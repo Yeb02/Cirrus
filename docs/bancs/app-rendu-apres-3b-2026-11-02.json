@@ -1,0 +1,97 @@
+{
+  "scale": "50000,500000",
+  "runs": [
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 2.740224,
+        "p95": 7.757824,
+        "max": 38.313984,
+        "n": 2320
+      },
+      "gpuSteadyMs": {
+        "p50": 2.615296,
+        "p95": 4.196352,
+        "max": 10.206208,
+        "n": 2116
+      },
+      "cpuMs": {
+        "p50": 0.5,
+        "p95": 2,
+        "max": 11.5,
+        "n": 2320
+      },
+      "intervalMs": {
+        "p50": 10.600000000002183,
+        "p95": 11.799999999999272,
+        "max": 279.1999999999971,
+        "n": 2319
+      },
+      "rebuilds": 102,
+      "worstFrame": {
+        "t": 4.466099999999998,
+        "cpuMs": 11.5,
+        "rebuilt": true
+      },
+      "loadMs": 9242,
+      "memoryMb": 521,
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 77
+      }
+    },
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 2.735104,
+        "p95": 7.991296,
+        "max": 27.411456,
+        "n": 1045
+      },
+      "gpuSteadyMs": {
+        "p50": 2.686976,
+        "p95": 4.516864,
+        "max": 17.50016,
+        "n": 959
+      },
+      "cpuMs": {
+        "p50": 1.7000000476837158,
+        "p95": 8.200000047683716,
+        "max": 36,
+        "n": 1045
+      },
+      "intervalMs": {
+        "p50": 10.60000000000582,
+        "p95": 11.5,
+        "max": 702.5999999999985,
+        "n": 1044
+      },
+      "rebuilds": 43,
+      "worstFrame": {
+        "t": 5.898900000000001,
+        "cpuMs": 36,
+        "rebuilt": true
+      },
+      "loadMs": 39464.5,
+      "memoryMb": 1440,
+      "reasons": {
+        "stale": 1,
+        "fold": 17,
+        "zoomIn": 5,
+        "rect": 22
+      }
+    }
+  ]
+}
