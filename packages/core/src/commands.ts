@@ -1,6 +1,6 @@
 import { uuidv7 } from './ids.ts';
 import { checkState, touchedBy } from './invariants.ts';
-import type { ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
+import type { BranchRec, ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag } from './registry.ts';
 import { applyOp, branchKey, cloneState, parseBranchKey, placementKey, type State } from './state.ts';
@@ -42,6 +42,16 @@ class Draft {
   }
   phantom(id: Id, after: PhantomRec | null): void {
     this.push({ t: 'phantom', before: this.s.phantoms.get(id) ?? null, after });
+  }
+  /** Removes the phantoms of a connection, all of them or those of one member's split arm. */
+  dropPhantoms(connection: Id, node?: Id): void {
+    for (const p of [...this.s.phantoms.values()]) if (p.connection === connection && (node === undefined || p.of.node === node)) this.phantom(p.id, null);
+  }
+  /** A connection goes to the trash with what only shows it: its branches and phantoms in every plan. */
+  trashConnection(c: ConnectionRec, members: Member[], shown = branchesOf(this.s, (_p, conn) => conn === c.id)): void {
+    for (const b of shown) this.branch(b.plan, c.id, b.node, false);
+    this.dropPhantoms(c.id);
+    this.connection(c.id, { ...c, members, trashedAt: Date.now() });
   }
   finish(label: string): Action {
     const touched = touchedBy(this.ops);
@@ -129,14 +139,15 @@ export function deleteEverywhere(s: State, node: Id): Action {
   const n = nodeOf(s, node);
   const d = new Draft(s);
   for (const p of placementsOf(d.s, node)) d.placement(p.plan, node, null);
-  for (const c of [...d.s.connections.values()]) {
-    if (c.trashedAt !== undefined || !c.members.some((m) => m.node === node)) continue;
+  const conns = [...d.s.connections.values()].filter((c) => c.trashedAt === undefined && c.members.some((m) => m.node === node));
+  // One pass over the branches for all of them (a hub node can have hundreds of connections).
+  const shown = new Map<Id, BranchRec[]>(conns.map((c) => [c.id, []]));
+  for (const b of branchesOf(d.s, (_p, conn) => shown.has(conn))) shown.get(b.connection)!.push(b);
+  for (const c of conns) {
     const members = c.members.filter((m) => m.node !== node);
-    for (const b of branchesOf(d.s, (_p, conn, nd) => conn === c.id && nd === node)) d.branch(b.plan, c.id, node, false);
-    if (c.kind !== 'knowledge' || members.length < 2) {
-      for (const b of branchesOf(d.s, (_p, conn) => conn === c.id)) d.branch(b.plan, c.id, b.node, false);
-      d.connection(c.id, { ...c, members, trashedAt: Date.now() });
-    } else d.connection(c.id, { ...c, members });
+    for (const b of shown.get(c.id)!) if (b.node === node) d.branch(b.plan, c.id, node, false);
+    if (c.kind !== 'knowledge' || members.length < 2) d.trashConnection(c, members, shown.get(c.id));
+    else d.connection(c.id, { ...c, members });
   }
   for (const ph of [...d.s.phantoms.values()]) if (ph.of.node === node) d.phantom(ph.id, null);
   d.node(node, { ...n, trashedAt: Date.now() });
@@ -181,10 +192,9 @@ export function removeMember(s: State, connection: Id, node: Id): Action {
   const d = new Draft(s);
   const members = c.members.filter((m) => m.node !== node);
   for (const b of branchesOf(d.s, (_p, conn, nd) => conn === connection && nd === node)) d.branch(b.plan, connection, node, false);
-  if (members.length < 2) {
-    for (const b of branchesOf(d.s, (_p, conn) => conn === connection)) d.branch(b.plan, connection, b.node, false);
-    d.connection(connection, { ...c, members, trashedAt: Date.now() });
-  } else d.connection(connection, { ...c, members });
+  d.dropPhantoms(connection, node);
+  if (members.length < 2) d.trashConnection(c, members);
+  else d.connection(connection, { ...c, members });
   return d.finish('Retirer un nœud de la connexion');
 }
 

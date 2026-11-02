@@ -21,8 +21,8 @@ export const branchKey = (b: BranchRec): string => `${b.plan}|${b.connection}|${
 export const layoutKey = (plan: Id, connection: Id): string => `${plan}|${connection}`;
 
 export function parseBranchKey(key: string): BranchRec {
-  const [plan, connection, node] = key.split('|');
-  return { plan, connection, node };
+  const i = key.indexOf('|'), j = key.indexOf('|', i + 1);
+  return { plan: key.slice(0, i), connection: key.slice(i + 1, j), node: key.slice(j + 1) };
 }
 
 export function emptyState(): State {

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import {
   type Action, CommandError, connect, createNode, createPlan, deleteEverywhere, include, joinArm, placeNode,
-  removeFromPlan, restoreNode, splitArm,
+  removeFromPlan, removeMember, restoreNode, splitArm,
 } from '../src/commands.ts';
 import type { Id } from '../src/model.ts';
 import { applyOp, branchKey, canonical, emptyState, placementKey, type State } from '../src/state.ts';
@@ -98,6 +98,25 @@ test('scinder un bras crée deux fantômes et retire la branche ; réunir rétab
   run(s, joinArm(s, p1, c, b));
   expect(s.phantoms.size).toBe(0);
   expect(s.branches.has(branchKey({ plan: p1, connection: c, node: b }))).toBe(true);
+});
+
+test('retirer un membre supprime les fantômes de son bras scindé', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A'), b = mk('B'), c2 = mk('C');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }, { node: c2, role: 'target' }] })), 'connection');
+  run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
+  run(s, removeMember(s, c, b));
+  expect(s.phantoms.size).toBe(0);
+});
+
+test('une connexion jetée perd tous ses fantômes', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A'), b = mk('B');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
+  run(s, deleteEverywhere(s, a));
+  expect(s.connections.get(c)!.trashedAt).toBeDefined();
+  expect(s.phantoms.size).toBe(0);
 });
 
 test("une commande ne modifie jamais l'état reçu", () => {

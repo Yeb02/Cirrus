@@ -70,6 +70,13 @@ test('connexion de structure hors plan document refusée', () => {
   expect(codes(s)).toContain('structureOutsideDocument');
 });
 
+test("branche vers un nœud qui n'est pas membre de la connexion refusée", () => {
+  const s = base();
+  connection(s, { id: 'k', kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: 'A', role: 'source' }, { node: 'G', role: 'target' }] }, 'p1');
+  applyOp(s, { t: 'branch', key: { plan: 'p1', connection: 'k', node: 'H' }, before: false, after: true });
+  expect(codes(s)).toContain('branchNotMember');
+});
+
 test('la vérification limitée aux objets touchés trouve les mêmes violations que la vérification complète', () => {
   const s = base();
   inclusion(s, 'A', 'G', 'p1');
@@ -77,9 +84,11 @@ test('la vérification limitée aux objets touchés trouve les mêmes violations
   inclusion(s, 'G', 'H', 'p2');
   inclusion(s, 'H', 'G', 'p2');
   connection(s, { id: 'st', kind: 'structure', title: '', relation: '', tags: [], members: [{ node: 'G', role: 'source' }, { node: 'A', role: 'target' }] }, 'p1');
+  connection(s, { id: 'k', kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: 'A', role: 'source' }, { node: 'G', role: 'target' }] }, 'p1');
+  applyOp(s, { t: 'branch', key: { plan: 'p2', connection: 'k', node: 'H' }, before: false, after: true });
   const keys = (vs: { code: string; subject: string }[]) => vs.map((v) => `${v.code}|${v.subject}`).sort();
-  expect(keys(checkState(s, new Set(['inc-A-H', 'inc-H-G', 'st'])))).toEqual(keys(checkState(s)));
-  expect(keys(checkState(s))).toEqual(['cycle|G', 'cycle|H', 'structureOutsideDocument|st', 'twoGroups|A']);
+  expect(keys(checkState(s, new Set(['inc-A-H', 'inc-H-G', 'st', 'k', 'H'])))).toEqual(keys(checkState(s)));
+  expect(keys(checkState(s))).toEqual(['branchNotMember|k', 'cycle|G', 'cycle|H', 'structureOutsideDocument|st', 'twoGroups|A']);
 });
 
 test('groupOf et ancestors suivent la hiérarchie du plan', () => {

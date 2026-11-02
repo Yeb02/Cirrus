@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { include, moveNodes } from '../src/commands.ts';
+import { deleteEverywhere, include, moveNodes } from '../src/commands.ts';
 import { checkState } from '../src/invariants.ts';
 import { applyOp, emptyState, type State } from '../src/state.ts';
 
@@ -21,6 +21,10 @@ function large(): State {
     const a = `n${(i * 7919) % N}`, b = `n${(i * 104729 + 1) % N}`;
     if (a !== b) link(`c${i}`, 'knowledge', a, b);
   }
+  // A hub: one node with 500 connections.
+  applyOp(s, { t: 'node', before: null, after: { id: 'hub', title: 'hub', summary: '', tags: [], files: [] } });
+  applyOp(s, { t: 'placement', before: null, after: { plan: 'p', node: 'hub', x: 0, y: 0, k: 0 } });
+  for (let i = 0; i < 500; i++) link(`h${i}`, 'knowledge', 'hub', `n${i * 7 + 1}`);
   return s;
 }
 
@@ -32,5 +36,8 @@ test('une commande reste rapide sur une grande base', () => {
   expect(performance.now() - t).toBeLessThan(300);
   t = performance.now();
   include(s, 'p', 'n5000', 'n3');
+  expect(performance.now() - t).toBeLessThan(300);
+  t = performance.now();
+  deleteEverywhere(s, 'hub');
   expect(performance.now() - t).toBeLessThan(300);
 }, 120_000);

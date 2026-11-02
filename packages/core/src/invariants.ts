@@ -1,10 +1,10 @@
-import type { BranchRec, ConnectionRec, Id } from './model.ts';
+import type { ConnectionRec, Id } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
 import { branchKey, parseBranchKey, placementKey, type State } from './state.ts';
 
 export interface Violation {
-  code: 'members' | 'duplicateMember' | 'twoGroups' | 'cycle' | 'trashedPlaced' | 'structureOutsideDocument' | 'tag';
+  code: 'members' | 'duplicateMember' | 'branchNotMember' | 'twoGroups' | 'cycle' | 'trashedPlaced' | 'structureOutsideDocument' | 'tag';
   message: string;
   subject: Id;
 }
@@ -22,15 +22,13 @@ function groupVia(s: State, plan: Id, c: ConnectionRec, node: Id): Id | undefine
   return shown(node) && shown(group.node) ? group.node : undefined;
 }
 
-/** One pass over the branches: builds the group index and hands every branch to `visit`. */
-function scanBranches(s: State, visit?: (b: BranchRec, c: ConnectionRec) => void): GroupIndex {
+/** Every direct group of every node in every plan, in one pass over the branches. For bulk queries (renderer). */
+export function groupIndex(s: State): GroupIndex {
   const index: GroupIndex = new Map();
   for (const key of s.branches) {
     const b = parseBranchKey(key);
     const c = s.connections.get(b.connection);
-    if (!c) continue;
-    visit?.(b, c);
-    const g = groupVia(s, b.plan, c, b.node);
+    const g = c && groupVia(s, b.plan, c, b.node);
     if (g === undefined) continue;
     let byNode = index.get(b.plan);
     if (!byNode) index.set(b.plan, (byNode = new Map()));
@@ -39,11 +37,6 @@ function scanBranches(s: State, visit?: (b: BranchRec, c: ConnectionRec) => void
     else byNode.set(b.node, [g]);
   }
   return index;
-}
-
-/** Every direct group of every node in every plan, in one pass over the branches. For bulk queries (renderer). */
-export function groupIndex(s: State): GroupIndex {
-  return scanBranches(s);
 }
 
 /** The direct group of a node in a plan (spec 10: at most one). Without an index, scans the connections. */
@@ -151,18 +144,23 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
     }
   };
 
-  if (!scope) {
-    // Whole state: one pass over the branches.
-    const index = scanBranches(s, (b, c) => { if (c.kind === 'structure' && s.plans.get(b.plan)?.type !== 'document') structureOutside(c); });
-    for (const byNode of index.values()) hierarchy(byNode.keys(), (n) => byNode.get(n) ?? []);
-  } else if ([...scope].some((id) => s.connections.has(id))) {
-    // Touched objects only (groups and structure depend on connections and branches: an action touching neither skips this).
-    for (const c of pick(s.connections)) {
-      if (c.kind !== 'structure') continue;
-      for (const p of s.plans.values()) {
-        if (p.type !== 'document' && c.members.some((m) => s.branches.has(branchKey({ plan: p.id, connection: c.id, node: m.node })))) structureOutside(c);
-      }
+  // Branches and groups depend on connections and branches only: an action touching no connection skips the rest.
+  if (scope && ![...scope].some((id) => s.connections.has(id))) return dedupe(out);
+
+  for (const key of s.branches) {
+    const b = parseBranchKey(key);
+    const c = inScope(b.connection) ? s.connections.get(b.connection) : undefined;
+    if (!c) continue;
+    if (c.kind === 'structure' && s.plans.get(b.plan)?.type !== 'document') structureOutside(c);
+    if (!c.members.some((m) => m.node === b.node)) {
+      out.push({ code: 'branchNotMember', subject: c.id, message: 'Une branche ne peut relier qu’un membre de sa connexion.' });
     }
+  }
+
+  if (!scope) {
+    for (const byNode of groupIndex(s).values()) hierarchy(byNode.keys(), (n) => byNode.get(n) ?? []);
+  } else {
+    // Only the chains of the touched nodes, through an index of inclusions by member.
     const bySource = new Map<Id, ConnectionRec[]>();
     for (const c of s.connections.values()) {
       const m = c.kind === 'inclusion' ? c.members.find((r) => r.role === 'source') : undefined;
