@@ -144,21 +144,7 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     order.push(i);
     for (const c of items[i].children) { items[c].depth = items[i].depth + 1; stack.push(c); }
   }
-  for (let o = order.length - 1; o >= 0; o--) {
-    const g = items[order[o]];
-    if (g.kind !== 'group') continue;
-    const kids = g.children.map((c) => items[c]);
-    const corners: Vec2[] = [];
-    for (const c of kids) {
-      if (c.kind === 'group') corners.push(...offsetPolygon(c.hull!, c.pad!));
-      else for (const dx of [-1, 1]) for (const dy of [-1, 1]) corners.push({ x: c.x + dx * c.halfW, y: c.y + dy * c.halfH });
-    }
-    g.x = kids.reduce((a, c) => a + c.x, 0) / kids.length;
-    g.y = kids.reduce((a, c) => a + c.y, 0) / kids.length;
-    g.hull = convexHull(corners);
-    g.maxChildK = Math.max(...kids.map((c) => c.k));
-    g.pad = p.envelopePad * stepScale(g.maxChildK, p);
-  }
+  for (let o = order.length - 1; o >= 0; o--) if (items[order[o]].kind === 'group') deriveGroup(items, order[o], p);
 
   // The plan's branches grouped by connection, once: connections and badges read it without building keys.
   const shown = new Map<Id, Id[]>();
@@ -173,6 +159,44 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
   const connections = sceneConnections(s, plan, items, byId, phantoms, shown);
   markBadges(s, items, byId, phantoms, shown);
   return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
+}
+
+/** A group's derived centre, hull of its members' footprints and padding (spec 10), from its children already derived. */
+function deriveGroup(items: SceneItem[], i: number, p: RenderParams): void {
+  const g = items[i];
+  const kids = g.children.map((c) => items[c]);
+  const corners: Vec2[] = [];
+  for (const c of kids) {
+    if (c.kind === 'group') corners.push(...offsetPolygon(c.hull!, c.pad!));
+    else for (const dx of [-1, 1]) for (const dy of [-1, 1]) corners.push({ x: c.x + dx * c.halfW, y: c.y + dy * c.halfH });
+  }
+  g.x = kids.reduce((a, c) => a + c.x, 0) / kids.length;
+  g.y = kids.reduce((a, c) => a + c.y, 0) / kids.length;
+  g.hull = convexHull(corners);
+  g.maxChildK = Math.max(...kids.map((c) => c.k));
+  g.pad = p.envelopePad * stepScale(g.maxChildK, p);
+}
+
+/**
+ * The scene with some items moved (and their descendants), for the preview of a drag: moved items and the groups
+ * above them are copied and derived again, everything else is shared. The original scene is left unchanged.
+ */
+export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: RenderParams): PlanScene {
+  const items = [...scene.items];
+  const shift = (i: number, d: Vec2) => {
+    const it = items[i];
+    items[i] = { ...it, x: it.x + d.x, y: it.y + d.y, ...(it.hull ? { hull: it.hull.map((q) => ({ x: q.x + d.x, y: q.y + d.y })) } : {}) };
+    for (const c of it.children) shift(c, d);
+  };
+  for (const [i, d] of offsets) shift(i, d);
+  // Every group above a moved item, deepest first.
+  const above = new Set<number>();
+  for (const i of offsets.keys()) for (let a = items[i].parent; a >= 0; a = items[a].parent) above.add(a);
+  for (const g of [...above].sort((a, b) => items[b].depth - items[a].depth)) {
+    items[g] = { ...items[g] };
+    deriveGroup(items, g, p);
+  }
+  return { ...scene, items, bounds: boundsOf(items) };
 }
 
 function sceneConnections(

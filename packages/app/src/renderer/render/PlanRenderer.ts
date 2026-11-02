@@ -151,15 +151,20 @@ export class PlanRenderer {
     this.pending = null;
   }
 
-  setScene(scene: PlanScene): void {
+  /**
+   * `transient`: a preview (a drag in progress) drawn at once on the main thread, without sending the scene to the
+   * worker nor forgetting where the connection titles sit; the real scene follows once the action is written.
+   */
+  setScene(scene: PlanScene, transient = false): void {
     this.scene = scene;
     this.index = buildIndex(scene, this.p);
-    this.titleSides.clear();
     this.stale = true;
     this.hasFrame = false;
     this.pending = null;
     this.hits = null;
     this.hitInputs = null;
+    if (transient) return;
+    this.titleSides.clear();
     this.worker?.postMessage({ t: 'scene', scene, params: this.p } satisfies FrameRequest);
   }
 

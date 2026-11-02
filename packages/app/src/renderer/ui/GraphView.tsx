@@ -1,7 +1,7 @@
-import type { Id, State } from '@cirrus/core';
+import { combine, type Id, moveNodes, movePhantom, type State } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
-  type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, worldToScreen,
+  type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -10,6 +10,7 @@ import { runBench } from '../bench.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
+import type { EditSession, Result } from '../session.ts';
 
 const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
@@ -29,7 +30,11 @@ type Chain = { item: number; title: string }[];
  * drag on the background, + − and arrows when the graph has the focus. Hover lights a connection, names stubs and
  * phantoms, and shows the groups under the cursor.
  */
-export function GraphView(props: { state: State; plan: Id; params: RenderParams; onFirstFrame(): void }) {
+export function GraphView(props: {
+  state: State; plan: Id; params: RenderParams; onFirstFrame(): void;
+  /** Edits go through the session (written, undoable); their outcome is reported (toasts). */
+  session: EditSession | null; onResult(r: Result): void;
+}) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const engine = useRef<{ app: Application; renderer: PlanRenderer } | null>(null);
@@ -43,6 +48,12 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const [rect, setRect] = useState<Bounds | null>(null);
+  /** A drag in progress: the moved items (top-most), the scene it started from, the world offset so far. */
+  const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; dirty: boolean } | null>(null);
+  const sessionRef = useRef(props.session);
+  sessionRef.current = props.session;
+  const onResultRef = useRef(props.onResult);
+  onResultRef.current = props.onResult;
   const [ready, setReady] = useState(false);
   const [scene, setScene] = useState<PlanScene | null>(null);
   const [tip, setTip] = useState<Tip>(null);
@@ -129,6 +140,13 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
           const cam = e.renderer.camera;
           if (cam.widthPx !== e.app.screen.width || cam.heightPx !== e.app.screen.height) {
             moveCamera(navigate(cam, { t: 'resize', widthPx: e.app.screen.width, heightPx: e.app.screen.height }, paramsRef.current));
+          }
+          // A drag in progress: its preview is drawn at most once per frame.
+          const d = dragging.current;
+          if (d && d.dirty) {
+            d.dirty = false;
+            e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: d.dx, y: d.dy }])), paramsRef.current), true);
+            dirty.current = true;
           }
           if (dirty.current) {
             dirty.current = false;
@@ -262,6 +280,58 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
       case 'rectCancel':
         setRect(null);
         break;
+      case 'dragStart': {
+        // An element moves with the whole selection if it belongs to it (spec 9.1); a group with all it contains.
+        if (intent.hit.kind !== 'item') break;
+        const id = sc.items[intent.hit.item].id;
+        const sel = selectionRef.current;
+        const chosen = sel.items.has(id) ? [...sel.items].flatMap((x) => { const i = sc.byId.get(x); return i === undefined ? [] : [i]; }) : [intent.hit.item];
+        const set = new Set(chosen);
+        const top = chosen.filter((i) => { for (let a = sc.items[i].parent; a >= 0; a = sc.items[a].parent) if (set.has(a)) return false; return true; });
+        dragging.current = { items: top, base: sc, dx: 0, dy: 0, dirty: false };
+        break;
+      }
+      case 'dragMove': {
+        const d = dragging.current;
+        if (!d) break;
+        d.dx = intent.dx;
+        d.dy = intent.dy;
+        d.dirty = true;
+        break;
+      }
+      case 'dragEnd': {
+        const d = dragging.current;
+        dragging.current = null;
+        if (!d) break;
+        if (intent.dx === 0 && intent.dy === 0) { e.renderer.setScene(d.base); break; }
+        // One action for the whole move (spec 6.4): the nodes by moveNodes, the phantoms one by one, combined.
+        const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number }[] = [];
+        const collect = (i: number) => {
+          const it = d.base.items[i];
+          if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
+          else if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
+          for (const c of it.children) collect(c);
+        };
+        for (const i of d.items) collect(i);
+        const plan = d.base.plan.id;
+        const session = sessionRef.current;
+        if (!session) { e.renderer.setScene(d.base); break; }
+        void session.run((st) => combine(st, nodes.length + phantoms.length === 1 ? 'Déplacer un élément' : `Déplacer ${nodes.length + phantoms.length} éléments`, [
+          ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
+          ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+        ])).then((r) => {
+          // Refused: back to where it was. Written: the scene follows the state.
+          if (!r.ok) { engine.current?.renderer.setScene(d.base); dirty.current = true; }
+          onResultRef.current(r);
+        });
+        break;
+      }
+      case 'dragCancel': {
+        const d = dragging.current;
+        dragging.current = null;
+        if (d) e.renderer.setScene(d.base);
+        break;
+      }
       default:
         break;
     }
