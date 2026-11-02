@@ -4,5 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run"
+  },
+  "dependencies": {
+    "flatbush": "^4.7.0"
   }
 }
