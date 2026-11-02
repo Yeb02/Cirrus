@@ -1,7 +1,8 @@
 import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { buildFrame } from '../src/frame.ts';
+import { groupPalette } from '../src/color.ts';
+import { buildFrame, groupColors } from '../src/frame.ts';
 import { buildHitIndex } from '../src/hit.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
@@ -43,6 +44,15 @@ test('le cadre contient les enveloppes, les rubans, les marqueurs et les titres'
   expect(frame.markers.some((m) => m.multi)).toBe(true);
   expect(frame.titles.map((t) => t.text)).toContain('Déduction jointe');
   expect(new Set(frame.centerlines.map((c) => c.conn)).size).toBe(visible.connections.length);
+});
+
+test('les groupes de premier niveau prennent les teintes dans leur ordre de création, leurs sous-groupes la même', () => {
+  const at = (id: string) => sc.byId.get(id)!;
+  const hueOf = (g: number) => groupColors(sc, g, P).closed;
+  const expected = (depth: number, i: number) => groupPalette({ depth, hue: P.groupHues[i] }, P).closed;
+  expect(hueOf(at(ids.nodes.groupeTheorie))).toEqual(expected(0, 0));
+  expect(hueOf(at(ids.nodes.groupeML))).toEqual(expected(0, 1));
+  expect(hueOf(at(ids.nodes.groupeInduction))).toEqual(expected(2, 0));
 });
 
 test('« n connexions » pour une agrégation', () => {

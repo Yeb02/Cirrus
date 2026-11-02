@@ -23,17 +23,22 @@ export interface FrameGeometry {
   stubs: { conn: number; stub: number; pos: Vec2; title: string }[];
 }
 
-/** FNV-1a: a stable hue per top-level group. */
-function hash(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
-  return h >>> 0;
-}
+/** Rank of each top-level group by creation (ids are UUIDv7): a group keeps its hue as others are added. */
+const hueRanks = new WeakMap<PlanScene, Map<number, number>>();
 
+/**
+ * A group's colours (spec 8.4): top-level groups take groupHues in their order of creation, their subgroups the same
+ * hue with a lightness offset per level.
+ */
 export function groupColors(scene: PlanScene, g: number, p: RenderParams): { open: Rgb; closed: Rgb } {
+  let ranks = hueRanks.get(scene);
+  if (!ranks) {
+    const tops = scene.roots.filter((i) => scene.items[i].kind === 'group').sort((a, b) => (scene.items[a].id < scene.items[b].id ? -1 : 1));
+    hueRanks.set(scene, (ranks = new Map(tops.map((i, r) => [i, r]))));
+  }
   let root = g;
   while (scene.items[root].parent >= 0) root = scene.items[root].parent;
-  const hue = p.groupHues[hash(scene.items[root].id) % p.groupHues.length];
+  const hue = p.groupHues[(ranks.get(root) ?? 0) % p.groupHues.length];
   return groupPalette({ depth: scene.items[g].depth, hue }, p);
 }
 

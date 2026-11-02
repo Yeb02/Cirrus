@@ -40,6 +40,8 @@ export interface RenderParams {
   groupHues: number[];
   groupTitleOpenScale: number;
   groupTitleClosedScale: number;
+  /** Fold range over which a group's title moves from the top of its envelope to its centre. */
+  groupTitleSwap: Range;
   // Connections (spec 8.5)
   trunkTension: number;
   trunkLength: number;
@@ -121,9 +123,11 @@ export const DEFAULT_PARAMS: RenderParams = {
   groupLightnessStep: 0.06,
   groupLightnessRange: [0.25, 0.85],
   groupChroma: 0.09,
-  groupHues: [255, 290, 200, 330, 160, 60],
+  // The maquette's blue (#34568f) and violet (#5a4690) first, then other cool hues.
+  groupHues: [262, 295, 230, 320, 200, 275],
   groupTitleOpenScale: 0.95,
   groupTitleClosedScale: 1.2,
+  groupTitleSwap: [0.45, 0.95],
   trunkTension: 0.55,
   trunkLength: 50,
   anchorGap: 3,
@@ -225,6 +229,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'groupHues', label: 'Teintes des groupes de premier niveau (degrés)', section: A, group: 'Groupes', kind: 'list', min: 0, max: 360, step: 1 },
   num('groupTitleOpenScale', 'Taille du titre d’un groupe ouvert', A, 'Groupes', 0.3, 3, 0.05),
   num('groupTitleClosedScale', 'Taille du titre d’un groupe replié', A, 'Groupes', 0.3, 3, 0.05),
+  range('groupTitleSwap', 'Passage du titre d’un groupe du haut au centre (repli de 0 à 1)', A, 'Groupes', 0, 1, 0.01),
   num('trunkTension', 'Tension des courbes', G, 'Connexions', 0.1, 0.95, 0.01),
   num('trunkLength', 'Longueur du tronc', G, 'Connexions', 0, 180, 1),
   num('anchorGap', 'Écart entre une boîte et sa connexion', A, 'Connexions', 0, 20, 0.5),

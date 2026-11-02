@@ -1,6 +1,7 @@
 import { fromSnapshot, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
+import { GraphView } from './ui/GraphView.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 
 const TABS_KEY = 'cirrus.tabs';
@@ -58,12 +59,10 @@ export function App() {
     readySent.current = true;
     window.cirrus.ready();
   };
-  useEffect(() => { if (state || error) firstFrame(); }, [state, error]);
+  useEffect(() => { if (error) firstFrame(); }, [error]);
 
   if (error) return <div className="app"><div className="placeholder">Impossible d’ouvrir la base : {error}</div></div>;
   if (!state || !active) return <div className="app"><div className="placeholder">Ouverture de la base…</div></div>;
-  const plan = state.plans.get(active)!;
-  const placed = [...state.placements.values()].filter((p) => p.plan === active).length;
   return (
     <div className="app">
       <Tabs
@@ -78,9 +77,7 @@ export function App() {
         }}
       />
       <div className="main">
-        <div className="graph">
-          <div className="placeholder">{plan.name} : {placed} nœuds placés (rendu à venir, tâche 6). Facteur {params.factor}.</div>
-        </div>
+        <GraphView state={state} plan={active} params={params} onFirstFrame={firstFrame} />
       </div>
     </div>
   );

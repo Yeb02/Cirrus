@@ -1,0 +1,412 @@
+import type { Id, Vec2 } from '@cirrus/core';
+import {
+  buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, FloatList, foldSignature, foldT, type FrameGeometry,
+  gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type Rgb, type SceneIndex, smooth,
+  starLayerAlpha, starLayers, starsInRect, stepScale, textPx, type TitleSide, type VisibleSet,
+} from '@cirrus/view';
+import { type Application, type BitmapText, Container, RenderTexture, type Shader, Sprite } from 'pixi.js';
+import { type AttributeSpec, MeshSlot } from './meshes.ts';
+import { boxShader, envelopeShader, glyphShader, markerShader, NO_GROUP, ribbonShader, setZoom, skyShader, starShader } from './shaders.ts';
+import { TextPool, type TextSpec } from './texts.ts';
+
+interface Rect { minX: number; maxX: number; minY: number; maxY: number }
+
+const RIBBON: AttributeSpec[] = [
+  { name: 'aPosition', size: 2 }, { name: 'aPosition2', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aNormal2', size: 2 },
+  { name: 'aScale', size: 1 }, { name: 'aSide', size: 1 }, { name: 'aDist', size: 1 }, { name: 'aEnd0', size: 3 }, { name: 'aEnd1', size: 3 },
+  { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 },
+];
+const GLYPH: AttributeSpec[] = [
+  { name: 'aPosition', size: 2 }, { name: 'aPosition2', size: 2 }, { name: 'aOffset', size: 2 }, { name: 'aOffset2', size: 2 },
+  { name: 'aScale', size: 1 }, { name: 'aFill', size: 1 }, { name: 'aEnd0', size: 3 }, { name: 'aEnd1', size: 3 }, { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 },
+];
+const ENVELOPE: AttributeSpec[] = [
+  { name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aAlpha', size: 1 }, { name: 'aOpen', size: 3 }, { name: 'aClosed', size: 3 }, { name: 'aFoldK', size: 1 },
+];
+const BOX: AttributeSpec[] = [
+  { name: 'aCenter', size: 2 }, { name: 'aHalf', size: 2 }, { name: 'aCorner', size: 2 }, { name: 'aParentK', size: 1 }, { name: 'aStyle', size: 1 }, { name: 'aBadge', size: 1 },
+];
+const MARKER: AttributeSpec[] = [{ name: 'aCenter', size: 2 }, { name: 'aCorner', size: 2 }, { name: 'aK', size: 1 }, { name: 'aConn', size: 1 }];
+const STAR: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aCorner', size: 2 }];
+const SKY: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aWorld', size: 2 }, { name: 'aV', size: 1 }];
+const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
+const QUAD_INDEX = [0, 1, 2, 0, 2, 3];
+const hex = (c: Rgb) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
+
+interface Shaders { ribbon: Shader; glyph: Shader; envelope: Shader; box: Shader; marker: Shader; stars: Shader[]; sky: Shader }
+interface Slots { ribbon: MeshSlot; glyph: MeshSlot; envelope: MeshSlot; box: MeshSlot; marker: MeshSlot; stars: MeshSlot[]; sky: MeshSlot }
+interface LiveText { t: BitmapText; alpha: (zoom: number) => number }
+
+/**
+ * Draws a plan scene (spec 8). Rebuilds the visible geometry when the view leaves the prepared rectangle, a group level
+ * changes state or the zoom outgrows the curve sampling; between rebuilds only uniforms change. Envelopes go through
+ * a reduced-resolution texture (bench lesson: they were the cost).
+ */
+export class PlanRenderer {
+  private p: RenderParams;
+  private shaders!: Shaders;
+  private slots!: Slots;
+  private readonly bgWorld = new Container();
+  private readonly envWorld = new Container();
+  private readonly world = new Container();
+  private readonly meshLayer = new Container();
+  private readonly textLayer = new Container();
+  private readonly skyLayer = new Container();
+  private envTexture: RenderTexture | null = null;
+  private readonly envSprite = new Sprite();
+  private readonly texts: TextPool;
+  private live: LiveText[] = [];
+  private scene: PlanScene | null = null;
+  private index: SceneIndex | null = null;
+  private visibleSet: VisibleSet | null = null;
+  private frame: FrameGeometry | null = null;
+  private hits: HitIndex | null = null;
+  private titleSides = new Map<Id, TitleSide>();
+  private cam: Camera = { x: 0, y: 0, zoom: 1, widthPx: 1, heightPx: 1 };
+  private origin: Vec2 = { x: 0, y: 0 };
+  private lastRect: Rect | null = null;
+  private lastSignature = '';
+  private builtZoom = 1;
+  private starRect: Rect | null = null;
+  private starKey = '';
+  private starKs: number[] = [];
+  private hot = -1;
+  private textZoom = -1;
+  private stale = true;
+
+  private readonly app: Application;
+
+  constructor(app: Application, p: RenderParams) {
+    this.app = app;
+    this.p = p;
+    this.texts = new TextPool(this.textLayer);
+    this.createGpu();
+    app.stage.addChild(this.skyLayer, this.bgWorld, this.envSprite, this.world);
+    this.world.addChild(this.meshLayer, this.textLayer);
+  }
+
+  private createGpu(): void {
+    const p = this.p;
+    this.shaders = {
+      ribbon: ribbonShader(p), glyph: glyphShader(p), envelope: envelopeShader(p), box: boxShader(p), marker: markerShader(p),
+      stars: [starShader(p), starShader(p), starShader(p)], sky: skyShader(p),
+    };
+    const s = this.shaders;
+    this.slots = {
+      ribbon: new MeshSlot(RIBBON, s.ribbon, 4096), glyph: new MeshSlot(GLYPH, s.glyph, 2048), envelope: new MeshSlot(ENVELOPE, s.envelope, 1024),
+      box: new MeshSlot(BOX, s.box, 1024), marker: new MeshSlot(MARKER, s.marker, 256),
+      stars: s.stars.map((sh) => new MeshSlot(STAR, sh, 4096)), sky: new MeshSlot(SKY, s.sky, 4),
+    };
+    this.envWorld.addChild(this.slots.envelope.mesh);
+    this.meshLayer.addChild(this.slots.ribbon.mesh, this.slots.glyph.mesh, this.slots.box.mesh, this.slots.marker.mesh);
+    for (const st of this.slots.stars) this.bgWorld.addChild(st.mesh);
+    this.skyLayer.addChild(this.slots.sky.mesh);
+    this.slots.sky.update({ aPosition: new Float32Array(8), aWorld: new Float32Array(8), aV: new Float32Array([0, 0, 1, 1]) }, new Uint32Array(QUAD_INDEX));
+  }
+
+  private destroyGpu(): void {
+    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.sky, ...this.slots.stars]) slot.dispose();
+    for (const sh of [this.shaders.ribbon, this.shaders.glyph, this.shaders.envelope, this.shaders.box, this.shaders.marker, this.shaders.sky, ...this.shaders.stars]) sh.destroy();
+  }
+
+  setParams(p: RenderParams): void {
+    this.p = p;
+    this.destroyGpu();
+    this.createGpu();
+    this.envTexture?.destroy(true);
+    this.envTexture = null;
+    this.starKey = '';
+    this.stale = true;
+  }
+
+  setScene(scene: PlanScene): void {
+    this.scene = scene;
+    this.index = buildIndex(scene, this.p);
+    this.titleSides.clear();
+    this.stale = true;
+  }
+
+  setCamera(c: Camera): void {
+    this.cam = c;
+  }
+
+  get camera(): Camera {
+    return this.cam;
+  }
+
+  /** Visible connection index under the pointer, or null. */
+  setHover(conn: number | null): void {
+    this.hot = conn ?? -1;
+    this.textZoom = -1;
+  }
+
+  get hitIndex(): HitIndex | null {
+    return this.hits;
+  }
+
+  get visible(): VisibleSet | null {
+    return this.visibleSet;
+  }
+
+  /** Compiles every shader now instead of on first sight (ANGLE compiles on first use: a 5 s freeze in the bench). */
+  warmUp(): number {
+    const t0 = performance.now();
+    const cam = this.cam;
+    this.cam = { x: 0, y: 0, zoom: 1, widthPx: 64, heightPx: 64 };
+    const one = (specs: AttributeSpec[]) => Object.fromEntries(specs.map((s) => [s.name, new Float32Array(3 * s.size)]));
+    for (const [slot, specs] of [[this.slots.ribbon, RIBBON], [this.slots.glyph, GLYPH], [this.slots.envelope, ENVELOPE], [this.slots.box, BOX], [this.slots.marker, MARKER], [this.slots.stars[0], STAR]] as const) {
+      slot.update(one(specs), new Uint32Array([0, 1, 2]));
+    }
+    const t = this.texts.acquire({ text: 'Nœud θ∑ ≤', size: 16, wrap: 0, lineHeight: 20, x: 0, y: 0, color: 0xffffff });
+    this.renderEnvelopes();
+    this.app.renderer.render(this.app.stage);
+    this.texts.release(t);
+    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.stars[0]]) {
+      slot.update(Object.fromEntries([...RIBBON, ...GLYPH, ...ENVELOPE, ...BOX, ...MARKER, ...STAR].map((s) => [s.name, new Float32Array(0)])), new Uint32Array(0));
+    }
+    this.cam = cam;
+    this.stale = true;
+    return performance.now() - t0;
+  }
+
+  private viewRect(marginPx: number): Rect {
+    const c = this.cam;
+    const hw = (c.widthPx / 2 + marginPx) / c.zoom, hh = (c.heightPx / 2 + marginPx) / c.zoom;
+    return { minX: c.x - hw, maxX: c.x + hw, minY: c.y - hh, maxY: c.y + hh };
+  }
+
+  private needsRebuild(): boolean {
+    if (this.stale || !this.lastRect || !this.index) return true;
+    if (foldSignature(this.index, this.cam.zoom, this.p) !== this.lastSignature) return true;
+    if (this.cam.zoom > this.builtZoom * this.p.curveZoomHeadroom || this.cam.zoom < this.builtZoom / (2 * this.p.curveZoomHeadroom)) return true;
+    const v = this.viewRect(0), r = this.lastRect;
+    return v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY;
+  }
+
+  /** Draws one frame if anything changed; returns whether the visible geometry was rebuilt. */
+  renderFrame(): boolean {
+    const { cam, p } = this;
+    let rebuilt = false;
+    if (this.scene && this.needsRebuild()) {
+      this.rebuild();
+      rebuilt = true;
+    }
+    this.updateBackground(rebuilt);
+    for (const c of [this.world, this.bgWorld, this.envWorld]) {
+      c.scale.set(cam.zoom);
+      c.position.set((this.origin.x - cam.x) * cam.zoom + cam.widthPx / 2, (this.origin.y - cam.y) * cam.zoom + cam.heightPx / 2);
+    }
+    const s = this.shaders;
+    setZoom([s.ribbon, s.glyph, s.envelope, s.box, s.marker, ...s.stars], cam.zoom);
+    const hw = cam.widthPx / 2 / cam.zoom, hh = cam.heightPx / 2 / cam.zoom;
+    const lx = cam.x - this.origin.x, ly = cam.y - this.origin.y;
+    for (const sh of [s.ribbon, s.glyph]) {
+      const u = sh.resources.conn.uniforms;
+      u.uScreen = [lx - hw, ly - hh, lx + hw, ly + hh];
+      u.uFadeWorld = p.connectionFadePx / cam.zoom;
+      u.uHot = this.hot;
+    }
+    s.marker.resources.marker.uniforms.uHot = this.hot;
+    if (cam.zoom !== this.textZoom || rebuilt) {
+      for (const l of this.live) {
+        const a = l.alpha(cam.zoom);
+        l.t.alpha = a;
+        l.t.visible = a > 0.01;
+      }
+      this.textZoom = cam.zoom;
+    }
+    this.renderEnvelopes();
+    this.app.renderer.render(this.app.stage);
+    return rebuilt;
+  }
+
+  private renderEnvelopes(): void {
+    const { cam, p } = this;
+    const res = (window.devicePixelRatio || 1) * p.envelopeResolution;
+    const w = Math.max(1, Math.ceil(cam.widthPx)), h = Math.max(1, Math.ceil(cam.heightPx));
+    if (!this.envTexture || this.envTexture.width !== w || this.envTexture.height !== h || this.envTexture.source.resolution !== res) {
+      this.envTexture?.destroy(true);
+      this.envTexture = RenderTexture.create({ width: w, height: h, resolution: res });
+      this.envSprite.texture = this.envTexture;
+    }
+    this.envSprite.width = w;
+    this.envSprite.height = h;
+    this.app.renderer.render({ container: this.envWorld, target: this.envTexture, clear: true, clearColor: [0, 0, 0, 0] });
+  }
+
+  private rebuild(): void {
+    const scene = this.scene!, index = this.index!, p = this.p, cam = this.cam;
+    this.origin = { x: cam.x, y: cam.y };
+    const visible = computeVisible(scene, index, cam, p);
+    this.visibleSet = visible;
+    this.frame = buildFrame(scene, visible, cam, this.origin, p, this.titleSides, this.frame ?? undefined);
+    for (const t of this.frame.titles) this.titleSides.set(t.id, t.side);
+    this.hits = buildHitIndex(scene, visible, this.frame, this.origin, p);
+    this.lastRect = this.viewRect(p.viewMarginPx);
+    this.lastSignature = visible.signature;
+    this.builtZoom = cam.zoom;
+    this.stale = false;
+
+    const f = this.frame;
+    const r = f.connections.ribbons, g = f.connections.glyphs, e = f.envelopes;
+    this.slots.ribbon.update({
+      aPosition: r.position.view(), aPosition2: r.position2.view(), aNormal: r.normal.view(), aNormal2: r.normal2.view(), aScale: r.scale.view(),
+      aSide: r.side.view(), aDist: r.dist.view(), aEnd0: r.end0.view(), aEnd1: r.end1.view(), aFold: r.fold.view(), aConn: r.conn.view(),
+    }, r.index.view());
+    this.slots.glyph.update({
+      aPosition: g.position.view(), aPosition2: g.position2.view(), aOffset: g.offset.view(), aOffset2: g.offset2.view(), aScale: g.scale.view(),
+      aFill: g.fill.view(), aEnd0: g.end0.view(), aEnd1: g.end1.view(), aFold: g.fold.view(), aConn: g.conn.view(),
+    }, g.index.view());
+    this.slots.envelope.update({ aPosition: e.position.view(), aNormal: e.normal.view(), aAlpha: e.alpha.view(), aOpen: e.open.view(), aClosed: e.closed.view(), aFoldK: e.foldK.view() }, e.index.view());
+    this.updateBoxes(visible);
+    this.updateMarkers(f);
+    this.updateTexts(visible, f);
+  }
+
+  private updateBoxes(visible: VisibleSet): void {
+    const scene = this.scene!;
+    const center = new FloatList(visible.items.length * 8), half = new FloatList(visible.items.length * 8), corner = new FloatList(visible.items.length * 8);
+    const parentK = new FloatList(visible.items.length * 4), style = new FloatList(visible.items.length * 4), badge = new FloatList(visible.items.length * 4);
+    const index = new IndexList(visible.items.length * 6);
+    const STYLE = { node: 1, center: 2, absent: 3 } as const;
+    visible.items.forEach((i, j) => {
+      const it = scene.items[i];
+      const pk = it.parent >= 0 ? scene.items[it.parent].maxChildK! : NO_GROUP;
+      const st = it.kind === 'phantom' ? STYLE[it.phantom!] : 0;
+      for (let c = 0; c < 4; c++) {
+        center.push2(it.x - this.origin.x, it.y - this.origin.y);
+        half.push2(it.halfW, it.halfH);
+        corner.push2(QUAD[c * 2], QUAD[c * 2 + 1]);
+        parentK.push1(pk);
+        style.push1(st);
+        badge.push1(it.badge ? 1 : 0);
+      }
+      const v = j * 4;
+      index.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    });
+    this.slots.box.update({ aCenter: center.view(), aHalf: half.view(), aCorner: corner.view(), aParentK: parentK.view(), aStyle: style.view(), aBadge: badge.view() }, index.view());
+  }
+
+  private updateMarkers(f: FrameGeometry): void {
+    const multi = f.markers.filter((m) => m.multi);
+    const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), index = new IndexList();
+    multi.forEach((m, j) => {
+      for (let c = 0; c < 4; c++) {
+        center.push2(m.pos.x, m.pos.y);
+        corner.push2(QUAD[c * 2], QUAD[c * 2 + 1]);
+        k.push1(m.kMax);
+        conn.push1(m.conn);
+      }
+      const v = j * 4;
+      index.push(v, v + 1, v + 2, v, v + 2, v + 3);
+    });
+    this.slots.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
+  }
+
+  private updateTexts(visible: VisibleSet, f: FrameGeometry): void {
+    const scene = this.scene!, p = this.p, o = this.origin;
+    for (const l of this.live) this.texts.release(l.t);
+    this.live = [];
+    const ink = hex(p.inkColor), titleInk = hex(p.titleColor);
+    const add = (spec: TextSpec, alpha: (zoom: number) => number) => this.live.push({ t: this.texts.acquire(spec), alpha });
+    const parentFold = (i: number) => {
+      const parent = scene.items[i].parent;
+      return (zoom: number) => (parent >= 0 ? 1 - foldT(scene.items[parent].maxChildK!, zoom, p) : 1);
+    };
+    for (const i of visible.items) {
+      const it = scene.items[i];
+      if (it.kind === 'phantom' && it.phantom !== 'node') continue;
+      const s = stepScale(it.k, p), size = p.baseFontPx * s;
+      const inParent = parentFold(i);
+      const dim = it.kind === 'phantom' ? 0.65 : 1;
+      add({ text: it.title, size, wrap: (p.boxWidth - 2 * p.boxPadX) * s, lineHeight: size * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
+        (zoom) => dim * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p)) * inParent(zoom));
+    }
+    for (const g of visible.groups) {
+      const it = scene.items[g];
+      const s = stepScale(it.k, p);
+      const top = Math.min(...offsetPolygon(it.hull!, it.pad!).map((q) => q.y));
+      const inParent = parentFold(g);
+      const openSize = p.baseFontPx * s * p.groupTitleOpenScale, closedSize = p.baseFontPx * s * p.groupTitleClosedScale;
+      const [s0, s1] = p.groupTitleSwap;
+      add({ text: it.title, size: openSize, wrap: 0, lineHeight: openSize * p.lineHeight, x: it.x - o.x, y: top - o.y - openSize * 0.45, color: ink },
+        (zoom) => (1 - smooth(s0, s1, foldT(it.maxChildK!, zoom, p))) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleOpenScale) * inParent(zoom));
+      add({ text: it.title, size: closedSize, wrap: p.boxWidth * s, lineHeight: closedSize * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
+        (zoom) => smooth(s0, s1, foldT(it.maxChildK!, zoom, p)) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleClosedScale) * inParent(zoom));
+    }
+    for (const t of f.titles) {
+      const size = p.titleFontPx * stepScale(t.kMax, p);
+      const vc = visible.connections[t.conn];
+      add({ text: t.text, size, wrap: 0, lineHeight: size * 1.2, x: t.box.x + t.box.w / 2, y: t.box.y + t.box.h / 2, color: titleInk },
+        (zoom) => {
+          if (t.conn === this.hot) return 1;
+          const readable = smooth(p.titleFade[0], p.titleFade[1], size * zoom);
+          return vc.fade === 'out' ? readable * (1 - foldT(vc.foldK, zoom, p)) : readable;
+        });
+    }
+  }
+
+  private updateBackground(rebuilt: boolean): void {
+    const { cam, p } = this;
+    const stars = p.background === 'stars';
+    // Sky quad in screen space, with the local world position of its corners for the grid.
+    const w = cam.widthPx, h = cam.heightPx;
+    const tl = { x: cam.x - w / 2 / cam.zoom - this.origin.x, y: cam.y - h / 2 / cam.zoom - this.origin.y };
+    const br = { x: tl.x + w / cam.zoom, y: tl.y + h / cam.zoom };
+    this.slots.sky.update({
+      aPosition: new Float32Array([0, 0, w, 0, w, h, 0, h]),
+      aWorld: new Float32Array([tl.x, tl.y, br.x, tl.y, br.x, br.y, tl.x, br.y]),
+      aV: new Float32Array([0, 0, 1, 1]),
+    }, new Uint32Array(QUAD_INDEX));
+    const su = this.shaders.sky.resources.sky.uniforms;
+    su.uZoom = cam.zoom;
+    const levels = stars ? [] : gridLevels(cam.zoom, p).slice(-3);
+    const spacing = [0, 0, 0], alpha = [0, 0, 0];
+    levels.forEach((l, i) => {
+      spacing[i] = l.spacingWorld;
+      alpha[i] = l.alpha * p.backgroundOpacity;
+      const mod = (v: number) => ((v % l.spacingWorld) + l.spacingWorld) % l.spacingWorld;
+      su[`uOffset${i}`] = [mod(this.origin.x), mod(this.origin.y)];
+    });
+    su.uSpacing = spacing;
+    su.uGridAlpha = alpha;
+
+    this.bgWorld.visible = stars;
+    if (!stars) return;
+    const ks = starLayers(cam.zoom, p);
+    const key = ks.join(',');
+    const v = this.viewRect(0), r = this.starRect;
+    const outside = !r || v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY;
+    if (rebuilt || outside || key !== this.starKey) {
+      this.starKey = key;
+      this.starKs = ks;
+      this.starRect = this.viewRect(Math.max(cam.widthPx, cam.heightPx) / 2);
+      this.slots.stars.forEach((slot, i) => {
+        const k = ks[i];
+        if (k === undefined) { slot.update({ aPosition: new Float32Array(0), aCorner: new Float32Array(0) }, new Uint32Array(0)); return; }
+        const rr = this.starRect!;
+        const list = starsInRect({ x: rr.minX, y: rr.minY, w: rr.maxX - rr.minX, h: rr.maxY - rr.minY }, k, 7, p);
+        const pos = new Float32Array(list.length * 8), corner = new Float32Array(list.length * 8), index = new Uint32Array(list.length * 6);
+        list.forEach((st, j) => {
+          const x = st.x - this.origin.x, y = st.y - this.origin.y;
+          pos.set([x, y, x, y, x, y, x, y], j * 8);
+          corner.set(QUAD, j * 8);
+          const o = j * 4;
+          index.set([o, o + 1, o + 2, o, o + 2, o + 3], j * 6);
+        });
+        slot.update({ aPosition: pos, aCorner: corner }, index);
+      });
+    }
+    this.slots.stars.forEach((_slot, i) => {
+      const k = this.starKs[i];
+      this.shaders.stars[i].resources.star.uniforms.uLayerAlpha = k === undefined ? 0 : starLayerAlpha(k, cam.zoom, p) * p.backgroundOpacity;
+    });
+  }
+
+  destroy(): void {
+    for (const l of this.live) this.texts.release(l.t);
+    this.texts.destroy();
+    this.destroyGpu();
+    this.envTexture?.destroy(true);
+  }
+}
