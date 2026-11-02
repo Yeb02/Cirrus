@@ -1,14 +1,14 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, branchKey, groupOf, placementKey, type State } from '@cirrus/core';
+import { applyOp, branchKey, groupOf, layoutKey, placementKey, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
 import {
   absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
-  pasteBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
+  layoutBuild, pasteBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
 } from '../src/renderer/actions.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
@@ -141,4 +141,12 @@ test('coller : une seule action, qui dit les nœuds déjà présents', () => {
   const a = run(r.build);
   expect(a.label).toBe('Coller 2 nœuds');
   expect(s.placements.has(placementKey(plans.these, nodes.monde))).toBe(true);
+});
+
+test('disposer une connexion à la main, puis rétablir la disposition automatique (spec 8.5)', () => {
+  const { plans, connections } = ids;
+  run(layoutBuild(plans.lobby, connections.twoToTwo, { marker: { x: 1, y: 2 }, handles: {} }));
+  expect(s.connLayouts.get(layoutKey(plans.lobby, connections.twoToTwo))).toMatchObject({ marker: { x: 1, y: 2 } });
+  run(layoutBuild(plans.lobby, connections.twoToTwo, null));
+  expect(s.connLayouts.has(layoutKey(plans.lobby, connections.twoToTwo))).toBe(false);
 });

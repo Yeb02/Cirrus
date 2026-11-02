@@ -71,6 +71,9 @@ export interface RenderParams {
   connectionFadePx: number;
   ribbonCullAlpha: number;
   hoverBoostPx: number;
+  /** Handles of a selected connection's layout (spec 8.5): radius, and the rotation handle's distance beyond the trunk. */
+  handleRadiusPx: number;
+  rotationHandlePx: number;
   // Phantoms and signs
   centerRadius: number;
   badgeRadiusPx: number;
@@ -180,6 +183,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   connectionFadePx: 150,
   ribbonCullAlpha: 0.03,
   hoverBoostPx: 1,
+  handleRadiusPx: 5.5,
+  rotationHandlePx: 34,
   centerRadius: 9,
   badgeRadiusPx: 3,
   phantomFillAlpha: 0.45,
@@ -304,6 +309,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('connectionFadePx', 'Marge de fondu d’une connexion hors écran (px)', A, 'Connexions', 0, 600, 5),
   num('ribbonCullAlpha', 'Opacité sous laquelle une connexion n’est pas dessinée', A, 'Connexions', 0, 0.5, 0.005),
   num('hoverBoostPx', 'Élargissement d’une connexion survolée (px)', A, 'Connexions', 0, 4, 0.1),
+  num('handleRadiusPx', 'Rayon des poignées de disposition (px)', A, 'Connexions', 2, 15, 0.5),
+  num('rotationHandlePx', 'Distance de la poignée de rotation au tronc (px)', A, 'Connexions', 10, 120, 1),
   num('centerRadius', 'Rayon d’un fantôme de centre', A, 'Fantômes et signes', 2, 40, 0.5),
   num('badgeRadiusPx', 'Rayon du badge des connexions absentes (px)', A, 'Fantômes et signes', 1, 8, 0.5),
   num('phantomFillAlpha', 'Opacité du fond d’un fantôme', A, 'Fantômes et signes', 0, 1, 0.01),

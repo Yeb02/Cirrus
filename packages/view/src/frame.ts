@@ -1,4 +1,4 @@
-import type { Id, Vec2 } from '@cirrus/core';
+import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { groupPalette } from './color.ts';
@@ -73,24 +73,7 @@ export function buildFrame(
   };
   const extentOf = (it: SceneItem, i: number) =>
     it.kind === 'group' ? Math.max(...paddedOf(i).map((q) => Math.hypot(q.x - it.x, q.y - it.y))) : Math.max(it.halfW, it.halfH);
-  const bundleEnd = (i: number, role: BundleEnd['role'], hollow: boolean, dashed: boolean, key: Id): BundleEnd => {
-    const it = items[i];
-    const end: BundleEnd = { pos: rel(it), halfW: it.halfW, halfH: it.halfH, role, k: it.k, hollow, dashed, key };
-    if (it.kind === 'group') end.hull = { poly: it.hull!.map(rel), centre: rel(it), pad: it.pad! };
-    return end;
-  };
-  const geometry = (vc: VisibleConnection, closed: boolean): BundleGeometry => {
-    const sc = scene.connections[vc.conns[0]];
-    const layout = vc.conns.length === 1 && sc.layout
-      ? { ...sc.layout, marker: sc.layout.marker ? rel(sc.layout.marker) : undefined }
-      : undefined;
-    return bundleGeometry({
-      ends: vc.ends.map((e) => bundleEnd(closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key)),
-      stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
-      ...(vc.center !== undefined ? { centre: rel(items[vc.center]) } : {}),
-      ...(layout ? { layout } : {}),
-    }, p);
-  };
+  const geometry = (vc: VisibleConnection, closed: boolean): BundleGeometry => bundleFor(scene, vc, p, origin, undefined, closed);
 
   const camRel = rel(cam);
   const pxPerUnit = cam.zoom * p.curveZoomHeadroom;
@@ -115,6 +98,32 @@ export function buildFrame(
 
   placeTitles(scene, visible, frame, cam, p, prevSides, rel);
   return frame;
+}
+
+/**
+ * The bundle of a visible connection (spec 8.5), relative to `origin`. `layout` stands in for the plan's own (a handle
+ * being dragged, spec 8.5); `closed` draws it with its fading level closed.
+ */
+export function bundleFor(
+  scene: PlanScene, vc: VisibleConnection, p: RenderParams, origin: Vec2 = { x: 0, y: 0 },
+  layout?: Omit<ConnectionLayout, 'plan' | 'connection'>, closed = false,
+): BundleGeometry {
+  const items = scene.items;
+  const rel = (q: Vec2): Vec2 => ({ x: q.x - origin.x, y: q.y - origin.y });
+  const end = (i: number, role: BundleEnd['role'], hollow: boolean, dashed: boolean, key: Id): BundleEnd => {
+    const it = items[i];
+    const e: BundleEnd = { pos: rel(it), halfW: it.halfW, halfH: it.halfH, role, k: it.k, hollow, dashed, key };
+    if (it.kind === 'group') e.hull = { poly: it.hull!.map(rel), centre: rel(it), pad: it.pad! };
+    return e;
+  };
+  const sc = scene.connections[vc.conns[0]];
+  const own = layout ?? (vc.conns.length === 1 ? sc.layout : undefined);
+  return bundleGeometry({
+    ends: vc.ends.map((e) => end(closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key)),
+    stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
+    ...(vc.center !== undefined ? { centre: rel(items[vc.center]) } : {}),
+    ...(own ? { layout: { ...own, marker: own.marker ? rel(own.marker) : undefined } } : {}),
+  }, p);
 }
 
 function placeTitles(

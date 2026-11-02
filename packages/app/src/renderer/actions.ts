@@ -1,10 +1,10 @@
 import {
   type Action, addMember, branchKey, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setRole,
-  splitArm, type State, type Vec2,
+  exclude, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setLayout,
+  setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
 import {
-  type Clip, type ConnectTarget, dropEffects, dropTarget, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
+  type Clip, type ConnectTarget, dropEffects, dropTarget, type Layout, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
 } from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
@@ -225,4 +225,9 @@ export function absentBuild(scene: PlanScene, connection: Id, node: Id, at: Vec2
 export function renameBuild(id: Id, title: string): Build {
   const name = title.trim();
   return name ? (st) => editNode(st, id, { title: name }) : null;
+}
+
+/** A connection's layout in this plan (spec 8.5): set by its handles, or null for the automatic one. */
+export function layoutBuild(plan: Id, connection: Id, layout: Layout | null): Build {
+  return (st) => setLayout(st, plan, connection, layout);
 }

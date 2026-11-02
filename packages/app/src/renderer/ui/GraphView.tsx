@@ -3,7 +3,8 @@ import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
-  type Mode, type Clip, copyClip, deleteSummary,
+  type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
+  type LayoutHandle, layoutHandles, withLayout,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -15,7 +16,7 @@ import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
   absentBuild, addMemberBuild, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild, joinBuild,
-  lobbyConnectionBuild, pasteBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
+  layoutBuild, lobbyConnectionBuild, pasteBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
@@ -89,6 +90,9 @@ export function GraphView(props: {
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
   const clip = useRef<Clip | null>(null);
+  /** The layout handles of the selected connection (spec 8.5), drawn over the canvas; one may be dragged. */
+  const handlesSvg = useRef<SVGSVGElement>(null);
+  const handleDrag = useRef<{ handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene } | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby »). */
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number } } | null>(null);
 
@@ -293,6 +297,66 @@ export function GraphView(props: {
     if (!c) { notify('Rien à coller : copiez d’abord une sélection (Ctrl+C).'); return; }
     startPlacing({ kind: 'paste' }, `Coller ${c.nodes.length} ${plural(c.nodes.length, 'nœud', 'nœuds')}`, at);
   };
+  /**
+   * The handles of the one connection selected, if it is drawn alone (spec 8.5): its marker, its trunk's rotation, the
+   * Bézier handles of its branches — from the layout being dragged, if any.
+   */
+  const layoutSpots = (): { spots: HandleSpot[]; g: BundleGeometry; conn: number } | null => {
+    const e = engine.current, sc = sceneRef.current, sel = selectionRef.current, vis = e?.renderer.visible;
+    if (!e || !sc || !vis || sel.items.size > 0 || sel.connections.size !== 1) return null;
+    const id = [...sel.connections][0];
+    const vc = vis.connections.find((x) => x.conns.length === 1 && x.fade === 'none' && sc.connections[x.conns[0]].id === id && sc.connections[x.conns[0]].part === 'main');
+    if (!vc) return null;
+    const g = bundleFor(sc, vc, paramsRef.current, { x: 0, y: 0 }, handleDrag.current?.layout);
+    return { spots: layoutHandles(g, e.renderer.camera.zoom, paramsRef.current), g, conn: vc.conns[0] };
+  };
+  const drawHandles = () => {
+    const svg = handlesSvg.current, e = engine.current;
+    if (!svg || !e) return;
+    const L = layoutSpots();
+    if (!L) { if (svg.firstChild) svg.replaceChildren(); return; }
+    const p = paramsRef.current, cam = e.renderer.camera;
+    const rgb = (c: [number, number, number]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
+    const ink = rgb(p.selectionColor), edge = rgb(p.skyColor);
+    const at = L.spots.map((s) => worldToScreen(cam, s.at.x, s.at.y));
+    let html = '';
+    L.spots.forEach((s, i) => {
+      if (!s.from) return;
+      const f = worldToScreen(cam, s.from.x, s.from.y);
+      html += `<line x1="${f.x}" y1="${f.y}" x2="${at[i].x}" y2="${at[i].y}" stroke="${ink}"/>`;
+    });
+    for (const a of at) html += `<circle cx="${a.x}" cy="${a.y}" r="${p.handleRadiusPx}" fill="${ink}" stroke="${edge}"/>`;
+    svg.innerHTML = html;
+  };
+  /** A press on a handle starts dragging it, out of the gesture machine's way. */
+  const grabHandle = (sx: number, sy: number): boolean => {
+    const e = engine.current, sc = sceneRef.current, L = layoutSpots();
+    if (!e || !sc || !L) return false;
+    const cam = e.renderer.camera, w = screenToWorld(cam, sx, sy);
+    const handle = handleAt(L.spots, w.x, w.y, cam.zoom, paramsRef.current);
+    if (!handle) return false;
+    const c = sc.connections[L.conn], l = c.layout;
+    const base = l && { handles: l.handles, ...(l.marker ? { marker: l.marker } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
+    handleDrag.current = { handle, conn: L.conn, id: c.id, base, g: L.g, layout: base, scene: sc };
+    return true;
+  };
+  /** The connection redrawn with the handle under the cursor: a preview, nothing written. */
+  const dragHandle = (sx: number, sy: number) => {
+    const d = handleDrag.current, e = engine.current;
+    if (!d || !e) return;
+    d.layout = applyHandle(d.base, d.g, d.handle, screenToWorld(e.renderer.camera, sx, sy));
+    e.renderer.setScene(withLayout(d.scene, d.conn, d.layout), true);
+    dirty.current = true;
+  };
+  /** Released: the layout is written for this plan (one step); Escape or a refusal brings the old one back. */
+  const dropHandle = (keep: boolean) => {
+    const d = handleDrag.current;
+    handleDrag.current = null;
+    if (!d) return;
+    const restore = () => { engine.current?.renderer.setScene(d.scene); dirty.current = true; };
+    if (!keep || !d.layout || d.layout === d.base) { restore(); return; }
+    edit(layoutBuild(d.scene.plan.id, d.id, d.layout), restore);
+  };
   /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
   const openPopup = (connections: Id[], sx: number, sy: number) => {
     const r = root.current!.getBoundingClientRect();
@@ -341,9 +405,17 @@ export function GraphView(props: {
           }
           const [t, xs, ys, ...mods] = step.split(/\s+/);
           const sx = Number(xs), sy = Number(ys), button = mods.includes('right') ? 2 : 0;
-          if (t === 'down') feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
-          else if (t === 'move') feed({ t: 'move', sx, sy });
-          else if (t === 'up') feed({ t: 'up', button, sx, sy });
+          // The same paths as the real pointer: a layout handle first, else the gesture machine.
+          if (t === 'down') {
+            if (button === 0 && !mods.includes('ctrl') && !gestures.current.busy && grabHandle(sx, sy)) continue;
+            feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
+          } else if (t === 'move') {
+            if (handleDrag.current) dragHandle(sx, sy);
+            else feed({ t: 'move', sx, sy });
+          } else if (t === 'up') {
+            if (handleDrag.current) dropHandle(true);
+            else feed({ t: 'up', button, sx, sy });
+          }
           else if (t === 'key') feed({ t: 'key', key: xs });
           else if (t === 'wheel') {
             const r = root.current!.getBoundingClientRect();
@@ -378,6 +450,7 @@ export function GraphView(props: {
           if (dirty.current) {
             dirty.current = false;
             const rebuilt = e.renderer.renderFrame();
+            drawHandles();
             // What is under a resting pointer changes with the drawn set (I1 of the review): look again.
             if (rebuilt && lastPointer.current && !gestures.current.busy) hover(lastPointer.current.x, lastPointer.current.y);
             if (firstPending.current) {
@@ -751,6 +824,19 @@ export function GraphView(props: {
       case 'paste':
         startPaste(at);
         break;
+      case 'layout':
+      case 'resetLayout': {
+        // Selected, a connection shows its handles; « rétablir » forgets this plan's layout (spec 8.5).
+        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
+        if (!vc) break;
+        const id = sc.connections[vc.conns[0]].id;
+        if (action === 'resetLayout') edit(layoutBuild(sc.plan.id, id, null));
+        else {
+          setSelection({ items: new Set(), connections: new Set([id]) });
+          notify('Tirez le marqueur, la poignée de rotation ou les poignées des branches.');
+        }
+        break;
+      }
       case 'deleteConnection': {
         const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
         if (vc) askDeleteConnection(sc.plan.id, sc.connections[vc.conns[0]].id);
@@ -815,8 +901,7 @@ export function GraphView(props: {
         break;
       }
       default:
-        // A connection's layout: plan 3b, task 11.
-        onResultRef.current({ ok: false, message: 'Cette action arrive avec une prochaine étape du plan 3b.' });
+        break;
     }
     dirty.current = true;
   };
@@ -829,7 +914,7 @@ export function GraphView(props: {
 
   // A lost focus abandons the gesture in progress (Review Focus 2 of plan 3b).
   useEffect(() => {
-    const onBlur = () => feed({ t: 'cancel' });
+    const onBlur = () => { dropHandle(false); feed({ t: 'cancel' }); };
     window.addEventListener('blur', onBlur);
     return () => window.removeEventListener('blur', onBlur);
   }, []);
@@ -855,22 +940,25 @@ export function GraphView(props: {
         root.current!.focus();
         const { sx, sy } = local(ev);
         root.current!.setPointerCapture(ev.pointerId);
+        if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && grabHandle(sx, sy)) return;
         feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
       }}
       onPointerMove={(ev) => {
         const { sx, sy } = local(ev);
         lastPointer.current = { x: sx, y: sy };
+        if (handleDrag.current) { dragHandle(sx, sy); return; }
         if (!gestures.current.busy) hover(sx, sy);
         feed({ t: 'move', sx, sy });
       }}
       onPointerUp={(ev) => {
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
+        if (handleDrag.current) { dropHandle(true); return; }
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
       onPointerLeave={() => { lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
-        if (ev.key === 'Escape') { feed({ t: 'key', key: 'Escape' }); return; }
+        if (ev.key === 'Escape') { if (handleDrag.current) dropHandle(false); else feed({ t: 'key', key: 'Escape' }); return; }
         const sc = sceneRef.current;
         // Ctrl+C, Ctrl+V and Suppr (spec 7), outside a gesture in progress.
         if (sc && !gestures.current.busy) {
@@ -890,6 +978,7 @@ export function GraphView(props: {
       }}
     >
       <div className="canvas-host" ref={host} />
+      <svg className="handles" ref={handlesSvg} />
       {rectStyle && <div className="select-rect" style={rectStyle} />}
       <HierarchyCorner
         chain={chain}

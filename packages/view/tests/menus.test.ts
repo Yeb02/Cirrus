@@ -1,11 +1,11 @@
-import type { State } from '@cirrus/core';
+import { setLayout, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
 import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { camAtTextPx, fixture, measure, P } from './helpers.ts';
+import { camAtTextPx, fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene, these: PlanScene;
 beforeAll(() => {
@@ -51,4 +51,17 @@ test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
   expect(menuFor(s, these, { kind: 'connection', conn, key: null }, emptySelection(), false, visible).map((m) => m.action)).toContain('addToLobby');
   const lobbyVisible = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
   expect(menuFor(s, sc, { kind: 'connection', conn: 0, key: null }, emptySelection(), false, lobbyVisible).map((m) => m.action)).not.toContain('addToLobby');
+});
+
+test('une connexion disposée à la main peut retrouver sa disposition automatique (spec 8.5)', () => {
+  const st = structuredClone(s) as State;
+  const conn = ids.connections.twoToTwo;
+  run(st, setLayout(st, ids.plans.lobby, conn, { angle: 1, handles: {} }));
+  const scene = buildScene(st, ids.plans.lobby, measure, P);
+  const visible = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 16), P);
+  const vi = visible.connections.findIndex((vc) => scene.connections[vc.conns[0]].id === conn);
+  expect(menuFor(st, scene, { kind: 'connection', conn: vi, key: null }, emptySelection(), false, visible).map((m) => m.action)).toContain('resetLayout');
+  const plain = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
+  const vj = plain.connections.findIndex((vc) => sc.connections[vc.conns[0]].id === conn);
+  expect(menuFor(s, sc, { kind: 'connection', conn: vj, key: null }, emptySelection(), false, plain).map((m) => m.action)).not.toContain('resetLayout');
 });

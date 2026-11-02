@@ -6,7 +6,7 @@ import type { VisibleSet } from './visibility.ts';
 
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
-  | 'copy' | 'paste' | 'newNode' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'deleteConnection';
+  | 'copy' | 'paste' | 'newNode' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection';
 
 export interface MenuItem { action: MenuAction; label: string }
 
@@ -27,6 +27,7 @@ const LABELS: Record<MenuAction, string> = {
   importNode: 'Importer le nœud dans ce plan',
   splitArm: 'Scinder ce bras',
   layout: 'Disposer la connexion',
+  resetLayout: 'Rétablir la disposition automatique',
   deleteConnection: 'Supprimer la connexion…',
 };
 
@@ -47,7 +48,9 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
     const sc = scene.connections[vc.conns[0]];
     if (sc.part === 'far') return make(['joinArm', 'deleteConnection']);
     const placed = sc.ends.some((e) => e.key === hit.key && !e.dashed && scene.items[e.item].kind !== 'phantom');
-    const actions: MenuAction[] = placed ? ['splitArm', 'layout', 'deleteConnection'] : ['layout', 'deleteConnection'];
+    const actions: MenuAction[] = placed ? ['splitArm', 'layout'] : ['layout'];
+    if (sc.layout) actions.push('resetLayout');
+    actions.push('deleteConnection');
     // Not yet in the lobby: it can be added there, placing itself (spec 7).
     const lobby = [...s.plans.values()].find((p) => p.type === 'lobby');
     const members = s.connections.get(sc.id)?.members ?? [];
