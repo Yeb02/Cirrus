@@ -15,10 +15,16 @@ export interface RenderParams {
   starCellWorld: number;
   starSpacingPx: [number, number];
   starSizePx: number;
-  /** Bézier sampling: one segment per this many on-screen px... */
-  curveSegmentPx: number;
+  /** Bézier flattening tolerance in on-screen px (segments follow curvature: a straight curve gets one)... */
+  curveTolerancePx: number;
   /** ...valid until the zoom grows by this factor, then ribbons are resampled. */
   curveZoomHeadroom: number;
+  /** A connection fades out over this many px once its nearest endpoint leaves the screen. */
+  connectionFadePx: number;
+  /** Connections fainter than this at their widest point are not drawn (they would be invisible). */
+  ribbonCullAlpha: number;
+  /** On-screen length of a stub (connections displayed as stubs). */
+  stubPx: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -37,8 +43,11 @@ export const DEFAULT_PARAMS: RenderParams = {
   starCellWorld: 40,
   starSpacingPx: [40, 160],
   starSizePx: 1,
-  curveSegmentPx: 6,
+  curveTolerancePx: 0.2,
   curveZoomHeadroom: 2,
+  connectionFadePx: 150,
+  ribbonCullAlpha: 0.03,
+  stubPx: 40,
 };
 
 export interface SceneSpec {

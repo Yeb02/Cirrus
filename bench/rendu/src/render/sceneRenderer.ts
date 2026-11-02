@@ -1,5 +1,7 @@
-import { type Application, BitmapText, Container, Mesh, type Shader } from 'pixi.js';
-import { bundleBranches, ribbonAttributes } from '../geometry/ribbon';
+import { type Application, BitmapText, Container, type Geometry, Mesh, type Shader } from 'pixi.js';
+
+type CustomMesh = Mesh<Geometry, Shader>;
+import { bezierSegments, bundleBranches, ribbonAttributes, ribbonWorthDrawing, stubLine } from '../geometry/ribbon';
 import { convexHull, featherRing } from '../geometry/hull';
 import { starLayerAlpha, starsInRect } from '../geometry/stars';
 import { textPx } from '../scene/lod';
@@ -36,9 +38,11 @@ export class SceneRenderer {
   private lastSignature = '';
   private lastZoom = -1;
   private ribbonZoom = 1;
+  /** Vertex count of the current ribbon mesh (reported by the bench). */
+  ribbonVertices = 0;
   private starRect: Rect | null = null;
   private starKey = '';
-  private meshes: { box?: Mesh; hull?: Mesh; ribbon?: Mesh; stars: Mesh[] } = { stars: [] };
+  private meshes: { box?: CustomMesh; hull?: CustomMesh; ribbon?: CustomMesh; stars: CustomMesh[] } = { stars: [] };
   visible: VisibleSet | null = null;
 
   constructor(private readonly app: Application, private readonly scene: Scene, private readonly params: RenderParams) {
@@ -64,6 +68,30 @@ export class SceneRenderer {
     this.cam = cam;
   }
 
+  /**
+   * Draws one of each element type once so every shader is compiled during loading instead of on first sight
+   * (ANGLE/D3D11 compiles on first use). Returns the time it took.
+   */
+  warmUp(): number {
+    const t0 = performance.now();
+    const tri = new Uint32Array([0, 1, 2]);
+    const three = (size: number) => new Float32Array(3 * size);
+    const meshes = [
+      new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aParentK: { data: three(1), size: 1 } }, tri), shader: this.shaders.box }),
+      new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aAlpha: { data: three(1), size: 1 }, aK: { data: three(1), size: 1 }, aLevel: { data: three(1), size: 1 } }, tri), shader: this.shaders.hull }),
+      new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aNormal: { data: three(2), size: 2 }, aScale: { data: three(1), size: 1 }, aEnd0: { data: three(3), size: 3 }, aEnd1: { data: three(3), size: 3 } }, tri), shader: this.shaders.ribbon }),
+      ...this.shaders.star.map((shader) => new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aCorner: { data: three(2), size: 2 } }, tri), shader })),
+    ];
+    const text = new BitmapText({ text: 'Nœud θ∑', style: { fontFamily: FONT_FAMILY, fontSize: 16, fill: 0xe6eefc } });
+    const probe = new Container();
+    probe.addChild(...meshes, text);
+    this.app.stage.addChild(probe);
+    this.app.renderer.render(this.app.stage);
+    this.app.stage.removeChild(probe);
+    probe.destroy({ children: true });
+    return performance.now() - t0;
+  }
+
   /** Updates what changed, renders one frame and returns the CPU time spent in JS for it. */
   renderFrame(): { cpuMs: number; rebuilt: boolean } {
     const t0 = performance.now();
@@ -82,9 +110,19 @@ export class SceneRenderer {
     this.world.scale.set(cam.zoom);
     this.world.position.set((this.origin.x - cam.x) * cam.zoom + cam.widthPx / 2, (this.origin.y - cam.y) * cam.zoom + cam.heightPx / 2);
     setZoom([this.shaders.ribbon, this.shaders.hull, this.shaders.box, ...this.shaders.star], cam.zoom);
+    // Screen rectangle in local world units, for the ribbon fade (spec 8.5).
+    const hw = cam.widthPx / 2 / cam.zoom, hh = cam.heightPx / 2 / cam.zoom;
+    const lx = cam.x - this.origin.x, ly = cam.y - this.origin.y;
+    const ribbonUniforms = this.shaders.ribbon.resources.ribbon.uniforms;
+    ribbonUniforms.uScreen = [lx - hw, ly - hh, lx + hw, ly + hh];
+    ribbonUniforms.uFadeWorld = this.params.connectionFadePx / cam.zoom;
     if (cam.zoom !== this.lastZoom || rebuilt) this.updateTextAlpha();
     this.lastZoom = cam.zoom;
+    const heapBefore = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0;
+    const tr = performance.now();
     this.app.renderer.render(this.app.stage);
+    this.lastRenderMs = performance.now() - tr;
+    this.lastHeapDeltaMb = (((performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) - heapBefore) / 1e6;
     return { cpuMs: performance.now() - t0, rebuilt };
   }
 
@@ -109,28 +147,51 @@ export class SceneRenderer {
     return { x: n.x - this.origin.x, y: n.y - this.origin.y };
   }
 
+  /** Last rebuild's phase timings (ms) and sizes, for diagnosis. */
+  lastRebuild: Record<string, number> = {};
+  /** Time spent in PixiJS render() for the last frame. */
+  lastRenderMs = 0;
+  /** JS heap change across the last render() call, in MB (a large drop betrays a GC pause). */
+  lastHeapDeltaMb = 0;
+
   private rebuild(): void {
     const { scene, params } = this;
+    const t: number[] = [performance.now()];
     this.origin = { x: this.cam.x, y: this.cam.y };
     const visible = computeVisible(scene, this.index, this.cam, params);
     this.visible = visible;
     this.lastRect = this.viewRect(params.viewMarginPx);
     this.lastSignature = this.openSignature();
+    t.push(performance.now());
     this.rebuildBoxes(visible);
     this.rebuildHulls(visible);
+    t.push(performance.now());
     this.rebuildRibbons(visible);
+    t.push(performance.now());
+    const textsBefore = this.texts.size;
     this.rebuildTexts(visible);
+    t.push(performance.now());
     this.attachChildren();
+    t.push(performance.now());
+    this.lastRebuild = {
+      visibleMs: t[1] - t[0], boxHullMs: t[2] - t[1], ribbonMs: t[3] - t[2], textMs: t[4] - t[3], attachMs: t[5] - t[4],
+      nodes: visible.nodes.length, closed: visible.closedGroups.length, open: visible.openGroups.length,
+      connections: visible.connections.length, ribbonVertices: this.ribbonVertices, texts: this.texts.size, textsBefore,
+    };
   }
+
+  /** Layers left out for cost diagnosis (?hide=stars,hull,ribbon,box,text). */
+  hidden = new Set<string>();
 
   private attachChildren(): void {
     this.world.removeChildren();
-    this.world.addChild(this.starLayer);
-    for (const m of [this.meshes.hull, this.meshes.ribbon, this.meshes.box]) if (m) this.world.addChild(m);
-    for (const t of this.texts.values()) this.world.addChild(t);
+    if (!this.hidden.has('stars')) this.world.addChild(this.starLayer);
+    const layers: [string, CustomMesh | undefined][] = [['hull', this.meshes.hull], ['ribbon', this.meshes.ribbon], ['box', this.meshes.box]];
+    for (const [name, m] of layers) if (m && !this.hidden.has(name)) this.world.addChild(m);
+    if (!this.hidden.has('text')) for (const t of this.texts.values()) this.world.addChild(t);
   }
 
-  private replaceMesh(key: 'box' | 'hull' | 'ribbon', mesh: Mesh | undefined): void {
+  private replaceMesh(key: 'box' | 'hull' | 'ribbon', mesh: CustomMesh | undefined): void {
     const old = this.meshes[key];
     if (old) old.destroy({ children: false });
     this.meshes[key] = mesh;
@@ -195,30 +256,62 @@ export class SceneRenderer {
   }
 
   private rebuildRibbons(visible: VisibleSet): void {
-    // Adaptive Bézier sampling: smooth on screen until the zoom grows by curveZoomHeadroom.
-    const { curveSegmentPx, curveZoomHeadroom } = this.params;
+    // Bézier flattening follows curvature (a straight curve gets one segment) and stays within curveTolerancePx
+    // until the zoom grows by curveZoomHeadroom.
+    const { curveTolerancePx, curveZoomHeadroom } = this.params;
     const pxPerUnit = this.cam.zoom * curveZoomHeadroom;
-    const segmentsFor = (chord: number) => Math.min(96, Math.max(2, Math.ceil((chord * 1.2 * pxPerUnit) / curveSegmentPx)));
+    const segmentsFor = (_chord: number, p0: Vec2, c0: Vec2, c1: Vec2, p3: Vec2) => bezierSegments(p0, c0, c1, p3, pxPerUnit, curveTolerancePx);
     this.ribbonZoom = this.cam.zoom;
-    const parts: ReturnType<typeof ribbonAttributes>[] = [];
+    // Each branch also carries two endpoints of its connection (its own and the one nearest the camera at rebuild,
+    // or the other one for a two-member connection), so the shader can fade the whole connection (spec 8.5).
+    const parts: { attrs: ReturnType<typeof ribbonAttributes>; end0: number[]; end1: number[] }[] = [];
+    const endOf = (node: number): number[] => { const c = this.rel(node); return [c.x, c.y, this.index.extent[node]]; };
+    const cx = this.cam.x - this.origin.x, cy = this.cam.y - this.origin.y;
     for (const vc of visible.connections) {
+      // Invisible at any zoom this geometry stays valid for: skip (spec 8.5, fade below the minimum width).
+      const maxK = Math.max(...vc.branches.map((b) => this.scene.nodes[b.node].k));
+      if (!ribbonWorthDrawing(maxK, pxPerUnit, this.params)) continue;
       const members = vc.branches.map((b) => ({ pos: this.rel(b.node), role: b.role, k: this.scene.nodes[b.node].k }));
-      for (const br of bundleBranches(members, segmentsFor, this.params.factor)) parts.push(ribbonAttributes(br.centerline, br.scales));
+      if (vc.stubs) {
+        // Far connection: a short stub at each endpoint toward the others, fading with its own endpoint only.
+        members.forEach((m, i) => {
+          const others = members.filter((_, j) => j !== i);
+          const toward = { x: others.reduce((s2, o) => s2 + o.pos.x, 0) / others.length, y: others.reduce((s2, o) => s2 + o.pos.y, 0) / others.length };
+          const line = stubLine(m.pos, toward, this.params.stubPx / this.cam.zoom);
+          const sc = this.params.factor ** m.k;
+          const end = endOf(vc.branches[i].node);
+          parts.push({ attrs: ribbonAttributes(line, [sc, sc]), end0: end, end1: end });
+        });
+        continue;
+      }
+      let nearest = 0, best = Infinity;
+      members.forEach((m, i) => { const d = Math.hypot(m.pos.x - cx, m.pos.y - cy); if (d < best) { best = d; nearest = i; } });
+      bundleBranches(members, segmentsFor, this.params.factor).forEach((br, i) => {
+        const other = i !== nearest ? nearest : (nearest + 1) % members.length;
+        parts.push({ attrs: ribbonAttributes(br.centerline, br.scales), end0: endOf(vc.branches[i].node), end1: endOf(vc.branches[other].node) });
+      });
     }
     let nv = 0, ni = 0;
-    for (const p of parts) { nv += p.scale.length; ni += p.index.length; }
+    for (const p of parts) { nv += p.attrs.scale.length; ni += p.attrs.index.length; }
     const position = new Float32Array(nv * 2), normal = new Float32Array(nv * 2), scale = new Float32Array(nv);
+    const end0 = new Float32Array(nv * 3), end1 = new Float32Array(nv * 3);
     const index = new Uint32Array(ni);
     let vo = 0, io = 0;
-    for (const p of parts) {
+    for (const { attrs: p, end0: e0, end1: e1 } of parts) {
+      const count = p.scale.length;
       position.set(p.position, vo * 2);
       normal.set(p.normal, vo * 2);
       scale.set(p.scale, vo);
+      for (let v = 0; v < count; v++) { end0.set(e0, (vo + v) * 3); end1.set(e1, (vo + v) * 3); }
       for (let i = 0; i < p.index.length; i++) index[io + i] = p.index[i] + vo;
-      vo += p.scale.length; io += p.index.length;
+      vo += count; io += p.index.length;
     }
+    this.ribbonVertices = nv;
     this.replaceMesh('ribbon', nv === 0 ? undefined : new Mesh({
-      geometry: makeGeometry({ aPosition: { data: position, size: 2 }, aNormal: { data: normal, size: 2 }, aScale: { data: scale, size: 1 } }, index),
+      geometry: makeGeometry({
+        aPosition: { data: position, size: 2 }, aNormal: { data: normal, size: 2 }, aScale: { data: scale, size: 1 },
+        aEnd0: { data: end0, size: 3 }, aEnd1: { data: end1, size: 3 },
+      }, index),
       shader: this.shaders.ribbon,
     }));
   }
@@ -282,14 +375,14 @@ export class SceneRenderer {
           index.set([o, o + 1, o + 2, o, o + 2, o + 3], j * 6);
         });
         const mesh = new Mesh({ geometry: makeGeometry({ aPosition: { data: position, size: 2 }, aCorner: { data: corner, size: 2 } }, index), shader: this.shaders.star[i] });
-        (mesh as Mesh & { layerK?: number }).layerK = k;
+        (mesh as CustomMesh & { layerK?: number }).layerK = k;
         return mesh;
       });
       this.starLayer.removeChildren();
       for (const m of this.meshes.stars) this.starLayer.addChild(m);
     }
     this.meshes.stars.forEach((m, i) => {
-      this.shaders.star[i].resources.star.uniforms.uLayerAlpha = starLayerAlpha((m as Mesh & { layerK?: number }).layerK!, cam.zoom, params);
+      this.shaders.star[i].resources.star.uniforms.uLayerAlpha = starLayerAlpha((m as CustomMesh & { layerK?: number }).layerK!, cam.zoom, params);
     });
   }
 }

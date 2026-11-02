@@ -40,6 +40,21 @@ test('un groupe est groupOffsetSteps crans au-dessus de ses membres', () => {
   s.children.forEach((kids, g) => kids.forEach((c) => expect(s.nodes[g].k - s.nodes[c].k).toBe(2)));
 });
 
+test('connexions lointaines en amorces, en proportion de la part « quelconque »', () => {
+  const s = generateScene(spec, DEFAULT_PARAMS);
+  const stubs = s.connections.filter((c) => c.display === 'stubs').length / s.connections.length;
+  expect(stubs).toBeGreaterThan(0.03);
+  expect(stubs).toBeLessThan(0.07);
+});
+
+test('degrés sans échelle : quelques pôles bien au-dessus de la moyenne', () => {
+  const s = generateScene(spec, DEFAULT_PARAMS);
+  const degree = new Array(s.nodes.length).fill(0);
+  for (const c of s.connections) for (const m of c.members) degree[m.node]++;
+  const mean = degree.reduce((a, b) => a + b, 0) / degree.length;
+  expect(Math.max(...degree)).toBeGreaterThan(5 * mean);
+});
+
 test('connexions valides et proportions', () => {
   const s = generateScene(spec, DEFAULT_PARAMS);
   let multi = 0;

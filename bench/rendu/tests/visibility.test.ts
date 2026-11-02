@@ -75,6 +75,48 @@ test('hors de la vue et de sa marge : non dessiné', () => {
   expect(v.nodes).toHaveLength(0);
 });
 
+test('connexion sans aucune extrémité à l\'écran masquée, même si elle traverse l\'écran', () => {
+  // Deux nœuds libres de part et d'autre de la vue, hors vue et hors marge ; la connexion traverse l'écran.
+  const far: Scene = {
+    nodes: [
+      { id: 0, x: -5000, y: 0, k: 0, parent: -1, r: 0, title: 'L' },
+      { id: 1, x: 5000, y: 0, k: 0, parent: -1, r: 0, title: 'R' },
+    ],
+    connections: [{ id: 0, members: [{ node: 0, role: 'source' }, { node: 1, role: 'target' }] }],
+    children: [[], []],
+  };
+  const v = computeVisible(far, buildIndex(far), camAtZoom(1), DEFAULT_PARAMS);
+  expect(v.connections).toHaveLength(0);
+});
+
+test('une extrémité dans la marge suffit à garder la connexion', () => {
+  // Bord droit de l'écran à x = 1280 ; marge 200 px ; demi-boîte 105 : le nœud en 1500 touche la marge.
+  const near: Scene = {
+    nodes: [
+      { id: 0, x: -5000, y: 0, k: 0, parent: -1, r: 0, title: 'L' },
+      { id: 1, x: 1500, y: 0, k: 0, parent: -1, r: 0, title: 'R' },
+    ],
+    connections: [{ id: 0, members: [{ node: 0, role: 'source' }, { node: 1, role: 'target' }] }],
+    children: [[], []],
+  };
+  const v = computeVisible(near, buildIndex(near), camAtZoom(1), DEFAULT_PARAMS);
+  expect(v.connections).toHaveLength(1);
+});
+
+test('connexion en amorces : signalée, et jamais agrégée avec une connexion complète', () => {
+  const s: Scene = {
+    ...scene,
+    connections: [
+      { id: 0, members: [{ node: A, role: 'source' }, { node: C, role: 'target' }] },
+      { id: 1, members: [{ node: A, role: 'source' }, { node: C, role: 'target' }], display: 'stubs' },
+    ],
+  };
+  const v = computeVisible(s, buildIndex(s), camAtZoom(1), DEFAULT_PARAMS);
+  expect(v.connections).toHaveLength(2);
+  expect(v.connections.find((c) => c.ids.includes(1))!.stubs).toBe(true);
+  expect(v.connections.find((c) => c.ids.includes(0))!.stubs).toBeFalsy();
+});
+
 test('plus bas groupe commun', () => {
   expect(lowestCommonGroup(scene, [A, B])).toBe(G);
   expect(lowestCommonGroup(scene, [A, C])).toBe(-1);

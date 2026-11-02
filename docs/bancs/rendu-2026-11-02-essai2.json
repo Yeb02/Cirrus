@@ -1,0 +1,107 @@
+{
+  "date": "2026-11-02",
+  "runs": [
+    {
+      "label": "uncapped",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 0.3000000000029104,
+        "p95": 6,
+        "max": 5908.4,
+        "n": 21840
+      },
+      "steadyIntervalMs": {
+        "p50": 0.3000000000029104,
+        "p95": 5.899999999997817,
+        "max": 3135.8,
+        "n": 21598
+      },
+      "cpuMs": {
+        "p50": 0.19999980926513672,
+        "p95": 5.400000095367432,
+        "max": 5898.099999904633,
+        "n": 21841
+      },
+      "ribbonVerticesMax": 6689424,
+      "rebuilds": 132,
+      "loadMs": 1123.0999999046326,
+      "memoryMb": 1280,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 1.8999999999978172,
+        "p95": 4.099999999998545,
+        "max": 7427.1,
+        "n": 10754
+      },
+      "steadyIntervalMs": {
+        "p50": 1.8000000000029104,
+        "p95": 3.800000000000182,
+        "max": 17.800000000000182,
+        "n": 10583
+      },
+      "cpuMs": {
+        "p50": 0.9000000953674316,
+        "p95": 2.5,
+        "max": 7428.200000047684,
+        "n": 10755
+      },
+      "ribbonVerticesMax": 3217598,
+      "rebuilds": 102,
+      "loadMs": 1153.4000000953674,
+      "memoryMb": 1000,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 10.200000000000728,
+        "max": 1730.1000000000001,
+        "n": 3304
+      },
+      "steadyIntervalMs": {
+        "p50": 10,
+        "p95": 10.19999999999709,
+        "max": 1730.1000000000001,
+        "n": 3021
+      },
+      "cpuMs": {
+        "p50": 0.39999985694885254,
+        "p95": 2.4000000953674316,
+        "max": 1535.7999999523163,
+        "n": 3305
+      },
+      "ribbonVerticesMax": 6225080,
+      "rebuilds": 154,
+      "loadMs": 1128.2000000476837,
+      "memoryMb": 1720,
+      "display": "2561x1601 @165 Hz (interne)"
+    }
+  ],
+  "verdict": {
+    "pass": false,
+    "lines": [
+      "Carte graphique : p95 de l'intervalle sans limite (hors reconstructions) = 5.90 ms (critère ≤ 2 ms) → non tenu.",
+      "Toutes images comprises : p95 = 6.00 ms, maximum = 5908.4 ms.",
+      "Processeur : p95 du temps par image sous ×4 = 2.50 ms (critère ≤ 16 ms) → tenu ; pire image 7428 ms.",
+      "Avec synchronisation : p95 = 10.20 ms pour un budget de 6.06 ms à 165 Hz (informatif)."
+    ]
+  }
+}

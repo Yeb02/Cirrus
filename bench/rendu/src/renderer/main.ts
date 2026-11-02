@@ -1,27 +1,18 @@
 import 'pixi.js/unsafe-eval'; // eval-free shader/uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
+import { runBenchPass } from '../bench/run';
+import type { RunResult } from '../bench/metrics';
+import { overviewCamera } from '../bench/scenario';
 import { generateScene } from '../scene/generate';
-import { BENCH_SCENE, BOX_WORLD_WIDTH, DEFAULT_PARAMS } from '../scene/params';
-import type { Camera, Scene } from '../scene/types';
+import { BENCH_SCENE, DEFAULT_PARAMS } from '../scene/params';
 import { SceneRenderer } from '../render/sceneRenderer';
 
 const status = document.getElementById('status')!;
 
-export function overviewCamera(s: Scene, widthPx: number, heightPx: number): Camera {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of s.nodes) {
-    if (n.parent >= 0) continue;
-    const r = Math.max(n.r, (BOX_WORLD_WIDTH / 2) * DEFAULT_PARAMS.factor ** n.k);
-    minX = Math.min(minX, n.x - r); maxX = Math.max(maxX, n.x + r);
-    minY = Math.min(minY, n.y - r); maxY = Math.max(maxY, n.y + r);
-  }
-  const zoom = 0.95 * Math.min(widthPx / (maxX - minX), heightPx / (maxY - minY));
-  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, zoom, widthPx, heightPx };
-}
-
 async function start(): Promise<void> {
   const app = new Application();
-  await app.init({ resizeTo: window, antialias: true, background: '#0a1120', resolution: window.devicePixelRatio, autoDensity: true, preference: 'webgl', autoStart: false });
+  const diag = new URLSearchParams(location.search);
+  await app.init({ resizeTo: window, antialias: diag.get('aa') !== '0', background: '#0a1120', resolution: window.devicePixelRatio, autoDensity: true, preference: 'webgl', autoStart: false });
   document.body.appendChild(app.canvas);
   app.ticker.stop();
   Assets.setPreferences({ preferWorkers: false }); // no blob workers: the page's CSP forbids them
@@ -29,14 +20,28 @@ async function start(): Promise<void> {
 
   await new Promise((r) => setTimeout(r, 0)); // let the status text paint
   const scene = generateScene(BENCH_SCENE, DEFAULT_PARAMS);
-  const renderer = new SceneRenderer(app, scene, DEFAULT_PARAMS);
+  const loadStart = performance.now(); // a plan's load: index, first visible set, first frame
+  const params = diag.has('tol') ? { ...DEFAULT_PARAMS, curveTolerancePx: Number(diag.get('tol')) } : DEFAULT_PARAMS;
+  const renderer = new SceneRenderer(app, scene, params);
+  for (const layer of (diag.get('hide') ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
+  const warmUpMs = renderer.warmUp();
+  const gl = (app.renderer as unknown as { gl: WebGL2RenderingContext }).gl;
+  console.log(`warm-up ${warmUpMs.toFixed(0)} ms; timer query ext: ${!!gl.getExtension('EXT_disjoint_timer_query_webgl2')}`);
   let cam = overviewCamera(scene, app.screen.width, app.screen.height);
-  // ?focusK=<step>&zoom=<z>: start on the first node of that step (visual checks at a given depth).
+  renderer.setCamera(cam);
+  renderer.renderFrame();
+  const loadMs = performance.now() - loadStart;
+
   const q = new URLSearchParams(location.search);
+  if (q.get('bench') === '1') {
+    status.textContent = `Mesure en cours : ${q.get('label')}`;
+    await runBenchPass(app, scene, renderer, q.get('label') as RunResult['label'], loadMs, q.get('final') === '1');
+    return;
+  }
+  // ?focusK=<step>&zoom=<z>: start on the first node of that step (visual checks at a given depth).
   if (q.has('focusK')) {
     const target = scene.nodes.find((n) => n.k === Number(q.get('focusK')) && n.parent >= 0)!;
     cam = { ...cam, x: target.x, y: target.y, zoom: Number(q.get('zoom') ?? 1) };
-    console.log(`focus ${target.id} k=${target.k} parent=${target.parent} at ${target.x.toFixed(1)},${target.y.toFixed(1)}`);
   }
   console.log(`screen ${app.screen.width}x${app.screen.height} css, dpr ${window.devicePixelRatio}, canvas ${app.canvas.width}x${app.canvas.height}`);
 

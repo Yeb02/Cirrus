@@ -1,0 +1,85 @@
+{
+  "date": "2026-11-02",
+  "runs": [
+    {
+      "label": "uncapped",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 0.3000000000029104,
+        "p95": 5.700000000000728,
+        "max": 7052.700000000001,
+        "n": 8213
+      },
+      "cpuMs": {
+        "p50": 0.20000004768371582,
+        "p95": 4.400000095367432,
+        "max": 7058.099999904633,
+        "n": 8214
+      },
+      "rebuilds": 27,
+      "loadMs": 1854.1999998092651,
+      "memoryMb": 3760,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 2.199999999999818,
+        "p95": 6.399999999999636,
+        "max": 11874,
+        "n": 1519
+      },
+      "cpuMs": {
+        "p50": 1.2000000476837158,
+        "p95": 4.5,
+        "max": 11871.399999856949,
+        "n": 1520
+      },
+      "rebuilds": 8,
+      "loadMs": 1796.5,
+      "memoryMb": 2060,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 39.79999999999927,
+        "max": 2450.1,
+        "n": 1086
+      },
+      "cpuMs": {
+        "p50": 0.5,
+        "p95": 1.2999999523162842,
+        "max": 1911.4000000953674,
+        "n": 1087
+      },
+      "rebuilds": 33,
+      "loadMs": 1812.3999998569489,
+      "memoryMb": 3760,
+      "display": "2561x1601 @165 Hz (interne)"
+    }
+  ],
+  "verdict": {
+    "pass": false,
+    "lines": [
+      "Carte graphique : p95 de l'intervalle sans limite = 5.70 ms (critère ≤ 2 ms) → non tenu.",
+      "Processeur : p95 du temps par image sous ×4 = 4.50 ms (critère ≤ 16 ms) → tenu.",
+      "Avec synchronisation : p95 = 39.80 ms pour un budget de 6.06 ms à 165 Hz (informatif)."
+    ]
+  }
+}

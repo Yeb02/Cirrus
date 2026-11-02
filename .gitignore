@@ -4,3 +4,4 @@ dist/
 bench/latex/vendor/
 bench/latex/work/
 bench/rendu/scripts/fonts/
+docs/bancs/.rendu-runs.json

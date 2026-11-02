@@ -7,6 +7,46 @@ export function widthPx(scale: number, zoom: number, p: RenderParams): { width: 
   return { width: Math.min(p.widthMaxPx, Math.max(p.widthMinPx, raw)), alpha: Math.min(1, raw / p.widthMinPx) };
 }
 
+/**
+ * CPU reference of the ribbon shader's fade: 1 while an endpoint is on screen, linear fade over connectionFadePx
+ * once it has left (distance from the screen rectangle to the endpoint's box, in px). A connection takes the
+ * largest value over its endpoints.
+ */
+export function endpointFade(distPx: number, p: RenderParams): number {
+  return Math.max(0, 1 - Math.max(0, distPx) / p.connectionFadePx);
+}
+
+/**
+ * Segments needed to flatten a cubic Bézier within tolPx on screen. Wang's formula on the second differences, keeping
+ * only their component across the chord: acceleration along a straight line moves the samples but never bends the
+ * curve, so aligned control points always give one segment, however they are spaced.
+ */
+export function bezierSegments(p0: Vec2, c0: Vec2, c1: Vec2, p3: Vec2, pxPerUnit: number, tolPx: number): number {
+  let ux = p3.x - p0.x, uy = p3.y - p0.y;
+  const len = Math.hypot(ux, uy);
+  if (len < 1e-12) { ux = 1; uy = 0; } else { ux /= len; uy /= len; }
+  const across = (dx: number, dy: number) => Math.abs(dx * uy - dy * ux);
+  const d1 = across(p0.x - 2 * c0.x + c1.x, p0.y - 2 * c0.y + c1.y);
+  const d2 = across(c0.x - 2 * c1.x + p3.x, c0.y - 2 * c1.y + p3.y);
+  const n = Math.ceil(Math.sqrt((0.75 * Math.max(d1, d2) * pxPerUnit) / tolPx));
+  return Math.min(64, Math.max(1, n));
+}
+
+/**
+ * A connection whose widest point (its largest endpoint step) would still be fainter than ribbonCullAlpha is not
+ * worth its vertices. Callers pass the zoom the geometry must stay valid for (zoom × curveZoomHeadroom).
+ */
+export function ribbonWorthDrawing(maxK: number, zoom: number, p: RenderParams): boolean {
+  return widthPx(p.factor ** maxK, zoom, p).alpha >= p.ribbonCullAlpha;
+}
+
+/** A stub: a short straight line from an endpoint toward the far end of its connection (spec 8.5). */
+export function stubLine(from: Vec2, toward: Vec2, length: number): Vec2[] {
+  const dx = toward.x - from.x, dy = toward.y - from.y;
+  const d = Math.hypot(dx, dy) || 1;
+  return [from, { x: from.x + (dx / d) * length, y: from.y + (dy / d) * length }];
+}
+
 /** Scale along a branch, interpolated geometrically between the two ends' steps. */
 export function localScale(t: number, kA: number, kB: number, factor: number): number {
   return factor ** (kA + (kB - kA) * t);
@@ -61,8 +101,8 @@ const centroid = (pts: Vec2[]): Vec2 => ({
  */
 export function bundleBranches(
   members: { pos: Vec2; role: Role; k: number }[],
-  /** Fixed count, or a count derived from the chord between the member and the marker (adaptive sampling). */
-  segments: number | ((chord: number) => number),
+  /** Fixed count, or a count derived from the chord and the Bézier's points (adaptive sampling). */
+  segments: number | ((chord: number, p0: Vec2, c0: Vec2, c1: Vec2, p3: Vec2) => number),
   factor: number = DEFAULT_PARAMS.factor,
 ): { centerline: Vec2[]; scales: number[] }[] {
   const sources = members.filter((m) => m.role === 'source').map((m) => m.pos);
@@ -88,7 +128,7 @@ export function bundleBranches(
     }
     const c1 = { x: marker.x + dx * L * 0.4, y: marker.y + dy * L * 0.4 };
     const c0 = { x: m.pos.x + (c1.x - m.pos.x) * 0.35, y: m.pos.y + (c1.y - m.pos.y) * 0.35 };
-    const segs = typeof segments === 'number' ? segments : Math.max(1, segments(L));
+    const segs = typeof segments === 'number' ? segments : Math.max(1, segments(L, m.pos, c0, c1, marker));
     const centerline = sampleBranch(m.pos, c0, c1, marker, segs);
     const scales = centerline.map((_, i) => localScale(i / segs, m.k, markerK, factor));
     return { centerline, scales };

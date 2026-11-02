@@ -58,6 +58,7 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - **Tests :** une petite base artificielle contenant juste ce qu'il faut pour exercer chaque fonctionnalité (`Exigences.txt`).
 - **Mise en service :** l'utilisateur saisira ses vraies données quand tout sera prêt, serveur loué compris. Le format peut donc évoluer librement jusque-là. Des ajustements continueront ensuite, par exemple sur les groupes, donc la lecture des anciennes bases s'impose dès la mise en service.
 - **Machines :** le PC principal est un portable Lenovo avec une RTX 4070 Laptop, un Ryzen 7 7435HS, 16 Go de mémoire et un écran de 2560×1600 à 165 Hz. C'est le plus puissant. Un second PC, plus petit, a une carte graphique intégrée et fixe le plancher de performance. Il n'est pas disponible pour les mesures : on extrapole à partir du portable principal (section 21).
+- **Structure du graphe** (utilisateur, 2026-11-02) : petit monde et sans échelle. Plus deux nœuds sont éloignés dans le graphe, moins il est probable qu'ils soient connectés.
 - **Volume visé à terme :** quelques dizaines de milliers de nœuds, et environ dix fois plus de connexions. Seule une petite fraction est rendue à chaque instant : l'écran ne couvre qu'un sous-graphe, dont la plupart des nœuds sont dans des groupes repliés.
 - **Compatibilité des données :** toute version ultérieure de l'app lit toute base plus ancienne. L'inverse n'est pas requis : l'app se met à jour d'office si le serveur l'exige, sans refus.
 - **Format :** les données ne sont ni chiffrées ni obfusquées, au format type JSON. Leur lecture par une autre application n'a pas à être facilitée.
@@ -287,6 +288,8 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
 - **Survol :** il illumine toute la connexion.
 - **Pop-up :** un clic ouvre la relation en pop-up, à l'endroit du clic.
 - **Nœud absent du plan :** il devient une **amorce** en pointillés, nommée au survol, déplaçable et cliquable comme un hyperlien. La connexion s'affiche dès que deux de ses nœuds sont présents.
+- **Mode d'affichage d'une connexion** (proposition de l'utilisateur, 2026-11-02) : complet, ou en amorces. En mode amorces, chaque extrémité reçoit un court lien vers un nœud fantôme qui représente l'autre bout, rendu comme l'amorce d'un nœud absent du plan. C'est le cas typique des rares connexions entre nœuds très éloignés. L'utilisateur choisit le mode connexion par connexion. Le mode par défaut est complet [C].
+- **Connexion hors écran** (décision de l'utilisateur, 2026-11-02) : une connexion ne s'affiche que si au moins un de ses nœuds est à l'écran. Pour éviter les apparitions et disparitions brutales, elle s'efface progressivement quand son nœud le plus proche sort légèrement de l'écran. La largeur de cette marge de fondu est un paramètre avancé, à 150 px par défaut [C].
 - **Largeur :** elle n'exprime que l'échelle, pas le sens de la relation.
   - Largeur à l'écran = largeur de base × échelle locale × zoom, bornée par défaut entre 1 et 5 px. Sous le minimum, la ligne ne s'affine plus : elle s'efface.
   - L'échelle locale varie le long de la branche, de l'échelle d'un nœud à celle de l'autre. Une connexion entre deux échelles très différentes s'amincit donc et se dissout vers le petit nœud.

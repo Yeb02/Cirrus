@@ -39,13 +39,21 @@ export function ribbonShader(p: RenderParams): Shader {
     gl: {
       vertex: /* glsl */ `#version 300 es
       in vec2 aPosition; in vec2 aNormal; in float aScale;
+      in vec3 aEnd0; in vec3 aEnd1; // two endpoints of the connection: (x, y, half extent), local world units
       uniform float uWidthBase; uniform float uWidthMin; uniform float uWidthMax;
+      uniform vec4 uScreen;     // screen rectangle in local world units: minX, minY, maxX, maxY
+      uniform float uFadeWorld; // connectionFadePx / zoom
       out float vAlpha;
       ${COMMON}
+      // endpointFade() of ribbon.ts: 1 on screen, linear fade over the margin once the endpoint has left.
+      float endpointFade(vec3 e) {
+        vec2 d = max(max(uScreen.xy - e.xy, e.xy - uScreen.zw), 0.0);
+        return max(0.0, 1.0 - max(0.0, length(d) - e.z) / uFadeWorld);
+      }
       void main() {
         float raw = uWidthBase * aScale * uZoom;
         float w = clamp(raw, uWidthMin, uWidthMax);
-        vAlpha = min(1.0, raw / uWidthMin);
+        vAlpha = min(1.0, raw / uWidthMin) * max(endpointFade(aEnd0), endpointFade(aEnd1));
         gl_Position = project(aPosition + aNormal * (0.5 * w / uZoom));
       }`,
       fragment: /* glsl */ `#version 300 es
@@ -59,6 +67,8 @@ export function ribbonShader(p: RenderParams): Shader {
         uWidthMin: { value: p.widthMinPx, type: 'f32' },
         uWidthMax: { value: p.widthMaxPx, type: 'f32' },
         uRibbonColor: { value: [0.56, 0.72, 1.0, 0.75], type: 'vec4<f32>' },
+        uScreen: { value: [0, 0, 0, 0], type: 'vec4<f32>' },
+        uFadeWorld: { value: p.connectionFadePx, type: 'f32' },
       },
     },
   });
@@ -136,7 +146,8 @@ export function setZoom(shaders: Shader[], zoom: number): void {
 }
 
 export function makeGeometry(attributes: Record<string, { data: Float32Array; size: number }>, index: Uint32Array): Geometry {
-  const attrs: Record<string, { buffer: Float32Array; format: 'float32' | 'float32x2' }> = {};
-  for (const [name, a] of Object.entries(attributes)) attrs[name] = { buffer: a.data, format: a.size === 1 ? 'float32' : 'float32x2' };
+  const FORMATS = { 1: 'float32', 2: 'float32x2', 3: 'float32x3' } as const;
+  const attrs: Record<string, { buffer: Float32Array; format: (typeof FORMATS)[1 | 2 | 3] }> = {};
+  for (const [name, a] of Object.entries(attributes)) attrs[name] = { buffer: a.data, format: FORMATS[a.size as 1 | 2 | 3] };
   return new Geometry({ attributes: attrs, indexBuffer: index });
 }

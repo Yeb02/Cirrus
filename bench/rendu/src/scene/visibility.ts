@@ -10,7 +10,7 @@ const ROLE_CODE: Record<Role, number> = { source: 0, target: 1, associate: 2 };
 /** node = drawn node: the member itself, or its highest closed ancestor. */
 export interface VisibleBranch { node: number; role: Role; hollow: boolean }
 /** ids: aggregated connections (length >= 1). */
-export interface VisibleConnection { ids: number[]; branches: VisibleBranch[] }
+export interface VisibleConnection { ids: number[]; branches: VisibleBranch[]; /** Drawn as stubs toward a phantom of the far end. */ stubs?: boolean }
 export interface VisibleSet { nodes: number[]; closedGroups: number[]; openGroups: number[]; connections: VisibleConnection[] }
 
 /** Flat, contiguous copies of what the per-frame visibility pass reads, plus the connection lists by LCA. */
@@ -27,6 +27,8 @@ export interface SceneIndex {
   memStart: Int32Array; // members of connection c: memStart[c] .. memStart[c + 1] - 1
   memNode: Int32Array;
   memRole: Uint8Array;
+  /** 1 when the connection is displayed as stubs. */
+  stub: Uint8Array;
   /** Connection ids keyed by their lowest common group (-1 = top level). */
   byLca: Map<number, Int32Array>;
 }
@@ -70,10 +72,11 @@ export function buildIndex(scene: Scene): SceneIndex {
   let total = 0;
   for (let c = 0; c < conns.length; c++) { memStart[c] = total; total += conns[c].members.length; }
   memStart[conns.length] = total;
-  const memNode = new Int32Array(total), memRole = new Uint8Array(total);
+  const memNode = new Int32Array(total), memRole = new Uint8Array(total), stub = new Uint8Array(conns.length);
   const lists = new Map<number, number[]>();
   for (let c = 0; c < conns.length; c++) {
     const members = conns[c].members;
+    stub[c] = conns[c].display === 'stubs' ? 1 : 0;
     for (let i = 0; i < members.length; i++) {
       memNode[memStart[c] + i] = members[i].node;
       memRole[memStart[c] + i] = ROLE_CODE[members[i].role];
@@ -85,11 +88,11 @@ export function buildIndex(scene: Scene): SceneIndex {
   }
   const byLca = new Map<number, Int32Array>();
   for (const [lca, list] of lists) byLca.set(lca, Int32Array.from(list));
-  return { roots, rootTree, parent, x, y, extent, maxChildK, memStart, memNode, memRole, byLca };
+  return { roots, rootTree, parent, x, y, extent, maxChildK, memStart, memNode, memRole, stub, byLca };
 }
 
 export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: RenderParams): VisibleSet {
-  const { parent, x, y, extent, maxChildK, memStart, memNode, memRole } = index;
+  const { parent, x, y, extent, maxChildK, memStart, memNode, memRole, stub } = index;
   const n = parent.length;
   const halfW = (cam.widthPx / 2 + p.viewMarginPx) / cam.zoom;
   const halfH = (cam.heightPx / 2 + p.viewMarginPx) / cam.zoom;
@@ -125,6 +128,7 @@ export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: 
   };
 
   const pairs = new Map<number, Map<number, VisibleConnection>>();
+  const stubPairs = new Map<number, Map<number, VisibleConnection>>(); // never aggregated with full connections
   const others = new Map<string, VisibleConnection>();
   const result: VisibleConnection[] = [];
   const codes: number[] = [];
@@ -139,12 +143,14 @@ export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: 
         const n0 = memNode[start], n1 = memNode[start + 1];
         const e0 = endpointOf(n0), e1 = endpointOf(n1);
         if (e0 === e1) continue;
-        if (Math.max(x[e0], x[e1]) < minX || Math.min(x[e0], x[e1]) > maxX || Math.max(y[e0], y[e1]) < minY || Math.min(y[e0], y[e1]) > maxY) continue;
+        // Shown only if at least one endpoint is on screen or in the margin (user rule, spec 8.5).
+        if (!inView(e0) && !inView(e1)) continue;
         const r0 = memRole[start], r1 = memRole[start + 1];
         const c0 = e0 * 3 + r0, c1 = e1 * 3 + r1;
         const lo = c0 < c1 ? c0 : c1, hi = c0 < c1 ? c1 : c0;
-        let inner = pairs.get(lo);
-        if (!inner) pairs.set(lo, (inner = new Map()));
+        const table = stub[cid] ? stubPairs : pairs;
+        let inner = table.get(lo);
+        if (!inner) table.set(lo, (inner = new Map()));
         const existing = inner.get(hi);
         if (existing) existing.ids.push(cid);
         else {
@@ -152,6 +158,7 @@ export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: 
             { node: e0, role: ROLES[r0], hollow: e0 !== n0 },
             { node: e1, role: ROLES[r1], hollow: e1 !== n1 },
           ] };
+          if (stub[cid]) vc.stubs = true;
           inner.set(hi, vc);
           result.push(vc);
         }
@@ -160,8 +167,7 @@ export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: 
       // Up to five members: dedupe branches by (endpoint, role) with a linear scan.
       codes.length = 0;
       const branches: VisibleBranch[] = [];
-      let distinct = 0, first = -1;
-      let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+      let distinct = 0, first = -1, anyInView = false;
       for (let i = start; i < end; i++) {
         const e = endpointOf(memNode[i]);
         const code = e * 3 + memRole[i];
@@ -169,14 +175,14 @@ export function computeVisible(scene: Scene, index: SceneIndex, cam: Camera, p: 
         codes.push(code);
         branches.push({ node: e, role: ROLES[memRole[i]], hollow: e !== memNode[i] });
         if (first === -1) { first = e; distinct = 1; } else if (distinct === 1 && e !== first) distinct = 2;
-        if (x[e] < bx0) bx0 = x[e]; if (x[e] > bx1) bx1 = x[e]; if (y[e] < by0) by0 = y[e]; if (y[e] > by1) by1 = y[e];
+        if (!anyInView && inView(e)) anyInView = true;
       }
-      if (distinct < 2 || bx1 < minX || bx0 > maxX || by1 < minY || by0 > maxY) continue;
-      const key = codes.sort((u, v) => u - v).join(',');
+      if (distinct < 2 || !anyInView) continue;
+      const key = (stub[cid] ? 's' : 'f') + codes.sort((u, v) => u - v).join(',');
       const existing = others.get(key);
       if (existing) existing.ids.push(cid);
       else {
-        const vc: VisibleConnection = { ids: [cid], branches };
+        const vc: VisibleConnection = stub[cid] ? { ids: [cid], branches, stubs: true } : { ids: [cid], branches };
         others.set(key, vc);
         result.push(vc);
       }

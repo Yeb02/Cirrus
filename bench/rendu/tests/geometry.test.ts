@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { widthPx, localScale, sampleBranch, ribbonAttributes, bundleBranches } from '../src/geometry/ribbon';
+import { widthPx, localScale, sampleBranch, ribbonAttributes, bundleBranches, endpointFade, bezierSegments, ribbonWorthDrawing, stubLine } from '../src/geometry/ribbon';
 import { convexHull } from '../src/geometry/hull';
 import { starsInRect, starLayerAlpha } from '../src/geometry/stars';
 import { DEFAULT_PARAMS } from '../src/scene/params';
@@ -58,6 +58,35 @@ test('faisceau : nombre de segments adapté à la longueur de chaque branche', (
   // marqueur en (500, 0) : branches de 500, 500 et 40 unités
   expect(b[0].centerline.length).toBe(51);
   expect(b[2].centerline.length).toBe(5);
+});
+
+test('extrémité : opaque à l\'écran, fondu sur la marge, invisible au-delà', () => {
+  expect(endpointFade(0, DEFAULT_PARAMS)).toBe(1);
+  expect(endpointFade(DEFAULT_PARAMS.connectionFadePx / 2, DEFAULT_PARAMS)).toBeCloseTo(0.5);
+  expect(endpointFade(DEFAULT_PARAMS.connectionFadePx, DEFAULT_PARAMS)).toBe(0);
+  expect(endpointFade(1e6, DEFAULT_PARAMS)).toBe(0);
+});
+
+test('segments selon la courbure : un seul pour une courbe droite', () => {
+  expect(bezierSegments({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }, 1, 0.2)).toBe(1);
+  // points de contrôle alignés mais inégalement espacés (cas des faisceaux) : toujours droite
+  expect(bezierSegments({ x: 0, y: 0 }, { x: 900, y: 0 }, { x: 950, y: 0 }, { x: 1000, y: 0 }, 1, 0.2)).toBe(1);
+  const curved = bezierSegments({ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }, { x: 100, y: 0 }, 1, 0.2);
+  expect(curved).toBeGreaterThan(8);
+  // à l'écran deux fois plus grand, il en faut plus
+  expect(bezierSegments({ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }, { x: 100, y: 0 }, 2, 0.2)).toBeGreaterThan(curved);
+});
+
+test('connexion trop fine pour être vue : écartée, mais pas une fois le zoom suffisant', () => {
+  // deux groupes au cran 10 en vue d'ensemble : 1,5 × 1024 × 5e-6 ≈ 0,008 px de large, alpha ≈ 0,008
+  expect(ribbonWorthDrawing(10, 5e-6, DEFAULT_PARAMS)).toBe(false);
+  expect(ribbonWorthDrawing(10, 1e-3, DEFAULT_PARAMS)).toBe(true);
+  expect(ribbonWorthDrawing(0, 1, DEFAULT_PARAMS)).toBe(true);
+});
+
+test("amorce : segment court partant de l'extrémité vers l'autre bout", () => {
+  const l = stubLine({ x: 10, y: 0 }, { x: 1000, y: 0 }, 40);
+  expect(l).toEqual([{ x: 10, y: 0 }, { x: 50, y: 0 }]);
 });
 
 test('enveloppe convexe', () => {

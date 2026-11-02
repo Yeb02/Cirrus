@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-02",
+  "runs": [
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 10.299999999999272,
+        "max": 810,
+        "n": 3071
+      },
+      "steadyIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 30.200000000000728,
+        "n": 2862
+      },
+      "gpuMs": {
+        "p50": 0.862208,
+        "p95": 3.528704,
+        "max": 6.515712,
+        "n": 3072
+      },
+      "cpuMs": {
+        "p50": 1.7999999523162842,
+        "p95": 7.5,
+        "max": 809.8000001907349,
+        "n": 3072
+      },
+      "ribbonVerticesMax": 198264,
+      "rebuilds": 123,
+      "loadMs": 414.7000000476837,
+      "memoryMb": 116,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 1180,
+        "n": 3772
+      },
+      "steadyIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 1180,
+        "n": 3450
+      },
+      "gpuMs": {
+        "p50": 1.205248,
+        "p95": 3.566592,
+        "max": 44.521472,
+        "n": 3773
+      },
+      "cpuMs": {
+        "p50": 0.40000009536743164,
+        "p95": 6.5,
+        "max": 132.69999980926514,
+        "n": 3773
+      },
+      "ribbonVerticesMax": 198264,
+      "rebuilds": 171,
+      "loadMs": 440.39999985694885,
+      "memoryMb": 116,
+      "display": "2561x1601 @165 Hz (interne)"
+    }
+  ],
+  "verdict": {
+    "pass": false,
+    "lines": [
+      "Carte graphique : p95 du temps GPU mesuré (passe vsync) = 3.57 ms (critère ≤ 2 ms) → non tenu ; pire image 44.5 ms.",
+      "Processeur : p95 du temps par image sous ×4 = 7.50 ms (critère ≤ 16 ms) → tenu ; pire image 810 ms.",
+      "Avec synchronisation : p95 = 10.10 ms pour un budget de 6.06 ms à 165 Hz (informatif)."
+    ]
+  }
+}

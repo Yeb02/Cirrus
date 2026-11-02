@@ -3,6 +3,8 @@ import { mulberry32 } from './rng';
 import type { Role, Scene, SceneConnection, SceneNode } from './types';
 
 const ROOT = -1;
+/** Tail index of the node weights: below 2 the degree distribution has the heavy tail of scale-free graphs. */
+const PARETO_ALPHA = 1.2;
 
 export function generateScene(spec: SceneSpec, params: RenderParams): Scene {
   const rand = mulberry32(spec.seed);
@@ -137,14 +139,29 @@ function generateConnections(
     sameGrandPools.set(m, bySize(grandKids, m));
   }
 
+  // Scale-free degrees (user: "small world, scale free"): every node gets a Pareto weight, picks are weighted.
+  const weight = Array.from({ length: n }, () => (1 - rand()) ** (-1 / PARETO_ALPHA));
+  const weightedPick = (pool: number[], total: number): number => {
+    let r = rand() * total;
+    for (const id of pool) { r -= weight[id]; if (r <= 0) return id; }
+    return pool[pool.length - 1];
+  };
   const pickDistinct = (pool: number[], m: number): number[] => {
+    const total = pool.reduce((s, id) => s + weight[id], 0);
     const picked = new Set<number>();
-    while (picked.size < m) picked.add(pool[Math.floor(rand() * pool.length)]);
+    while (picked.size < m) picked.add(weightedPick(pool, total));
     return [...picked];
   };
+  const cumulative = new Float64Array(n);
+  weight.forEach((w, i) => { cumulative[i] = (i > 0 ? cumulative[i - 1] : 0) + w; });
   const anyNodes = (m: number): number[] => {
     const picked = new Set<number>();
-    while (picked.size < m) picked.add(Math.floor(rand() * n));
+    while (picked.size < m) {
+      const r = rand() * cumulative[n - 1];
+      let lo = 0, hi = n - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (cumulative[mid] < r) lo = mid + 1; else hi = mid; }
+      picked.add(lo);
+    }
     return [...picked];
   };
 
@@ -154,12 +171,17 @@ function generateConnections(
     const m = rand() < spec.multiMemberShare ? randInt(3, 5) : 2;
     const u = rand();
     let ids: number[];
+    let display: SceneConnection['display'] = 'full';
     const sp = sameParentPools.get(m)!;
     const sg = sameGrandPools.get(m)!;
     if (u < localShare && sp.length > 0) ids = pickDistinct(kidsOf(sp[Math.floor(rand() * sp.length)]), m);
     else if (u < localShare + grandShare && sg.length > 0) ids = pickDistinct(grandKids.get(sg[Math.floor(rand() * sg.length)])!, m);
-    else ids = anyNodes(m);
-    connections.push({ id, members: assignRoles(ids, rand) });
+    else {
+      // The rare far connections: shown as stubs toward a phantom of the far end (user's choice, spec 8.5).
+      ids = anyNodes(m);
+      display = 'stubs';
+    }
+    connections.push({ id, members: assignRoles(ids, rand), display });
   }
   return connections;
 }

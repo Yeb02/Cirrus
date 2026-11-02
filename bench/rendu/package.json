@@ -7,7 +7,8 @@
     "test": "vitest run",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "start": "electron-vite preview"
+    "start": "electron-vite preview",
+    "bench": "electron-vite build && node scripts/bench.mjs"
   },
   "dependencies": {
     "flatbush": "^4.7.0",
