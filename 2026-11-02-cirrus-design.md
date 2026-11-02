@@ -294,12 +294,12 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
     2. La vue saute vers le nœud lointain, où le curseur tient le second fantôme, et un clic gauche le pose.
     3. La vue revient à sa position initiale.
   - **Annulation [C] :** Échap annule tout le geste, et le geste entier se défait en un seul Ctrl+Z.
-  - **Foyers :** une connexion peut ainsi former plusieurs foyers. Chaque foyer dessine normalement ses membres réels, et chaque bras scindé y est remplacé par le fantôme du nœud lointain, qui garde le rôle et la flèche de ce nœud. Du côté du nœud lointain, sa branche relie le nœud au second fantôme, qui représente le centre de la connexion [C, à confirmer].
+  - **Foyers :** une connexion peut ainsi former plusieurs foyers. Chaque foyer dessine normalement ses membres réels, et chaque bras scindé y est remplacé par le fantôme du nœud lointain, qui garde le rôle et la flèche de ce nœud. Du côté du nœud lointain, sa branche relie le nœud au second fantôme, qui représente le centre de la connexion (confirmé par l'utilisateur).
   - **Position :** un fantôme est fixe dans le plan, et grandit et rétrécit avec le zoom comme le reste.
-  - **Usage [C] :**
-    - le survol nomme ce que représente le fantôme ;
-    - un clic gauche saute vers l'autre extrémité ;
-    - un clic droit propose « réunir ce bras », qui supprime les deux fantômes et redessine la branche entière.
+  - **Usage** (décision de l'utilisateur) :
+    - un clic gauche ouvre le contenu de ce que représente le fantôme, comme sur l'original : le pop-up du nœud lointain, ou celui de la connexion ;
+    - un clic droit propose « s'y téléporter », qui amène la vue sur l'original et compte comme un saut pour précédent et suivant, ainsi que « réunir ce bras », qui supprime les deux fantômes et redessine la branche entière ;
+    - le survol nomme ce que représente le fantôme [C].
   - **Plan :** les fantômes et les foyers font partie de la disposition, donc ils sont propres à chaque plan.
 - **Fantômes et groupes** (décision de l'utilisateur, 2026-11-02) : tout fantôme, qu'il vienne d'un bras scindé ou d'un membre absent du plan (11.3), se place dans un groupe comme un nœud ordinaire. Il entre dans l'enveloppe et en sort selon les mêmes règles, compte dans le calcul de l'enveloppe et se replie avec le groupe. Son appartenance ne concerne que son plan, donc aucune question « partout ou ici seulement » ne se pose [C].
 - **Connexion hors écran** (décision de l'utilisateur, 2026-11-02) : une connexion ne s'affiche que si au moins un de ses nœuds est à l'écran. Pour éviter les apparitions et disparitions brutales, elle s'efface progressivement quand son nœud le plus proche sort légèrement de l'écran. La largeur de cette marge de fondu est un paramètre avancé, à 150 px par défaut [C].
