@@ -18,3 +18,4 @@ export * from './navigation.ts';
 export * from './edit.ts';
 export * from './gestures.ts';
 export * from './selection.ts';
+export * from './menus.ts';

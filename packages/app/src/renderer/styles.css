@@ -100,3 +100,12 @@ button, input, select { font: inherit; color: var(--ink); }
   background: rgba(19, 31, 55, 0.96); border: 1px solid rgba(143, 184, 255, 0.4); box-shadow: 0 8px 24px rgba(2, 6, 16, 0.55);
 }
 .select-rect { position: absolute; z-index: 4; pointer-events: none; border: 1px dashed rgba(255, 217, 160, 0.85); background: rgba(255, 217, 160, 0.08); }
+.context-menu { position: absolute; top: 0; left: 0; z-index: 30; }
+.title-editor {
+  position: absolute; z-index: 30; box-sizing: border-box; height: 32px; padding: 4px 10px; text-align: center;
+  background: #1b2b49; border: 1px solid var(--accent); border-radius: 8px; outline: none; user-select: text;
+}
+.ghost {
+  position: absolute; z-index: 25; pointer-events: none; transform: translate(-50%, -50%); padding: 8px 14px; border-radius: 10px;
+  background: rgba(27, 43, 73, 0.75); border: 1px dashed var(--accent); color: var(--ink); font-size: 13px; white-space: nowrap;
+}

@@ -1,8 +1,8 @@
-import { type Action, combine, exclude, type Id, include, moveNodes, movePhantom, type State } from '@cirrus/core';
+import type { Id, State } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, intruders,
+  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -12,6 +12,8 @@ import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
+import { type Build, createBuild, dropBuild, hideBuild, renameBuild, scaleBuild } from '../actions.ts';
+import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 
 const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
@@ -53,6 +55,21 @@ export function GraphView(props: {
   const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean } | null>(null);
   const intrudersRef = useRef(new Map<number, number>());
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
+  const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
+  const [ghost, setGhost] = useState<{ x: number; y: number; text: string } | null>(null);
+  /** What a gesture without a held button will do once placed. */
+  const placing = useRef<{ kind: 'newNode' } | { kind: 'exclude'; base: PlanScene; items: number[]; from: { x: number; y: number } } | null>(null);
+
+  /** Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. */
+  const edit = (build: Build, onRefused?: () => void) => {
+    const session = sessionRef.current;
+    if (!build || !session) { onRefused?.(); return; }
+    void session.run(build).then((r) => {
+      if (!r.ok) onRefused?.();
+      onResultRef.current(r);
+    });
+  };
   const sessionRef = useRef(props.session);
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
@@ -285,10 +302,11 @@ export function GraphView(props: {
         break;
       }
       case 'context': {
-        // A right click outside the selection lets it go (spec 9.1); the menus come with task 7.
+        // A right click outside the selection lets it go (spec 9.1), then opens the menu of what is under it.
         const target = targetOf(intent.hit);
-        const sel = selectionRef.current;
-        if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) setSelection(emptySelection());
+        let sel = selectionRef.current;
+        if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) { sel = emptySelection(); setSelection(sel); }
+        setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items: menuFor(props.state, sc, intent.hit, sel, false) });
         break;
       }
       case 'rectMove':
@@ -330,49 +348,37 @@ export function GraphView(props: {
         dragging.current = null;
         if (!d) break;
         e.renderer.setDropTarget(null);
-        const p = paramsRef.current, base = d.base;
-        const target = dropTarget(base, intent.at, d.items, e.renderer.camera.zoom, p);
-        const effects = dropEffects(base, d.items, target, intent.alt);
-        if (intent.dx === 0 && intent.dy === 0 && effects.every((f) => !f.leave && f.enter === null)) { e.renderer.setScene(base); break; }
         // One action for the whole drop (spec 6.4): the moves, then the groups left and entered.
-        const effectOf = new Map(effects.map((f) => [f.item, f]));
-        const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number; group?: Id | null }[] = [];
-        const memberships: ((s: State) => Action)[] = [];
-        const plan = base.plan.id, targetId = target === null ? null : base.items[target].id;
-        const collect = (i: number) => {
-          const it = base.items[i], f = effectOf.get(i);
-          const group = f?.enter != null ? targetId : f?.leave ? null : undefined;
-          if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + intent.dx, y: it.y + intent.dy, ...(group !== undefined ? { group } : {}) });
-          else {
-            if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
-            if (f?.enter != null) memberships.push((x) => include(x, plan, it.id, targetId!));
-            else if (f?.leave) memberships.push((x) => exclude(x, plan, it.id));
-          }
-          for (const c of it.children) collect(c);
-        };
-        for (const i of d.items) collect(i);
-        // A simple node receiving its first members becomes a group, groupOffsetSteps above its largest member (spec 8.1).
-        const entering = effects.filter((f) => f.enter !== null).map((f) => base.items[f.item].k);
-        if (target !== null && base.items[target].kind === 'node' && entering.length > 0) {
-          const k = Math.max(...entering) + p.groupOffsetSteps;
-          if (base.items[target].k < k) memberships.push((x) => moveNodes(x, plan, [{ node: targetId!, k }]));
-        }
-        const session = sessionRef.current;
-        if (!session) { e.renderer.setScene(base); break; }
-        const count = nodes.length + phantoms.length;
-        const label = targetId !== null && effects.some((f) => f.enter !== null) ? `Mettre dans « ${base.items[target!].title} »`
-          : effects.some((f) => f.leave) ? 'Sortir du groupe' : count === 1 ? 'Déplacer un élément' : `Déplacer ${count} éléments`;
-        void session.run((st) => combine(st, label, [
-          ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
-          ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group)),
-          ...memberships,
-        ])).then((r) => {
-          // Refused: back to where it was. Written: the scene follows the state.
-          if (!r.ok) { engine.current?.renderer.setScene(d.base); dirty.current = true; }
-          onResultRef.current(r);
-        });
+        const build = dropBuild(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, e.renderer.camera.zoom, paramsRef.current);
+        if (!build) { e.renderer.setScene(d.base); break; }
+        // Refused: back to where it was. Written: the scene follows the state.
+        edit(build, () => { engine.current?.renderer.setScene(d.base); dirty.current = true; });
         break;
       }
+      case 'placeMove':
+        setGhost((g) => (g ? { ...g, x: intent.sx, y: intent.sy } : g));
+        break;
+      case 'place': {
+        const what = placing.current;
+        placing.current = null;
+        setGhost(null);
+        if (!what) break;
+        const zoom = e.renderer.camera.zoom, p = paramsRef.current;
+        if (what.kind === 'newNode') {
+          // The node is placed, then named in place (spec 12); the creation is written with its title, as one step.
+          const sp = worldToScreen(e.renderer.camera, intent.at.x, intent.at.y);
+          const width = Math.max(140, (p.boxWidth - 2 * p.boxPadX) * p.textScale * zoom * p.factor ** Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor)));
+          setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p)); } });
+        } else if (what.kind === 'exclude') {
+          // Out of its group, put down where clicked; entering the group under the cursor if it is another (spec 10).
+          edit(dropBuild(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, zoom, p));
+        }
+        break;
+      }
+      case 'placeCancel':
+        placing.current = null;
+        setGhost(null);
+        break;
       case 'dragCancel': {
         const d = dragging.current;
         dragging.current = null;
@@ -382,6 +388,47 @@ export function GraphView(props: {
       }
       default:
         break;
+    }
+    dirty.current = true;
+  };
+  /** A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. */
+  const pick = (action: MenuAction, hit: Hit, at: { x: number; y: number }) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc) return;
+    const p = paramsRef.current, sel = selectionRef.current;
+    const clicked = hit.kind === 'item' ? hit.item : -1;
+    const clickedId = clicked >= 0 ? sc.items[clicked].id : null;
+    const targets = clickedId && sel.items.has(clickedId)
+      ? [...sel.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; })
+      : clicked >= 0 ? [clicked] : [];
+    switch (action) {
+      case 'newNode':
+        placing.current = { kind: 'newNode' };
+        setGhost({ x: at.x, y: at.y, text: 'Nouveau nœud' });
+        gestures.current.start('place');
+        break;
+      case 'rename': {
+        if (clicked < 0) break;
+        const it = sc.items[clicked], sp = worldToScreen(e.renderer.camera, it.x, it.y);
+        setEditor({ x: sp.x, y: sp.y, width: Math.max(140, 2 * it.halfW * e.renderer.camera.zoom), initial: it.title, done: (title) => { if (title !== null && title.trim() !== it.title) edit(renameBuild(it.id, title)); } });
+        break;
+      }
+      case 'exclude':
+        if (clicked < 0) break;
+        placing.current = { kind: 'exclude', base: sc, items: [clicked], from: { x: sc.items[clicked].x, y: sc.items[clicked].y } };
+        setGhost({ x: at.x, y: at.y, text: sc.items[clicked].title });
+        gestures.current.start('exclude');
+        break;
+      case 'scaleDown':
+      case 'scaleUp':
+        edit(scaleBuild(sc, targets, action === 'scaleUp' ? 1 : -1, p));
+        break;
+      case 'hide':
+        edit(hideBuild(sc, targets.map((i) => sc.items[i].id)));
+        break;
+      default:
+        // Connections, phantoms, stubs, copy and paste, deletion: plan 3b, tasks 9 and 10.
+        onResultRef.current({ ok: false, message: 'Cette action arrive avec une prochaine étape du plan 3b.' });
     }
     dirty.current = true;
   };
@@ -448,6 +495,9 @@ export function GraphView(props: {
         onPick={(item) => { const e = engine.current, sc = sceneRef.current; if (e && sc) moveCamera(fitItem(sc, item, e.renderer.camera, paramsRef.current)); }}
       />
       <Tooltip tip={tip} />
+      {ghost && <Ghost x={ghost.x} y={ghost.y} text={ghost.text} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} onPick={(a) => pick(a, menu.hit, { x: menu.x, y: menu.y })} />}
+      {editor && <TitleEditor x={editor.x} y={editor.y} width={editor.width} initial={editor.initial} onDone={(t) => { setEditor(null); editor.done(t); root.current?.focus(); }} />}
     </div>
   );
 }
