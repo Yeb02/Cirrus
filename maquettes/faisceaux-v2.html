@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexions et groupes</title>
+<style>
+:root{
+  --sky0:#0a1120; --sky1:#14213a; --sky2:#26395e;
+  --ink:#e9effb; --muted:#9fb1cf;
+  --dir:#8fb8ff; --absent:#8494ae;
+  --node:#1b2b49; --node-edge:#4d6a9a; --handle:#ffd9a0;
+}
+html,body{height:100%;margin:0;background:var(--sky0);color:var(--ink);
+  font:14px/1.45 "Segoe UI",system-ui,sans-serif;overflow:hidden}
+body{display:flex}
+#stage{flex:1;min-width:0;position:relative;background:
+  radial-gradient(900px 500px at 25% 15%,rgba(120,160,230,.20),transparent 70%),
+  radial-gradient(800px 600px at 80% 85%,rgba(170,140,230,.14),transparent 70%),
+  linear-gradient(160deg,var(--sky1),var(--sky0))}
+svg#svg{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;user-select:none;cursor:grab}
+svg#svg.dragging{cursor:grabbing}
+aside{width:310px;flex:none;box-sizing:border-box;padding:18px;overflow:auto;
+  background:rgba(14,23,41,.92);border-left:1px solid rgba(143,184,255,.18)}
+h1{font-size:17px;margin:0 0 4px;font-weight:600}
+h2{font-size:12px;margin:18px 0 6px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+p{margin:0 0 8px}
+aside ul{margin:0;padding-left:18px}
+aside li{margin-bottom:4px}
+.note{color:var(--muted);font-size:13px}
+label{display:block;margin-bottom:10px;font-size:13px}
+input[type=range]{width:100%;accent-color:var(--dir)}
+button{font:inherit;color:var(--ink);background:var(--sky2);border:1px solid var(--node-edge);
+  border-radius:6px;padding:5px 11px;cursor:pointer}
+button:hover{background:#31497a}
+#factors{display:flex;gap:6px;margin-bottom:6px}
+#factors button.on{background:#4a6ea8;border-color:#a9c6f5}
+#readout{font-size:13px;color:var(--muted);margin-bottom:10px;min-height:38px}
+.legend{display:grid;grid-template-columns:44px 1fr;gap:4px 8px;align-items:center;font-size:13px}
+.legend svg{width:44px;height:16px;display:block}
+.legend path,.legend line{stroke:var(--dir);stroke-width:1.6;fill:none}
+.legend .fill{fill:var(--dir);stroke:none}
+.legend .holl{fill:var(--sky1);stroke:var(--dir);stroke-width:1.3}
+
+.hull{transition:none}
+.hulltop{font-size:15px;font-weight:600;text-anchor:middle;pointer-events:none;fill:#d6e3fa}
+.hullmid{font-size:19px;font-weight:600;text-anchor:middle;pointer-events:none;fill:#fff}
+
+.strand,.trunk{fill:none;stroke:var(--dir);vector-effect:non-scaling-stroke;stroke-linecap:round}
+.strand{stroke-width:1.8;opacity:.75}
+.strand.absent{stroke-dasharray:4 5;stroke:var(--absent)}
+.trunk{stroke-width:3.4;opacity:.85}
+.hit{fill:none;stroke:transparent;stroke-width:14;vector-effect:non-scaling-stroke;cursor:pointer}
+.glyph{fill:var(--dir);stroke:none;opacity:.95}
+.glyph.hollow{fill:var(--sky1);stroke:var(--dir);stroke-width:1.3;vector-effect:non-scaling-stroke}
+.glyph.absent{fill:var(--absent)}
+.mk{fill:var(--sky1);stroke:var(--dir);stroke-width:2;vector-effect:non-scaling-stroke;cursor:move}
+.stubdot{fill:var(--sky1);stroke:var(--absent);vector-effect:non-scaling-stroke;stroke-width:1.5;cursor:move}
+.stublabel{fill:var(--muted);font-style:italic;text-anchor:middle;opacity:0;pointer-events:none}
+.conn.hot .stublabel,.conn.sel .stublabel{opacity:1}
+.ctitle{fill:#cfdcf5;text-anchor:middle;dominant-baseline:central;cursor:pointer;
+  paint-order:stroke;stroke:rgba(10,17,32,.8);stroke-width:3px;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.conn.hot .ctitle,.conn.sel .ctitle{fill:#fff}
+svg.focus .conn:not(.hot):not(.sel){opacity:.2}
+.conn.hot .strand:not(.absent),.conn.sel .strand:not(.absent){opacity:1;stroke-width:2.6}
+.conn.hot .trunk,.conn.sel .trunk{opacity:1;stroke-width:4.4}
+.conn.agg .strand{stroke-width:3.2;opacity:.85}
+
+.node rect{fill:var(--node);stroke:var(--node-edge);stroke-width:1.2;vector-effect:non-scaling-stroke;cursor:move;
+  filter:drop-shadow(0 3px 10px rgba(5,10,25,.55))}
+.node text{fill:var(--ink);font-size:16px;text-anchor:middle;pointer-events:none}
+svg.focus .node:not(.member){opacity:.42}
+.node.member rect{stroke:#cfe0ff;stroke-width:1.8}
+
+.guide{stroke:var(--handle);stroke-width:1;stroke-dasharray:3 3;vector-effect:non-scaling-stroke;opacity:.7;pointer-events:none}
+.hd{fill:var(--handle);stroke:#3a2c12;stroke-width:1;vector-effect:non-scaling-stroke;cursor:pointer}
+.hd.rot{fill:#fff}
+
+.pop{position:absolute;width:320px;max-height:60%;overflow:auto;background:rgba(19,31,55,.97);
+  border:1px solid rgba(143,184,255,.4);border-radius:10px;box-shadow:0 10px 30px rgba(2,6,16,.6);display:none}
+.pop.on{display:block}
+.pophead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;cursor:move;
+  border-bottom:1px solid rgba(143,184,255,.2);font-weight:600}
+.pophead button{padding:0 8px;line-height:20px;background:none;border-color:transparent}
+.popbody{padding:10px 12px;font-size:13px}
+.popbody p{margin-bottom:7px}
+.popbody b{font-weight:600}
+.popbody hr{border:0;border-top:1px solid rgba(143,184,255,.2);margin:10px 0}
+.tag{display:inline-block;padding:0 7px;margin:2px 4px 2px 0;border-radius:9px;font-size:12px;background:rgba(143,184,255,.16)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="svg"><g id="world"><g id="hulls"></g><g id="conns"></g><g id="nodes"></g><g id="grouplabels"></g><g id="handles"></g></g></svg>
+  <div id="pop" class="pop"><div class="pophead" id="pophead"><span id="poptitle"></span><button id="popclose" aria-label="Fermer">×</button></div><div class="popbody" id="popbody"></div></div>
+</div>
+<aside>
+  <h1>Connexions et groupes</h1>
+  <p class="note">Maquette jetable. MDL, Solomonoff, Universalité et Monde viennent de ton exemple, le reste est inventé pour tester la forme.</p>
+
+  <h2>Extrémités d'une branche</h2>
+  <div class="legend">
+    <svg viewBox="0 0 44 16"><rect x="0" y="1" width="6" height="14" fill="#4d6a9a"/><path class="fill" d="M6 2.5 L21 8 L6 13.5 L11 8Z"/><line x1="21" y1="8" x2="44" y2="8"/></svg><span>Source : flèche qui sort du nœud</span>
+    <svg viewBox="0 0 44 16"><rect x="38" y="1" width="6" height="14" fill="#4d6a9a"/><line x1="0" y1="8" x2="28" y2="8"/><path class="fill" d="M38 8 L23 2.5 L28 8 L23 13.5Z"/></svg><span>Cible : flèche qui entre</span>
+    <svg viewBox="0 0 44 16"><rect x="38" y="1" width="6" height="14" fill="#4d6a9a"/><line x1="0" y1="8" x2="34" y2="8"/><circle class="fill" cx="37" cy="8" r="4"/></svg><span>Associé : sans direction</span>
+    <svg viewBox="0 0 44 16"><rect x="38" y="1" width="6" height="14" fill="#34568f"/><line x1="0" y1="8" x2="28" y2="8"/><path class="holl" d="M38 8 L23 2.5 L28 8 L23 13.5Z"/></svg><span>Évidée : vient de l'intérieur d'un groupe replié</span>
+  </div>
+
+  <h2>À essayer</h2>
+  <ul>
+    <li>Clique une connexion : la relation détaillée s'ouvre en popup, avec le marqueur et les poignées.</li>
+    <li>Glisse l'amorce en pointillés près de « Complexité de Kolmogorov » (zoome d'abord).</li>
+    <li>Dézoome à la molette : le marqueur et les titres s'effacent, puis les groupes se referment.</li>
+    <li>Glisse l'enveloppe d'un groupe pour le déplacer entier.</li>
+    <li>Compare les facteurs ci-dessous en zoomant.</li>
+  </ul>
+
+  <h2>Facteur entre deux niveaux</h2>
+  <div id="factors"></div>
+  <div id="readout"></div>
+
+  <h2>Réglages</h2>
+  <label>Tension des courbes <input id="tension" type="range" min="0.1" max="0.95" step="0.01" value="0.55"></label>
+  <label>Longueur du tronc <input id="trunk" type="range" min="0" max="180" step="1" value="50"></label>
+  <button id="reset">Réinitialiser</button>
+</aside>
+<script>
+const NS='http://www.w3.org/2000/svg';
+const $=s=>document.querySelector(s);
+const el=(t,a={},p)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
+const add=(a,b)=>({x:a.x+b.x,y:a.y+b.y}),sub=(a,b)=>({x:a.x-b.x,y:a.y-b.y}),mul=(a,k)=>({x:a.x*k,y:a.y*k});
+const len=a=>Math.hypot(a.x,a.y),norm=a=>{const l=len(a)||1;return{x:a.x/l,y:a.y/l}};
+const rot=(a,r)=>({x:a.x*Math.cos(r)-a.y*Math.sin(r),y:a.x*Math.sin(r)+a.y*Math.cos(r)});
+const lerp=(a,b,t)=>({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t});
+const centroid=l=>mul(l.reduce((s,p)=>add(s,p),{x:0,y:0}),1/l.length);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const smooth=(a,b,v)=>{const t=clamp((v-a)/(b-a),0,1);return t*t*(3-2*t)};
+const f=n=>n.toFixed(1);
+
+// Seuils de lisibilité, en pixels de hauteur de texte à l'écran
+const TEXT_FADE=[6,8];        // texte des nœuds
+const GROUP_FOLD=[4.5,6.5];   // le groupe se referme quand le texte de ses membres passe sous ces tailles
+const TITLE_FADE=[6.5,9];     // marqueur et titre des connexions
+
+const FONT=16,W=210,TITLE=13;
+const PHI=(1+Math.sqrt(5))/2;
+const P={tension:.55,trunk:50,r:2};
+const view={x:0,y:0,s:1};
+
+const GROUPS={
+  g1:{id:'g1',title:'Complexité et induction',x:270,y:300,color:'#34568f',init:[270,300]},
+  g2:{id:'g2',title:'Généralisation en ML',x:1140,y:440,color:'#5a4690',init:[1140,440]}
+};
+const NINIT={
+  kol:['Complexité de Kolmogorov','g1',-175,-140],
+  comp:['Compression sans perte','g1',175,-140],
+  sol:['Induction de Solomonoff','g1',-175,140],
+  mdl:['Minimum Description Length Principle (MDL)','g1',175,140],
+  bia:['Biais de simplicité des réseaux','g2',0,-150],
+  sur:['Surparamétrisation','g2',-170,120],
+  gen:['Généralisation sans régularisation','g2',170,120],
+  occ:["Rasoir d'Occam formalisé",null,720,110],
+  uni:['Universalité algorithmique',null,660,650],
+  monde:['Monde algorithmique',null,190,740]
+};
+function wrap(t,m){const o=[];let l='';for(const w of t.split(' ')){if(l&&(l+' '+w).length>m){o.push(l);l=w}else l=l?l+' '+w:w}o.push(l);return o}
+const N={};
+for(const id in NINIT){
+  const [title,group,a,b]=NINIT[id],lines=wrap(title,23);
+  N[id]={id,title,group,lines,h0:26+lines.length*20,lx:group?a:0,ly:group?b:0,x:group?0:a,y:group?0:b,s:1,w:W,h:0};
+}
+const unknown='Connexion de ton exemple, texte non précisé.';
+const C=[
+ {id:'c1',title:'Analogue bayésien',src:[],tgt:[],neu:['mdl','sol'],tags:['parallèle'],
+  text:"La priore universelle de l'induction de Solomonoff biaise la posteriore vers les algorithmes les plus courts, un analogue bayésien au MDL."},
+ {id:'c2',title:'',src:['mdl'],tgt:['uni'],neu:[],tags:[],text:unknown},
+ {id:'c3',title:'',src:['uni'],tgt:['monde'],neu:[],tags:[],text:unknown},
+ {id:'c4',title:'Déduction jointe',src:['kol','sol','mdl'],tgt:['occ'],neu:[],tags:['déduction'],
+  text:'Exemple inventé : ces trois nœuds ensemble mènent au résultat, ce qui diffère de trois connexions séparées.'},
+ {id:'c5',title:'Deux résultats',src:['occ','uni'],tgt:['bia','gen'],neu:[],tags:['déduction'],
+  text:'Exemple inventé : deux nœuds ensemble mènent à deux résultats.'},
+ {id:'c6',title:'',src:['sur'],tgt:['gen'],neu:[],tags:[],text:'Exemple inventé : connexion séparée, interne au groupe.'},
+ {id:'c7',title:'',src:['bia'],tgt:['gen'],neu:[],tags:[],text:'Exemple inventé : connexion séparée, interne au groupe.'},
+ {id:'c8',title:'Source hors plan',src:['kol'],absent:[{title:'Entropie de Shannon',angle:-.9,dist:150}],tgt:['comp'],neu:[],tags:['déduction'],
+  text:"Exemple inventé : un des nœuds n'est pas dans ce plan. Il apparaît comme une amorce en pointillés, nommée au survol."},
+ {id:'c9',title:"Autre lien vers l'universalité",src:['sol'],tgt:['uni'],neu:[],tags:[],
+  text:'Exemple inventé : quand le groupe se replie, elle se fond avec la connexion qui part de MDL vers le même nœud.'},
+ {id:'c10',title:'Source, cible et associé',src:['comp'],tgt:['bia'],neu:['occ'],tags:[],
+  text:"Exemple inventé : le nœud associé participe à la relation sans direction par rapport à elle."},
+ {id:'c11',title:'Lien entre groupes',src:['@g1'],tgt:['@g2'],neu:[],tags:['inspiration'],
+  text:'Exemple inventé : cette connexion est attachée aux groupes eux-mêmes, pas à leurs membres. Sa flèche reste pleine.'}
+];
+for(const c of C){c.off={};c.pin=null;c.angle=null;c.side=null}
+
+const svg=$('#svg'),world=$('#world'),gHulls=$('#hulls'),gConns=$('#conns'),gNodes=$('#nodes'),gLabels=$('#grouplabels'),gHandles=$('#handles');
+let hoverId=null,selId=null,drag=null,popOff={x:0,y:0};
+const byId=i=>C.find(c=>c.id===i);
+
+function hullOf(pts){
+  const p=[...pts].sort((a,b)=>a.x-b.x||a.y-b.y);
+  const cross=(o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
+  const lo=[],up=[];
+  for(const q of p){while(lo.length>=2&&cross(lo[lo.length-2],lo[lo.length-1],q)<=0)lo.pop();lo.push(q)}
+  for(const q of p.slice().reverse()){while(up.length>=2&&cross(up[up.length-2],up[up.length-1],q)<=0)up.pop();up.push(q)}
+  return lo.slice(0,-1).concat(up.slice(0,-1));
+}
+function layout(){
+  const sc=1/P.r;
+  for(const id in N){
+    const n=N[id];
+    if(n.group){const G=GROUPS[n.group];n.s=sc;n.x=G.x+n.lx*sc;n.y=G.y+n.ly*sc}else n.s=1;
+    n.w=W*n.s;n.h=n.h0*n.s;
+  }
+  for(const gid in GROUPS){
+    const G=GROUPS[gid],corners=[];
+    for(const id in N)if(N[id].group===gid){
+      const n=N[id];
+      for(const dx of[-1,1])for(const dy of[-1,1])corners.push({x:n.x+dx*n.w/2,y:n.y+dy*n.h/2});
+    }
+    G.poly=hullOf(corners);
+    G.c=centroid(G.poly);
+    G.pad=44*sc;
+    G.t=1-smooth(GROUP_FOLD[0],GROUP_FOLD[1],FONT*sc*view.s);
+  }
+}
+function anchor(n,p){
+  const d=sub(p,n);
+  const sx=Math.abs(d.x)>1e-6?(n.w/2+3)/Math.abs(d.x):Infinity;
+  const sy=Math.abs(d.y)>1e-6?(n.h/2+3)/Math.abs(d.y):Infinity;
+  return add({x:n.x,y:n.y},mul(d,Math.min(sx,sy,1)));
+}
+function hullAnchor(G,p){
+  const d=norm(sub(p,G.c));let best=0;const h=G.poly;
+  for(let i=0;i<h.length;i++){
+    const a=h[i],b=h[(i+1)%h.length],e=sub(b,a),den=d.x*e.y-d.y*e.x;
+    if(Math.abs(den)<1e-9)continue;
+    const v=sub(a,G.c),s=(v.x*e.y-v.y*e.x)/den,u=(v.x*d.y-v.y*d.x)/den;
+    if(s>=0&&u>=-1e-6&&u<=1+1e-6&&s>best)best=s;
+  }
+  return add(G.c,mul(d,best+G.pad));
+}
+function ep(id,stayInside){
+  if(id[0]==='@'){const G=GROUPS[id.slice(1)];return{id,pos:G.c,anchor:p=>hullAnchor(G,p),t:0,key:G.id,group:null}}
+  const n=N[id];
+  if(n.group){const G=GROUPS[n.group],t=stayInside?0:G.t;return{id,pos:lerp(n,G.c,t),anchor:p=>lerp(anchor(n,p),hullAnchor(G,p),t),t,key:G.id,group:G.id}}
+  return{id,pos:{x:n.x,y:n.y},anchor:p=>anchor(n,p),t:0,key:id,group:null};
+}
+const depth=id=>id[0]==='@'?0:(N[id].group?1:0);
+
+function geom(c){
+  const pairNeu=!c.src.length&&!c.tgt.length&&c.neu.length===2;
+  const sIds=pairNeu?[c.neu[0]]:c.src,tIds=pairNeu?[c.neu[1]]:c.tgt,nIds=pairNeu?[]:c.neu;
+  const first=[...sIds,...tIds,...nIds].map(i=>ep(i,false)),keys=new Set(first.map(e=>e.key));
+  const internal=keys.size===1,tmax=Math.max(...first.map(e=>e.t));
+  // Une connexion interne ne se redirige pas : elle s'efface sur place avec son groupe
+  const S=sIds.map(i=>ep(i,internal)),T=tIds.map(i=>ep(i,internal)),Ne=nIds.map(i=>ep(i,internal));
+  const all=[...S,...T,...Ne];
+  const reduced=!internal&&keys.size===2&&!c.neu.length&&!c.absent;
+  const lvl=Math.min(...all.map(e=>depth(e.id))),sc=Math.pow(P.r,-lvl);
+  const count=all.length+(c.absent?c.absent.length:0),multi=count>2;
+  const fold=reduced?tmax:0;
+  const cs=centroid(S.map(e=>e.pos)),ct=centroid(T.map(e=>e.pos));
+  const M=add(mul(add(cs,ct),.5),c.pin||{x:0,y:0});
+  const u=c.angle!=null?{x:Math.cos(c.angle),y:Math.sin(c.angle)}:norm(sub(ct,cs));
+  const h=multi?P.trunk/2*sc*(1-fold):0;
+  const A=sub(M,mul(u,h)),B=add(M,mul(u,h));
+  const off=k=>c.off[k]||{b1:{x:0,y:0},b2:{x:0,y:0}};
+  const seen=new Set(),br=[];
+  const dup=(side,e)=>{const k=side+e.key;if(e.t>=.999&&seen.has(k))return true;seen.add(k);return false};
+  const incoming=(k,a,e,role,extra)=>{
+    const t=P.tension*len(sub(A,a));
+    br.push({k,role,nodeEnd:'p0',p0:a,p3:A,
+      b1:add(add(a,mul(norm(sub(A,a)),t*.6)),off(k).b1),
+      b2:add(sub(A,mul(u,t)),off(k).b2),
+      redirected:!!(e&&e.group&&e.t>.5),hide:e?dup('s',e):false,...extra});
+  };
+  for(const e of S)incoming('s:'+e.id,e.anchor(A),e,pairNeu?'neu':'src',{});
+  (c.absent||[]).forEach((x,i)=>incoming('a:'+i,add(A,mul(rot(mul(u,-1),x.angle),x.dist*sc)),null,'src',{absent:x,i}));
+  for(const e of T){
+    const k='t:'+e.id,a=e.anchor(B),t=P.tension*len(sub(B,a));
+    br.push({k,role:pairNeu?'neu':'tgt',nodeEnd:'p3',p0:B,p3:a,
+      b1:add(add(B,mul(u,t)),off(k).b1),
+      b2:add(add(a,mul(norm(sub(B,a)),t*.6)),off(k).b2),
+      redirected:!!(e.group&&e.t>.5),hide:dup('t',e)});
+  }
+  for(const e of Ne){
+    const k='n:'+e.id,a=e.anchor(M),t=P.tension*len(sub(M,a));
+    let n={x:-u.y,y:u.x};
+    const v=sub(e.pos,M);if(n.x*v.x+n.y*v.y<0)n=mul(n,-1);
+    br.push({k,role:'neu',nodeEnd:'p0',p0:a,p3:M,
+      b1:add(add(a,mul(norm(sub(M,a)),t*.6)),off(k).b1),
+      b2:add(add(M,mul(n,t)),off(k).b2),
+      redirected:!!(e.group&&e.t>.5),hide:dup('n',e)});
+  }
+  return{M,u,A,B,multi,br,internal,reduced,tmax,fold,sc,lvl};
+}
+const pathOf=b=>`M${f(b.p0.x)} ${f(b.p0.y)}C${f(b.b1.x)} ${f(b.b1.y)} ${f(b.b2.x)} ${f(b.b2.y)} ${f(b.p3.x)} ${f(b.p3.y)}`;
+function glyphOf(b){
+  // Pointe échancrée : un triangle presque équilatéral ne montre pas assez son sens
+  const s=15/view.s,w=5.4/view.s;
+  if(b.role==='neu'){
+    const p=b[b.nodeEnd],r=3.8/view.s;
+    return `M${f(p.x-r)} ${f(p.y)}a${f(r)} ${f(r)} 0 1 0 ${f(2*r)} 0a${f(r)} ${f(r)} 0 1 0 ${f(-2*r)} 0Z`;
+  }
+  const tri=(tip,d)=>{const base=sub(tip,mul(d,s)),n={x:-d.y,y:d.x},q=add(base,mul(n,w)),z=sub(base,mul(n,w)),notch=sub(tip,mul(d,s*.66));
+    return `M${f(tip.x)} ${f(tip.y)}L${f(q.x)} ${f(q.y)}L${f(notch.x)} ${f(notch.y)}L${f(z.x)} ${f(z.y)}Z`};
+  if(b.role==='tgt')return tri(b.p3,norm(sub(b.p3,b.b2)));
+  const d=norm(sub(b.b1,b.p0)),start=b.absent?add(b.p0,mul(d,5/view.s)):b.p0;
+  return tri(add(start,mul(d,s)),d);
+}
+function bez(b,t){
+  const m=1-t;
+  return{x:m*m*m*b.p0.x+3*m*m*t*b.b1.x+3*m*t*t*b.b2.x+t*t*t*b.p3.x,
+         y:m*m*m*b.p0.y+3*m*m*t*b.b1.y+3*m*t*t*b.b2.y+t*t*t*b.p3.y};
+}
+
+function build(){
+  for(const gid in GROUPS){
+    const G=GROUPS[gid];
+    G.ui={hull:el('polygon',{class:'hull','data-kind':'group','data-id':gid,fill:G.color,stroke:G.color,'stroke-linejoin':'round'},gHulls)};
+    G.ui.top=el('text',{class:'hulltop'},gLabels);G.ui.top.textContent=G.title;
+    G.ui.mid=el('text',{class:'hullmid'},gLabels);
+    wrap(G.title,14).forEach((l,i,a)=>{const t=el('tspan',{'data-i':i,'data-n':a.length},G.ui.mid);t.textContent=l});
+  }
+  for(const c of C){
+    const g=geom(c),root=el('g',{class:'conn','data-conn':c.id},gConns);
+    c.ui={root,strand:{},hit:{},glyph:{},dot:{},label:{}};
+    c.ui.trunk=el('path',{class:'trunk'},root);
+    c.ui.trunkHit=el('path',{class:'hit','data-kind':'hit','data-conn':c.id},root);
+    for(const b of g.br){
+      c.ui.strand[b.k]=el('path',{class:'strand'+(b.absent?' absent':'')},root);
+      c.ui.hit[b.k]=el('path',{class:'hit','data-kind':'hit','data-conn':c.id},root);
+      c.ui.glyph[b.k]=el('path',{class:'glyph'+(b.absent?' absent':''),'data-role':b.role},root);
+      if(b.absent){
+        c.ui.dot[b.k]=el('circle',{class:'stubdot','data-kind':'stub','data-conn':c.id,'data-i':b.i},root);
+        const t=el('text',{class:'stublabel'},root);t.textContent='absent : '+b.absent.title;c.ui.label[b.k]=t;
+      }
+    }
+    c.ui.mk=el('circle',{class:'mk','data-kind':'marker','data-conn':c.id},root);
+    c.ui.title=el('text',{class:'ctitle','data-kind':'hit','data-conn':c.id},root);
+  }
+  for(const id in N){
+    const n=N[id],g=el('g',{class:'node','data-node':id},gNodes);
+    el('rect',{x:-W/2,y:-n.h0/2,width:W,height:n.h0,rx:11,'data-kind':'node','data-id':id},g);
+    const y0=-(n.lines.length-1)*10+5.5;
+    n.textEls=n.lines.map((l,i)=>{const t=el('text',{y:y0+i*20},g);t.textContent=l;return t});
+    n.ui=g;
+  }
+}
+// Regroupe les connexions redirigées qui relient désormais les deux mêmes extrémités
+function computeAggregates(){
+  for(const c of C){c.agg=null;c.aggHidden=false}
+  const by={};
+  for(const c of C){
+    const g=c.geo;
+    if(!g.reduced||g.tmax<.999||c.pin||c.angle!=null||Object.keys(c.off).length)continue;
+    const sk=[...new Set(c.src.map(i=>ep(i).key))].join(),tk=[...new Set(c.tgt.map(i=>ep(i).key))].join();
+    (by[sk+'>'+tk]=by[sk+'>'+tk]||[]).push(c);
+  }
+  for(const k in by)if(by[k].length>1){
+    by[k][0].agg=by[k];
+    by[k].slice(1).forEach(c=>{c.aggHidden=true});
+  }
+}
+function placeTitles(){
+  const pts=[],boxes=[];
+  for(const c of C){
+    if(c.alpha<.05||c.aggHidden)continue;
+    for(const b of c.geo.br){if(b.hide)continue;for(let i=0;i<=40;i++)pts.push(bez(b,i/40))}
+    if(c.geo.multi)for(let i=0;i<=6;i++)pts.push(lerp(c.geo.A,c.geo.B,i/6));
+  }
+  for(const id in N){
+    const n=N[id];
+    if(n.group&&GROUPS[n.group].t>.9)continue;
+    boxes.push({x:n.x-n.w/2,y:n.y-n.h/2,w:n.w,h:n.h});
+  }
+  for(const gid in GROUPS){
+    const G=GROUPS[gid];
+    if(G.t>.5){const xs=G.poly.map(p=>p.x),ys=G.poly.map(p=>p.y);
+      boxes.push({x:Math.min(...xs)-G.pad,y:Math.min(...ys)-G.pad,w:Math.max(...xs)-Math.min(...xs)+2*G.pad,h:Math.max(...ys)-Math.min(...ys)+2*G.pad})}
+  }
+  const placed=[];
+  for(const c of C){
+    c.titleBox=null;
+    const txt=c.agg?c.agg.length+' connexions':c.title;
+    c.ui.title.textContent=txt;
+    if(!txt||c.alpha<.05||c.aggHidden||c.titleAlpha<.02)continue;
+    const fs=TITLE*c.geo.sc,w=txt.length*.52*fs,h=fs*1.3,gap=11/view.s,M=c.geo.M;
+    const far=gap*3.5,dx=w/2+gap*.6,dy=gap+h/2;
+    const cands={
+      up:{x:M.x,y:M.y-dy,cost:0},upright:{x:M.x+dx,y:M.y-dy,cost:.2},upleft:{x:M.x-dx,y:M.y-dy,cost:.2},
+      down:{x:M.x,y:M.y+dy,cost:.3},downright:{x:M.x+dx,y:M.y+dy,cost:.4},downleft:{x:M.x-dx,y:M.y+dy,cost:.4},
+      right:{x:M.x+gap+w/2,y:M.y,cost:.5},left:{x:M.x-gap-w/2,y:M.y,cost:.5},
+      upfar:{x:M.x,y:M.y-far-h/2,cost:1},downfar:{x:M.x,y:M.y+far+h/2,cost:1}
+    };
+    let best=null,bestScore=Infinity;
+    for(const side in cands){
+      const q=cands[side],r={x:q.x-w/2,y:q.y-h/2,w,h};
+      let score=q.cost;
+      if(side===c.side)score-=1.5;
+      for(const p of pts)if(p.x>r.x&&p.x<r.x+r.w&&p.y>r.y&&p.y<r.y+r.h)score+=1;
+      for(const o of boxes.concat(placed))if(r.x<o.x+o.w&&o.x<r.x+r.w&&r.y<o.y+o.h&&o.y<r.y+r.h)score+=25;
+      if(score<bestScore){bestScore=score;best=side}
+    }
+    c.side=best;
+    const q=cands[best];
+    c.titleBox={x:q.x-w/2,y:q.y-h/2,w,h};
+    placed.push(c.titleBox);
+    c.ui.title.setAttribute('x',q.x);c.ui.title.setAttribute('y',q.y);c.ui.title.setAttribute('font-size',fs);
+  }
+}
+function render(){
+  layout();
+  world.setAttribute('transform',`translate(${view.x} ${view.y}) scale(${view.s})`);
+  for(const gid in GROUPS){
+    const G=GROUPS[gid],t=G.t,hull=G.ui.hull;
+    hull.setAttribute('points',G.poly.map(p=>f(p.x)+','+f(p.y)).join(' '));
+    hull.setAttribute('stroke-width',2*G.pad);
+    hull.style.opacity=.32+.68*t;
+    hull.style.filter=`blur(${f(10-9*t)}px)`;
+    const ys=G.poly.map(p=>p.y),top=Math.min(...ys)-G.pad;
+    const fadeTop=(1-t)*smooth(TEXT_FADE[0],TEXT_FADE[1],15*view.s);
+    G.ui.top.setAttribute('x',G.c.x);G.ui.top.setAttribute('y',top+2);G.ui.top.style.opacity=fadeTop;
+    const fadeMid=smooth(.45,.95,t)*smooth(TEXT_FADE[0],TEXT_FADE[1],19*view.s);
+    G.ui.mid.style.opacity=fadeMid;
+    G.ui.mid.querySelectorAll('tspan').forEach(ts=>{
+      const i=+ts.dataset.i,n=+ts.dataset.n;
+      ts.setAttribute('x',G.c.x);ts.setAttribute('y',G.c.y+(i-(n-1)/2)*23+6);
+    });
+  }
+  for(const id in N){
+    const n=N[id],G=n.group?GROUPS[n.group]:null,t=G?G.t:0;
+    n.ui.setAttribute('transform',`translate(${n.x} ${n.y}) scale(${n.s})`);
+    n.ui.style.opacity=1-t;
+    n.ui.style.pointerEvents=t>.9?'none':'';
+    const a=smooth(TEXT_FADE[0],TEXT_FADE[1],FONT*n.s*view.s);
+    n.textEls.forEach(e=>{e.style.opacity=a});
+  }
+  for(const c of C)c.geo=geom(c);
+  computeAggregates();
+  const active=hoverId?byId(hoverId):selId?byId(selId):null;
+  for(const c of C){
+    const g=c.geo,isOn=c.id===hoverId||c.id===selId;
+    c.alpha=g.internal?1-g.tmax:1;
+    const fadeC=smooth(TITLE_FADE[0],TITLE_FADE[1],TITLE*g.sc*view.s);
+    c.titleAlpha=(isOn?1:fadeC)*c.alpha;
+    c.ui.root.style.display=c.aggHidden?'none':'';
+    c.ui.root.style.opacity=c.id===selId||c.id===hoverId?'':c.alpha;
+    c.ui.root.style.pointerEvents=c.alpha<.05?'none':'';
+    c.ui.root.classList.toggle('hot',c.id===hoverId);
+    c.ui.root.classList.toggle('sel',c.id===selId);
+    c.ui.root.classList.toggle('agg',!!c.agg);
+    const t=g.multi?`M${f(g.A.x)} ${f(g.A.y)}L${f(g.B.x)} ${f(g.B.y)}`:'';
+    c.ui.trunk.setAttribute('d',t);c.ui.trunkHit.setAttribute('d',t);
+    c.ui.trunk.style.opacity=g.multi?1-g.fold:0;
+    const mkA=c.id===selId?1:(g.multi?fadeC*(1-g.fold):0);
+    c.ui.mk.setAttribute('cx',g.M.x);c.ui.mk.setAttribute('cy',g.M.y);c.ui.mk.setAttribute('r',6.5/view.s);
+    c.ui.mk.style.opacity=mkA;
+    c.ui.mk.style.pointerEvents=mkA<.3?'none':'';
+    for(const b of g.br){
+      const d=pathOf(b),vis=b.hide?'none':'';
+      for(const e of[c.ui.strand[b.k],c.ui.hit[b.k],c.ui.glyph[b.k]])e.style.display=vis;
+      c.ui.strand[b.k].setAttribute('d',d);c.ui.hit[b.k].setAttribute('d',d);
+      c.ui.glyph[b.k].setAttribute('d',glyphOf(b));
+      c.ui.glyph[b.k].classList.toggle('hollow',b.redirected);
+      if(b.absent){
+        const dot=c.ui.dot[b.k],lab=c.ui.label[b.k];
+        dot.setAttribute('cx',b.p0.x);dot.setAttribute('cy',b.p0.y);dot.setAttribute('r',5/view.s);
+        lab.setAttribute('x',b.p0.x);lab.setAttribute('y',b.p0.y-10/view.s);lab.setAttribute('font-size',12/view.s);
+      }
+    }
+  }
+  placeTitles();
+  for(const c of C)c.ui.title.style.opacity=c.titleBox?c.titleAlpha:0;
+  svg.classList.toggle('focus',!!(hoverId||selId));
+  for(const id in N)N[id].ui.classList.toggle('member',!!active&&(active.src.includes(id)||active.tgt.includes(id)||active.neu.includes(id)));
+  renderHandles();
+  positionPop();
+  const fm=FONT/P.r*view.s;
+  $('#readout').textContent=`Zoom ×${view.s.toFixed(2)}. Texte des nœuds : ${(FONT*view.s).toFixed(1)} px, des membres de groupe : ${fm.toFixed(1)} px.`;
+}
+function renderHandles(){
+  gHandles.replaceChildren();
+  if(!selId)return;
+  const c=byId(selId),g=c.geo,r=5.5/view.s;
+  if(c.aggHidden)return;
+  for(const b of g.br){
+    if(b.hide)continue;
+    el('line',{class:'guide',x1:b.p0.x,y1:b.p0.y,x2:b.b1.x,y2:b.b1.y},gHandles);
+    el('line',{class:'guide',x1:b.p3.x,y1:b.p3.y,x2:b.b2.x,y2:b.b2.y},gHandles);
+    for(const w of['b1','b2'])
+      el('circle',{class:'hd',cx:b[w].x,cy:b[w].y,r,'data-kind':'handle','data-conn':c.id,'data-branch':b.k,'data-which':w},gHandles);
+  }
+  const q=add(g.B,mul(g.u,34/view.s));
+  el('line',{class:'guide',x1:g.M.x,y1:g.M.y,x2:q.x,y2:q.y},gHandles);
+  el('circle',{class:'hd rot',cx:q.x,cy:q.y,r,'data-kind':'rot','data-conn':c.id},gHandles);
+}
+function fillPop(){
+  const c=selId?byId(selId):null,pop=$('#pop'),body=$('#popbody');
+  if(!c){pop.classList.remove('on');return}
+  pop.classList.add('on');
+  const list=c.agg||[c];
+  $('#poptitle').textContent=c.agg?c.agg.length+' connexions':(c.title||'Connexion sans titre');
+  body.replaceChildren();
+  const names=l=>l.map(i=>i[0]==='@'?GROUPS[i.slice(1)].title:N[i].title).join(', ');
+  const line=(lab,val)=>{const p=document.createElement('p'),b=document.createElement('b');b.textContent=lab;p.append(b,' '+val);body.append(p)};
+  list.forEach((x,i)=>{
+    if(i)body.append(document.createElement('hr'));
+    if(c.agg){const h=document.createElement('p'),b=document.createElement('b');b.textContent=x.title||'Connexion sans titre';h.append(b);body.append(h)}
+    const t=document.createElement('p');t.textContent=x.text;body.append(t);
+    if(x.src.length)line('Sources :',names(x.src));
+    if(x.tgt.length)line('Cibles :',names(x.tgt));
+    if(x.neu.length)line('Associés :',names(x.neu));
+    if(x.absent)line('Absent du plan :',x.absent.map(a=>a.title).join(', '));
+    for(const tag of x.tags){const s=document.createElement('span');s.className='tag';s.textContent=tag;body.append(s)}
+  });
+}
+function positionPop(){
+  if(!selId)return;
+  const c=byId(selId),pop=$('#pop'),st=$('#stage').getBoundingClientRect(),M=c.geo.M;
+  const x=M.x*view.s+view.x+22+popOff.x,y=M.y*view.s+view.y+18+popOff.y;
+  pop.style.left=clamp(x,6,Math.max(6,st.width-pop.offsetWidth-6))+'px';
+  pop.style.top=clamp(y,6,Math.max(6,st.height-pop.offsetHeight-6))+'px';
+}
+function setHover(i){if(i===hoverId)return;hoverId=i;render()}
+function select(i){selId=i;popOff={x:0,y:0};render();fillPop();positionPop()}
+const toWorld=e=>{const r=svg.getBoundingClientRect();return{x:(e.clientX-r.left-view.x)/view.s,y:(e.clientY-r.top-view.y)/view.s}};
+
+svg.addEventListener('pointerdown',e=>{
+  const t=e.target,k=t.dataset.kind,p=toWorld(e);
+  try{svg.setPointerCapture(e.pointerId)}catch(_){}
+  if(k==='node'){const n=N[t.dataset.id];drag={k,n,o:sub(p,n)}}
+  else if(k==='group'){const G=GROUPS[t.dataset.id];drag={k,G,o:sub(p,G),sx:e.clientX,sy:e.clientY,moved:false}}
+  else if(k==='marker'){select(t.dataset.conn);drag={k,c:byId(t.dataset.conn)}}
+  else if(k==='stub')drag={k,c:byId(t.dataset.conn),i:+t.dataset.i};
+  else if(k==='handle')drag={k,c:byId(t.dataset.conn),b:t.dataset.branch,w:t.dataset.which};
+  else if(k==='rot')drag={k,c:byId(t.dataset.conn)};
+  else if(k==='hit'){select(t.dataset.conn);drag=null}
+  else drag={k:'pan',sx:e.clientX,sy:e.clientY,x:view.x,y:view.y,moved:false};
+  if(drag)svg.classList.add('dragging');
+});
+svg.addEventListener('pointermove',e=>{
+  if(!drag){
+    const h=e.target.closest&&e.target.closest('[data-conn]');
+    setHover(h?h.dataset.conn:null);
+    return;
+  }
+  const p=toWorld(e);
+  if(drag.k==='node'){
+    const n=drag.n,q=sub(p,drag.o);
+    if(n.group){const G=GROUPS[n.group];n.lx=(q.x-G.x)/n.s;n.ly=(q.y-G.y)/n.s}
+    else{n.x=q.x;n.y=q.y}
+  }
+  else if(drag.k==='group'){const q=sub(p,drag.o);drag.G.x=q.x;drag.G.y=q.y;
+    if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)>3)drag.moved=true}
+  else if(drag.k==='marker'){
+    const c=drag.c,g=geom(c),o=c.pin||{x:0,y:0};
+    c.pin=sub(p,sub(g.M,o));
+  }
+  else if(drag.k==='stub'){
+    const c=drag.c,g=geom(c),x=c.absent[drag.i],a=mul(g.u,-1),v=sub(p,g.A);
+    x.angle=Math.atan2(a.x*v.y-a.y*v.x,a.x*v.x+a.y*v.y);
+    x.dist=len(v)/g.sc;
+  }
+  else if(drag.k==='handle'){
+    const c=drag.c,b=geom(c).br.find(x=>x.k===drag.b);
+    const o=c.off[drag.b]||(c.off[drag.b]={b1:{x:0,y:0},b2:{x:0,y:0}});
+    o[drag.w]=sub(p,sub(b[drag.w],o[drag.w]));
+  }
+  else if(drag.k==='rot'){const g=geom(drag.c),d=sub(p,g.M);drag.c.angle=Math.atan2(d.y,d.x)}
+  else{
+    if(Math.hypot(e.clientX-drag.sx,e.clientY-drag.sy)>3)drag.moved=true;
+    view.x=drag.x+e.clientX-drag.sx;view.y=drag.y+e.clientY-drag.sy;
+  }
+  render();
+});
+const end=()=>{
+  if(drag&&(drag.k==='pan'||drag.k==='group')&&!drag.moved)select(null);
+  drag=null;svg.classList.remove('dragging');
+};
+svg.addEventListener('pointerup',end);
+svg.addEventListener('pointercancel',end);
+svg.addEventListener('pointerleave',()=>{if(!drag)setHover(null)});
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const r=svg.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+  const s=clamp(view.s*Math.exp(-e.deltaY*.0012),.12,5),k=s/view.s;
+  view.x=mx-(mx-view.x)*k;view.y=my-(my-view.y)*k;view.s=s;render();
+},{passive:false});
+window.addEventListener('keydown',e=>{if(e.key==='Escape')select(null)});
+window.addEventListener('resize',render);
+$('#popclose').addEventListener('click',()=>select(null));
+(()=>{
+  const head=$('#pophead');let d=null;
+  head.addEventListener('pointerdown',e=>{if(e.target.id==='popclose')return;d={x:e.clientX,y:e.clientY,ox:popOff.x,oy:popOff.y};try{head.setPointerCapture(e.pointerId)}catch(_){}});
+  head.addEventListener('pointermove',e=>{if(!d)return;popOff={x:d.ox+e.clientX-d.x,y:d.oy+e.clientY-d.y};positionPop()});
+  head.addEventListener('pointerup',()=>{d=null});
+})();
+
+function fit(){
+  layout();
+  const r=svg.getBoundingClientRect(),xs=[],ys=[];
+  for(const id in N){const n=N[id];xs.push(n.x-n.w/2,n.x+n.w/2);ys.push(n.y-n.h/2,n.y+n.h/2)}
+  for(const g in GROUPS)for(const p of GROUPS[g].poly){xs.push(p.x-GROUPS[g].pad,p.x+GROUPS[g].pad);ys.push(p.y-GROUPS[g].pad,p.y+GROUPS[g].pad)}
+  const x0=Math.min(...xs)-30,x1=Math.max(...xs)+30,y0=Math.min(...ys)-30,y1=Math.max(...ys)+30;
+  view.s=Math.min(r.width/(x1-x0),r.height/(y1-y0),1.2);
+  view.x=(r.width-(x1-x0)*view.s)/2-x0*view.s;
+  view.y=(r.height-(y1-y0)*view.s)/2-y0*view.s;
+}
+const FACTORS=[[1.5,'1,5'],[PHI,'φ'],[2,'2'],[3,'3']];
+function setFactor(r){
+  P.r=r;
+  document.querySelectorAll('#factors button').forEach(b=>b.classList.toggle('on',Math.abs(+b.dataset.r-r)<.001));
+  render();
+}
+for(const [r,l] of FACTORS){
+  const b=document.createElement('button');b.textContent=l;b.dataset.r=r;
+  b.addEventListener('click',()=>setFactor(r));$('#factors').append(b);
+}
+function reset(){
+  for(const id in NINIT){const n=N[id],v=NINIT[id];if(n.group){n.lx=v[2];n.ly=v[3]}else{n.x=v[2];n.y=v[3]}}
+  for(const g in GROUPS){GROUPS[g].x=GROUPS[g].init[0];GROUPS[g].y=GROUPS[g].init[1]}
+  for(const c of C){c.off={};c.pin=null;c.angle=null;c.side=null;if(c.absent)c.absent.forEach(a=>{a.angle=-.9;a.dist=150})}
+  P.tension=.55;P.trunk=50;$('#tension').value=.55;$('#trunk').value=50;
+  P.r=2;setFactor(2);select(null);fit();render();
+}
+$('#tension').addEventListener('input',e=>{P.tension=+e.target.value;render()});
+$('#trunk').addEventListener('input',e=>{P.trunk=+e.target.value;render()});
+$('#reset').addEventListener('click',reset);
+
+layout();build();fit();setFactor(2);
+(()=>{
+  const h=new URLSearchParams(location.hash.slice(1));
+  if(h.get('r'))setFactor(+h.get('r'));
+  if(h.get('z')){
+    const r=svg.getBoundingClientRect();
+    const cx=h.get('cx')?+h.get('cx'):(r.width/2-view.x)/view.s,cy=h.get('cy')?+h.get('cy'):(r.height/2-view.y)/view.s;
+    view.s=+h.get('z');view.x=r.width/2-cx*view.s;view.y=r.height/2-cy*view.s;render();
+  }
+  if(h.get('sel'))select(h.get('sel'));
+})();
+</script>
+</body>
+</html>

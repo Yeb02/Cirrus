@@ -1,0 +1,86 @@
+﻿Le PKM (Personal Knowledge Manager) “Cirrus”:
+
+
+Nous allons développer un logiciel de stockage et de visualisation de la connaissance customisé à mon besoin, et pour mon usage personnel exclusif. Il y a pour l'instant 4 cas d'usage, décrits très grossièrement ci dessous, approfondis plus loin.
+
+
+0- Le stockage d'information. De tous types: script, image, reflexion, formule mathématiques, pdf externe (publications), etc. Le sujet principal sera ma recherche en machine learning, mais tous sujets doivent être traitable. On essaye de modulariser et atomiser maximalement l'information, le modèle sous jacent est un graphe de connaissance. Un noeud a une donnée et des méta données, deux noeuds peuvent être connectés par une connexion contenant une liste de label spécifiant la nature de la relation. L'ajout sera continuel, et un genre de git permettra de tracer et visualiser les changements.
+
+
+1- la récupération / visualisation d'information de la base de donnée. Un moteur 2D ou 3D, ou l'on visualise le graphe, dans lequel on peut se déplacer. Ergonomie soignée, déplacement type jeu vidéo ? Mécanismes de filtre sur les noeuds et connections, etc. Point important, la forme du graphe doit être plus ou moins constante dans le temps (réel), à mesure que des noeuds ou relations sont ajoutés. Donc pas de moteurs physique qui définirait une force d'attraction entre noeuds liés
+
+
+2- La création de documents (latex, type publications) à partir d'éléments du graphe. Par exemple, on spécifierait une liste de noeud et des niveaux et le logiciel créerait un projet tex qui contiendrait le document, ses figures, lien de citations, etc,. 
+
+
+3- L'exécution de tâches par des LLMs : veiller les publications d'un chercheur à une certaine fréquence, chercher des publications sur tel sujet, faire telle experience sachant le contexte que donne la database, chercher une incohérence dans ce sous graphe, .... (Le LLM  n'a pas le droit d'éditer la database. Ses résultats me seront soumis, et je déciderai qu'en faire. Je garde le contrôle.) 
+
+
+
+
+
+
+
+
+Dans les grandes lignes, le PKM doit etre accessible et synchronisé depuis différents ordinateurs, donc il va falloir louer un serveur. Ce sera aussi sur le serveur que tourneront les LLMs, qui n’auront ainsi pas besoin qu’un de mes ordinateurs soit ouvert. Le code de l’app sera sur mon github, mais il en existera une version copiée en dur sur le serveur, au cas où. L'application est un exe / wizard que télécharge l'ordinateur de l'utilisateur (moi) se connectant au serveur pour la première fois, ou si une maj est disponible. La database est sur le serveur mais l'application utilisateur doit avoir une copie locale des données (notre outil de version control (je l'appellerai “notre git”) pour mise à jour ?). Certaines données comme les publications externes n'ont besoin que d'un lien, ne sont pas automatiquement téléchargées, et sont cached en local. Le PKM doit être fonctionnel sans accès internet et se resynchroniser quand l'accès est réétabli. Les performances de l'application doivent être excellentes, et le framework graphique doit permettre la plus grande qualité visuelle. Ce doit être très pro.
+
+
+
+
+Passons maintenant à une vue plus détaillée des features.
+
+
+
+
+1- L'aspect Git: je veux tracer toutes les modifications faites à la database, de manière à comparer la version actuelle à une ancienne, reconstruire une ancienne version, effectuer la synchronisation entre la database du serveur et celle d’un ordinateur en avance / en retard. Il n'y a pas besoin de considérer les merge conflicts, comme je suis seul utilisateur et m'assurerai de toujours synchroniser le travail d’un ordinateur avec le serveur avant de passer sur un autre ordi. L’historique git doit être conservé en local sur chaque ordi.
+Features: 
+* commit et push
+* reconstituer un certain état de la database
+* voir les différences dans les données (différence entre texte par exemple, mais a terme aussi différences dans la topologie du graphe. Pas tout de suite). 
+
+
+2- Les analytics: trace les ouvertures de l’application, les consultations des nœuds, l’utilisation de chaque fonction, le temps passé sur l'app, l'historique des actions, etc. Toute la donnée utilisateur. 
+
+
+3- Détails sur le contenu et l’organisation de la database: je veux que l’information soit atomisée maximalement, mais pas excessivement. Un datome (data+atome) est un noeud du graphe de connaissance. Un noeud contient une quantité d’information arbitraire en pratique, comme un dossier de l’explorateur de fichier. Par exemple, un fichier .tex expliquant un petit algorithme, le fichier .py l’implémentant, un tableau excel avec les résultats, une image png affichant les courbes, un hyperlien vers une publication qui l’introduit, le PDF de la publication (téléchargé à la première lecture pas avant) etc. Chaque noeud a un titre, et une liste de tags qui sera utilisée pour le filtrage et les vues. Ces tags peuvent être des mots, ou bien des paires clé-valeur, soit valeurs numériques soit d’une énumération. Par exemple, tous les noeuds auront un niveau de certitude épistémique, disons 0 pour une idée sans recul, 1 pour quelque chose qui me semble vrai, 2 pour quelque chose auquel je crois particulièrement, -1 pour quelque chose d’un peu douteux, etc. Un autre tag numérique, sera la pertinence absolue de l’info, un autre encore son originalité, etc. Un noeud a aussi ses méta données: git et analytics. Autres éléments encore, les données liées aux visualisations, type sa position dans l’espace, sa taille/ couleur / …, les “groupes” dont il fait partie, etc. Nous verrons ca plus loin.
+Les noeuds sont reliés par des connexions. Elles ont des tags et méta données, et un court texte .tex.
+
+
+4-Navigation dans la base de données: c’est un point central du pkm. La donnée est représentée dans un espace où je peux me déplacer. Je ne sais pas encore exactement à quoi cet espace doit ressembler. Bi ou tri dimensionnel ? Bi dimensionnel, avec un contrôle du zoom fractal, un quadrillage fractal en arrière plan pour se repérer, me semble un bon choix. Plus on zoom, plus on est profond dans un sujet (et le déplacement est plus lent. Flèches et pan à la souris, molette ou +- pour zoomer). Les positions des noeuds sont fixes, a moins que je les bouge moi même. Je peux en sélectionner plusieurs à la fois pour déplacer un groupe. En cliquant sur un noeud, je peux ouvrir son contenu (le dossier) en pop up, l’ épingler, de même pour les prévisualisation des éléments le composant: image, tex compilé en pdf,... Je peux déplacer les fenêtres ainsi ouvertes, les changer de taille, etc. Note que le format .tex pour de l’information textuelle et des équations sera le plus fréquent contenu d’un noeud. J’aimerai que la prévisualisation pdf inclut les hyperliens latex valide. Cad que si un noeud a dans un .tex qu’il contient un \label{XXX}, auquel un autre noeud fait référence \ref{XXX}, je peux cliquer sur le lien pour avoir une prévisu, ou être transporté au noeud source, a voir. De même pour les citations \cite vers les noeuds contenant une publication externe.
+
+
+Un seul plan bidimensionnel me semble insuffisant. Mon graphe de connaissance sera assez densément connecté, et j’aurai du mal à représenter clairement en une seul topologie et positionnement du graphe tous les regroupements sémantiques, relations etc. Je pense qu’il faut donc un plan central, où tous les noeuds sont représentés, servant de bibliothèque exhaustive, et un nombre illimités de plans annexes, chacun ne contenant qu’une sous partie du graphe, avec un agencement différent, spécialement dédié à la visualisation des choses sous un certain prisme. Les positions des noeuds et connexions dans un plan annexe (appelé juste plan par la suite) sont indépendantes de celles dans le plan principal (appelé lobby par la suite). Evidemment ce sont des pointeurs, changer le contenu d’un noeud dans un plan le change dans tous, idem pour une connexion. La visualisation du graphe se fait dans des onglets. Un onglet pour le lobby, un pour le plan X que j’ai ouvert, un pour le plan Y, le plan Z n’est pas ouvert, … Les plans ne sont pas nécessairement permanents, ils peuvent servir de “plan de travail”. Un groupe de noeud et ses connexions peut être sélectionné dans un plan et copiés collés dans un autre (ce ne sont bien sur que des pointeurs vers la database + info graphiques). Un plan peut contenir des noeuds ou connexions que le lobby n’ a pas. Depuis un plan, seuls les connexions et noeuds exclusifs à ce plan peuvent être supprimés de la database, ceux qui existent déjà dans le lobby ne peuvent être que retirés du plans. Un filtre visuel met en évidence les noeuds et connexions exclusifs au plan, et une opération “merge” est disponible (par noeud et connexion), qui permet à l’utilisateur de placer le noeud manuellement dans le lobby. La connexion a un placement automatique puisqu’elle relie les noeuds.
+Un autre usage pour les plans est le filtrage selon des mots clés, tags, relations (langage de graph query à discuter) du graphe du lobby. Une fenêtre filtres au lobby permet de spécifier les critères, et le graphe extrait est transféré dans un nouveau plan.
+
+
+
+
+5-L'interface: sons, couleurs, formes, icônes, primitives de navigation, etc. A détailler. En particulier le groupement de noeuds, et la manière dont l’échelle des noeuds et connexion est choisie. A quoi ressemble un noeud ? Un cercle d’une couleur dépendant des tags, une boite avec son titre, autre ? Point important, le groupement thématique de noeuds. Se fait avec une connexion avec le tag d’inclusion vers le noeud qui résume le sujet du groupe, taggé “groupe”. Le renderer traite ce noeud et les noeuds inclus de manière à rendre le groupement évident visuellement. Comment ? En ne montrant que le noeud de groupe quand on dezoom suffisamment, et quand on zoome assez pour voir le groupe, il est sur un fond diffus coloré (enveloppe convexe) indiquant le groupement ?
+L’esthétique du PKM serait orientée éthérée, céleste, comme l’indique le nom Cirrus. N’hésite pas à t’inspirer (plagier) éhontément les projets publics qui l'autorisent.
+
+
+6- L’ajout d'information à la database : cela doit se faire dans la fenêtre principale, la même que la navigation dans le graphe. Par exemple, j’aurai un contrôle pour créer un noeud, avec des gizmos pour le déplacer, je peux éditer un noeud (son titre, son contenu, ses tags, …), importer depuis l’ordinateur vers son “dossier”, ctrl+z ctrl+y pour annuler/rétablir, etc. Les edits sont enregistrés en local et le commit et push est à la main de l’utilisateur.
+
+
+
+
+7- LLMs: Pour l’instant deux gros cas d’usage. A- A terme, je souhaiterai que les LLMs avec lesquels je discute de ma recherche en machine learning puissent accéder de manière optimisée à l’information de ma database. Par exemple, la database exposerait un MCP permettant au LLM de parcourir efficacement son contenu, sans en rater ni déborder son contexte. Je ne suis pas sûr que le RAG soit une bonne idée initialement. Peut-être dans les publications externes, en tout cas ma masse de données personnelles ne sera pas si grosse que ça au début. Peut-etre une fonctionnalité permettant de dumper une liste de tous les noms de noeuds et leur .tex de résumé ? 
+B- Je voudrais prévoir des tâches de veille sur des sujets/ des auteurs/ des organisations. A fréquence contrôlable, un LLM est démarré avec un budget token limité pour relever les journaux, les google scholars, etc. Pour les “sujets”, un fichier persistant entre sessions compile petit à petit les liens, noms, etc pertinents à aller consulter, ainsi que mes retours sur la validité du contenu proposé (où et quoi ne plus me soumettre).
+
+
+
+
+8- Création de documents: mes publications se recoupent un petit peu, et ne contiennent que des informations incluses dans le PKM, il serait donc pratique de les créer à partir du PKM même. Voici l’idée que j’en ai: une publication est un plan de travail où je spécifie un parcours des nœuds (quand monter, descendre dans la hiérarchie des parties, etc), ainsi que le liant entre les parties, comme les introductions, conclusions, clarification de relation, etc (ce seraient des noeuds exclusifs au plan). L’application se débrouille pour que l’ensemble forme un projet tex compilable, cohérent, avec citations, sommaire, bibliographie automatique, que je peux prévisualiser. Quel format exactement ? Amas de tex inclus dans un main ? Un gros main ? A voir. En tous cas ce doit réagir aux modifications des contenus des nœuds dans un autre plan. Je pense que le projet tex ainsi obtenu ne sera pas directement la publication elle-même, et que je ferai des ajustements hors de l’app, donc son format doit être standard (compatible avec celui d’overleaf disons). 
+
+
+Je ne l’ai pas précisé précédemment mais l’app doit inclure un compilateur tex, car c’est le format principal de l’information. Pour les prévisualisations par exemple.
+
+
+9- Divers:
+A- Agenda intégré : revoir des sujets, timeline, objectifs, avancements, etc
+B- Intégrer la méta de mon travail ? Quel type de réflexion j’ai eu dans tel contact, quelles erreurs j’ai fait, etc. A voir comment c’est présenté dans le graphe.
+
+
+
+
+Tout cela est très sous spécifié, je souhaiterais qu’on détaille chaque point ensemble pour converger vers un design. Prend en compte la complexité du code, la maintenabilité, etc. Mais d’abord, suggère des fonctionnalités importantes que j’aurai pu oublier. N’hésite pas non plus à proposer par la suite si quelque chose te vient.
