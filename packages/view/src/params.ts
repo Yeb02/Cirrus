@@ -101,6 +101,8 @@ export interface RenderParams {
   selectionColor: Rgb;
   selectionWidthPx: number;
   selectionGapPx: number;
+  dropColor: Rgb;
+  intruderColor: Rgb;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -188,6 +190,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   selectionColor: hexToRgb('#ffd9a0'),
   selectionWidthPx: 2,
   selectionGapPx: 3,
+  dropColor: hexToRgb('#8fb8ff'),
+  intruderColor: hexToRgb('#ff9a3c'),
 };
 
 export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list';
@@ -299,6 +303,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   color('selectionColor', 'Sélection'),
   num('selectionWidthPx', 'Épaisseur du contour de sélection (px)', A, 'Couleurs', 0.5, 8, 0.5),
   num('selectionGapPx', 'Écart du contour de sélection (px)', A, 'Couleurs', 0, 12, 0.5),
+  color('dropColor', 'Groupe qui recevra un dépôt'),
+  color('intruderColor', 'Intrus dans une enveloppe'),
 ];
 
 const SPEC_BY_KEY = new Map(PARAM_SPECS.map((s) => [s.key, s]));

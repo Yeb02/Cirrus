@@ -1,5 +1,5 @@
 import { Shader } from 'pixi.js';
-import type { RenderParams } from '@cirrus/view';
+import type { RenderParams, Rgb } from '@cirrus/view';
 
 // Every mesh is drawn in world units relative to a local origin; the world container carries zoom and offset.
 // On-screen sizes (widths, feathers, stars, markers) and fold transitions are computed here from uZoom, so geometry
@@ -365,7 +365,7 @@ export function setZoom(shaders: Shader[], zoom: number): void {
 }
 
 /** Selection outlines: rings around selected boxes and envelopes, at a constant on-screen gap and width. */
-export function outlineShader(p: RenderParams): Shader {
+export function outlineShader(p: RenderParams, color: Rgb = p.selectionColor): Shader {
   return Shader.from({
     gl: {
       vertex: /* glsl */ `#version 300 es
@@ -393,7 +393,7 @@ export function outlineShader(p: RenderParams): Shader {
       outline: {
         uGapPx: { value: p.selectionGapPx, type: 'f32' },
         uWidthPx: { value: p.selectionWidthPx, type: 'f32' },
-        uOutlineColor: { value: p.selectionColor, type: 'vec3<f32>' },
+        uOutlineColor: { value: color, type: 'vec3<f32>' },
       },
     },
   });

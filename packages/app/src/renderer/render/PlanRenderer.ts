@@ -36,8 +36,8 @@ const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
 const QUAD_INDEX = [0, 1, 2, 0, 2, 3];
 const hex = (c: Rgb) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
 
-interface Shaders { ribbon: Shader; glyph: Shader; envelope: Shader; box: Shader; marker: Shader; outline: Shader; stars: Shader[]; sky: Shader }
-interface Slots { ribbon: MeshSlot; glyph: MeshSlot; envelope: MeshSlot; box: MeshSlot; marker: MeshSlot; outline: MeshSlot; stars: MeshSlot[]; sky: MeshSlot }
+interface Shaders { ribbon: Shader; glyph: Shader; envelope: Shader; box: Shader; marker: Shader; outline: Shader; drop: Shader; intruder: Shader; stars: Shader[]; sky: Shader }
+interface Slots { ribbon: MeshSlot; glyph: MeshSlot; envelope: MeshSlot; box: MeshSlot; marker: MeshSlot; outline: MeshSlot; drop: MeshSlot; intruder: MeshSlot; stars: MeshSlot[]; sky: MeshSlot }
 interface LiveText { t: BitmapText; alpha: (zoom: number) => number }
 
 /**
@@ -84,6 +84,8 @@ export class PlanRenderer {
   private starKs: number[] = [];
   private hot = -1;
   private selection: Selection = emptySelection();
+  private dropTarget: number | null = null;
+  private intruderItems: number[] = [];
   private textZoom = -1;
   private stale = true;
 
@@ -116,26 +118,28 @@ export class PlanRenderer {
     const p = this.p;
     this.shaders = {
       ribbon: ribbonShader(p), glyph: glyphShader(p), envelope: envelopeShader(p), box: boxShader(p), marker: markerShader(p), outline: outlineShader(p),
+      drop: outlineShader(p, p.dropColor), intruder: outlineShader(p, p.intruderColor),
       stars: [starShader(p), starShader(p), starShader(p)], sky: skyShader(p),
     };
     const s = this.shaders;
     this.slots = {
       ribbon: new MeshSlot(RIBBON, s.ribbon, 4096), glyph: new MeshSlot(GLYPH, s.glyph, 2048), envelope: new MeshSlot(ENVELOPE, s.envelope, 1024),
       box: new MeshSlot(BOX, s.box, 1024), marker: new MeshSlot(MARKER, s.marker, 256), outline: new MeshSlot(OUTLINE, s.outline, 64),
+      drop: new MeshSlot(OUTLINE, s.drop, 64), intruder: new MeshSlot(OUTLINE, s.intruder, 64),
       stars: s.stars.map((sh) => new MeshSlot(STAR, sh, 4096)), sky: new MeshSlot(SKY, s.sky, 4),
     };
     // envelopeResolution 1: envelopes drawn in the main pass (no extra render target); below 1, into a reduced texture.
     if (p.envelopeResolution >= 1) this.meshLayer.addChild(this.slots.envelope.mesh);
     else this.envWorld.addChild(this.slots.envelope.mesh);
-    this.meshLayer.addChild(this.slots.ribbon.mesh, this.slots.glyph.mesh, this.slots.box.mesh, this.slots.outline.mesh, this.slots.marker.mesh);
+    this.meshLayer.addChild(this.slots.ribbon.mesh, this.slots.glyph.mesh, this.slots.box.mesh, this.slots.intruder.mesh, this.slots.drop.mesh, this.slots.outline.mesh, this.slots.marker.mesh);
     for (const st of this.slots.stars) this.bgWorld.addChild(st.mesh);
     this.skyLayer.addChild(this.slots.sky.mesh);
     this.slots.sky.update({ aPosition: new Float32Array(8), aWorld: new Float32Array(8), aV: new Float32Array([0, 0, 1, 1]) }, new Uint32Array(QUAD_INDEX));
   }
 
   private destroyGpu(): void {
-    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.outline, this.slots.sky, ...this.slots.stars]) slot.dispose();
-    for (const sh of [this.shaders.ribbon, this.shaders.glyph, this.shaders.envelope, this.shaders.box, this.shaders.marker, this.shaders.outline, this.shaders.sky, ...this.shaders.stars]) sh.destroy();
+    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.outline, this.slots.drop, this.slots.intruder, this.slots.sky, ...this.slots.stars]) slot.dispose();
+    for (const sh of [this.shaders.ribbon, this.shaders.glyph, this.shaders.envelope, this.shaders.box, this.shaders.marker, this.shaders.outline, this.shaders.drop, this.shaders.intruder, this.shaders.sky, ...this.shaders.stars]) sh.destroy();
   }
 
   setParams(p: RenderParams): void {
@@ -196,14 +200,35 @@ export class PlanRenderer {
     return i;
   }
 
+  /** The group that would receive a drop, lit while dragging (spec 10). */
+  setDropTarget(item: number | null): void {
+    if (item === this.dropTarget) return;
+    this.dropTarget = item;
+    this.slots.drop.update(...this.outlineArrays(item === null ? [] : [item]));
+  }
+
+  /** Items an envelope covers without being its members (spec 10), with an orange ring. */
+  setIntruders(items: number[]): void {
+    this.intruderItems = items;
+    this.slots.intruder.update(...this.outlineArrays(items));
+  }
+
   private updateOutline(): void {
+    const scene = this.scene;
+    const items = scene ? [...this.selection.items].flatMap((id) => { const i = scene.byId.get(id); return i === undefined ? [] : [i]; }) : [];
+    this.slots.outline.update(...this.outlineArrays(items));
+    this.slots.drop.update(...this.outlineArrays(this.dropTarget === null ? [] : [this.dropTarget]));
+    this.slots.intruder.update(...this.outlineArrays(this.intruderItems));
+  }
+
+  /** Rings around items (boxes, discs or padded envelopes), relative to the current origin. */
+  private outlineArrays(items: number[]): [Record<string, Float32Array>, Uint32Array] {
     const scene = this.scene;
     const position = new FloatList(), normal = new FloatList(), outer = new FloatList(), index = new IndexList();
     if (scene) {
-      for (const id of this.selection.items) {
-        const i = scene.byId.get(id);
-        if (i === undefined) continue;
+      for (const i of items) {
         const it = scene.items[i];
+        if (!it) continue;
         const poly = it.kind === 'group'
           ? offsetPolygon(it.hull!, it.pad!)
           : it.kind === 'phantom' && it.phantom !== 'node'
@@ -224,7 +249,7 @@ export class PlanRenderer {
         }
       }
     }
-    this.slots.outline.update({ aPosition: position.view(), aNormal: normal.view(), aOuter: outer.view() }, index.view());
+    return [{ aPosition: position.view(), aNormal: normal.view(), aOuter: outer.view() }, index.view()];
   }
 
   get hitIndex(): HitIndex | null {
@@ -306,7 +331,7 @@ export class PlanRenderer {
       c.position.set((this.origin.x - cam.x) * cam.zoom + cam.widthPx / 2, (this.origin.y - cam.y) * cam.zoom + cam.heightPx / 2);
     }
     const s = this.shaders;
-    setZoom([s.ribbon, s.glyph, s.envelope, s.box, s.marker, s.outline, ...s.stars], cam.zoom);
+    setZoom([s.ribbon, s.glyph, s.envelope, s.box, s.marker, s.outline, s.drop, s.intruder, ...s.stars], cam.zoom);
     const hw = cam.widthPx / 2 / cam.zoom, hh = cam.heightPx / 2 / cam.zoom;
     const lx = cam.x - this.origin.x, ly = cam.y - this.origin.y;
     for (const sh of [s.ribbon, s.glyph]) {

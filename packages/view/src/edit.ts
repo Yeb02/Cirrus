@@ -1,4 +1,6 @@
-import type { Id } from '@cirrus/core';
+import type { Id, Vec2 } from '@cirrus/core';
+import { offsetPolygon } from './geometry/hull.ts';
+import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
 
@@ -36,4 +38,79 @@ export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: 
   // A group member that is not scaled itself has nothing to write.
   out.nodes = out.nodes.filter((m) => m.x !== undefined || m.k !== undefined);
   return out;
+}
+
+function inPolygon(poly: Vec2[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/** Not inside a group more than half folded at this zoom: what can be dropped onto. */
+const reachable = (scene: PlanScene, i: number, zoom: number, p: RenderParams) => {
+  for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (foldT(scene.items[a].maxChildK!, zoom, p) >= 0.5) return false;
+  return true;
+};
+
+/**
+ * Where dropped items would enter (spec 10): the deepest group under the point (its padded envelope), or a simple
+ * node whose box is under it (it becomes a group). Never a dragged item nor one of its descendants.
+ */
+export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: number, p: RenderParams): number | null {
+  const excluded = new Set<number>();
+  const mark = (i: number) => { excluded.add(i); for (const c of scene.items[i].children) mark(c); };
+  for (const i of dragged) mark(i);
+  let best = -1, bestDepth = -1, bestIsBox = false;
+  scene.items.forEach((it, i) => {
+    if (excluded.has(i) || it.kind === 'phantom' || !reachable(scene, i, zoom, p)) return;
+    const isBox = it.kind === 'node';
+    const under = isBox
+      ? Math.abs(at.x - it.x) <= it.halfW && Math.abs(at.y - it.y) <= it.halfH
+      : inPolygon(offsetPolygon(it.hull!, it.pad!), at.x, at.y);
+    if (!under) return;
+    if (it.depth > bestDepth || (it.depth === bestDepth && isBox && !bestIsBox)) { best = i; bestDepth = it.depth; bestIsBox = isBox; }
+  });
+  return best >= 0 ? best : null;
+}
+
+/**
+ * Items an envelope covers without being its members (spec 10, « intrus »): each with the deepest such group. They
+ * are never pushed away; they get a sign and appear in the graph's health.
+ */
+export function intruders(scene: PlanScene): Map<number, number> {
+  const out = new Map<number, number>();
+  const isDescendant = (i: number, g: number) => { for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (a === g) return true; return false; };
+  scene.items.forEach((g, gi) => {
+    if (g.kind !== 'group') return;
+    const poly = offsetPolygon(g.hull!, g.pad!);
+    const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    scene.items.forEach((it, i) => {
+      if (i === gi || it.x < x0 || it.x > x1 || it.y < y0 || it.y > y1) return;
+      if (isDescendant(i, gi) || isDescendant(gi, i) || !inPolygon(poly, it.x, it.y)) return;
+      const known = out.get(i);
+      if (known === undefined || scene.items[known].depth < g.depth) out.set(i, gi);
+    });
+  });
+  return out;
+}
+
+export interface DropEffect { item: number; leave: boolean; enter: number | null }
+
+/**
+ * What a drop does to each moved item's group (spec 10): a free item enters the group it is dropped in; a member only
+ * goes down into a subgroup of its group (else it just moves: changing groups goes through « exclure »); with Alt it
+ * leaves its group, and enters the one under the cursor if that is another one.
+ */
+export function dropEffects(scene: PlanScene, items: number[], target: number | null, alt: boolean): DropEffect[] {
+  const below = (t: number, g: number) => { for (let a = scene.items[t].parent; a >= 0; a = scene.items[a].parent) if (a === g) return true; return false; };
+  return items.map((item) => {
+    const g = scene.items[item].parent;
+    if (alt) return { item, leave: g >= 0, enter: target !== null && target !== g ? target : null };
+    if (target === null || target === g) return { item, leave: false, enter: null };
+    return { item, leave: false, enter: g < 0 || below(target, g) ? target : null };
+  });
 }

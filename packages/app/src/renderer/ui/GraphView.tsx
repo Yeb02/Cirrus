@@ -1,7 +1,8 @@
-import { combine, type Id, moveNodes, movePhantom, type State } from '@cirrus/core';
+import { type Action, combine, exclude, type Id, include, moveNodes, movePhantom, type State } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
+  dropEffects, dropTarget, intruders,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -49,7 +50,8 @@ export function GraphView(props: {
   selectionRef.current = selection;
   const [rect, setRect] = useState<Bounds | null>(null);
   /** A drag in progress: the moved items (top-most), the scene it started from, the world offset so far. */
-  const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; dirty: boolean } | null>(null);
+  const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean } | null>(null);
+  const intrudersRef = useRef(new Map<number, number>());
   const sessionRef = useRef(props.session);
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
@@ -83,6 +85,7 @@ export function GraphView(props: {
     dirty.current = true;
     let text: string | null = null;
     if (h.kind === 'stub') text = `absent : ${e.renderer.visible!.connections[h.conn].stubs[h.stub].title}`;
+    else if (h.kind === 'item' && intrudersRef.current.has(h.item)) text = `intrus dans le groupe « ${sc.items[intrudersRef.current.get(h.item)!].title} »`;
     else if (h.kind === 'item' && sc.items[h.item].kind === 'phantom') {
       const it = sc.items[h.item];
       text = `${it.phantom === 'node' ? 'fantôme' : it.phantom === 'center' ? 'centre' : 'absent'} : ${it.title}`;
@@ -146,6 +149,10 @@ export function GraphView(props: {
           if (d && d.dirty) {
             d.dirty = false;
             e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: d.dx, y: d.dy }])), paramsRef.current), true);
+            // The group that would receive the drop lights up (spec 10), only if the drop would enter it.
+            const at = screenToWorld(e.renderer.camera, d.sx, d.sy);
+            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current);
+            e.renderer.setDropTarget(t !== null && dropEffects(d.base, d.items, t, d.alt).some((f) => f.enter === t) ? t : null);
             dirty.current = true;
           }
           if (dirty.current) {
@@ -209,6 +216,9 @@ export function GraphView(props: {
     }
     sceneRef.current = scene;
     e.renderer.setScene(scene);
+    // Items covered by an envelope they do not belong to: an orange ring and a tooltip (spec 10).
+    intrudersRef.current = intruders(scene);
+    e.renderer.setIntruders([...intrudersRef.current.keys()]);
     clearHover();
     const { width, height } = e.app.screen;
     const known = cameras.current.get(scene.plan.id);
@@ -288,7 +298,7 @@ export function GraphView(props: {
         const chosen = sel.items.has(id) ? [...sel.items].flatMap((x) => { const i = sc.byId.get(x); return i === undefined ? [] : [i]; }) : [intent.hit.item];
         const set = new Set(chosen);
         const top = chosen.filter((i) => { for (let a = sc.items[i].parent; a >= 0; a = sc.items[a].parent) if (set.has(a)) return false; return true; });
-        dragging.current = { items: top, base: sc, dx: 0, dy: 0, dirty: false };
+        dragging.current = { items: top, base: sc, dx: 0, dy: 0, sx: 0, sy: 0, alt: intent.alt, dirty: false };
         break;
       }
       case 'dragMove': {
@@ -296,6 +306,8 @@ export function GraphView(props: {
         if (!d) break;
         d.dx = intent.dx;
         d.dy = intent.dy;
+        d.sx = intent.sx;
+        d.sy = intent.sy;
         d.dirty = true;
         break;
       }
@@ -303,22 +315,43 @@ export function GraphView(props: {
         const d = dragging.current;
         dragging.current = null;
         if (!d) break;
-        if (intent.dx === 0 && intent.dy === 0) { e.renderer.setScene(d.base); break; }
-        // One action for the whole move (spec 6.4): the nodes by moveNodes, the phantoms one by one, combined.
-        const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number }[] = [];
+        e.renderer.setDropTarget(null);
+        const p = paramsRef.current, base = d.base;
+        const target = dropTarget(base, intent.at, d.items, e.renderer.camera.zoom, p);
+        const effects = dropEffects(base, d.items, target, intent.alt);
+        if (intent.dx === 0 && intent.dy === 0 && effects.every((f) => !f.leave && f.enter === null)) { e.renderer.setScene(base); break; }
+        // One action for the whole drop (spec 6.4): the moves, then the groups left and entered.
+        const effectOf = new Map(effects.map((f) => [f.item, f]));
+        const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number; group?: Id | null }[] = [];
+        const memberships: ((s: State) => Action)[] = [];
+        const plan = base.plan.id, targetId = target === null ? null : base.items[target].id;
         const collect = (i: number) => {
-          const it = d.base.items[i];
-          if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
-          else if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
+          const it = base.items[i], f = effectOf.get(i);
+          const group = f?.enter != null ? targetId : f?.leave ? null : undefined;
+          if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + intent.dx, y: it.y + intent.dy, ...(group !== undefined ? { group } : {}) });
+          else {
+            if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + intent.dx, y: it.y + intent.dy });
+            if (f?.enter != null) memberships.push((x) => include(x, plan, it.id, targetId!));
+            else if (f?.leave) memberships.push((x) => exclude(x, plan, it.id));
+          }
           for (const c of it.children) collect(c);
         };
         for (const i of d.items) collect(i);
-        const plan = d.base.plan.id;
+        // A simple node receiving its first members becomes a group, groupOffsetSteps above its largest member (spec 8.1).
+        const entering = effects.filter((f) => f.enter !== null).map((f) => base.items[f.item].k);
+        if (target !== null && base.items[target].kind === 'node' && entering.length > 0) {
+          const k = Math.max(...entering) + p.groupOffsetSteps;
+          if (base.items[target].k < k) memberships.push((x) => moveNodes(x, plan, [{ node: targetId!, k }]));
+        }
         const session = sessionRef.current;
-        if (!session) { e.renderer.setScene(d.base); break; }
-        void session.run((st) => combine(st, nodes.length + phantoms.length === 1 ? 'Déplacer un élément' : `Déplacer ${nodes.length + phantoms.length} éléments`, [
+        if (!session) { e.renderer.setScene(base); break; }
+        const count = nodes.length + phantoms.length;
+        const label = targetId !== null && effects.some((f) => f.enter !== null) ? `Mettre dans « ${base.items[target!].title} »`
+          : effects.some((f) => f.leave) ? 'Sortir du groupe' : count === 1 ? 'Déplacer un élément' : `Déplacer ${count} éléments`;
+        void session.run((st) => combine(st, label, [
           ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
-          ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+          ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group)),
+          ...memberships,
         ])).then((r) => {
           // Refused: back to where it was. Written: the scene follows the state.
           if (!r.ok) { engine.current?.renderer.setScene(d.base); dirty.current = true; }
@@ -329,6 +362,7 @@ export function GraphView(props: {
       case 'dragCancel': {
         const d = dragging.current;
         dragging.current = null;
+        e.renderer.setDropTarget(null);
         if (d) e.renderer.setScene(d.base);
         break;
       }
