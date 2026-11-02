@@ -6,7 +6,9 @@ import { applyOp, canonical, emptyState, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
 const createdId = (a: Action): Id => (a.ops.find((o) => o.t === 'node' && o.before === null) as { after: { id: Id } }).after.id;
-const snapshot = (s: State) => canonical({ n: [...s.nodes], c: [...s.connections], p: [...s.placements], b: [...s.branches] });
+// Sorted: removing then re-adding an entry changes Map/Set iteration order, not the content.
+const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
+const snapshot = (s: State) => canonical({ n: sorted(s.nodes), c: sorted(s.connections), p: sorted(s.placements), b: sorted(s.branches) });
 
 function setup() {
   const s = emptyState();
