@@ -16,7 +16,7 @@ import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
   absentBuild, addMemberBuild, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild, joinBuild,
-  dropMemberships, layoutBuild, lobbyConnectionBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
+  dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
   withRepercussion,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
@@ -170,7 +170,7 @@ export function GraphView(props: {
     e.renderer.setHover(h.kind === 'connection' || h.kind === 'stub' ? h.conn : null);
     dirty.current = true;
     let text: string | null = null;
-    if (h.kind === 'stub') text = `absent : ${e.renderer.visible!.connections[h.conn].stubs[h.stub].title}`;
+    if (h.kind === 'stub') text = `absent : ${h.title}`;
     else if (h.kind === 'item' && intrudersRef.current.has(h.item)) text = `intrus dans le groupe « ${sc.items[intrudersRef.current.get(h.item)!].title} »`;
     else if (h.kind === 'item' && sc.items[h.item].kind === 'phantom') {
       const it = sc.items[h.item];
@@ -264,35 +264,48 @@ export function GraphView(props: {
   };
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
-  /** « Cacher » (spec 7): a group asks whether its content follows; leaving a last plan is announced. */
+  /** What goes to the trash, said for a question: nothing, or these nodes, this plan being their last (spec 7). */
+  const trashNote = (last: Id[]) => (last.length === 0 ? 'rien ne part à la corbeille'
+    : `${titles(last)} ${plural(last.length, 'ira', 'iront')} à la corbeille (dernier plan)`);
+  /**
+   * « Cacher » (spec 7): a group asks whether its content follows; what would leave its last plan is announced, for each
+   * answer, content included (I12 of the plan 3b review).
+   */
   const askHide = (sc: PlanScene, items: number[]) => {
     const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
     if (ids.length === 0) return;
-    const groups = items.filter((i) => sc.items[i].kind === 'group');
-    const last = deleteSummary(stateRef.current, ids).last;
-    if (groups.length === 0 && last.length === 0) { edit(hideBuild(sc, ids)); return; }
-    const warning = last.length > 0 ? `${titles(last)} ${plural(last.length, 'n’est', 'ne sont')} dans aucun autre plan : ${plural(last.length, 'il ira', 'ils iront')} à la corbeille.` : undefined;
+    const s = stateRef.current, groups = items.filter((i) => sc.items[i].kind === 'group');
+    const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
+    if (groups.length === 0 && alone.length === 0) { edit(hideBuild(sc, ids)); return; }
     setQuestion({
       text: groups.length > 0 ? `Cacher ${plural(groups.length, 'ce groupe', 'ces groupes')} : le contenu suit-il ?` : `Cacher ${titles(ids)} ?`,
-      ...(warning ? { detail: warning } : {}),
+      detail: groups.length > 0 ? `Avec le contenu, ${trashNote(all)}. Seul, ${trashNote(alone)}.` : `${trashNote(alone)[0].toUpperCase()}${trashNote(alone).slice(1)}.`,
       choices: groups.length > 0
         ? [{ value: 'content', label: 'Avec le contenu' }, { value: 'alone', label: plural(groups.length, 'Le groupe seul', 'Les groupes seuls') }]
         : [{ value: 'alone', label: 'Cacher' }],
       answer: (v) => { if (v !== null) edit(hideBuild(sc, ids, v === 'content')); },
     });
   };
-  /** Deletion (spec 7): always « partout » or « ici seulement », with the instances counted and the last ones announced. */
+  /**
+   * Deletion (spec 7): always « partout » or « ici seulement », with the instances counted and the last ones announced;
+   * « ici » for a group asks whether its content follows (I12 of the plan 3b review).
+   */
   const askDelete = (sc: PlanScene, items: number[]) => {
     const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
     if (ids.length === 0) return;
-    const { instances, last } = deleteSummary(stateRef.current, ids);
-    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: 'Partout' };
+    const s = stateRef.current, { instances } = deleteSummary(s, ids);
+    const groups = items.some((i) => sc.items[i].kind === 'group');
+    const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
+    const here = groups
+      ? [{ value: 'content', label: 'Ici, avec le contenu' }, { value: 'here', label: 'Ici, le groupe seul' }]
+      : [{ value: 'here', label: 'Ici seulement' }];
+    const everywhere = { value: 'everywhere', label: 'Partout' };
     setQuestion({
       text: `Supprimer ${titles(ids)} ?`,
-      detail: `${plural(ids.length, 'Il figure', 'Ils figurent')} dans ${instances} plan${instances > 1 ? 's' : ''} en tout.`
-        + (last.length > 0 ? ` ${titles(last)} ${plural(last.length, 'n’est', 'ne sont')} dans aucun autre plan : à la corbeille.` : ''),
-      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
-      answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere')); },
+      detail: `${plural(ids.length, 'Il figure', 'Ils figurent')} dans ${instances} plan${instances > 1 ? 's' : ''} en tout. `
+        + (groups ? `Ici avec le contenu, ${trashNote(all)} ; ici seul, ${trashNote(alone)}.` : `Ici, ${trashNote(alone)}.`),
+      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [everywhere, ...here] : [...here, everywhere],
+      answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere', v === 'content')); },
     });
   };
   /** A connection's deletion (spec 7): « ici seulement » hides it here; when this is its last plan, it goes to the trash. */
@@ -664,10 +677,9 @@ export function GraphView(props: {
   };
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
-    const sc = sceneRef.current, vis = engine.current?.renderer.visible;
-    if (!sc) return null;
-    if (h.kind === 'item') return { kind: 'item', id: sc.items[h.item].id };
-    if ((h.kind === 'connection' || h.kind === 'stub') && vis) return { kind: 'connection', id: sc.connections[vis.connections[h.conn].conns[0]].id };
+    if (h.kind === 'item') return { kind: 'item', id: h.id };
+    if (h.kind === 'connection') return { kind: 'connection', id: h.ids[0] };
+    if (h.kind === 'stub') return { kind: 'connection', id: h.connection };
     return null;
   };
 
@@ -684,16 +696,14 @@ export function GraphView(props: {
         if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
         setSelection(target ? toggle(emptySelection(), target) : emptySelection());
         // A stub or an absent phantom brings its node in (spec 11.3); a connection or a centre phantom opens its pop-up (spec 8.5).
-        const vis = e.renderer.visible, here = { x: intent.sx, y: intent.sy };
-        if (intent.hit.kind === 'stub' && vis) {
-          const st = vis.connections[intent.hit.conn].stubs[intent.hit.stub];
-          startPlacing({ kind: 'import', node: st.node }, st.title, here);
-        } else if (intent.hit.kind === 'connection' && vis) {
-          openPopup(vis.connections[intent.hit.conn].conns.map((c) => sc.connections[c].id), intent.sx, intent.sy);
-        } else if (intent.hit.kind === 'item') {
-          const it = sc.items[intent.hit.item];
-          if (it.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
-          else if (it.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
+        // By ids, not indices: a frame may have been rebuilt between the press and the release (I9 of the review).
+        const here = { x: intent.sx, y: intent.sy };
+        if (intent.hit.kind === 'stub') startPlacing({ kind: 'import', node: intent.hit.node }, intent.hit.title, here);
+        else if (intent.hit.kind === 'connection') openPopup(intent.hit.ids, intent.sx, intent.sy);
+        else if (intent.hit.kind === 'item') {
+          const i = sc.byId.get(intent.hit.id), it = i === undefined ? undefined : sc.items[i];
+          if (it?.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
+          else if (it?.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
         }
         break;
       }
@@ -702,8 +712,12 @@ export function GraphView(props: {
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
         if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) { sel = emptySelection(); setSelection(sel); }
-        const items = menuFor(stateRef.current, sc, intent.hit, sel, clip.current !== null, e.renderer.visible);
-        if (items.length > 0) setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items });
+        // On the background of an open group: that group's menu first (spec 9.1, I11 of the review).
+        const w = screenToWorld(e.renderer.camera, intent.sx, intent.sy);
+        const under = intent.hit.kind === 'background' ? e.renderer.hitIndex?.openGroupsAt(w.x, w.y, e.renderer.camera.zoom)[0] : undefined;
+        const items = menuFor(stateRef.current, sc, intent.hit, sel, clip.current !== null, under === undefined ? undefined : sc.items[under].id);
+        const hit: Hit = under === undefined ? intent.hit : { kind: 'item', item: under, id: sc.items[under].id };
+        if (items.length > 0) setMenu({ x: intent.sx, y: intent.sy, hit, items });
         break;
       }
       case 'rectMove':
@@ -722,15 +736,15 @@ export function GraphView(props: {
       case 'dragStart': {
         // A stub dragged gets a place of its own: an absent phantom (spec 8.5).
         if (intent.hit.kind === 'stub') {
-          const vc = e.renderer.visible?.connections[intent.hit.conn], st = vc?.stubs[intent.hit.stub];
-          if (vc && st) stubDrag.current = { connection: sc.connections[vc.conns[0]].id, node: st.node, title: st.title };
+          stubDrag.current = { connection: intent.hit.connection, node: intent.hit.node, title: intent.hit.title };
           break;
         }
         // An element moves with the whole selection if it belongs to it (spec 9.1); a group with all it contains.
         if (intent.hit.kind !== 'item') break;
-        const id = sc.items[intent.hit.item].id;
+        const id = intent.hit.id, pressed = sc.byId.get(id);
+        if (pressed === undefined) break;
         const sel = selectionRef.current;
-        const chosen = sel.items.has(id) ? [...sel.items].flatMap((x) => { const i = sc.byId.get(x); return i === undefined ? [] : [i]; }) : [intent.hit.item];
+        const chosen = sel.items.has(id) ? [...sel.items].flatMap((x) => { const i = sc.byId.get(x); return i === undefined ? [] : [i]; }) : [pressed];
         const set = new Set(chosen);
         const top = chosen.filter((i) => { for (let a = sc.items[i].parent; a >= 0; a = sc.items[a].parent) if (set.has(a)) return false; return true; });
         dragging.current = { items: top, base: sc, dx: 0, dy: 0, sx: 0, sy: 0, alt: intent.alt, dirty: false };
@@ -906,7 +920,9 @@ export function GraphView(props: {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
     const p = paramsRef.current, sel = selectionRef.current;
-    const clicked = hit.kind === 'item' ? hit.item : -1;
+    // The menu may have stayed open across a rebuild: what it was opened on is found again by id (I9 of the review).
+    const clicked = hit.kind === 'item' ? sc.byId.get(hit.id) ?? -1 : -1;
+    const line = hit.kind === 'connection' && hit.ids.length === 1 ? hit.ids[0] : null;
     const clickedId = clicked >= 0 ? sc.items[clicked].id : null;
     const targets = clickedId && sel.items.has(clickedId)
       ? [...sel.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; })
@@ -948,9 +964,8 @@ export function GraphView(props: {
       case 'layout':
       case 'resetLayout': {
         // Selected, a connection shows its handles; « rétablir » forgets this plan's layout (spec 8.5).
-        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
-        if (!vc) break;
-        const id = sc.connections[vc.conns[0]].id;
+        if (line === null) break;
+        const id = line;
         if (action === 'resetLayout') edit(layoutBuild(sc.plan.id, id, null));
         else {
           setSelection({ items: new Set(), connections: new Set([id]) });
@@ -959,8 +974,7 @@ export function GraphView(props: {
         break;
       }
       case 'deleteConnection': {
-        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
-        if (vc) askDeleteConnection(sc.plan.id, sc.connections[vc.conns[0]].id);
+        if (line !== null) askDeleteConnection(sc.plan.id, line);
         break;
       }
       case 'addToLobby': {
@@ -968,8 +982,7 @@ export function GraphView(props: {
         const lobby = [...stateRef.current.plans.values()].find((x) => x.type === 'lobby');
         if (!lobby) break;
         if (hit.kind === 'connection') {
-          const vc = e.renderer.visible?.connections[hit.conn];
-          if (vc) edit(lobbyConnectionBuild(lobby.id, sc.connections[vc.conns[0]].id));
+          if (line !== null) edit(lobbyConnectionBuild(lobby.id, line));
           break;
         }
         if (clicked < 0) break;
@@ -986,11 +999,10 @@ export function GraphView(props: {
         aimLine(at.x, at.y);
         break;
       case 'splitArm': {
-        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
         const far = hit.kind === 'connection' && hit.key !== null ? sc.byId.get(hit.key) : undefined;
-        if (!vc || far === undefined) break;
+        if (line === null || far === undefined) break;
         const it = sc.items[far];
-        startPlacing({ kind: 'split', step: 1, connection: sc.connections[vc.conns[0]].id, node: it.id, title: it.title, home: e.renderer.camera }, `fantôme : ${it.title}`, at);
+        startPlacing({ kind: 'split', step: 1, connection: line, node: it.id, title: it.title, home: e.renderer.camera }, `fantôme : ${it.title}`, at);
         break;
       }
       case 'joinArm': {
@@ -998,8 +1010,8 @@ export function GraphView(props: {
           const it = sc.items[clicked];
           edit(joinBuild(sc.plan.id, it.connection!, it.node));
         } else if (hit.kind === 'connection') {
-          const vc = e.renderer.visible?.connections[hit.conn], c = vc && sc.connections[vc.conns[0]];
-          if (c && c.part === 'far') edit(joinBuild(sc.plan.id, c.id, c.ends[0].key));
+          const c = sc.connections.find((x) => x.id === line && x.part === 'far');
+          if (c) edit(joinBuild(sc.plan.id, c.id, c.ends[0].key));
         }
         break;
       }
@@ -1016,7 +1028,7 @@ export function GraphView(props: {
         break;
       }
       case 'importNode': {
-        const st = hit.kind === 'stub' ? e.renderer.visible?.connections[hit.conn].stubs[hit.stub] : undefined;
+        const st = hit.kind === 'stub' ? hit : undefined;
         const node = st ? st.node : clicked >= 0 ? sc.items[clicked].node : null;
         if (node) startPlacing({ kind: 'import', node }, st ? st.title : sc.items[clicked].title, at);
         break;

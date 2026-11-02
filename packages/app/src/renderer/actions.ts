@@ -4,7 +4,7 @@ import {
   setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
 import {
-  type Clip, type ConnectTarget, dropEffects, dropTarget, type Layout, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
+  type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
 } from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
@@ -114,9 +114,17 @@ export function hideBuild(scene: PlanScene, ids: Id[], withContent = false): Bui
   return (st) => combine(st, nodes.length === 1 ? 'Cacher dans ce plan' : `Cacher ${nodes.length} éléments dans ce plan`, nodes.map((n) => (x: State) => removeFromPlan(x, plan, n)));
 }
 
-/** Deletion (spec 7): « ici seulement » takes the nodes out of this plan, « partout » out of every plan, to the trash. */
-export function deleteBuild(scene: PlanScene, ids: Id[], everywhere: boolean): Build {
-  const nodes = nodesOf(scene, ids, false);
+/** The nodes that hiding these (with their content or not) would send to the trash: this plan is their last (spec 7, I12 of the review). */
+export function lastPlanNodes(s: State, scene: PlanScene, ids: Id[], withContent: boolean): Id[] {
+  return deleteSummary(s, nodesOf(scene, ids, withContent)).last;
+}
+
+/**
+ * Deletion (spec 7): « ici seulement » takes the nodes out of this plan — with a group's content when `withContent` —
+ * « partout » out of every plan, to the trash.
+ */
+export function deleteBuild(scene: PlanScene, ids: Id[], everywhere: boolean, withContent = false): Build {
+  const nodes = nodesOf(scene, ids, withContent && !everywhere);
   if (nodes.length === 0) return null;
   const plan = scene.plan.id, n = nodes.length;
   const label = everywhere ? (n === 1 ? 'Supprimer partout' : `Supprimer ${n} nœuds partout`) : (n === 1 ? 'Supprimer de ce plan' : `Supprimer ${n} nœuds de ce plan`);

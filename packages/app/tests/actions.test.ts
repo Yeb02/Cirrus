@@ -8,7 +8,7 @@ import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScen
 import { beforeEach, expect, test } from 'vitest';
 import {
   absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
-  dropBuild, dropMemberships, layoutBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
+  dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
   withRepercussion,
 } from '../src/renderer/actions.ts';
 
@@ -213,4 +213,16 @@ test('la disposition d’une connexion suit quand toutes ses extrémités bougen
   expect(l.marker!.x).toBeCloseTo(g.x + (110 - g.x) * P.factor, 9);
   expect(l.handles[nodes.solomonoff].b2).toEqual({ x: 3 * P.factor, y: 4 * P.factor });
   // A connection with an end that does not move keeps its layout (Déduction jointe reaches Occam).
+});
+
+test('cacher ou supprimer un groupe ici : l’avertissement du dernier plan compte son contenu quand il suit (I12 de la relecture 3b)', () => {
+  const { nodes, plans } = ids;
+  expect(lastPlanNodes(s, sc, [nodes.groupeInduction], false)).toEqual([nodes.groupeInduction]);
+  const all = lastPlanNodes(s, sc, [nodes.groupeInduction], true);
+  expect(all).toHaveLength(2); // the group and Priore; Solomonoff is in the document plan too
+  expect(all).toContain(nodes.groupeInduction);
+  expect(all).not.toContain(nodes.solomonoff);
+  run(deleteBuild(sc, [nodes.groupeInduction], false, true));
+  expect(s.placements.has(placementKey(plans.lobby, nodes.solomonoff))).toBe(false);
+  expect(s.placements.has(placementKey(plans.article, nodes.solomonoff))).toBe(true);
 });

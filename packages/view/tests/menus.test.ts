@@ -13,7 +13,7 @@ beforeAll(() => {
   sc = buildScene(s, ids.plans.lobby, measure, P);
   these = buildScene(s, ids.plans.these, measure, P);
 });
-const item = (scene: PlanScene, id: string) => ({ kind: 'item' as const, item: scene.byId.get(id)! });
+const item = (scene: PlanScene, id: string) => ({ kind: 'item' as const, item: scene.byId.get(id)!, id });
 const actions = (m: { action: string }[]) => m.map((x) => x.action);
 
 test('nœud membre d’un groupe : connexion, sortie du groupe, échelle, renommer, cacher, supprimer', () => {
@@ -36,7 +36,7 @@ test('élément d’une sélection de plusieurs : le menu de sélection (spec 9.
 
 test('fantôme, amorce, connexion, fond', () => {
   expect(actions(menuFor(s, sc, item(sc, ids.phantoms.node), emptySelection(), false))).toEqual(['teleport', 'joinArm']);
-  expect(actions(menuFor(s, these, { kind: 'stub', conn: 0, stub: 0 }, emptySelection(), false))).toEqual(['importNode']);
+  expect(actions(menuFor(s, these, { kind: 'stub', conn: 0, stub: 0, connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: '' }, emptySelection(), false))).toEqual(['importNode']);
   expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode']);
   expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste']);
 });
@@ -46,11 +46,9 @@ test('chaque article a un libellé français', () => {
 });
 
 test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
-  const visible = computeVisible(these, buildIndex(these, P), camAtTextPx(these, 0, 16), P);
-  const conn = visible.connections.findIndex((vc) => these.connections[vc.conns[0]].id === ids.connections.twoToOne);
-  expect(menuFor(s, these, { kind: 'connection', conn, key: null }, emptySelection(), false, visible).map((m) => m.action)).toContain('addToLobby');
-  const lobbyVisible = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
-  expect(menuFor(s, sc, { kind: 'connection', conn: 0, key: null }, emptySelection(), false, lobbyVisible).map((m) => m.action)).not.toContain('addToLobby');
+  const line = (id: string) => ({ kind: 'connection' as const, conn: -1, key: null, ids: [id], part: 'main' as const });
+  expect(menuFor(s, these, line(ids.connections.twoToOne), emptySelection(), false).map((m) => m.action)).toContain('addToLobby');
+  expect(menuFor(s, sc, line(ids.connections.twoToTwo), emptySelection(), false).map((m) => m.action)).not.toContain('addToLobby');
 });
 
 test('une connexion disposée à la main peut retrouver sa disposition automatique (spec 8.5)', () => {
@@ -58,10 +56,12 @@ test('une connexion disposée à la main peut retrouver sa disposition automatiq
   const conn = ids.connections.twoToTwo;
   run(st, setLayout(st, ids.plans.lobby, conn, { angle: 1, handles: {} }));
   const scene = buildScene(st, ids.plans.lobby, measure, P);
-  const visible = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 16), P);
-  const vi = visible.connections.findIndex((vc) => scene.connections[vc.conns[0]].id === conn);
-  expect(menuFor(st, scene, { kind: 'connection', conn: vi, key: null }, emptySelection(), false, visible).map((m) => m.action)).toContain('resetLayout');
-  const plain = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
-  const vj = plain.connections.findIndex((vc) => sc.connections[vc.conns[0]].id === conn);
-  expect(menuFor(s, sc, { kind: 'connection', conn: vj, key: null }, emptySelection(), false, plain).map((m) => m.action)).not.toContain('resetLayout');
+  const line = { kind: 'connection' as const, conn: -1, key: null, ids: [conn], part: 'main' as const };
+  expect(menuFor(st, scene, line, emptySelection(), false).map((m) => m.action)).toContain('resetLayout');
+  expect(menuFor(s, sc, line, emptySelection(), false).map((m) => m.action)).not.toContain('resetLayout');
+});
+
+test('clic droit sur le fond d’un groupe ouvert : le menu de ce groupe, puis de quoi créer ou coller (spec 9.1, I11 de la relecture 3b)', () => {
+  const m = actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true, ids.nodes.groupeML));
+  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste']);
 });

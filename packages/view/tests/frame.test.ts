@@ -68,7 +68,7 @@ test('« n connexions » pour une agrégation', () => {
 test('survol : nœud, connexion, groupe replié, fond d’un groupe ouvert', () => {
   const { frame, origin, hits, cam } = frameAt(sc, 0, 16);
   const mdl = sc.items[sc.byId.get(ids.nodes.mdl)!];
-  expect(hits.hit(mdl.x, mdl.y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.mdl) });
+  expect(hits.hit(mdl.x, mdl.y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.mdl), id: ids.nodes.mdl });
   // A point on a connection's centerline, away from boxes.
   const line = frame.centerlines.find((c) => c.points.length > 6)!;
   const q = line.points[Math.floor(line.points.length / 2)];
@@ -86,7 +86,7 @@ test('survol : nœud, connexion, groupe replié, fond d’un groupe ouvert', () 
 test('un groupe replié se touche comme un élément', () => {
   const { hits, cam } = frameAt(sc, 0, 3);
   const g = sc.items[sc.byId.get(ids.nodes.groupeML)!];
-  expect(hits.hit(g.x, g.y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.groupeML) });
+  expect(hits.hit(g.x, g.y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.groupeML), id: ids.nodes.groupeML });
 });
 
 test('rappel de hiérarchie : du plus profond au plus haut', () => {
@@ -115,4 +115,13 @@ test('l’enveloppe d’un sous-groupe porte le repli de son parent, pour s’es
   expect(parentK.some((k) => k > 1e8)).toBe(true); // a top-level group: no parent
   expect(parentK).toHaveLength(frame.envelopes.alpha.length);
   expect(visible.groups.length).toBeGreaterThan(0);
+});
+
+test('le titre d’un groupe ouvert se touche comme le groupe : on le clique, on le tire, on ouvre son menu (spec 9.1, I11 de la relecture 3b)', () => {
+  const { hits, cam } = frameAt(sc, 0, 16);
+  const g = sc.items[sc.byId.get(ids.nodes.groupeML)!];
+  const top = Math.min(...offsetPolygon(g.hull!, g.pad!).map((q) => q.y));
+  const size = P.baseFontPx * P.factor ** g.k * P.groupTitleOpenScale;
+  const y = top - size * P.groupTitleOffset;
+  expect(hits.hit(g.x, y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.groupeML), id: ids.nodes.groupeML });
 });

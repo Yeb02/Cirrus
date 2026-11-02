@@ -4,7 +4,7 @@ import type { Hit } from '../src/hit.ts';
 import { P } from './helpers.ts';
 
 const cam = { x: 0, y: 0, zoom: 2, widthPx: 800, heightPx: 600 };
-const item: Hit = { kind: 'item', item: 3 };
+const item: Hit = { kind: 'item', item: 3, id: 'n3' };
 const bg: Hit = { kind: 'background' };
 const down = (sx: number, sy: number, hit: Hit, extra: Partial<Extract<Input, { t: 'down' }>> = {}): Input =>
   ({ t: 'down', button: 0, sx, sy, ctrl: false, alt: false, shift: false, hit, ...extra });
@@ -76,7 +76,7 @@ test('geste sans bouton : suit le curseur, se pose au clic gauche, s’annule au
 
 test('une amorce se tire comme un élément, pour lui donner une place (spec 8.5)', () => {
   const g = new GestureMachine(P);
-  const stub: Hit = { kind: 'stub', conn: 0, stub: 0 };
+  const stub: Hit = { kind: 'stub', conn: 0, stub: 0, connection: 'c', node: 'n', title: 'N' };
   g.feed(down(100, 100, stub), cam);
   expect(g.feed(move(130, 100), cam)[0]).toEqual({ t: 'dragStart', hit: stub, alt: false });
 });

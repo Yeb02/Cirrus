@@ -2,16 +2,22 @@ import type { Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { FrameGeometry } from './frame.ts';
 import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
-import { foldT } from './lod.ts';
+import { foldT, stepScale, textPx } from './lod.ts';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
 import type { VisibleSet } from './visibility.ts';
 
+/**
+ * What is under a point. Indices (item, conn, stub) serve at once (hover light); what acts later — a click handled at
+ * the release, a menu chosen after a zoom — goes by the stable ids, the indices changing at each rebuild (I9 of the
+ * plan 3b review).
+ */
 export type Hit =
-  | { kind: 'item'; item: number }
-  /** conn: visible connection index; key: the member whose branch is under the point (null: the trunk). */
-  | { kind: 'connection'; conn: number; key: Id | null }
-  | { kind: 'stub'; conn: number; stub: number }
+  | { kind: 'item'; item: number; id: Id }
+  /** conn: visible connection index; key: the member whose branch is under the point (null: the trunk); ids: the scene connections it stands for. */
+  | { kind: 'connection'; conn: number; key: Id | null; ids: Id[]; part: 'main' | 'far' }
+  /** connection, node: the absent member's; title: its node's. */
+  | { kind: 'stub'; conn: number; stub: number; connection: Id; node: Id; title: string }
   | { kind: 'background' };
 
 export interface HitIndex {
@@ -62,6 +68,13 @@ export function buildHitIndex(
   const markers = frame.markers.map((m) => ({ conn: m.conn, pos: abs(m.pos) }));
 
   const folded = (g: number, zoom: number) => foldT(items[g].maxChildK!, zoom, p) >= p.foldClickable;
+  // An open group's title, above its envelope as drawn: it stands for the group (spec 9.1, I11 of the plan 3b review).
+  const titles = groups.map(({ g, poly }) => {
+    const it = items[g], size = p.baseFontPx * stepScale(it.k, p) * p.groupTitleOpenScale;
+    const cy = Math.min(...poly.map((q) => q.y)) - size * p.groupTitleOffset;
+    const hw = (p.titleCharWidth * size * it.title.length) / 2, hh = (size * p.lineHeight) / 2;
+    return { g, x0: it.x - hw, x1: it.x + hw, y0: cy - hh, y1: cy + hh };
+  });
   /** Not inside a group that is more than half closed. */
   const reachable = (i: number, zoom: number) => {
     for (let a = items[i].parent; a >= 0; a = items[a].parent) if (folded(a, zoom)) return false;
@@ -75,19 +88,29 @@ export function buildHitIndex(
     hit(wx, wy, zoom) {
       const tol = p.hitTolerancePx / zoom;
       const onBox = boxTree ? boxTree.search(wx, wy, wx, wy).map((j) => boxes[j]).filter((i) => reachable(i, zoom)) : [];
-      if (onBox.length > 0) return { kind: 'item', item: deepest(onBox) };
+      const item = (i: number): Hit => ({ kind: 'item', item: i, id: items[i].id });
+      if (onBox.length > 0) return item(deepest(onBox));
       const closed = groupsAt(wx, wy).filter((g) => folded(g, zoom) && reachable(g, zoom));
-      if (closed.length > 0) return { kind: 'item', item: deepest(closed) };
+      if (closed.length > 0) return item(deepest(closed));
+      const titled = titles.filter((r) => wx >= r.x0 && wx <= r.x1 && wy >= r.y0 && wy <= r.y1 && !folded(r.g, zoom) && reachable(r.g, zoom)
+        && textPx(items[r.g].k, zoom, p) * p.groupTitleOpenScale >= p.textFade[0]).map((r) => r.g);
+      if (titled.length > 0) return item(deepest(titled));
       let bestStub = -1, bestStubD = tol * p.stubHitFactor;
       stubs.forEach((s, j) => { const d = Math.hypot(s.pos.x - wx, s.pos.y - wy); if (d <= bestStubD) { bestStubD = d; bestStub = j; } });
-      if (bestStub >= 0) return { kind: 'stub', conn: stubs[bestStub].conn, stub: stubs[bestStub].stub };
+      if (bestStub >= 0) {
+        const st = stubs[bestStub], vc = visible.connections[st.conn];
+        return { kind: 'stub', conn: st.conn, stub: st.stub, connection: scene.connections[vc.conns[0]].id, node: vc.stubs[st.stub].node, title: vc.stubs[st.stub].title };
+      }
       if (segTree) {
         let best = -1, bestD = tol;
         for (const j of segTree.search(wx - tol, wy - tol, wx + tol, wy + tol)) {
           const d = segmentDistance(wx, wy, segs[j].a, segs[j].b);
           if (d <= bestD) { bestD = d; best = j; }
         }
-        if (best >= 0) return { kind: 'connection', conn: segs[best].conn, key: segs[best].key };
+        if (best >= 0) {
+          const vc = visible.connections[segs[best].conn];
+          return { kind: 'connection', conn: segs[best].conn, key: segs[best].key, ids: vc.conns.map((c) => scene.connections[c].id), part: scene.connections[vc.conns[0]].part };
+        }
       }
       return { kind: 'background' };
     },

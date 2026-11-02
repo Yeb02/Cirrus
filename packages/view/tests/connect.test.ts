@@ -41,13 +41,14 @@ test('le survol d’une branche dit de quel membre elle part ; le menu propose a
   const line = frame.centerlines.find((c) => c.conn === vi && c.key === ids.nodes.occam)!;
   const q = line.points[Math.floor(line.points.length / 2)];
   const h = hits.hit(q.x + origin.x, q.y + origin.y, cam.zoom);
-  expect(h).toEqual({ kind: 'connection', conn: vi, key: ids.nodes.occam });
-  const actions = (hit: typeof h) => menuFor(s, sc, hit, emptySelection(), false, visible).map((m) => m.action);
+  // Stable ids: the line is known by its connection, not by indices that change at the next rebuild (I9 of the review).
+  const deduction = sc.connections[visible.connections[vi].conns[0]].id;
+  expect(h).toEqual({ kind: 'connection', conn: vi, key: ids.nodes.occam, ids: [deduction], part: 'main' });
+  const actions = (hit: typeof h) => menuFor(s, sc, hit, emptySelection(), false).map((m) => m.action);
   expect(actions(h)).toEqual(['splitArm', 'layout', 'deleteConnection']);
-  expect(actions({ kind: 'connection', conn: vi, key: null })).toEqual(['layout', 'deleteConnection']);
+  expect(actions({ kind: 'connection', conn: -1, key: null, ids: [deduction], part: 'main' })).toEqual(['layout', 'deleteConnection']);
   // The far side of a split arm: join it back.
-  const far = visible.connections.findIndex((vc) => sc.connections[vc.conns[0]].part === 'far');
-  expect(actions({ kind: 'connection', conn: far, key: ids.nodes.universalite })).toEqual(['joinArm', 'deleteConnection']);
+  expect(actions({ kind: 'connection', conn: -1, key: ids.nodes.universalite, ids: [ids.connections.split], part: 'far' })).toEqual(['joinArm', 'deleteConnection']);
 });
 
 test('le cœur d’une connexion se touche, celui d’une connexion 1 vers 1 aussi (spec 11.1)', () => {
@@ -61,7 +62,7 @@ test('le cœur d’une connexion se touche, celui d’une connexion 1 vers 1 aus
 
 test('cibles d’une connexion tirée : un autre nœud ou un groupe qui ne le contient pas, jamais lui-même, ses groupes, un fantôme ni le fond', () => {
   const from = at(ids.nodes.mdl);
-  const item = (i: number) => ({ kind: 'item' as const, item: i });
+  const item = (i: number) => ({ kind: 'item' as const, item: i, id: sc.items[i].id });
   expect(connectTarget(s, sc, from, item(at(ids.nodes.occam)), null)).toEqual({ kind: 'node', item: at(ids.nodes.occam) });
   expect(connectTarget(s, sc, from, item(at(ids.nodes.groupeML)), null)).toEqual({ kind: 'node', item: at(ids.nodes.groupeML) });
   for (const no of [from, at(ids.nodes.groupeComplexite), at(ids.nodes.groupeTheorie), at(ids.phantoms.node)]) {
@@ -76,7 +77,7 @@ test('le cœur d’une connexion est une cible, sauf si le nœud en est déjà m
   expect(connectTarget(s, sc, from, { kind: 'background' }, two)).toEqual({ kind: 'connection', conn: two });
   expect(connectTarget(s, sc, from, { kind: 'background' }, mainOf(ids.connections.mdlSolomonoff))).toBeNull();
   // A box under the cursor decides alone.
-  expect(connectTarget(s, sc, from, { kind: 'item', item: from }, two)).toBeNull();
+  expect(connectTarget(s, sc, from, { kind: 'item', item: from, id: ids.nodes.mdl }, two)).toBeNull();
 });
 
 test('« partout » : les autres plans (hors documents) où les nœuds sont tous présents, et la connexion si elle existe déjà', () => {
@@ -96,4 +97,14 @@ test('suggestions d’un nœud à ajouter : sans accents ni casse, débuts de ti
   expect(titles('complex', [ids.nodes.groupeComplexite])).not.toContain('Complexité et induction');
   expect(titles('brouillon')).toEqual([]); // in the trash
   expect(titles('   ')).toEqual([]);
+});
+
+test('un appui sur une amorce dit son nœud, sa connexion et son titre ; sur un élément, son id (I9 de la relecture 3b)', () => {
+  const these = buildScene(s, ids.plans.these, measure, P);
+  const { frame, hits, cam, origin } = frameAt(these, 0, 16);
+  const st = frame.stubs[0];
+  const h = hits.hit(st.pos.x + origin.x, st.pos.y + origin.y, cam.zoom);
+  expect(h).toMatchObject({ kind: 'stub', connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: 'Entropie de Shannon' });
+  const mdl = these.items[these.byId.get(ids.nodes.mdl)!];
+  expect(hits.hit(mdl.x, mdl.y, cam.zoom)).toEqual({ kind: 'item', item: these.byId.get(ids.nodes.mdl), id: ids.nodes.mdl });
 });
