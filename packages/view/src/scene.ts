@@ -1,5 +1,5 @@
 import {
-  ancestors, branchKey, type ConnectionLayout, type ConnectionRec, groupIndex, type Id, layoutKey, parseBranchKey, type PhantomRec, placementKey,
+  ancestors, type ConnectionLayout, type ConnectionRec, groupIndex, type Id, parseBranchKey, type PhantomRec,
   type PlanRec, type Role, type State, type Vec2,
 } from '@cirrus/core';
 import type { Bounds } from './camera.ts';
@@ -93,7 +93,6 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     return n;
   };
   const add = (item: SceneItem) => { byId.set(item.id, items.length); items.push(item); };
-  const isPlaced = (node: Id) => s.placements.has(placementKey(planId, node));
 
   for (const pl of s.placements.values()) {
     if (pl.plan !== planId) continue;
@@ -161,39 +160,49 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     g.pad = p.envelopePad * stepScale(g.maxChildK, p);
   }
 
-  const connections = sceneConnections(s, plan, items, byId, phantoms, isPlaced);
-  markBadges(s, planId, items, byId, phantoms);
-  return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
-}
-
-function sceneConnections(
-  s: State, plan: PlanRec, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], isPlaced: (n: Id) => boolean,
-): SceneConnection[] {
-  const kind = plan.type === 'document' ? 'structure' : 'knowledge';
+  // The plan's branches grouped by connection, once: connections and badges read it without building keys.
   const shown = new Map<Id, Id[]>();
+  const prefix = `${planId}|`;
   for (const key of s.branches) {
+    if (!key.startsWith(prefix)) continue;
     const b = parseBranchKey(key);
-    if (b.plan !== plan.id) continue;
     const list = shown.get(b.connection);
     if (list) list.push(b.node);
     else shown.set(b.connection, [b.node]);
   }
+  const connections = sceneConnections(s, plan, items, byId, phantoms, shown);
+  markBadges(s, items, byId, phantoms, shown);
+  return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
+}
+
+function sceneConnections(
+  s: State, plan: PlanRec, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>,
+): SceneConnection[] {
+  const kind = plan.type === 'document' ? 'structure' : 'knowledge';
   const phantomsOf = new Map<Id, PhantomRec[]>();
-  for (const ph of phantoms) phantomsOf.set(ph.connection, [...(phantomsOf.get(ph.connection) ?? []), ph]);
+  for (const ph of phantoms) {
+    const list = phantomsOf.get(ph.connection);
+    if (list) list.push(ph);
+    else phantomsOf.set(ph.connection, [ph]);
+  }
+  const layouts = new Map<Id, ConnectionLayout>();
+  for (const l of s.connLayouts.values()) if (l.plan === plan.id) layouts.set(l.connection, l);
+  /** A node placed in this plan (phantoms are items too, under other ids). */
+  const placed = (node: Id) => { const i = byId.get(node); return i !== undefined && items[i].kind !== 'phantom'; };
 
   const out: SceneConnection[] = [];
   const roleIn = (c: ConnectionRec, node: Id) => c.members.find((m) => m.node === node)?.role;
   for (const id of new Set([...shown.keys(), ...phantomsOf.keys()])) {
     const c = s.connections.get(id);
     if (!c || c.trashedAt !== undefined || c.kind !== kind) continue;
-    const layout = s.connLayouts.get(layoutKey(plan.id, id));
+    const layout = layouts.get(id);
     const ph = phantomsOf.get(id) ?? [];
     const main: SceneConnection = { index: 0, id, part: 'main', title: c.title, ends: [], stubs: [], ...(layout ? { layout } : {}) };
     for (const node of shown.get(id) ?? []) {
       const role = roleIn(c, node);
       if (!role) continue;
       const absent = ph.find((x) => x.of.kind === 'absent' && x.of.node === node);
-      if (isPlaced(node) && byId.has(node)) main.ends.push({ item: byId.get(node)!, role, key: node, dashed: false });
+      if (placed(node)) main.ends.push({ item: byId.get(node)!, role, key: node, dashed: false });
       else if (absent) main.ends.push({ item: byId.get(absent.id)!, role, key: node, dashed: true });
       else main.stubs.push({ role, node, title: s.nodes.get(node)?.title ?? '' });
     }
@@ -213,14 +222,16 @@ function sceneConnections(
 }
 
 /** A placed node is badged when one of its knowledge connections shows no branch to it here (and no split arm). */
-function markBadges(s: State, planId: Id, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[]): void {
-  const split = new Set(phantoms.filter((ph) => ph.of.kind === 'center').map((ph) => `${ph.connection}|${ph.of.node}`));
+function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>): void {
+  const split = new Map<Id, Id[]>();
+  for (const ph of phantoms) if (ph.of.kind === 'center') split.set(ph.connection, [...(split.get(ph.connection) ?? []), ph.of.node]);
   for (const c of s.connections.values()) {
     if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
+    const here = shown.get(c.id), splitHere = split.get(c.id);
     for (const m of c.members) {
       const i = byId.get(m.node);
       if (i === undefined || items[i].kind === 'phantom' || items[i].badge) continue;
-      if (!s.branches.has(branchKey({ plan: planId, connection: c.id, node: m.node })) && !split.has(`${c.id}|${m.node}`)) items[i].badge = true;
+      if (!here?.includes(m.node) && !splitHere?.includes(m.node)) items[i].badge = true;
     }
   }
 }

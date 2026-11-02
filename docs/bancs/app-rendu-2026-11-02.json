@@ -1,0 +1,97 @@
+{
+  "scale": "50000,500000",
+  "runs": [
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 2.34496,
+        "p95": 4.482048,
+        "max": 32.65024,
+        "n": 3866
+      },
+      "gpuSteadyMs": {
+        "p50": 2.328576,
+        "p95": 4.427776,
+        "max": 32.65024,
+        "n": 3472
+      },
+      "cpuMs": {
+        "p50": 0.5,
+        "p95": 1.7000000476837158,
+        "max": 22.100000143051147,
+        "n": 3866
+      },
+      "intervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 160,
+        "n": 3865
+      },
+      "rebuilds": 197,
+      "worstFrame": {
+        "t": 31.830799999999996,
+        "cpuMs": 22.100000143051147,
+        "rebuilt": true
+      },
+      "loadMs": 7850.899999856949,
+      "memoryMb": 435,
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 172
+      }
+    },
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 2.192384,
+        "p95": 4.205568,
+        "max": 13.264896,
+        "n": 3833
+      },
+      "gpuSteadyMs": {
+        "p50": 2.22208,
+        "p95": 4.192256,
+        "max": 8.439808,
+        "n": 3443
+      },
+      "cpuMs": {
+        "p50": 1.8000001907348633,
+        "p95": 5.799999952316284,
+        "max": 24.90000009536743,
+        "n": 3833
+      },
+      "intervalMs": {
+        "p50": 10,
+        "p95": 10.10000000000582,
+        "max": 209.8000000000029,
+        "n": 3832
+      },
+      "rebuilds": 195,
+      "worstFrame": {
+        "t": 9.380299999999995,
+        "cpuMs": 24.90000009536743,
+        "rebuilt": false
+      },
+      "loadMs": 37458.5,
+      "memoryMb": 521,
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 170
+      }
+    }
+  ]
+}

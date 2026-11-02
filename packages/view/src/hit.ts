@@ -37,7 +37,7 @@ function segmentDistance(px: number, py: number, a: Vec2, b: Vec2): number {
 }
 
 /** Built at each rebuild from what is drawn; queries take the current zoom, since groups fold between rebuilds. */
-export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: FrameGeometry, origin: Vec2, p: RenderParams): HitIndex {
+export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick<FrameGeometry, 'centerlines' | 'stubs'>, origin: Vec2, p: RenderParams): HitIndex {
   const items = scene.items;
   const abs = (q: Vec2): Vec2 => ({ x: q.x + origin.x, y: q.y + origin.y });
 

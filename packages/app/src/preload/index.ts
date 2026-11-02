@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('cirrus', {
   getSettings: () => ipcRenderer.invoke('cirrus:settings:get'),
   setSettings: (overrides: Record<string, unknown>) => ipcRenderer.invoke('cirrus:settings:set', overrides),
   ready: () => ipcRenderer.send('cirrus:ready'),
+  benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),
   launch,
 });

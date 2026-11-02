@@ -7,6 +7,8 @@ import {
 import { type Application, type BitmapText, Container, RenderTexture, type Shader, Sprite } from 'pixi.js';
 import { type AttributeSpec, MeshSlot } from './meshes.ts';
 import { boxShader, envelopeShader, glyphShader, markerShader, NO_GROUP, ribbonShader, setZoom, skyShader, starShader } from './shaders.ts';
+import { type PackedFrame, packFrame } from './frameData.ts';
+import type { FrameRequest } from './frameWorker.ts';
 import { TextPool, type TextSpec } from './texts.ts';
 
 interface Rect { minX: number; maxX: number; minY: number; maxY: number }
@@ -39,10 +41,19 @@ interface LiveText { t: BitmapText; alpha: (zoom: number) => number }
 
 /**
  * Draws a plan scene (spec 8). Rebuilds the visible geometry when the view leaves the prepared rectangle, a group level
- * changes state or the zoom outgrows the curve sampling; between rebuilds only uniforms change. Envelopes go through
- * a reduced-resolution texture (bench lesson: they were the cost).
+ * changes state or the zoom outgrows the curve sampling; between rebuilds only uniforms change. The visible set is
+ * decided here; the meshes are built in a worker while the previous frame stays on screen (the first frame of a plan
+ * is built at once). Envelopes are drawn in the main pass, or into a reduced texture if envelopeResolution < 1.
  */
 export class PlanRenderer {
+  /** Called when a frame built in the worker has arrived: the view must be drawn again. */
+  onUpdate: () => void = () => {};
+  private worker: Worker | null = null;
+  private seq = 0;
+  private pending: { seq: number; origin: Vec2 } | null = null;
+  private hitInputs: { visible: VisibleSet; frame: Pick<PackedFrame, 'centerlines' | 'stubs'>; origin: Vec2 } | null = null;
+  private hasFrame = false;
+  private originMoved = false;
   private p: RenderParams;
   private shaders!: Shaders;
   private slots!: Slots;
@@ -83,6 +94,20 @@ export class PlanRenderer {
     this.createGpu();
     app.stage.addChild(this.skyLayer, this.bgWorld, this.envSprite, this.world);
     this.world.addChild(this.meshLayer, this.textLayer);
+    try {
+      this.worker = new Worker(new URL('./frameWorker.ts', import.meta.url), { type: 'module' });
+      this.worker.onmessage = (e: MessageEvent<{ seq: number; visible: VisibleSet; frame: PackedFrame }>) => this.receive(e.data.seq, e.data.visible, e.data.frame);
+      this.worker.onerror = (e) => {
+        // Without a worker, frames are built on the main thread: slower rebuilds, same picture.
+        console.warn(`Travailleur de rendu indisponible (${e.message}) : construction sur le fil principal.`);
+        this.worker = null;
+        this.pending = null;
+        this.stale = true;
+        this.onUpdate();
+      };
+    } catch (e) {
+      console.warn(`Travailleur de rendu indisponible (${String(e)}) : construction sur le fil principal.`);
+    }
   }
 
   private createGpu(): void {
@@ -97,7 +122,9 @@ export class PlanRenderer {
       box: new MeshSlot(BOX, s.box, 1024), marker: new MeshSlot(MARKER, s.marker, 256),
       stars: s.stars.map((sh) => new MeshSlot(STAR, sh, 4096)), sky: new MeshSlot(SKY, s.sky, 4),
     };
-    this.envWorld.addChild(this.slots.envelope.mesh);
+    // envelopeResolution 1: envelopes drawn in the main pass (no extra render target); below 1, into a reduced texture.
+    if (p.envelopeResolution >= 1) this.meshLayer.addChild(this.slots.envelope.mesh);
+    else this.envWorld.addChild(this.slots.envelope.mesh);
     this.meshLayer.addChild(this.slots.ribbon.mesh, this.slots.glyph.mesh, this.slots.box.mesh, this.slots.marker.mesh);
     for (const st of this.slots.stars) this.bgWorld.addChild(st.mesh);
     this.skyLayer.addChild(this.slots.sky.mesh);
@@ -117,6 +144,9 @@ export class PlanRenderer {
     this.envTexture = null;
     this.starKey = '';
     this.stale = true;
+    // The new meshes are empty: build the next frame at once rather than show nothing while the worker works.
+    this.hasFrame = false;
+    this.pending = null;
   }
 
   setScene(scene: PlanScene): void {
@@ -124,6 +154,11 @@ export class PlanRenderer {
     this.index = buildIndex(scene, this.p);
     this.titleSides.clear();
     this.stale = true;
+    this.hasFrame = false;
+    this.pending = null;
+    this.hits = null;
+    this.hitInputs = null;
+    this.worker?.postMessage({ t: 'scene', scene, params: this.p } satisfies FrameRequest);
   }
 
   setCamera(c: Camera): void {
@@ -141,6 +176,10 @@ export class PlanRenderer {
   }
 
   get hitIndex(): HitIndex | null {
+    if (!this.hits && this.hitInputs && this.scene) {
+      const { visible, frame, origin } = this.hitInputs;
+      this.hits = buildHitIndex(this.scene, visible, frame, origin, this.p);
+    }
     return this.hits;
   }
 
@@ -175,21 +214,39 @@ export class PlanRenderer {
     return { minX: c.x - hw, maxX: c.x + hw, minY: c.y - hh, maxY: c.y + hh };
   }
 
-  private needsRebuild(): boolean {
-    if (this.stale || !this.lastRect || !this.index) return true;
-    if (foldSignature(this.index, this.cam.zoom, this.p) !== this.lastSignature) return true;
-    if (this.cam.zoom > this.builtZoom * this.p.curveZoomHeadroom || this.cam.zoom < this.builtZoom / (2 * this.p.curveZoomHeadroom)) return true;
+  /** Why each rebuild happened (bench report). */
+  readonly reasons: Record<string, number> = {};
+  /** Layers left out, for cost diagnosis. */
+  readonly hidden = new Set<string>();
+
+  /** Why the prepared geometry no longer serves the camera, or null. */
+  private rebuildReason(): string | null {
+    if (this.stale || !this.lastRect || !this.index) return 'stale';
+    if (foldSignature(this.index, this.cam.zoom, this.p) !== this.lastSignature) return 'fold';
+    if (this.cam.zoom > this.builtZoom * this.p.curveZoomHeadroom) return 'zoomIn';
+    if (this.cam.zoom < this.builtZoom / (2 * this.p.curveZoomHeadroom)) return 'zoomOut';
     const v = this.viewRect(0), r = this.lastRect;
-    return v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY;
+    return v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY ? 'rect' : null;
   }
 
   /** Draws one frame if anything changed; returns whether the visible geometry was rebuilt. */
   renderFrame(): boolean {
     const { cam, p } = this;
     let rebuilt = false;
-    if (this.scene && this.needsRebuild()) {
-      this.rebuild();
+    // One request at a time: while the worker builds, the camera may move on; the next request leaves when this one
+    // is back, from wherever the camera is then (no queue of frames built for places already left).
+    const reason = this.scene && !this.pending ? this.rebuildReason() : null;
+    if (reason) {
+      this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
+      if (this.worker && this.hasFrame) this.request();
+      else {
+        this.rebuildNow();
+        rebuilt = true;
+      }
+    }
+    if (this.originMoved) {
       rebuilt = true;
+      this.originMoved = false;
     }
     this.updateBackground(rebuilt);
     for (const c of [this.world, this.bgWorld, this.envWorld]) {
@@ -215,7 +272,19 @@ export class PlanRenderer {
       }
       this.textZoom = cam.zoom;
     }
-    this.renderEnvelopes();
+    // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text).
+    const h = this.hidden;
+    this.skyLayer.visible = !h.has('sky');
+    if (h.has('stars')) this.bgWorld.visible = false;
+    const direct = this.p.envelopeResolution >= 1;
+    this.envSprite.visible = !direct && !h.has('env');
+    if (direct) this.slots.envelope.mesh.visible &&= !h.has('env');
+    this.slots.ribbon.mesh.visible &&= !h.has('ribbon');
+    this.slots.glyph.mesh.visible &&= !h.has('glyph');
+    this.slots.box.mesh.visible &&= !h.has('box');
+    this.slots.marker.mesh.visible &&= !h.has('marker');
+    this.textLayer.visible = !h.has('text');
+    if (this.envSprite.visible) this.renderEnvelopes();
     this.app.renderer.render(this.app.stage);
     return rebuilt;
   }
@@ -234,33 +303,59 @@ export class PlanRenderer {
     this.app.renderer.render({ container: this.envWorld, target: this.envTexture, clear: true, clearColor: [0, 0, 0, 0] });
   }
 
-  private rebuild(): void {
-    const scene = this.scene!, index = this.index!, p = this.p, cam = this.cam;
-    this.origin = { x: cam.x, y: cam.y };
-    const visible = computeVisible(scene, index, cam, p);
-    this.visibleSet = visible;
-    this.frame = buildFrame(scene, visible, cam, this.origin, p, this.titleSides, this.frame ?? undefined);
-    for (const t of this.frame.titles) this.titleSides.set(t.id, t.side);
-    this.hits = buildHitIndex(scene, visible, this.frame, this.origin, p);
-    this.lastRect = this.viewRect(p.viewMarginPx);
-    this.lastSignature = visible.signature;
+  /** Decides what is visible now and marks it prepared, so the request is not repeated while the worker builds it. */
+  /** Marks the camera's surroundings prepared, so the rebuild is not asked for again while it is being built. */
+  private prepare(): Vec2 {
+    const cam = this.cam;
+    this.lastRect = this.viewRect(this.p.viewMarginPx);
+    this.lastSignature = foldSignature(this.index!, cam.zoom, this.p);
     this.builtZoom = cam.zoom;
     this.stale = false;
+    return { x: cam.x, y: cam.y };
+  }
 
-    const f = this.frame;
-    const r = f.connections.ribbons, g = f.connections.glyphs, e = f.envelopes;
-    this.slots.ribbon.update({
-      aPosition: r.position.view(), aPosition2: r.position2.view(), aNormal: r.normal.view(), aNormal2: r.normal2.view(), aScale: r.scale.view(),
-      aSide: r.side.view(), aDist: r.dist.view(), aEnd0: r.end0.view(), aEnd1: r.end1.view(), aFold: r.fold.view(), aConn: r.conn.view(),
-    }, r.index.view());
-    this.slots.glyph.update({
-      aPosition: g.position.view(), aPosition2: g.position2.view(), aOffset: g.offset.view(), aOffset2: g.offset2.view(), aScale: g.scale.view(),
-      aFill: g.fill.view(), aEnd0: g.end0.view(), aEnd1: g.end1.view(), aFold: g.fold.view(), aConn: g.conn.view(),
-    }, g.index.view());
-    this.slots.envelope.update({ aPosition: e.position.view(), aNormal: e.normal.view(), aAlpha: e.alpha.view(), aOpen: e.open.view(), aClosed: e.closed.view(), aFoldK: e.foldK.view() }, e.index.view());
+  private rebuildNow(): void {
+    const origin = this.prepare();
+    const visible = computeVisible(this.scene!, this.index!, this.cam, this.p);
+    this.pending = null;
+    this.seq++;
+    this.frame = buildFrame(this.scene!, visible, this.cam, origin, this.p, this.titleSides, this.frame ?? undefined);
+    this.apply(packFrame(this.frame, false), visible, origin);
+  }
+
+  /** The worker decides what is visible and builds it; the main thread only uploads. */
+  private request(): void {
+    const origin = this.prepare();
+    const seq = ++this.seq;
+    this.pending = { seq, origin };
+    this.worker!.postMessage({ t: 'frame', seq, cam: this.cam, origin, params: this.p, sides: [...this.titleSides] } satisfies FrameRequest);
+  }
+
+  /** A frame from the worker: kept only if it answers the request in flight. */
+  private receive(seq: number, visible: VisibleSet, frame: PackedFrame): void {
+    if (!this.pending || seq !== this.pending.seq) return;
+    const { origin } = this.pending;
+    this.pending = null;
+    this.apply(frame, visible, origin);
+    this.originMoved = true;
+    this.onUpdate();
+  }
+
+  private apply(f: PackedFrame, visible: VisibleSet, origin: Vec2): void {
+    this.origin = origin;
+    this.visibleSet = visible;
+    this.hasFrame = true;
+    for (const t of f.titles) this.titleSides.set(t.id, t.side);
+    // Built on the first hover query: navigation does not wait for it.
+    this.hits = null;
+    this.hitInputs = { visible, frame: { centerlines: f.centerlines, stubs: f.stubs }, origin };
+    this.slots.ribbon.update(f.ribbons, f.ribbonIndex);
+    this.slots.glyph.update(f.glyphs, f.glyphIndex);
+    this.slots.envelope.update(f.envelopes, f.envelopeIndex);
     this.updateBoxes(visible);
     this.updateMarkers(f);
     this.updateTexts(visible, f);
+    this.textZoom = -1;
   }
 
   private updateBoxes(visible: VisibleSet): void {
@@ -287,7 +382,7 @@ export class PlanRenderer {
     this.slots.box.update({ aCenter: center.view(), aHalf: half.view(), aCorner: corner.view(), aParentK: parentK.view(), aStyle: style.view(), aBadge: badge.view() }, index.view());
   }
 
-  private updateMarkers(f: FrameGeometry): void {
+  private updateMarkers(f: Pick<PackedFrame, 'markers'>): void {
     const multi = f.markers.filter((m) => m.multi);
     const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), index = new IndexList();
     multi.forEach((m, j) => {
@@ -303,7 +398,7 @@ export class PlanRenderer {
     this.slots.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
   }
 
-  private updateTexts(visible: VisibleSet, f: FrameGeometry): void {
+  private updateTexts(visible: VisibleSet, f: Pick<PackedFrame, 'titles'>): void {
     const scene = this.scene!, p = this.p, o = this.origin;
     for (const l of this.live) this.texts.release(l.t);
     this.live = [];
@@ -313,9 +408,12 @@ export class PlanRenderer {
       const parent = scene.items[i].parent;
       return (zoom: number) => (parent >= 0 ? 1 - foldT(scene.items[parent].maxChildK!, zoom, p) : 1);
     };
+    // A text still unreadable at the deepest zoom this geometry serves is not created (most of them, zoomed out).
+    const maxZoom = this.builtZoom * p.curveZoomHeadroom;
+    const readable = (k: number, scale: number) => textPx(k, maxZoom, p) * scale >= p.textFade[0];
     for (const i of visible.items) {
       const it = scene.items[i];
-      if (it.kind === 'phantom' && it.phantom !== 'node') continue;
+      if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) continue;
       const s = stepScale(it.k, p), size = p.baseFontPx * s;
       const inParent = parentFold(i);
       const dim = it.kind === 'phantom' ? 0.65 : 1;
@@ -324,6 +422,7 @@ export class PlanRenderer {
     }
     for (const g of visible.groups) {
       const it = scene.items[g];
+      if (!readable(it.k, Math.max(p.groupTitleOpenScale, p.groupTitleClosedScale))) continue;
       const s = stepScale(it.k, p);
       const top = Math.min(...offsetPolygon(it.hull!, it.pad!).map((q) => q.y));
       const inParent = parentFold(g);
@@ -404,6 +503,7 @@ export class PlanRenderer {
   }
 
   destroy(): void {
+    this.worker?.terminate();
     for (const l of this.live) this.texts.release(l.t);
     this.texts.destroy();
     this.destroyGpu();

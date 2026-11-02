@@ -1,4 +1,4 @@
-import { fromSnapshot, type Id, type State } from '@cirrus/core';
+import { fromSnapshot, type Id, type Snapshot, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { GraphView } from './ui/GraphView.tsx';
@@ -35,7 +35,7 @@ export function App() {
     void (async () => {
       try {
         const [snap, settings] = await Promise.all([window.cirrus.snapshot(), window.cirrus.getSettings()]);
-        const s = fromSnapshot(snap);
+        const s = fromSnapshot(JSON.parse(snap) as Snapshot);
         const plans = [...s.plans.values()];
         const lobby = plans.find((p) => p.type === 'lobby')!;
         let open = loadTabs().filter((id) => s.plans.has(id) && id !== lobby.id);

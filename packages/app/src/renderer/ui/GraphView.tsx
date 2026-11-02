@@ -3,6 +3,7 @@ import { buildScene, type Camera, fitBounds, fitItem, navigate, type NavInput, t
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
+import { runBench } from '../bench.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
@@ -97,6 +98,8 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
       await Assets.load(FONT_URL);
       const renderer = new PlanRenderer(app, props.params);
       console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
+      for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
+      renderer.onUpdate = () => { dirty.current = true; };
       engine.current = { app, renderer };
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
@@ -113,7 +116,18 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
             if (firstPending.current) {
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
-              else { firstPending.current = false; props.onFirstFrame(); }
+              else {
+                firstPending.current = false;
+                props.onFirstFrame();
+                const label = window.cirrus.launch.bench;
+                if (label) {
+                  // The bench drives the camera itself; the regular loop stops.
+                  const loadMs = performance.now();
+                  cancelAnimationFrame(raf);
+                  void runBench(e.app, e.renderer, sceneRef.current, paramsRef.current, label, loadMs).then((run) => window.cirrus.benchDone(run));
+                  return;
+                }
+              }
             }
           }
         }

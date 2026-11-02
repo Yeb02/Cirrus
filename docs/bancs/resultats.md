@@ -65,3 +65,11 @@ Mesures faites sur le portable principal (RTX 4070 Laptop, Ryzen 7 7435HS, panne
 - **Première seconde :** elle est écartée de toutes les statistiques, car elle contient l'apparition de la fenêtre et le passage en plein écran.
 - **Synchronisation à 100 Hz :** Chromium se cale sur l'écran principal, ici l'écran externe à 100 Hz, même quand la fenêtre est sur le panneau à 165 Hz. Le rapport le signale, et la cible de 165 Hz n'a pas pu être observée.
 - **Scène synthétique :** elle suit ta description d'un graphe petit monde et sans échelle. Les 5 % de connexions lointaines y sont en amorces vers un fantôme fixe, placé d'office faute d'utilisateur.
+
+## Plan 3 : banc de l'application (2026-11-02)
+
+Rapport : `app-rendu-2026-11-02.md` (50 000 nœuds, 500 000 connexions, même parcours que le plan 1).
+
+- **Processeur sous ×4 :** 5,8 ms au p95, critère tenu ; pire image 25 ms (contre 1,27 s au plan 1) grâce au travailleur.
+- **Carte graphique :** 4,5 ms au p95, critère non tenu. Les enveloppes ne sont plus en cause (dessin direct) ; le texte et les marqueurs pèsent le plus.
+- **Chargement :** 7,9 s.
