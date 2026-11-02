@@ -2,7 +2,7 @@ import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy } from './invariants.ts';
 import type { BranchRec, ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
-import { normalizeTag } from './registry.ts';
+import { normalizeTag, TagError } from './registry.ts';
 import { applyOp, branchKey, cloneState, parseBranchKey, placementKey, type State } from './state.ts';
 
 /** One user action: one undo step, one group of journal lines (spec 6.4). */
@@ -79,6 +79,15 @@ const connectionOf = (s: State, id: Id) => need(s.connections.get(id), 'Connexio
 const branchesOf = (s: State, pred: (plan: Id, connection: Id, node: Id) => boolean) =>
   [...s.branches].map(parseBranchKey).filter((b) => pred(b.plan, b.connection, b.node));
 const placementsOf = (s: State, node: Id) => [...s.placements.values()].filter((p) => p.node === node);
+/** Enumeration values stored by name; an unknown value is a user error like any other refused command. */
+const normalizeTags = (s: State, tags: TagValue[]): TagValue[] => {
+  try {
+    return tags.map((t) => normalizeTag(t, s.tagKeys));
+  } catch (e) {
+    if (e instanceof TagError) throw new CommandError(e.message);
+    throw e;
+  }
+};
 
 export function createPlan(s: State, name: string, type: PlanType): Action {
   const d = new Draft(s);
@@ -91,7 +100,7 @@ export function createNode(s: State, a: { plan: Id; title: string; x: number; y:
   planOf(s, a.plan);
   const d = new Draft(s);
   const id = uuidv7();
-  const tags = (a.tags ?? []).map((t) => normalizeTag(t, s.tagKeys));
+  const tags = normalizeTags(s, a.tags ?? []);
   d.node(id, { id, title: a.title, summary: a.summary ?? '', tags, files: [] });
   d.placement(a.plan, id, { plan: a.plan, node: id, x: a.x, y: a.y, k: a.k });
   return d.finish(`Créer « ${a.title} »`);
@@ -100,7 +109,7 @@ export function createNode(s: State, a: { plan: Id; title: string; x: number; y:
 export function editNode(s: State, id: Id, patch: Partial<Pick<NodeRec, 'title' | 'summary' | 'tags' | 'files'>>): Action {
   const n = nodeOf(s, id);
   const d = new Draft(s);
-  const tags = patch.tags ? patch.tags.map((t) => normalizeTag(t, s.tagKeys)) : n.tags;
+  const tags = patch.tags ? normalizeTags(s, patch.tags) : n.tags;
   d.node(id, { ...n, ...patch, tags });
   return d.finish(`Modifier « ${patch.title ?? n.title} »`);
 }
@@ -186,7 +195,7 @@ export function connect(s: State, a: { plan: Id; members: Member[]; title?: stri
   for (const m of a.members) liveNodeOf(s, m.node);
   const d = new Draft(s);
   const id = uuidv7();
-  const tags = (a.tags ?? []).map((t) => normalizeTag(t, s.tagKeys));
+  const tags = normalizeTags(s, a.tags ?? []);
   d.connection(id, { id, kind: a.kind ?? 'knowledge', title: a.title ?? '', relation: a.relation ?? '', tags, members: a.members });
   for (const m of a.members) d.branch(a.plan, id, m.node, true);
   return d.finish('Créer une connexion');

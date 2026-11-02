@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addMember, CommandError, connect, createNode, createPlan, deleteEverywhere, include, joinArm, movePhantom,
+  type Action, addMember, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, include, joinArm, movePhantom,
   placeNode, removeFromPlan, removeMember, restoreNode, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
@@ -170,6 +170,15 @@ test("on n'inclut que dans un groupe présent dans le plan", () => {
   run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
   const phantom = [...s.phantoms.values()][0].id;
   expect(() => movePhantom(s, phantom, 0, 0, t)).toThrow(/pas dans ce plan/);
+});
+
+test("une valeur de tag inconnue est refusée par une CommandError", () => {
+  const { s, p1, mk } = world();
+  applyOp(s, { t: 'tagKey', before: null, after: { key: 'pertinence', type: 'enum', scope: 'node', multi: false, required: false, enumValues: [{ name: 'central', rank: 5 }] } });
+  const tags = [{ key: 'pertinence', value: 'centrale' }];
+  expect(() => createNode(s, { plan: p1, title: 'A', x: 0, y: 0, k: 0, tags })).toThrow(CommandError);
+  expect(() => editNode(s, mk('B'), { tags })).toThrow(/inconnue/);
+  expect(() => connect(s, { plan: p1, members: [{ node: mk('C'), role: 'source' }, { node: mk('D'), role: 'target' }], tags })).toThrow(CommandError);
 });
 
 test("une commande ne modifie jamais l'état reçu", () => {
