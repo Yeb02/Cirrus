@@ -1,7 +1,8 @@
 import { fromSnapshot, type Id, type State } from '@cirrus/core';
-import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
+import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { GraphView } from './ui/GraphView.tsx';
+import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 
 const TABS_KEY = 'cirrus.tabs';
@@ -24,8 +25,11 @@ export function App() {
   const [params, setParams] = useState<RenderParams>(DEFAULT_PARAMS);
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
+  const [panel, setPanel] = useState(window.cirrus.launch.panel === true);
   const [error, setError] = useState<string | null>(null);
   const readySent = useRef(false);
+  /** The settings just read are not written back. */
+  const loadedParams = useRef<RenderParams | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -41,7 +45,9 @@ export function App() {
           if (wanted.type !== 'lobby' && !open.includes(wanted.id)) open = [...open, wanted.id];
           current = wanted.id;
         }
-        setParams(withOverrides(settings));
+        const p = withOverrides(settings);
+        loadedParams.current = p;
+        setParams(p);
         setTabs(open);
         setActive(current);
         setState(s);
@@ -52,6 +58,13 @@ export function App() {
   }, []);
 
   useEffect(() => { if (state) saveTabs(tabs); }, [tabs, state]);
+
+  // Settings are written a moment after the last change (spec 19: outside the history and undo).
+  useEffect(() => {
+    if (!state || params === loadedParams.current) return;
+    const timer = setTimeout(() => { void window.cirrus.setSettings(diffFromDefaults(params)); }, params.settingsSaveDelayMs);
+    return () => clearTimeout(timer);
+  }, [params, state]);
 
   /** Captures wait for the first drawn frame. */
   const firstFrame = () => {
@@ -75,9 +88,12 @@ export function App() {
           setTabs((t) => t.filter((x) => x !== id));
           if (active === id) setActive([...state.plans.values()].find((p) => p.type === 'lobby')!.id);
         }}
+        settingsOpen={panel}
+        onSettings={() => setPanel((o) => !o)}
       />
       <div className="main">
         <GraphView state={state} plan={active} params={params} onFirstFrame={firstFrame} />
+        {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
       </div>
     </div>
   );

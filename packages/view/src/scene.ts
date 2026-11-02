@@ -67,6 +67,11 @@ export interface PlanScene {
   bounds: Bounds | null;
 }
 
+/** The parameters buildScene reads: the scene is rebuilt only when one of them changes (settings panel). */
+export function sceneParamsKey(p: RenderParams): string {
+  return JSON.stringify([p.factor, p.textScale, p.baseFontPx, p.boxWidth, p.boxPadX, p.boxPadY, p.lineHeight, p.envelopePad, p.centerRadius]);
+}
+
 const boxHalves = (lines: number, k: number, p: RenderParams) => {
   const s = stepScale(k, p);
   return { halfW: (p.boxWidth / 2) * s, halfH: ((lines * p.lineHeight * p.baseFontPx + 2 * p.boxPadY) / 2) * s };

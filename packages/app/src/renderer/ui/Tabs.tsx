@@ -11,6 +11,8 @@ export function Tabs(props: {
   onSelect(id: Id): void;
   onOpen(id: Id): void;
   onClose(id: Id): void;
+  settingsOpen: boolean;
+  onSettings(): void;
 }) {
   const [menu, setMenu] = useState(false);
   const byId = new Map(props.plans.map((p) => [p.id, p]));
@@ -44,6 +46,8 @@ export function Tabs(props: {
           </div>
         )}
       </div>
+      <div className="spacer" />
+      <button className={`gear${props.settingsOpen ? ' on' : ''}`} aria-label="Paramètres graphiques" title="Paramètres graphiques" onClick={props.onSettings}>⚙</button>
     </div>
   );
 }

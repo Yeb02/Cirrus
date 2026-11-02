@@ -75,6 +75,7 @@ export interface RenderParams {
   keyZoomStep: number;
   keyPanPx: number;
   fitMarginPx: number;
+  settingsSaveDelayMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -158,6 +159,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   keyZoomStep: 1.25,
   keyPanPx: 80,
   fitMarginPx: 60,
+  settingsSaveDelayMs: 300,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -260,6 +262,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('keyZoomStep', 'Pas du zoom au clavier', A, 'Vue', 1.05, 3, 0.05),
   num('keyPanPx', 'Pas du déplacement aux flèches (px)', A, 'Vue', 10, 400, 5),
   num('fitMarginPx', 'Marge du cadrage (px)', A, 'Vue', 0, 300, 5),
+  num('settingsSaveDelayMs', 'Délai avant d’enregistrer les réglages (ms)', A, 'Vue', 0, 5000, 50),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
@@ -294,6 +297,15 @@ function valid(spec: ParamSpec, v: unknown): boolean {
     case 'list': return Array.isArray(v) && v.length > 0 && v.every(finite);
     case 'choice': return typeof v === 'string' && spec.choices!.some((c) => c.value === v);
   }
+}
+
+/** The fields that differ from the defaults: only those are written, so a later default reaches everyone else (spec 5.4 spirit). */
+export function diffFromDefaults(p: RenderParams): Partial<RenderParams> {
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(p)) {
+    if (JSON.stringify(v) !== JSON.stringify(DEFAULT_PARAMS[key as keyof RenderParams])) out[key] = v;
+  }
+  return out as Partial<RenderParams>;
 }
 
 /** The defaults with every known, well-typed override applied: a corrupt settings file degrades key by key. */

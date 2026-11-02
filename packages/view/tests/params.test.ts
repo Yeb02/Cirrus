@@ -1,5 +1,22 @@
 import { expect, test } from 'vitest';
-import { DEFAULT_PARAMS, PARAM_SPECS, withOverrides } from '../src/params.ts';
+import { DEFAULT_PARAMS, diffFromDefaults, PARAM_SPECS, withOverrides } from '../src/params.ts';
+import { sceneParamsKey } from '../src/scene.ts';
+
+test('seuls les écarts aux défauts sont écrits, et l’aller-retour est exact', () => {
+  expect(diffFromDefaults(DEFAULT_PARAMS)).toEqual({});
+  const p = { ...DEFAULT_PARAMS, factor: 3, textFade: [5, 9] as [number, number], skyColor: [0, 0, 0] as [number, number, number] };
+  expect(diffFromDefaults(p)).toEqual({ factor: 3, textFade: [5, 9], skyColor: [0, 0, 0] });
+  expect(withOverrides(diffFromDefaults(p))).toEqual(p);
+  expect(diffFromDefaults({ ...DEFAULT_PARAMS, groupHues: [...DEFAULT_PARAMS.groupHues] })).toEqual({});
+});
+
+test('la scène ne se reconstruit que pour les paramètres qu’elle lit', () => {
+  const key = sceneParamsKey(DEFAULT_PARAMS);
+  expect(sceneParamsKey({ ...DEFAULT_PARAMS, connectionColor: [1, 0, 0], trunkTension: 0.3 })).toBe(key);
+  for (const change of [{ boxWidth: 300 }, { factor: 3 }, { textScale: 1.5 }, { envelopePad: 10 }, { centerRadius: 4 }]) {
+    expect(sceneParamsKey({ ...DEFAULT_PARAMS, ...change })).not.toBe(key);
+  }
+});
 
 test('chaque paramètre a sa fiche, et une seule (spec 19)', () => {
   const keys = Object.keys(DEFAULT_PARAMS).sort();

@@ -1,5 +1,5 @@
 import type { Id, State } from '@cirrus/core';
-import { buildScene, type Camera, fitBounds, fitItem, navigate, type NavInput, type PlanScene, type RenderParams, screenToWorld } from '@cirrus/view';
+import { buildScene, type Camera, fitBounds, fitItem, navigate, type NavInput, type PlanScene, type RenderParams, sceneParamsKey, screenToWorld } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
@@ -130,11 +130,13 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
     };
   }, []);
 
-  // The scene depends on the state, the plan and the parameters (box sizes); the measure needs the font loaded.
+  // The scene depends on the state, the plan and the few parameters it reads (box sizes): a colour or a threshold
+  // changed in the settings panel does not rebuild it. The measure needs the font loaded.
+  const sceneKey = sceneParamsKey(props.params);
   useEffect(() => {
     if (!ready) return;
-    setScene(buildScene(props.state, props.plan, measureTitle(props.params), props.params));
-  }, [ready, props.state, props.plan, props.params]);
+    setScene(buildScene(props.state, props.plan, measureTitle(paramsRef.current), paramsRef.current));
+  }, [ready, props.state, props.plan, sceneKey]);
 
   useEffect(() => {
     const e = engine.current;
