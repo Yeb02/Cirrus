@@ -2,7 +2,8 @@
   "name": "cirrus",
   "private": true,
   "workspaces": [
-    "bench/*"
+    "bench/*",
+    "packages/*"
   ],
   "devDependencies": {
     "@types/node": "^26.6.6",

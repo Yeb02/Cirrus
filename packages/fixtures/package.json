@@ -1,0 +1,14 @@
+{
+  "name": "@cirrus/fixtures",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "fixture": "node scripts/make-fixture.ts"
+  },
+  "dependencies": {
+    "@cirrus/core": "*",
+    "@cirrus/store": "*"
+  }
+}

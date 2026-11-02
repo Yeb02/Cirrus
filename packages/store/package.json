@@ -1,0 +1,12 @@
+{
+  "name": "@cirrus/store",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cirrus/core": "*"
+  }
+}
