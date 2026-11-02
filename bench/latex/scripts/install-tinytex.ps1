@@ -17,5 +17,7 @@ if (-not (Test-Path $pdflatex)) {
   Remove-Item $exe
 }
 
+# The bundled tlmgr can be older than the repository it talks to: update it first.
+& (Join-Path $bin 'tlmgr.bat') update --self
 & (Join-Path $bin 'tlmgr.bat') install pgf xcolor hyperref amsmath amsfonts graphics
 & $pdflatex --version | Select-Object -First 1

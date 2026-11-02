@@ -1,0 +1,12 @@
+\begin{align*}
+  L(x) &= \min_{M} \bigl( L(M) + L(x \mid M) \bigr) \\
+  K(x) &\le L(x) + O(1) \\
+  P_U(x) &= \sum_{p \,:\, U(p) = x} 2^{-|p|} \\
+  -\log_2 P_U(x) &= K(x) + O(1) \\
+  H(X) &= -\sum_{x} p(x) \log_2 p(x) \\
+  \mathbb{E}\bigl[K(X)\bigr] &\approx H(X) \\
+  D_{\mathrm{KL}}(p \,\|\, q) &= \sum_{x} p(x) \log \frac{p(x)}{q(x)} \\
+  \hat\theta &= \arg\min_{\theta} \; -\log p(x \mid \theta) + \tfrac{k}{2} \log n \\
+  \int_0^1 f(t)\, dt &\le \sup_{t \in [0,1]} |f(t)| \\
+  \nabla_\theta \mathcal{L} &= \frac{1}{N} \sum_{i=1}^{N} \nabla_\theta \ell(x_i; \theta)
+\end{align*}
