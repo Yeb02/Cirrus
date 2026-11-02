@@ -4,7 +4,8 @@ import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
-import { fixture, measure, P } from './helpers.ts';
+import { buildIndex, computeVisible } from '../src/visibility.ts';
+import { camAtTextPx, fixture, measure, P } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene, these: PlanScene;
 beforeAll(() => {
@@ -42,4 +43,12 @@ test('fantôme, amorce, connexion, fond', () => {
 
 test('chaque article a un libellé français', () => {
   for (const it of menuFor(s, sc, item(sc, ids.nodes.mdl), emptySelection(), true)) expect(it.label.length).toBeGreaterThan(2);
+});
+
+test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
+  const visible = computeVisible(these, buildIndex(these, P), camAtTextPx(these, 0, 16), P);
+  const conn = visible.connections.findIndex((vc) => these.connections[vc.conns[0]].id === ids.connections.twoToOne);
+  expect(menuFor(s, these, { kind: 'connection', conn, key: null }, emptySelection(), false, visible).map((m) => m.action)).toContain('addToLobby');
+  const lobbyVisible = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
+  expect(menuFor(s, sc, { kind: 'connection', conn: 0, key: null }, emptySelection(), false, lobbyVisible).map((m) => m.action)).not.toContain('addToLobby');
 });

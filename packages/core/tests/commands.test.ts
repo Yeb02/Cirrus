@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editConnection, editNode, include, joinArm,
+  type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteConnection, deleteEverywhere, editConnection, editNode, include, joinArm,
   movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, restoreNode, setBranches, setLayout, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
@@ -159,6 +159,22 @@ test('une amorce posée devient un fantôme « absent » ; importer le nœud l�
   expect(() => placeAbsent(s, p1, c, b, 0, 0, 0)).toThrow(/déjà/);
   run(s, placeNode(s, p1, b, 300, 40, 1));
   expect(s.phantoms.has(ph.id)).toBe(false);
+});
+
+test('supprimer une connexion la met à la corbeille avec ses branches et ses fantômes, dans tous les plans', () => {
+  const { s, p1, p2, mk } = world();
+  const a = mk('A'), b = mk('B');
+  for (const n of [a, b]) run(s, placeNode(s, p2, n, 0, 0, 0));
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, setBranches(s, c, [{ plan: p2, node: a }, { plan: p2, node: b }], true));
+  run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
+  const action = run(s, deleteConnection(s, c));
+  expect(s.connections.get(c)!.trashedAt).toBeDefined();
+  expect([...s.branches].some((k) => k.includes(c))).toBe(false);
+  expect(s.phantoms.size).toBe(0);
+  for (const op of invertAction(action).ops) applyOp(s, op);
+  expect(s.connections.get(c)!.trashedAt).toBeUndefined();
+  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
 });
 
 test('retirer un membre supprime les fantômes de son bras scindé', () => {

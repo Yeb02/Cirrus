@@ -263,6 +263,15 @@ export function placeAbsent(s: State, plan: Id, connection: Id, node: Id, x: num
   return d.finish('Déplacer une amorce');
 }
 
+/** « Partout » for a connection (spec 7): to the trash, with its branches and phantoms in every plan. */
+export function deleteConnection(s: State, id: Id): Action {
+  const c = connectionOf(s, id);
+  if (c.trashedAt !== undefined) throw new CommandError('Cette connexion est déjà à la corbeille.');
+  const d = new Draft(s);
+  d.trashConnection(c, c.members);
+  return d.finish('Supprimer la connexion');
+}
+
 export function setRole(s: State, connection: Id, node: Id, role: Role): Action {
   const c = connectionOf(s, connection);
   if (!c.members.some((m) => m.node === node)) throw new CommandError('Ce nœud ne fait pas partie de la connexion.');

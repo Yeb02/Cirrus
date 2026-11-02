@@ -3,7 +3,7 @@ import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
-  type Mode,
+  type Mode, type Clip, copyClip, deleteSummary,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -14,8 +14,8 @@ import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
-  absentBuild, addMemberBuild, type Build, connectBuild, createBuild, dropBuild, hideBuild, importBuild, joinBuild, removeMemberBuild, renameBuild,
-  scaleBuild, splitBuild,
+  absentBuild, addMemberBuild, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild, joinBuild,
+  lobbyConnectionBuild, pasteBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
@@ -39,11 +39,14 @@ type Placing =
   | { kind: 'exclude'; base: PlanScene; items: number[]; from: Vec2 }
   /** Drawing a connection from this node (spec 11.1). */
   | { kind: 'connect'; node: Id }
-  /** Bringing in a node from a stub (spec 11.3). */
-  | { kind: 'import'; node: Id }
+  /** Bringing in a node from a stub (spec 11.3), or into the lobby (spec 7). */
+  | { kind: 'import'; node: Id; label?: string }
+  /** Pasting the clip (spec 7). */
+  | { kind: 'paste' }
   /** Splitting an arm (spec 8.5): the far node's phantom near the bundle, then the centre's near the far node. */
   | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 };
-const MODE: Record<Placing['kind'], Mode> = { newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', split: 'split' };
+const MODE: Record<Placing['kind'], Mode> = { newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split' };
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 /**
  * Hosts the PixiJS canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
@@ -54,6 +57,8 @@ export function GraphView(props: {
   state: State; plan: Id; params: RenderParams; onFirstFrame(): void;
   /** Edits go through the session (written, undoable); their outcome is reported (toasts). */
   session: EditSession | null; onResult(r: Result): void;
+  /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
+  onOpenPlan(plan: Id): void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -82,6 +87,10 @@ export function GraphView(props: {
   const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
+  /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
+  const clip = useRef<Clip | null>(null);
+  /** A gesture to begin once another plan is shown (« ajouter au lobby »). */
+  const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number } } | null>(null);
 
   /** Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. */
   const edit = (build: Build, onRefused?: () => void) => {
@@ -99,6 +108,8 @@ export function GraphView(props: {
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
   onResultRef.current = props.onResult;
+  /** A notice in a toast, not an edit's outcome. */
+  const notify = (message: string) => onResultRef.current({ ok: false, message });
   const [ready, setReady] = useState(false);
   const [scene, setScene] = useState<PlanScene | null>(null);
   const [tip, setTip] = useState<Tip>(null);
@@ -216,6 +227,72 @@ export function GraphView(props: {
       answer: (v) => { if (v !== null) edit(removeMemberBuild(plan, connection, node, v === 'everywhere')); },
     });
   };
+  /** Node titles for a question: « A », « B » et 2 autres. */
+  const titles = (ids: Id[]) => {
+    const t = ids.slice(0, 2).map((id) => `« ${stateRef.current.nodes.get(id)?.title ?? '?'} »`).join(', ');
+    return ids.length > 2 ? `${t} et ${ids.length - 2} autre${ids.length > 3 ? 's' : ''}` : t;
+  };
+  /** The items of the selection, as indices of this scene. */
+  const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
+  /** « Cacher » (spec 7): a group asks whether its content follows; leaving a last plan is announced. */
+  const askHide = (sc: PlanScene, items: number[]) => {
+    const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
+    if (ids.length === 0) return;
+    const groups = items.filter((i) => sc.items[i].kind === 'group');
+    const last = deleteSummary(stateRef.current, ids).last;
+    if (groups.length === 0 && last.length === 0) { edit(hideBuild(sc, ids)); return; }
+    const warning = last.length > 0 ? `${titles(last)} ${plural(last.length, 'n’est', 'ne sont')} dans aucun autre plan : ${plural(last.length, 'il ira', 'ils iront')} à la corbeille.` : undefined;
+    setQuestion({
+      text: groups.length > 0 ? `Cacher ${plural(groups.length, 'ce groupe', 'ces groupes')} : le contenu suit-il ?` : `Cacher ${titles(ids)} ?`,
+      ...(warning ? { detail: warning } : {}),
+      choices: groups.length > 0
+        ? [{ value: 'content', label: 'Avec le contenu' }, { value: 'alone', label: plural(groups.length, 'Le groupe seul', 'Les groupes seuls') }]
+        : [{ value: 'alone', label: 'Cacher' }],
+      answer: (v) => { if (v !== null) edit(hideBuild(sc, ids, v === 'content')); },
+    });
+  };
+  /** Deletion (spec 7): always « partout » or « ici seulement », with the instances counted and the last ones announced. */
+  const askDelete = (sc: PlanScene, items: number[]) => {
+    const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
+    if (ids.length === 0) return;
+    const { instances, last } = deleteSummary(stateRef.current, ids);
+    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: 'Partout' };
+    setQuestion({
+      text: `Supprimer ${titles(ids)} ?`,
+      detail: `${plural(ids.length, 'Il figure', 'Ils figurent')} dans ${instances} plan${instances > 1 ? 's' : ''} en tout.`
+        + (last.length > 0 ? ` ${titles(last)} ${plural(last.length, 'n’est', 'ne sont')} dans aucun autre plan : à la corbeille.` : ''),
+      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
+      answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere')); },
+    });
+  };
+  /** A connection's deletion (spec 7): « ici seulement » hides it here; when this is its last plan, it goes to the trash. */
+  const askDeleteConnection = (plan: Id, connection: Id) => {
+    const s = stateRef.current, c = s.connections.get(connection);
+    if (!c) return;
+    const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has(branchKey({ plan: pl, connection, node: m.node })))
+      || [...s.phantoms.values()].some((ph) => ph.plan === pl && ph.connection === connection));
+    const n = shownIn.length;
+    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: n <= 1 ? 'Supprimer' : 'Partout' };
+    setQuestion({
+      text: `Supprimer la connexion${c.title ? ` « ${c.title} »` : ''} ?`,
+      detail: n <= 1 ? 'Elle n’est affichée dans aucun autre plan : elle ira à la corbeille.' : `Elle est affichée dans ${n} plans.`,
+      choices: n <= 1 ? [all] : paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
+      answer: (v) => { if (v !== null) edit(deleteConnectionBuild(plan, connection, v === 'everywhere')); },
+    });
+  };
+  /** Ctrl+C (spec 7): the selection, or what was clicked, with this plan and zoom. */
+  const copy = (sc: PlanScene, items: number[]) => {
+    const c = copyClip(stateRef.current, sc, items, engine.current?.renderer.camera.zoom ?? 1);
+    if (!c) return;
+    clip.current = c;
+    notify(`${c.nodes.length} ${plural(c.nodes.length, 'nœud copié', 'nœuds copiés')}.`);
+  };
+  /** Ctrl+V (spec 7): the clip follows the cursor until a click puts it down. */
+  const startPaste = (at: { x: number; y: number }) => {
+    const c = clip.current;
+    if (!c) { notify('Rien à coller : copiez d’abord une sélection (Ctrl+C).'); return; }
+    startPlacing({ kind: 'paste' }, `Coller ${c.nodes.length} ${plural(c.nodes.length, 'nœud', 'nœuds')}`, at);
+  };
   /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
   const openPopup = (connections: Id[], sx: number, sy: number) => {
     const r = root.current!.getBoundingClientRect();
@@ -256,6 +333,12 @@ export function GraphView(props: {
       const replay = (script: string) => {
         for (const step of script.split(';').map((x) => x.trim()).filter(Boolean)) {
           if (step.startsWith('click ')) { document.querySelector<HTMLElement>(step.slice(6))?.click(); continue; }
+          if (step.startsWith('press ')) {
+            // Keys to the graph itself (Ctrl+C, Suppr…), where window-wide keys (--keys) do not go.
+            const parts = step.slice(6).split('+');
+            root.current?.dispatchEvent(new KeyboardEvent('keydown', { key: parts.pop()!, ctrlKey: parts.includes('ctrl'), bubbles: true }));
+            continue;
+          }
           const [t, xs, ys, ...mods] = step.split(/\s+/);
           const sx = Number(xs), sy = Number(ys), button = mods.includes('right') ? 2 : 0;
           if (t === 'down') feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
@@ -363,6 +446,8 @@ export function GraphView(props: {
     const { width, height } = e.app.screen;
     const known = cameras.current.get(scene.plan.id);
     moveCamera(known ? { ...known, widthPx: width, heightPx: height } : initialCamera(scene, width, height, props.params, window.cirrus.launch.view));
+    const pend = pendingPlace.current;
+    if (pend && pend.plan === scene.plan.id) { pendingPlace.current = null; startPlacing(pend.what, pend.text, pend.at); }
   }, [scene]);
 
   // Wheel: a native, non-passive listener (React's is passive and could not keep the page from scrolling).
@@ -432,7 +517,7 @@ export function GraphView(props: {
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
         if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) { sel = emptySelection(); setSelection(sel); }
-        const items = menuFor(stateRef.current, sc, intent.hit, sel, false, e.renderer.visible);
+        const items = menuFor(stateRef.current, sc, intent.hit, sel, clip.current !== null, e.renderer.visible);
         if (items.length > 0) setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items });
         break;
       }
@@ -543,7 +628,17 @@ export function GraphView(props: {
         }
         placing.current = null;
         setGhost(null);
-        if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p));
+        if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label));
+        else if (what.kind === 'paste' && clip.current) {
+          const r = pasteBuild(stateRef.current, clip.current, sc, intent.at, zoom, p);
+          edit(r.build);
+          // Nodes already here keep their place and group; selected, they are ready to be moved (spec 7).
+          if (r.present.length > 0) {
+            const n = r.present.length;
+            notify(`${titles(r.present)} ${plural(n, 'était déjà', 'étaient déjà')} dans ce plan : ${plural(n, 'il garde sa', 'ils gardent leur')} place (${plural(n, 'sélectionné', 'sélectionnés')}, à déplacer au besoin).`);
+            setSelection({ items: new Set(r.present), connections: new Set() });
+          }
+        }
         else if (what.kind === 'newNode') {
           // The node is placed, then named in place (spec 12); the creation is written with its title, as one step.
           const width = Math.max(140, (p.boxWidth - 2 * p.boxPadX) * p.textScale * zoom * p.factor ** Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor)));
@@ -645,8 +740,37 @@ export function GraphView(props: {
         edit(scaleBuild(sc, targets, action === 'scaleUp' ? 1 : -1, p));
         break;
       case 'hide':
-        edit(hideBuild(sc, targets.map((i) => sc.items[i].id)));
+        askHide(sc, targets);
         break;
+      case 'delete':
+        askDelete(sc, targets);
+        break;
+      case 'copy':
+        copy(sc, targets);
+        break;
+      case 'paste':
+        startPaste(at);
+        break;
+      case 'deleteConnection': {
+        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
+        if (vc) askDeleteConnection(sc.plan.id, sc.connections[vc.conns[0]].id);
+        break;
+      }
+      case 'addToLobby': {
+        // A connection places itself; a node follows the cursor in the lobby until a click (spec 7).
+        const lobby = [...stateRef.current.plans.values()].find((x) => x.type === 'lobby');
+        if (!lobby) break;
+        if (hit.kind === 'connection') {
+          const vc = e.renderer.visible?.connections[hit.conn];
+          if (vc) edit(lobbyConnectionBuild(lobby.id, sc.connections[vc.conns[0]].id));
+          break;
+        }
+        if (clicked < 0) break;
+        const it = sc.items[clicked];
+        pendingPlace.current = { plan: lobby.id, what: { kind: 'import', node: it.node, label: 'Ajouter au lobby' }, text: it.title, at };
+        props.onOpenPlan(lobby.id);
+        break;
+      }
       case 'connect':
         // A straight line follows the cursor from the node; 1-to-1 connections show their centre, a target too (spec 11.1).
         if (clicked < 0) break;
@@ -691,7 +815,7 @@ export function GraphView(props: {
         break;
       }
       default:
-        // Copy and paste, deletion, adding to the lobby, a connection's layout: plan 3b, tasks 10 and 11.
+        // A connection's layout: plan 3b, task 11.
         onResultRef.current({ ok: false, message: 'Cette action arrive avec une prochaine étape du plan 3b.' });
     }
     dirty.current = true;
@@ -747,6 +871,19 @@ export function GraphView(props: {
       onPointerLeave={() => { lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
         if (ev.key === 'Escape') { feed({ t: 'key', key: 'Escape' }); return; }
+        const sc = sceneRef.current;
+        // Ctrl+C, Ctrl+V and Suppr (spec 7), outside a gesture in progress.
+        if (sc && !gestures.current.busy) {
+          const key = ev.key.toLowerCase();
+          if (ev.ctrlKey && key === 'c') { ev.preventDefault(); copy(sc, selectedItems(sc)); return; }
+          if (ev.ctrlKey && key === 'v') { ev.preventDefault(); startPaste(lastPointer.current ?? { x: 0, y: 0 }); return; }
+          if (ev.key === 'Delete') {
+            const items = selectedItems(sc), conns = [...selectionRef.current.connections];
+            if (items.length > 0) askDelete(sc, items);
+            else if (conns.length === 1) askDeleteConnection(sc.plan.id, conns[0]);
+            return;
+          }
+        }
         if (!NAV_KEYS.has(ev.key)) return;
         ev.preventDefault();
         nav({ t: 'key', key: ev.key });

@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { applyOp, branchKey, groupOf, placementKey, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
-import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
+import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
 import {
-  absentBuild, addMemberBuild, connectBuild, createBuild, hideBuild, importBuild, joinBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild,
-  splitBuild,
+  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
+  pasteBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
 } from '../src/renderer/actions.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
@@ -99,4 +99,46 @@ test('membres d’une connexion : ajouter partout, changer le rôle, ôter ici s
   expect(shown(plans.these, c, nodes.kolmogorov)).toBe(true);
   run(removeMemberBuild(plans.lobby, c, nodes.kolmogorov, true));
   expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([nodes.mdl, nodes.compression]);
+});
+
+test('cacher un groupe avec son contenu, ou seul : ses membres restent alors, dans l’ancêtre présent (spec 7)', () => {
+  const { nodes, plans } = ids;
+  run(hideBuild(sc, [nodes.groupeInduction], false));
+  expect(s.placements.has(placementKey(plans.lobby, nodes.groupeInduction))).toBe(false);
+  expect(s.placements.has(placementKey(plans.lobby, nodes.solomonoff))).toBe(true);
+  const sc2 = buildScene(s, plans.lobby, measure, P);
+  expect(sc2.items[sc2.items[sc2.byId.get(nodes.solomonoff)!].parent].id).toBe(nodes.groupeComplexite);
+  run(hideBuild(sc2, [nodes.groupeML], true));
+  for (const n of [nodes.groupeML, nodes.biais, nodes.generalisation]) expect(s.placements.has(placementKey(plans.lobby, n))).toBe(false);
+});
+
+test('supprimer : ici seulement retire du plan, partout met à la corbeille ; une connexion de même', () => {
+  const { nodes, plans, connections } = ids;
+  run(deleteBuild(sc, [nodes.mdl], false));
+  expect(s.placements.has(placementKey(plans.lobby, nodes.mdl))).toBe(false);
+  expect(s.placements.has(placementKey(plans.these, nodes.mdl))).toBe(true);
+  run(deleteBuild(sc, [nodes.monde, nodes.occam], true));
+  expect(s.nodes.get(nodes.occam)!.trashedAt).toBeDefined();
+  run(deleteConnectionBuild(plans.lobby, connections.twoToTwo, false));
+  expect(shown(plans.lobby, connections.twoToTwo, nodes.biais)).toBe(false);
+  expect(s.connections.get(connections.twoToTwo)!.trashedAt).toBeUndefined();
+  run(deleteConnectionBuild(plans.these, connections.twoToOne, true));
+  expect(s.connections.get(connections.twoToOne)!.trashedAt).toBeDefined();
+});
+
+test('une connexion ajoutée au lobby y montre tous ses membres, en amorces s’ils n’y sont pas (spec 7)', () => {
+  const { nodes, plans, connections } = ids;
+  run(lobbyConnectionBuild(plans.lobby, connections.twoToOne));
+  for (const n of [nodes.kolmogorov, nodes.entropie, nodes.compression]) expect(shown(plans.lobby, connections.twoToOne, n)).toBe(true);
+});
+
+test('coller : une seule action, qui dit les nœuds déjà présents', () => {
+  const { nodes, plans } = ids;
+  const clip = copyClip(s, sc, [sc.byId.get(nodes.mdl)!, sc.byId.get(nodes.monde)!], 1)!;
+  const these = buildScene(s, plans.these, measure, P);
+  const r = pasteBuild(s, clip, these, { x: 0, y: 900 }, 1, P);
+  expect(r.present).toEqual([nodes.mdl]);
+  const a = run(r.build);
+  expect(a.label).toBe('Coller 2 nœuds');
+  expect(s.placements.has(placementKey(plans.these, nodes.monde))).toBe(true);
 });

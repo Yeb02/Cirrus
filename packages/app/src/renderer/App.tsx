@@ -144,7 +144,11 @@ export function App() {
         onSettings={() => setPanel((o) => !o)}
       />
       <div className="main">
-        <GraphView state={state} plan={active} params={params} onFirstFrame={firstFrame} session={session.current} onResult={(r) => report(r)} />
+        <GraphView
+          state={state} plan={active} params={params} onFirstFrame={firstFrame} session={session.current} onResult={(r) => report(r)}
+          // The lobby has its own tab, always there: only another plan is added to the open ones.
+          onOpenPlan={(id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); }}
+        />
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
         <Toasts toasts={toasts} />
       </div>

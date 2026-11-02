@@ -1,8 +1,11 @@
 import {
-  type Action, addMember, combine, connect, type ConnectionRec, createNode, editConnection, editNode, exclude, type Id, include, joinArm, moveNodes,
-  movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setRole, splitArm, type State, type Vec2,
+  type Action, addMember, branchKey, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
+  exclude, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setRole,
+  splitArm, type State, type Vec2,
 } from '@cirrus/core';
-import { type ConnectTarget, dropEffects, dropTarget, type PlanScene, type RenderParams, scaleMoves } from '@cirrus/view';
+import {
+  type Clip, type ConnectTarget, dropEffects, dropTarget, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
+} from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -58,12 +61,62 @@ export function scaleBuild(scene: PlanScene, items: number[], delta: number, p: 
   ]);
 }
 
-/** « Cacher » (spec 7): out of this plan only; a node leaving its last plan goes to the trash. */
-export function hideBuild(scene: PlanScene, ids: Id[]): Build {
-  const nodes = ids.filter((id) => { const i = scene.byId.get(id); return i !== undefined && scene.items[i].kind !== 'phantom'; });
+/** These nodes (phantoms aside), with everything they contain when `withContent`, deepest first: a group after its members. */
+const nodesOf = (scene: PlanScene, ids: Id[], withContent: boolean): Id[] => {
+  const chosen = new Set<number>();
+  const take = (i: number) => {
+    if (scene.items[i].kind === 'phantom') return;
+    chosen.add(i);
+    if (withContent) for (const c of scene.items[i].children) take(c);
+  };
+  for (const id of ids) { const i = scene.byId.get(id); if (i !== undefined) take(i); }
+  return [...chosen].sort((a, b) => scene.items[b].depth - scene.items[a].depth).map((i) => scene.items[i].id);
+};
+
+/**
+ * « Cacher » (spec 7): out of this plan only; a node leaving its last plan goes to the trash. A group's content follows
+ * when `withContent`; otherwise each member shows in its nearest ancestor present in the plan.
+ */
+export function hideBuild(scene: PlanScene, ids: Id[], withContent = false): Build {
+  const nodes = nodesOf(scene, ids, withContent);
   if (nodes.length === 0) return null;
   const plan = scene.plan.id;
   return (st) => combine(st, nodes.length === 1 ? 'Cacher dans ce plan' : `Cacher ${nodes.length} éléments dans ce plan`, nodes.map((n) => (x: State) => removeFromPlan(x, plan, n)));
+}
+
+/** Deletion (spec 7): « ici seulement » takes the nodes out of this plan, « partout » out of every plan, to the trash. */
+export function deleteBuild(scene: PlanScene, ids: Id[], everywhere: boolean): Build {
+  const nodes = nodesOf(scene, ids, false);
+  if (nodes.length === 0) return null;
+  const plan = scene.plan.id, n = nodes.length;
+  const label = everywhere ? (n === 1 ? 'Supprimer partout' : `Supprimer ${n} nœuds partout`) : (n === 1 ? 'Supprimer de ce plan' : `Supprimer ${n} nœuds de ce plan`);
+  return (st) => combine(st, label, nodes.map((node) => (x: State) => (everywhere ? deleteEverywhere(x, node) : removeFromPlan(x, plan, node))));
+}
+
+/** A connection's deletion (spec 7): « ici seulement » hides its branches and phantoms in this plan, « partout » trashes it. */
+export function deleteConnectionBuild(plan: Id, connection: Id, everywhere: boolean): Build {
+  if (everywhere) return (st) => deleteConnection(st, connection);
+  return (st) => {
+    const c = st.connections.get(connection);
+    const shown = (node: Id) => st.branches.has(branchKey({ plan, connection, node }))
+      || [...st.phantoms.values()].some((ph) => ph.plan === plan && ph.connection === connection && ph.of.node === node);
+    const nodes = (c?.members ?? []).map((m) => m.node).filter(shown);
+    return combine(st, 'Ôter la connexion de ce plan', [(x) => setBranches(x, connection, nodes.map((node) => ({ plan, node })), false)]);
+  };
+}
+
+/** « Ajouter au lobby » for a connection (spec 7): it places itself, every member shown, as a stub where absent. */
+export function lobbyConnectionBuild(lobby: Id, connection: Id): Build {
+  return (st) => combine(st, 'Ajouter la connexion au lobby', [
+    (x) => setBranches(x, connection, (x.connections.get(connection)?.members ?? []).map((m) => ({ plan: lobby, node: m.node })), true),
+  ]);
+}
+
+/** Pasting a clip at `at` (spec 7) as one action; `present`: the nodes that were already there and kept their place. */
+export function pasteBuild(s: State, clip: Clip, scene: PlanScene, at: Vec2, zoom: number, p: RenderParams): { build: Build; present: Id[] } {
+  const r = pasteSteps(s, clip, scene.plan.id, at, zoom, groupAt(scene, at, zoom, p), p);
+  const n = clip.nodes.length;
+  return { build: r.steps.length === 0 ? null : (st) => combine(st, n === 1 ? 'Coller un nœud' : `Coller ${n} nœuds`, r.steps), present: r.present };
 }
 
 /** The step whose text reads at the base size at this zoom (a node created or brought in from elsewhere). */
@@ -153,10 +206,10 @@ export function joinBuild(plan: Id, connection: Id, node: Id): Build {
  * A node brought into the plan from a stub or an absent phantom (spec 11.3), at the step readable at this zoom;
  * inside an envelope, it enters that group.
  */
-export function importBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams): Build {
+export function importBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, label = 'Importer un nœud dans ce plan'): Build {
   const plan = scene.plan.id;
   const group = groupAt(scene, at, zoom, p);
-  return (st) => combine(st, 'Importer un nœud dans ce plan', [
+  return (st) => combine(st, label, [
     (x) => placeNode(x, plan, node, at.x, at.y, readableStep(zoom, p)),
     ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
   ]);
