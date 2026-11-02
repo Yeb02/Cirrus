@@ -136,3 +136,16 @@ export class GestureMachine {
     }
   }
 }
+
+/** Scale steps under way with Ctrl+wheel; `flush` is the previous gesture, ended by a pause or another target. */
+export interface WheelSteps { target: string; delta: number; last: number; flush: { target: string; delta: number } | null }
+
+/**
+ * Ctrl+wheel changes the scale step of the selection or of the element under the cursor (spec 8.1): the notches of
+ * one gesture add up into one action, written once the wheel pauses for scaleGesturePauseMs or the target changes.
+ */
+export function stepWheel(prev: WheelSteps | null, target: string, deltaY: number, now: number, p: RenderParams): WheelSteps {
+  const sign = deltaY < 0 ? 1 : -1;
+  if (prev && prev.target === target && now - prev.last <= p.scaleGesturePauseMs) return { target, delta: prev.delta + sign, last: now, flush: null };
+  return { target, delta: sign, last: now, flush: prev && prev.delta !== 0 ? { target: prev.target, delta: prev.delta } : null };
+}

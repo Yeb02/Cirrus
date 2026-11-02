@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { GestureMachine, type Input } from '../src/gestures.ts';
+import { GestureMachine, type Input, stepWheel } from '../src/gestures.ts';
 import type { Hit } from '../src/hit.ts';
 import { P } from './helpers.ts';
 
@@ -72,4 +72,17 @@ test('geste sans bouton : suit le curseur, se pose au clic gauche, s’annule au
   expect(g.feed(down(0, 0, bg, { button: 2 }), cam)).toEqual([{ t: 'placeCancel', mode: 'connect' }]);
   g.start('paste');
   expect(g.feed({ t: 'key', key: 'Escape' }, cam)).toEqual([{ t: 'placeCancel', mode: 'paste' }]);
+});
+
+test('Ctrl+molette : les crans d’un même geste s’additionnent, une pause ou une autre cible en commence un autre', () => {
+  let acc = stepWheel(null, 'a', -120, 0, P);
+  expect(acc).toMatchObject({ target: 'a', delta: 1, flush: null });
+  acc = stepWheel(acc, 'a', -120, 100, P);
+  expect(acc).toMatchObject({ delta: 2, flush: null });
+  acc = stepWheel(acc, 'a', 120, 200, P);
+  expect(acc).toMatchObject({ delta: 1, flush: null });
+  const later = stepWheel(acc, 'a', -120, 200 + P.scaleGesturePauseMs + 1, P);
+  expect(later).toMatchObject({ delta: 1, flush: { target: 'a', delta: 1 } });
+  const other = stepWheel(later, 'b', 120, 1000, P);
+  expect(other).toMatchObject({ target: 'b', delta: -1, flush: { target: 'a', delta: 1 } });
 });

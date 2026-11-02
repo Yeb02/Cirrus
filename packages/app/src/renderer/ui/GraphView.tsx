@@ -1,8 +1,8 @@
-import type { Id, State } from '@cirrus/core';
+import { applyOp, cloneState, type Id, type State } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor,
+  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -70,6 +70,9 @@ export function GraphView(props: {
       onResultRef.current(r);
     });
   };
+  // Handlers registered once (wheel, render loop) read the current state through this ref, never a stale closure.
+  const stateRef = useRef(props.state);
+  stateRef.current = props.state;
   const sessionRef = useRef(props.session);
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
@@ -157,6 +160,10 @@ export function GraphView(props: {
           else if (t === 'move') feed({ t: 'move', sx, sy });
           else if (t === 'up') feed({ t: 'up', button, sx, sy });
           else if (t === 'key') feed({ t: 'key', key: xs });
+          else if (t === 'wheel') {
+            const r = root.current!.getBoundingClientRect();
+            root.current!.dispatchEvent(new WheelEvent('wheel', { clientX: sx + r.left, clientY: sy + r.top, deltaY: Number(mods[0] ?? -120), ctrlKey: mods.includes('ctrl'), cancelable: true }));
+          }
         }
       };
       // One exception must not stop the drawing for good (C1 of the plan 3 review): it is reported and the loop goes on.
@@ -261,8 +268,10 @@ export function GraphView(props: {
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault();
       const r = el.getBoundingClientRect();
-      nav({ t: 'wheel', sx: ev.clientX - r.left, sy: ev.clientY - r.top, deltaY: ev.deltaY, ctrl: ev.ctrlKey });
-      hover(ev.clientX - r.left, ev.clientY - r.top);
+      const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
+      if (ev.ctrlKey) { wheelScale(sx, sy, ev.deltaY); return; }
+      nav({ t: 'wheel', sx, sy, deltaY: ev.deltaY, ctrl: false });
+      hover(sx, sy);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -306,7 +315,7 @@ export function GraphView(props: {
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
         if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) { sel = emptySelection(); setSelection(sel); }
-        setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items: menuFor(props.state, sc, intent.hit, sel, false) });
+        setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items: menuFor(stateRef.current, sc, intent.hit, sel, false) });
         break;
       }
       case 'rectMove':
@@ -391,6 +400,43 @@ export function GraphView(props: {
     }
     dirty.current = true;
   };
+  /**
+   * Ctrl+wheel (spec 8.1): the step of the selection or of the element under the cursor. The notches of one gesture
+   * are previewed at once and written as one action when the wheel pauses (stepWheel).
+   */
+  const wheelGesture = useRef<{ steps: WheelSteps; base: PlanScene; items: number[]; timer: number } | null>(null);
+  const commitScale = (g: { steps: WheelSteps; base: PlanScene; items: number[] }) => {
+    if (g.steps.delta === 0) { engine.current?.renderer.setScene(g.base); return; }
+    edit(scaleBuild(g.base, g.items, g.steps.delta, paramsRef.current), () => { engine.current?.renderer.setScene(g.base); dirty.current = true; });
+  };
+  const wheelScale = (sx: number, sy: number, deltaY: number) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc) return;
+    const h = hitAt(sx, sy);
+    const prev = wheelGesture.current;
+    // Within a gesture the scene shown is a preview: the target is read on the scene the gesture started from.
+    const base = prev ? prev.base : sc;
+    if (h.kind !== 'item') return;
+    const id = sc.items[h.item].id, sel = selectionRef.current;
+    const ids = sel.items.has(id) ? [...sel.items] : [id];
+    const items = ids.flatMap((x) => { const i = base.byId.get(x); return i === undefined ? [] : [i]; });
+    const steps = stepWheel(prev?.steps ?? null, [...ids].sort().join(','), deltaY, performance.now(), paramsRef.current);
+    if (prev) window.clearTimeout(prev.timer);
+    if (steps.flush && prev) commitScale(prev);
+    const gesture = { steps, base: steps.flush || !prev ? sc : prev.base, items, timer: 0 };
+    gesture.items = ids.flatMap((x) => { const i = gesture.base.byId.get(x); return i === undefined ? [] : [i]; });
+    // Preview: the state as the action would leave it, drawn without writing anything.
+    const build = scaleBuild(gesture.base, gesture.items, steps.delta, paramsRef.current);
+    if (build) {
+      const preview = cloneState(stateRef.current);
+      for (const op of build(preview).ops) applyOp(preview, op);
+      e.renderer.setScene(buildScene(preview, gesture.base.plan.id, measureTitle(paramsRef.current), paramsRef.current), true);
+    } else e.renderer.setScene(gesture.base, true);
+    gesture.timer = window.setTimeout(() => { wheelGesture.current = null; commitScale(gesture); }, paramsRef.current.scaleGesturePauseMs);
+    wheelGesture.current = gesture;
+    dirty.current = true;
+  };
+
   /** A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. */
   const pick = (action: MenuAction, hit: Hit, at: { x: number; y: number }) => {
     const e = engine.current, sc = sceneRef.current;
