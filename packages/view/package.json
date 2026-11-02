@@ -1,0 +1,17 @@
+{
+  "name": "@cirrus/view",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cirrus/core": "*",
+    "flatbush": "4.7.0"
+  },
+  "devDependencies": {
+    "@cirrus/fixtures": "*",
+    "@cirrus/store": "*"
+  }
+}
