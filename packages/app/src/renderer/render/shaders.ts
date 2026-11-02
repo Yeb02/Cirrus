@@ -153,14 +153,15 @@ export function envelopeShader(p: RenderParams): Shader {
   return Shader.from({
     gl: {
       vertex: /* glsl */ `#version 300 es
-      in vec2 aPosition; in vec2 aNormal; in float aAlpha; in vec3 aOpen; in vec3 aClosed; in float aFoldK;
+      in vec2 aPosition; in vec2 aNormal; in float aAlpha; in vec3 aOpen; in vec3 aClosed; in float aFoldK; in float aParentK;
       out float vAlpha; out vec3 vColor;
       uniform float uFeatherOpen; uniform float uFeatherClosed;
       ${COMMON}
       void main() {
         float t = foldT(aFoldK);
         vColor = mix(aOpen, aClosed, t);
-        vAlpha = aAlpha;
+        // A subgroup fades as its parent closes, like the boxes inside it (spec 8.4).
+        vAlpha = aAlpha * (1.0 - foldT(aParentK));
         gl_Position = project(aPosition + aNormal * mix(uFeatherOpen, uFeatherClosed, t) / uZoom);
       }`,
       fragment: /* glsl */ `#version 300 es
@@ -207,7 +208,7 @@ export function boxShader(p: RenderParams): Shader {
       fragment: /* glsl */ `#version 300 es
       precision highp float;
       in vec2 vLocal; in vec2 vHalf; in float vRadius; in float vAlpha; in float vStyle; in float vBadge;
-      uniform float uZoom; uniform float uBorderPx; uniform float uBadgePx; uniform vec2 uDash;
+      uniform float uZoom; uniform float uBorderPx; uniform float uBadgePx; uniform vec2 uDash; uniform float uPhantomFill;
       uniform vec3 uNode; uniform vec3 uEdge; uniform vec3 uMarker; uniform vec3 uConnection; uniform vec3 uAbsent;
       out vec4 finalColor;
       float sdBox(vec2 q, vec2 b, float r) { vec2 d = abs(q) - b + r; return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r; }
@@ -218,7 +219,7 @@ export function boxShader(p: RenderParams): Shader {
         float border = clamp(0.5 * uBorderPx + 0.5 - abs(d + 0.5 * uBorderPx), 0.0, 1.0);
         vec3 fill = uNode; vec3 edge = uEdge; float fillA = 1.0;
         if (vStyle == 1.0) {
-          fillA = 0.45;
+          fillA = uPhantomFill;
           float period = uDash.x + uDash.y;
           if (mod((vLocal.x + vLocal.y) * uZoom, period) > uDash.x) border = 0.0;
         } else if (vStyle == 2.0) { fill = uMarker; edge = uConnection; }
@@ -240,6 +241,7 @@ export function boxShader(p: RenderParams): Shader {
         uBoxHalf: { value: p.boxWidth / 2, type: 'f32' },
         uBadgePx: { value: p.badgeRadiusPx, type: 'f32' },
         uBorderPx: { value: p.boxBorderPx, type: 'f32' },
+        uPhantomFill: { value: p.phantomFillAlpha, type: 'f32' },
         uDash: { value: p.dashPx, type: 'vec2<f32>' },
         uNode: { value: p.nodeColor, type: 'vec3<f32>' },
         uEdge: { value: p.nodeEdgeColor, type: 'vec3<f32>' },
@@ -268,11 +270,11 @@ export function markerShader(p: RenderParams): Shader {
       fragment: /* glsl */ `#version 300 es
       precision highp float;
       in vec2 vLocal; in float vAlpha; out vec4 finalColor;
-      uniform float uRadiusPx; uniform vec3 uFill; uniform vec3 uRing;
+      uniform float uRadiusPx; uniform vec3 uFill; uniform vec3 uRing; uniform float uRingPx;
       void main() {
         float d = length(vLocal) - uRadiusPx;
         float inside = clamp(0.5 - d, 0.0, 1.0);
-        float ring = clamp(1.5 - abs(d + 1.0), 0.0, 1.0);
+        float ring = clamp(0.5 * uRingPx + 0.5 - abs(d + 0.5 * uRingPx), 0.0, 1.0);
         finalColor = (vec4(uFill, 1.0) * (inside - ring * inside) + vec4(uRing, 1.0) * ring * inside) * vAlpha;
       }`,
     },
@@ -285,6 +287,7 @@ export function markerShader(p: RenderParams): Shader {
         uTitle1: { value: p.titleFade[1], type: 'f32' },
         uFill: { value: p.markerColor, type: 'vec3<f32>' },
         uRing: { value: p.connectionColor, type: 'vec3<f32>' },
+        uRingPx: { value: p.markerRingPx, type: 'f32' },
       },
     },
   });
@@ -300,12 +303,12 @@ export function starShader(p: RenderParams): Shader {
       void main() { gl_Position = project(aPosition + aCorner * (0.5 * uStarPx / uZoom)); }`,
       fragment: /* glsl */ `#version 300 es
       precision highp float;
-      uniform float uLayerAlpha; uniform float uBrightness; out vec4 finalColor;
-      void main() { finalColor = vec4(0.85, 0.9, 1.0, 1.0) * uBrightness * uLayerAlpha; }`,
+      uniform float uLayerAlpha; uniform float uBrightness; uniform vec3 uStarColor; out vec4 finalColor;
+      void main() { finalColor = vec4(uStarColor, 1.0) * uBrightness * uLayerAlpha; }`,
     },
     resources: {
       lod: lod(p),
-      star: { uStarPx: { value: p.starSizePx, type: 'f32' }, uLayerAlpha: { value: 0, type: 'f32' }, uBrightness: { value: p.starBrightness, type: 'f32' } },
+      star: { uStarPx: { value: p.starSizePx, type: 'f32' }, uLayerAlpha: { value: 0, type: 'f32' }, uBrightness: { value: p.starBrightness, type: 'f32' }, uStarColor: { value: p.starColor, type: 'vec3<f32>' } },
     },
   });
 }
@@ -329,7 +332,7 @@ export function skyShader(p: RenderParams): Shader {
       fragment: /* glsl */ `#version 300 es
       precision highp float;
       in vec2 vWorld; in float vV; out vec4 finalColor;
-      uniform vec3 uSky; uniform vec3 uSky2; uniform float uZoom;
+      uniform vec3 uSky; uniform vec3 uSky2; uniform vec3 uGridColor; uniform float uZoom;
       uniform vec3 uSpacing; uniform vec3 uGridAlpha; uniform vec2 uOffset0; uniform vec2 uOffset1; uniform vec2 uOffset2;
       float line(vec2 offset, float spacing) {
         if (spacing <= 0.0) return 0.0;
@@ -341,13 +344,14 @@ export function skyShader(p: RenderParams): Shader {
         float a = line(uOffset0, uSpacing.x) * uGridAlpha.x;
         a = max(a, line(uOffset1, uSpacing.y) * uGridAlpha.y);
         a = max(a, line(uOffset2, uSpacing.z) * uGridAlpha.z);
-        finalColor = vec4(mix(c, vec3(0.85, 0.9, 1.0), a), 1.0);
+        finalColor = vec4(mix(c, uGridColor, a), 1.0);
       }`,
     },
     resources: {
       sky: {
         uSky: { value: p.skyColor, type: 'vec3<f32>' },
         uSky2: { value: p.skyColor2, type: 'vec3<f32>' },
+        uGridColor: { value: p.gridColor, type: 'vec3<f32>' },
         uZoom: { value: 1, type: 'f32' },
         uSpacing: { value: [0, 0, 0], type: 'vec3<f32>' },
         uGridAlpha: { value: [0, 0, 0], type: 'vec3<f32>' },

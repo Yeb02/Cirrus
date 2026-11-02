@@ -42,6 +42,8 @@ export interface RenderParams {
   groupTitleClosedScale: number;
   /** Fold range over which a group's title moves from the top of its envelope to its centre. */
   groupTitleSwap: Range;
+  /** Gap between an open group's title and the top of its envelope, in title heights. */
+  groupTitleOffset: number;
   // Connections (spec 8.5)
   trunkTension: number;
   trunkLength: number;
@@ -57,6 +59,10 @@ export interface RenderParams {
   markerRadiusPx: number;
   titleFontPx: number;
   titleGap: number;
+  /** Width of a connection title per character, and its box height, in font sizes (title placement estimate). */
+  titleCharWidth: number;
+  titleBoxHeight: number;
+  markerRingPx: number;
   stubLength: number;
   stubAngle: number;
   dashPx: Range;
@@ -68,10 +74,15 @@ export interface RenderParams {
   // Phantoms and signs
   centerRadius: number;
   badgeRadiusPx: number;
+  phantomFillAlpha: number;
+  phantomTitleDim: number;
   // View and navigation
   viewMarginPx: number;
   hitTolerancePx: number;
   clickSlopPx: number;
+  /** Fold from which a group's members are no longer clickable: the group is taken whole (spec 9.3). */
+  foldClickable: number;
+  stubHitFactor: number;
   wheelZoomSpeed: number;
   keyZoomStep: number;
   keyPanPx: number;
@@ -85,6 +96,10 @@ export interface RenderParams {
   starSpacingPx: Range;
   starSizePx: number;
   starBrightness: number;
+  starPresence: number;
+  starSeed: number;
+  starColor: Rgb;
+  gridColor: Rgb;
   gridSpacingPx: Range;
   gridAlpha: number;
   // Colours
@@ -136,6 +151,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   groupTitleOpenScale: 0.95,
   groupTitleClosedScale: 1.2,
   groupTitleSwap: [0.45, 0.95],
+  groupTitleOffset: 0.45,
   trunkTension: 0.55,
   trunkLength: 50,
   anchorGap: 3,
@@ -150,6 +166,9 @@ export const DEFAULT_PARAMS: RenderParams = {
   markerRadiusPx: 6.5,
   titleFontPx: 13,
   titleGap: 11,
+  titleCharWidth: 0.52,
+  titleBoxHeight: 1.3,
+  markerRingPx: 1.5,
   stubLength: 150,
   stubAngle: 0.6,
   dashPx: [4, 5],
@@ -160,9 +179,13 @@ export const DEFAULT_PARAMS: RenderParams = {
   hoverBoostPx: 1,
   centerRadius: 9,
   badgeRadiusPx: 3,
+  phantomFillAlpha: 0.45,
+  phantomTitleDim: 0.65,
   viewMarginPx: 200,
   hitTolerancePx: 6,
   clickSlopPx: 4,
+  foldClickable: 0.5,
+  stubHitFactor: 1.5,
   wheelZoomSpeed: 0.0015,
   keyZoomStep: 1.25,
   keyPanPx: 80,
@@ -175,6 +198,10 @@ export const DEFAULT_PARAMS: RenderParams = {
   starSpacingPx: [40, 160],
   starSizePx: 1,
   starBrightness: 0.7,
+  starPresence: 0.7,
+  starSeed: 7,
+  starColor: hexToRgb('#d9e6ff'),
+  gridColor: hexToRgb('#d9e6ff'),
   gridSpacingPx: [24, 96],
   gridAlpha: 0.06,
   skyColor: hexToRgb('#0a1120'),
@@ -246,6 +273,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('groupTitleOpenScale', 'Taille du titre d’un groupe ouvert', A, 'Groupes', 0.3, 3, 0.05),
   num('groupTitleClosedScale', 'Taille du titre d’un groupe replié', A, 'Groupes', 0.3, 3, 0.05),
   range('groupTitleSwap', 'Passage du titre d’un groupe du haut au centre (repli de 0 à 1)', A, 'Groupes', 0, 1, 0.01),
+  num('groupTitleOffset', 'Écart entre le titre d’un groupe ouvert et son enveloppe (en hauteurs de titre)', A, 'Groupes', 0, 2, 0.05),
   num('trunkTension', 'Tension des courbes', G, 'Connexions', 0.1, 0.95, 0.01),
   num('trunkLength', 'Longueur du tronc', G, 'Connexions', 0, 180, 1),
   num('anchorGap', 'Écart entre une boîte et sa connexion', A, 'Connexions', 0, 20, 0.5),
@@ -260,6 +288,9 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('markerRadiusPx', 'Rayon du marqueur d’un faisceau (px)', A, 'Connexions', 2, 20, 0.5),
   num('titleFontPx', 'Taille des titres de connexion', A, 'Connexions', 6, 30, 0.5),
   num('titleGap', 'Distance du titre des connexions', G, 'Connexions', 0, 60, 1),
+  num('titleCharWidth', 'Largeur estimée d’un caractère de titre (en tailles de police)', A, 'Connexions', 0.3, 1, 0.01),
+  num('titleBoxHeight', 'Hauteur réservée à un titre de connexion (en tailles de police)', A, 'Connexions', 1, 2.5, 0.05),
+  num('markerRingPx', 'Épaisseur du cercle des marqueurs (px)', A, 'Connexions', 0.5, 5, 0.25),
   num('stubLength', 'Longueur des amorces', A, 'Connexions', 20, 600, 5),
   num('stubAngle', 'Écart angulaire des amorces (radians)', A, 'Connexions', 0, 1.5, 0.05),
   range('dashPx', 'Pointillés des amorces : trait et espace (px)', A, 'Connexions', 1, 20, 0.5),
@@ -270,9 +301,13 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('hoverBoostPx', 'Élargissement d’une connexion survolée (px)', A, 'Connexions', 0, 4, 0.1),
   num('centerRadius', 'Rayon d’un fantôme de centre', A, 'Fantômes et signes', 2, 40, 0.5),
   num('badgeRadiusPx', 'Rayon du badge des connexions absentes (px)', A, 'Fantômes et signes', 1, 8, 0.5),
+  num('phantomFillAlpha', 'Opacité du fond d’un fantôme', A, 'Fantômes et signes', 0, 1, 0.01),
+  num('phantomTitleDim', 'Atténuation du titre d’un fantôme', A, 'Fantômes et signes', 0.1, 1, 0.01),
   num('viewMarginPx', 'Marge préparée autour de l’écran (px)', A, 'Vue', 0, 1000, 10),
   num('hitTolerancePx', 'Tolérance de survol d’une connexion (px)', A, 'Vue', 1, 20, 0.5),
   num('clickSlopPx', 'Mouvement en deçà duquel un appui reste un clic (px)', A, 'Vue', 0, 20, 1),
+  num('foldClickable', 'Repli à partir duquel les membres d’un groupe ne sont plus cliquables', A, 'Vue', 0.05, 0.95, 0.05),
+  num('stubHitFactor', 'Tolérance de survol du bout d’une amorce (× tolérance)', A, 'Vue', 1, 5, 0.1),
   num('wheelZoomSpeed', 'Vitesse du zoom à la molette', A, 'Vue', 0.0002, 0.01, 0.0001),
   num('keyZoomStep', 'Pas du zoom au clavier', A, 'Vue', 1.05, 3, 0.05),
   num('keyPanPx', 'Pas du déplacement aux flèches (px)', A, 'Vue', 10, 400, 5),
@@ -288,6 +323,10 @@ export const PARAM_SPECS: ParamSpec[] = [
   range('starSpacingPx', 'Espacement des étoiles à l’écran (px)', A, 'Fond', 5, 600, 5),
   num('starSizePx', 'Taille des étoiles (px)', A, 'Fond', 0.5, 4, 0.1),
   num('starBrightness', 'Éclat des étoiles', A, 'Fond', 0, 1, 0.01),
+  num('starPresence', 'Densité des étoiles (part des cases occupées)', A, 'Fond', 0.05, 1, 0.01),
+  num('starSeed', 'Graine du ciel étoilé', A, 'Fond', 0, 9999, 1),
+  color('starColor', 'Étoiles'),
+  color('gridColor', 'Grille'),
   range('gridSpacingPx', 'Espacement de la grille à l’écran (px)', A, 'Fond', 5, 600, 1),
   num('gridAlpha', 'Opacité de la grille', A, 'Fond', 0, 0.5, 0.005),
   color('skyColor', 'Ciel'),
@@ -320,6 +359,21 @@ function valid(spec: ParamSpec, v: unknown): boolean {
   }
 }
 
+/**
+ * A valid value brought inside its card's bounds (C1 of the plan 3 review): a keystroke on the way to a value, or a
+ * hand-edited file, never reaches the renderer out of range (a factor of 1 froze it). An interval stays ordered.
+ */
+function bounded(spec: ParamSpec, v: unknown): unknown {
+  const clamp = (x: number) => Math.min(spec.max ?? Infinity, Math.max(spec.min ?? -Infinity, x));
+  if (spec.kind === 'number') return clamp(v as number);
+  if (spec.kind === 'list') return (v as number[]).map(clamp);
+  if (spec.kind === 'range') {
+    const [a, b] = (v as number[]).map(clamp).sort((x, y) => x - y);
+    return [a, b > a ? b : Math.min(spec.max ?? Infinity, a + (spec.step ?? 1))];
+  }
+  return Array.isArray(v) ? [...v] : v;
+}
+
 /** The fields that differ from the defaults: only those are written, so a later default reaches everyone else (spec 5.4 spirit). */
 export function diffFromDefaults(p: RenderParams): Partial<RenderParams> {
   const out: Record<string, unknown> = {};
@@ -335,7 +389,7 @@ export function withOverrides(overrides: unknown): RenderParams {
   if (overrides === null || typeof overrides !== 'object') return out as unknown as RenderParams;
   for (const [key, v] of Object.entries(overrides)) {
     const spec = SPEC_BY_KEY.get(key as keyof RenderParams);
-    if (spec && valid(spec, v)) out[key] = Array.isArray(v) ? [...v] : v;
+    if (spec && valid(spec, v)) out[key] = bounded(spec, v);
   }
   return out as unknown as RenderParams;
 }

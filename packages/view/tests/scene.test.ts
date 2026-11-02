@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Action, applyOp, cloneState, createNode, createPlan, emptyState, type Id, removeFromPlan, type State } from '@cirrus/core';
+import { type Action, applyOp, cloneState, connect, createNode, createPlan, emptyState, type Id, placeNode, removeFromPlan, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { beforeAll, expect, test } from 'vitest';
@@ -135,4 +135,19 @@ test('les bornes couvrent les boîtes et les enveloppes élargies', () => {
   }
   const g = it(sc, ids.nodes.groupeTheorie);
   expect(Math.min(...offsetPolygon(g.hull!, g.pad!).map((q) => q.x))).toBeGreaterThanOrEqual(b.minX - 1e-6);
+});
+
+test('une connexion masquée dans ce plan (un seul nœud présent) laisse un badge à ce nœud (spec 11.3, M2 de la relecture)', () => {
+  const st = emptyState();
+  const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const a = created(run(st, createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 })), 'node');
+  const b = created(run(st, createNode(st, { plan, title: 'B', x: 400, y: 0, k: 0 })), 'node');
+  const other = created(run(st, createPlan(st, 'Q', 'plan')), 'plan');
+  run(st, placeNode(st, other, b, 0, 0, 0)); // B lives on elsewhere: hiding it here keeps it out of the trash
+  run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] }));
+  expect(it(buildScene(st, plan, measure, P), a).badge).toBe(false);
+  run(st, removeFromPlan(st, plan, b));
+  const sc2 = buildScene(st, plan, measure, P);
+  expect(sc2.connections).toHaveLength(0); // masked: fewer than two nodes shown (spec 11.2)
+  expect(it(sc2, a).badge).toBe(true);
 });

@@ -190,7 +190,8 @@ export function computeVisible(scene: PlanScene, index: SceneIndex, cam: Camera,
       const merged: VisibleEnd[] = [];
       for (const e of ends) if (!merged.some((m) => m.item === e.item && m.role === e.role)) merged.push(e);
       const vc: VisibleConnection = { conns: [sc.index], ends: merged, stubs: sc.stubs, ...(center !== undefined ? { center } : {}), fade, foldK: Number.NaN };
-      if (sc.layout || sc.stubs.length > 0 || center !== undefined || merged.some((e) => e.dashed)) { out.connections.push(vc); continue; }
+      // Only ends lifted onto a closed group merge (spec 8.5, « Groupe replié »): open parallel connections stay apart.
+      if (sc.layout || sc.stubs.length > 0 || center !== undefined || merged.some((e) => e.dashed) || !merged.some((e) => e.hollow)) { out.connections.push(vc); continue; }
       const key = merged.map((e) => e.item * 3 + ROLE_CODE[e.role]).sort((a, b) => a - b).join(',');
       const existing = aggregated.get(key);
       if (existing) existing.conns.push(sc.index);

@@ -1,8 +1,11 @@
+const stop = (e: React.PointerEvent) => e.stopPropagation();
+
 /** The groups under the cursor, from the top level down; a click frames one of them (spec 8.4, rappel discret). */
 export function HierarchyCorner(props: { chain: { item: number; title: string }[]; onPick(item: number): void }) {
   if (props.chain.length === 0) return null;
   return (
-    <div className="hierarchy" aria-label="Groupes sous le curseur">
+    // Its pointer events stay here (I2 of the review): the graph below must not pan or re-hover while it is used.
+    <div className="hierarchy" aria-label="Groupes sous le curseur" onPointerDown={stop} onPointerMove={stop} onPointerUp={stop}>
       {props.chain.map((g, i) => (
         <span key={g.item}>
           {i > 0 && <span className="sep">›</span>}

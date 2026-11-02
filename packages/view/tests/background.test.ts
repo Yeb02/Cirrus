@@ -36,3 +36,11 @@ test('grille fractale : niveaux à espacement borné, opacité au plus gridAlpha
     }
   }
 });
+
+test('paramètres dégénérés hors des fiches : les couches restent bornées et le calcul se termine (C1)', () => {
+  for (const bad of [{ factor: 1 }, { factor: Number.NaN }, { starSpacingPx: [0, 160] as [number, number] }, { gridSpacingPx: [0, 0] as [number, number] }, { starCellWorld: 0 }]) {
+    const p = { ...P, ...bad };
+    expect(starLayers(0.3, p).length).toBeLessThanOrEqual(3);
+    expect(gridLevels(1, p).length).toBeLessThanOrEqual(64);
+  }
+});

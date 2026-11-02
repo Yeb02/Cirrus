@@ -106,3 +106,13 @@ test('titre : « up » si libre, autre côté si une boîte le recouvre, côté 
   const crossing = Array.from({ length: 20 }, (_, i) => ({ x: -50 + i * 5, y: -20 }));
   expect(placeTitle(m, 100, 20, 10, crossing, []).side).not.toBe('up');
 });
+
+test('l’enveloppe d’un sous-groupe porte le repli de son parent, pour s’estomper avec lui (I4 de la relecture)', () => {
+  const { frame, visible } = frameAt(sc, 0, 16);
+  const parentK = [...frame.envelopes.parentK.view()];
+  const kOfComplexite = sc.items[sc.byId.get(ids.nodes.groupeComplexite)!].maxChildK!;
+  expect(parentK).toContain(kOfComplexite); // Induction universelle, inside Complexité et induction
+  expect(parentK.some((k) => k > 1e8)).toBe(true); // a top-level group: no parent
+  expect(parentK).toHaveLength(frame.envelopes.alpha.length);
+  expect(visible.groups.length).toBeGreaterThan(0);
+});

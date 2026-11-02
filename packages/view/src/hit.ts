@@ -65,7 +65,7 @@ export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick
   }
   const stubs = frame.stubs.map((s) => ({ ...s, pos: abs(s.pos) }));
 
-  const folded = (g: number, zoom: number) => foldT(items[g].maxChildK!, zoom, p) >= 0.5;
+  const folded = (g: number, zoom: number) => foldT(items[g].maxChildK!, zoom, p) >= p.foldClickable;
   /** Not inside a group that is more than half closed. */
   const reachable = (i: number, zoom: number) => {
     for (let a = items[i].parent; a >= 0; a = items[a].parent) if (folded(a, zoom)) return false;
@@ -82,7 +82,7 @@ export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick
       if (onBox.length > 0) return { kind: 'item', item: deepest(onBox) };
       const closed = groupsAt(wx, wy).filter((g) => folded(g, zoom) && reachable(g, zoom));
       if (closed.length > 0) return { kind: 'item', item: deepest(closed) };
-      let bestStub = -1, bestStubD = tol * 1.5;
+      let bestStub = -1, bestStubD = tol * p.stubHitFactor;
       stubs.forEach((s, j) => { const d = Math.hypot(s.pos.x - wx, s.pos.y - wy); if (d <= bestStubD) { bestStubD = d; bestStub = j; } });
       if (bestStub >= 0) return { kind: 'stub', conn: stubs[bestStub].conn, stub: stubs[bestStub].stub };
       if (segTree) {

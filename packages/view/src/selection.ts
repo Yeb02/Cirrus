@@ -30,7 +30,7 @@ export function inRectangle(scene: PlanScene, rect: Bounds, zoom: number, p: Ren
   };
   const visit = (i: number): boolean => {
     const it = scene.items[i];
-    if (it.kind !== 'group' || foldT(it.maxChildK!, zoom, p) >= 0.5) {
+    if (it.kind !== 'group' || foldT(it.maxChildK!, zoom, p) >= p.foldClickable) {
       const taken = inside(i);
       if (taken) out.push(it.id);
       return taken;

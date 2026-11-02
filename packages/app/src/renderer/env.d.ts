@@ -13,7 +13,7 @@ export interface CirrusBridge {
   /** The first frame is drawn (captures wait for it). */
   ready(): void;
   /** Launch options for visual checks: plan name, view "x,y,zoom", simulated hover "x,y", settings panel open. */
-  launch: { plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; hide?: string; keys?: string; pointer?: string };
+  launch: { plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; hide?: string; keys?: string; pointer?: string; click?: string };
 }
 
 declare global {

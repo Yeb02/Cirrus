@@ -51,7 +51,7 @@ function inPolygon(poly: Vec2[], x: number, y: number): boolean {
 
 /** Not inside a group more than half folded at this zoom: what can be dropped onto. */
 const reachable = (scene: PlanScene, i: number, zoom: number, p: RenderParams) => {
-  for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (foldT(scene.items[a].maxChildK!, zoom, p) >= 0.5) return false;
+  for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (foldT(scene.items[a].maxChildK!, zoom, p) >= p.foldClickable) return false;
   return true;
 };
 

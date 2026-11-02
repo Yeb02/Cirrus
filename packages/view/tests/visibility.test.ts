@@ -115,3 +115,18 @@ test('signature de repli : change seulement quand un niveau change d’état', (
   expect(foldSignature(idx, camAtTextPx(sc, 0, 5.5).zoom, P)).not.toBe(a);
   expect(computeVisible(sc, idx, camAtTextPx(sc, 0, 16), P).signature).toBe(a);
 });
+
+test('deux connexions parallèles ouvertes restent distinctes ; elles ne fusionnent que repliées (I5 de la relecture)', () => {
+  const st = emptyState();
+  const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const node = (title: string, x: number, y: number) => created(run(st, createNode(st, { plan, title, x, y, k: 0 })), 'node');
+  const g = node('G', 0, 0), a = node('A', 0, 0), b = node('B', 2000, 0);
+  run(st, include(st, plan, a, g));
+  run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }], title: 'cite' }));
+  run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }], title: 'contredit' }));
+  const scene = buildScene(st, plan, measure, P);
+  expect(computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 16), P).connections).toHaveLength(2);
+  const folded = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 3), P);
+  expect(folded.connections).toHaveLength(1);
+  expect(folded.connections[0].conns).toHaveLength(2);
+});

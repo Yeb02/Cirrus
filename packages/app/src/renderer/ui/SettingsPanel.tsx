@@ -70,7 +70,8 @@ function Section(props: { title: string; specs: ParamSpec[]; params: RenderParam
         <div key={g} className="param-group">
           <h3>{g}</h3>
           {props.specs.filter((s) => s.group === g).map((s) => (
-            <label key={s.key} className="param">
+            // A div, not a label: a label would pass any click on its text to the reset button inside (I3 of the review).
+            <div key={s.key} className="param">
               <span className="label">
                 {s.label}
                 {!same(props.params[s.key], DEFAULT_PARAMS[s.key]) && (
@@ -79,7 +80,7 @@ function Section(props: { title: string; specs: ParamSpec[]; params: RenderParam
                 )}
               </span>
               <Control spec={s} value={props.params[s.key]} onChange={(v) => props.onChange(s.key, v)} />
-            </label>
+            </div>
           ))}
         </div>
       ))}

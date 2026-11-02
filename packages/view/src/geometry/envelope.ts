@@ -12,19 +12,24 @@ export interface EnvelopeMeshes {
   open: FloatList;
   closed: FloatList;
   foldK: FloatList;
+  /** The parent group's maxChildK (NO_PARENT at top level): the envelope fades as its parent folds (spec 8.4). */
+  parentK: FloatList;
   index: IndexList;
 }
 
 export function newEnvelopeMeshes(): EnvelopeMeshes {
-  return { position: new FloatList(), normal: new FloatList(), alpha: new FloatList(), open: new FloatList(), closed: new FloatList(), foldK: new FloatList(), index: new IndexList() };
+  return { position: new FloatList(), normal: new FloatList(), alpha: new FloatList(), open: new FloatList(), closed: new FloatList(), foldK: new FloatList(), parentK: new FloatList(), index: new IndexList() };
 }
 
 export function clearEnvelopeMeshes(m: EnvelopeMeshes): void {
   for (const l of Object.values(m)) l.clear();
 }
 
+/** The parentK of a top-level group: above 1e8, the shaders read it as "never folded". */
+export const NO_PARENT = 1e9;
+
 /** Appends the envelope of a hull (world, relative to the local origin) padded by `pad`. */
-export function appendEnvelope(m: EnvelopeMeshes, hull: Vec2[], pad: number, colors: { open: Rgb; closed: Rgb }, maxChildK: number): void {
+export function appendEnvelope(m: EnvelopeMeshes, hull: Vec2[], pad: number, colors: { open: Rgb; closed: Rgb }, maxChildK: number, parentK = NO_PARENT): void {
   const poly = offsetPolygon(hull, pad);
   const normals = vertexNormals(poly);
   const c = centroid(poly);
@@ -37,6 +42,7 @@ export function appendEnvelope(m: EnvelopeMeshes, hull: Vec2[], pad: number, col
     m.open.push3(...colors.open);
     m.closed.push3(...colors.closed);
     m.foldK.push1(maxChildK);
+    m.parentK.push1(parentK);
   };
   vertex(c, 0, 0, 1);
   for (const q of poly) vertex(q, 0, 0, 1);

@@ -24,6 +24,7 @@ const GLYPH: AttributeSpec[] = [
 ];
 const ENVELOPE: AttributeSpec[] = [
   { name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aAlpha', size: 1 }, { name: 'aOpen', size: 3 }, { name: 'aClosed', size: 3 }, { name: 'aFoldK', size: 1 },
+  { name: 'aParentK', size: 1 },
 ];
 const BOX: AttributeSpec[] = [
   { name: 'aCenter', size: 2 }, { name: 'aHalf', size: 2 }, { name: 'aCorner', size: 2 }, { name: 'aParentK', size: 1 }, { name: 'aStyle', size: 1 }, { name: 'aBadge', size: 1 },
@@ -423,6 +424,8 @@ export class PlanRenderer {
     this.visibleSet = visible;
     this.hasFrame = true;
     for (const t of f.titles) this.titleSides.set(t.id, t.side);
+    // The hovered index belonged to the previous visible set (I1 of the review); hover() sets it again.
+    this.hot = -1;
     // Built on the first hover query: navigation does not wait for it.
     this.hits = null;
     this.hitInputs = { visible, frame: { centerlines: f.centerlines, stubs: f.stubs }, origin };
@@ -494,7 +497,7 @@ export class PlanRenderer {
       if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) continue;
       const s = stepScale(it.k, p), size = p.baseFontPx * s;
       const inParent = parentFold(i);
-      const dim = it.kind === 'phantom' ? 0.65 : 1;
+      const dim = it.kind === 'phantom' ? p.phantomTitleDim : 1;
       add({ text: it.title, size, wrap: (p.boxWidth - 2 * p.boxPadX) * s, lineHeight: size * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
         (zoom) => dim * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p)) * inParent(zoom));
     }
@@ -506,7 +509,7 @@ export class PlanRenderer {
       const inParent = parentFold(g);
       const openSize = p.baseFontPx * s * p.groupTitleOpenScale, closedSize = p.baseFontPx * s * p.groupTitleClosedScale;
       const [s0, s1] = p.groupTitleSwap;
-      add({ text: it.title, size: openSize, wrap: 0, lineHeight: openSize * p.lineHeight, x: it.x - o.x, y: top - o.y - openSize * 0.45, color: ink },
+      add({ text: it.title, size: openSize, wrap: 0, lineHeight: openSize * p.lineHeight, x: it.x - o.x, y: top - o.y - openSize * p.groupTitleOffset, color: ink },
         (zoom) => (1 - smooth(s0, s1, foldT(it.maxChildK!, zoom, p))) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleOpenScale) * inParent(zoom));
       add({ text: it.title, size: closedSize, wrap: p.boxWidth * s, lineHeight: closedSize * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
         (zoom) => smooth(s0, s1, foldT(it.maxChildK!, zoom, p)) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleClosedScale) * inParent(zoom));
@@ -514,7 +517,7 @@ export class PlanRenderer {
     for (const t of f.titles) {
       const size = p.titleFontPx * stepScale(t.kMax, p);
       const vc = visible.connections[t.conn];
-      add({ text: t.text, size, wrap: 0, lineHeight: size * 1.2, x: t.box.x + t.box.w / 2, y: t.box.y + t.box.h / 2, color: titleInk },
+      add({ text: t.text, size, wrap: 0, lineHeight: size * p.lineHeight, x: t.box.x + t.box.w / 2, y: t.box.y + t.box.h / 2, color: titleInk },
         (zoom) => {
           if (t.conn === this.hot) return 1;
           const readable = smooth(p.titleFade[0], p.titleFade[1], size * zoom);
@@ -562,7 +565,7 @@ export class PlanRenderer {
         const k = ks[i];
         if (k === undefined) { slot.update({ aPosition: new Float32Array(0), aCorner: new Float32Array(0) }, new Uint32Array(0)); return; }
         const rr = this.starRect!;
-        const list = starsInRect({ x: rr.minX, y: rr.minY, w: rr.maxX - rr.minX, h: rr.maxY - rr.minY }, k, 7, p);
+        const list = starsInRect({ x: rr.minX, y: rr.minY, w: rr.maxX - rr.minX, h: rr.maxY - rr.minY }, k, p.starSeed, p);
         const pos = new Float32Array(list.length * 8), corner = new Float32Array(list.length * 8), index = new Uint32Array(list.length * 6);
         list.forEach((st, j) => {
           const x = st.x - this.origin.x, y = st.y - this.origin.y;

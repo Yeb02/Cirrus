@@ -2,6 +2,7 @@ import type { RenderParams } from './params.ts';
 
 /** Smoothstep: 0 below a, 1 above b (the maquette's transitions). */
 export function smooth(a: number, b: number, v: number): number {
+  if (!(b > a)) return v >= a ? 1 : 0; // a degenerate interval is a step, never NaN
   const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
   return t * t * (3 - 2 * t);
 }

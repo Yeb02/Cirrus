@@ -35,7 +35,7 @@ export function packFrame(f: FrameGeometry, copy: boolean): PackedFrame {
     glyphIndex: v(g.index.view()),
     envelopes: {
       aPosition: v(e.position.view()), aNormal: v(e.normal.view()), aAlpha: v(e.alpha.view()), aOpen: v(e.open.view()), aClosed: v(e.closed.view()),
-      aFoldK: v(e.foldK.view()),
+      aFoldK: v(e.foldK.view()), aParentK: v(e.parentK.view()),
     },
     envelopeIndex: v(e.index.view()),
     centerlines: f.centerlines, markers: f.markers, titles: f.titles, stubs: f.stubs,

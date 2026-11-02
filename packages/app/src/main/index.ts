@@ -27,6 +27,7 @@ const launch = {
   hide: process.env.CIRRUS_BENCH_HIDE,
   keys: process.env.CIRRUS_KEYS,
   pointer: process.env.CIRRUS_POINTER,
+  click: process.env.CIRRUS_CLICK,
 };
 if (bench) app.commandLine.appendSwitch('force_high_performance_gpu');
 

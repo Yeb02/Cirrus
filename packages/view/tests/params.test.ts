@@ -47,3 +47,13 @@ test('un choix hors liste et un nombre non fini sont ignorés', () => {
   expect(p.groupHues).toEqual(DEFAULT_PARAMS.groupHues);
   expect(withOverrides({ background: 'grid', groupHues: [10, 20] })).toMatchObject({ background: 'grid', groupHues: [10, 20] });
 });
+
+test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
+  const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
+  const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;
+  expect(p.factor).toBe(spec('factor').min);
+  expect(p.widthMaxPx).toBe(spec('widthMaxPx').max);
+  expect(p.textFade[0]).toBeLessThan(p.textFade[1]); // an interval stays ordered
+  expect(p.starSpacingPx[0]).toBeGreaterThan(0);
+  expect(p.gridSpacingPx[0]).toBeLessThan(p.gridSpacingPx[1]);
+});

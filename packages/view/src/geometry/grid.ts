@@ -8,6 +8,8 @@ export function gridLevels(zoom: number, p: RenderParams): { spacingWorld: numbe
   const [lo, hi] = p.gridSpacingPx;
   const lf = Math.log(p.factor);
   const jLo = Math.ceil(Math.log(lo / zoom) / lf), jHi = Math.floor(Math.log(hi / zoom) / lf);
+  // Parameters outside their cards (factor 1, zero spacing): no grid rather than an endless loop (C1 of the review).
+  if (!Number.isFinite(jLo) || !Number.isFinite(jHi) || jHi - jLo > 64) return [];
   const out: { spacingWorld: number; alpha: number }[] = [];
   for (let j = jLo; j <= jHi; j++) {
     const spacingWorld = p.factor ** j;

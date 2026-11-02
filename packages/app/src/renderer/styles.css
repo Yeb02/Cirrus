@@ -22,7 +22,7 @@ button, input, select { font: inherit; color: var(--ink); }
 
 .app { display: flex; flex-direction: column; height: 100%; }
 .main { flex: 1; display: flex; min-height: 0; }
-.graph { flex: 1; position: relative; min-width: 0; outline: none; }
+.graph { flex: 1; position: relative; min-width: 0; outline: none; overflow: hidden; }
 .graph canvas { position: absolute; inset: 0; display: block; }
 .placeholder { position: absolute; left: 16px; top: 12px; color: var(--muted); }
 

@@ -52,6 +52,7 @@ export function GraphView(props: {
   /** A drag in progress: the moved items (top-most), the scene it started from, the world offset so far. */
   const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean } | null>(null);
   const intrudersRef = useRef(new Map<number, number>());
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const sessionRef = useRef(props.session);
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
@@ -104,6 +105,7 @@ export function GraphView(props: {
   // One PixiJS application for the window's lifetime.
   useEffect(() => {
     let cancelled = false, raf = 0;
+    let resizeObserver: ResizeObserver | null = null;
     const app = new Application();
     void (async () => {
       await app.init({
@@ -114,6 +116,9 @@ export function GraphView(props: {
       app.ticker.stop();
       // A resized canvas is cleared: draw again even if the CSS size (the camera's) did not change.
       app.renderer.on('resize', () => { dirty.current = true; });
+      // The host also resizes without the window (the settings panel opening): Pixi only listens to the window (C2).
+      resizeObserver = new ResizeObserver(() => { app.resize(); dirty.current = true; });
+      resizeObserver.observe(host.current!);
       host.current!.appendChild(app.canvas);
       Assets.setPreferences({ preferWorkers: false }); // no blob workers: the page's CSP forbids them
       await Assets.load(FONT_URL);
@@ -137,7 +142,13 @@ export function GraphView(props: {
           else if (t === 'key') feed({ t: 'key', key: xs });
         }
       };
+      // One exception must not stop the drawing for good (C1 of the plan 3 review): it is reported and the loop goes on.
       const loop = () => {
+        try { step(); } catch (err) { console.error('Erreur de rendu :', err); }
+        if (!stopped) raf = requestAnimationFrame(loop);
+      };
+      let stopped = false;
+      const step = () => {
         const e = engine.current;
         if (e && sceneRef.current) {
           const cam = e.renderer.camera;
@@ -157,7 +168,9 @@ export function GraphView(props: {
           }
           if (dirty.current) {
             dirty.current = false;
-            e.renderer.renderFrame();
+            const rebuilt = e.renderer.renderFrame();
+            // What is under a resting pointer changes with the drawn set (I1 of the review): look again.
+            if (rebuilt && lastPointer.current && !gestures.current.busy) hover(lastPointer.current.x, lastPointer.current.y);
             if (firstPending.current) {
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
@@ -170,7 +183,7 @@ export function GraphView(props: {
                 if (label) {
                   // The bench drives the camera itself; the regular loop stops.
                   const loadMs = performance.now();
-                  cancelAnimationFrame(raf);
+                  stopped = true;
                   void runBench(e.app, e.renderer, sceneRef.current, paramsRef.current, label, loadMs).then((run) => window.cirrus.benchDone(run));
                   return;
                 }
@@ -178,12 +191,12 @@ export function GraphView(props: {
             }
           }
         }
-        raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
     })();
     return () => {
       cancelled = true;
+      resizeObserver?.disconnect();
       cancelAnimationFrame(raf);
       engine.current?.renderer.destroy();
       engine.current?.app.destroy(true);
@@ -232,6 +245,7 @@ export function GraphView(props: {
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       nav({ t: 'wheel', sx: ev.clientX - r.left, sy: ev.clientY - r.top, deltaY: ev.deltaY, ctrl: ev.ctrlKey });
+      hover(ev.clientX - r.left, ev.clientY - r.top);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -410,6 +424,7 @@ export function GraphView(props: {
       }}
       onPointerMove={(ev) => {
         const { sx, sy } = local(ev);
+        lastPointer.current = { x: sx, y: sy };
         if (!gestures.current.busy) hover(sx, sy);
         feed({ t: 'move', sx, sy });
       }}
@@ -418,7 +433,7 @@ export function GraphView(props: {
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
-      onPointerLeave={() => { if (!gestures.current.busy) clearHover(); }}
+      onPointerLeave={() => { lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
         if (ev.key === 'Escape') { feed({ t: 'key', key: 'Escape' }); return; }
         if (!NAV_KEYS.has(ev.key)) return;

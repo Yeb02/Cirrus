@@ -157,7 +157,7 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     else shown.set(b.connection, [b.node]);
   }
   const connections = sceneConnections(s, plan, items, byId, phantoms, shown);
-  markBadges(s, items, byId, phantoms, shown);
+  markBadges(s, items, byId, phantoms, shown, new Set(connections.map((c) => c.id)));
   return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
 }
 
@@ -245,8 +245,8 @@ function sceneConnections(
   return out;
 }
 
-/** A placed node is badged when one of its knowledge connections shows no branch to it here (and no split arm). */
-function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>): void {
+/** A placed node is badged when one of its knowledge connections is not seen here: no branch to it, or masked (spec 11.3). */
+function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>, drawn: Set<Id>): void {
   const split = new Map<Id, Id[]>();
   for (const ph of phantoms) if (ph.of.kind === 'center') split.set(ph.connection, [...(split.get(ph.connection) ?? []), ph.of.node]);
   for (const c of s.connections.values()) {
@@ -255,7 +255,8 @@ function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantom
     for (const m of c.members) {
       const i = byId.get(m.node);
       if (i === undefined || items[i].kind === 'phantom' || items[i].badge) continue;
-      if (!here?.includes(m.node) && !splitHere?.includes(m.node)) items[i].badge = true;
+      // No branch here, or a connection masked here (fewer than two nodes shown): it exists but is not seen.
+      if ((!here?.includes(m.node) || !drawn.has(c.id)) && !splitHere?.includes(m.node)) items[i].badge = true;
     }
   }
 }

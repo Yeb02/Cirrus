@@ -3,7 +3,7 @@ import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { groupPalette } from './color.ts';
 import { type BundleEnd, type BundleGeometry, bundleGeometry } from './geometry/bundle.ts';
-import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes } from './geometry/envelope.ts';
+import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes, NO_PARENT } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
 import { appendBundle, clearConnectionMeshes, type ConnectionMeshes, newConnectionMeshes } from './geometry/ribbon.ts';
 import { foldT, stepScale } from './lod.ts';
@@ -61,7 +61,7 @@ export function buildFrame(
   // Envelopes, parents first so nested levels are drawn on top.
   for (const g of visible.groups) {
     const it = items[g];
-    appendEnvelope(envelopes, it.hull!.map(rel), it.pad!, groupColors(scene, g, p), it.maxChildK!);
+    appendEnvelope(envelopes, it.hull!.map(rel), it.pad!, groupColors(scene, g, p), it.maxChildK!, it.parent >= 0 ? items[it.parent].maxChildK! : NO_PARENT);
   }
 
   const padded = new Map<number, Vec2[]>();
@@ -129,7 +129,7 @@ function placeTitles(
   }
   for (const g of visible.groups) {
     const it = items[g];
-    if (foldT(it.maxChildK!, cam.zoom, p) < 0.5) continue;
+    if (foldT(it.maxChildK!, cam.zoom, p) < p.foldClickable) continue;
     const poly = offsetPolygon(it.hull!, it.pad!).map(rel);
     const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
     obstacles.push({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) });
@@ -149,7 +149,7 @@ function placeTitles(
     const size = p.titleFontPx * stepScale(m.kMax, p);
     // Unreadable until the next rebuild even at the deepest zoom it serves: skip (spec 8.2).
     if (size * cam.zoom * p.curveZoomHeadroom < p.titleFade[0]) continue;
-    const w = 0.52 * size * text.length, h = size * 1.3, gap = p.titleGap * stepScale(m.kMax, p);
+    const w = p.titleCharWidth * size * text.length, h = size * p.titleBoxHeight, gap = p.titleGap * stepScale(m.kMax, p);
     const reach = w + gap * 4 + h;
     const near = (x0: number, y0: number, x1: number, y1: number) => [x0 - reach, y0 - reach, x1 + reach, y1 + reach] as const;
     const [qx0, qy0, qx1, qy1] = near(m.pos.x, m.pos.y, m.pos.x, m.pos.y);
