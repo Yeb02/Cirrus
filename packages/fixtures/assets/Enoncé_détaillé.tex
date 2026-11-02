@@ -1,0 +1,13 @@
+\section{Énoncé détaillé}\label{mdl:enonce}
+
+Soit $D$ un jeu de données et $\mathcal{M}$ une classe de modèles génératifs.
+Le principe de longueur de description minimale retient le modèle
+\[
+  \hat{M} = \operatorname*{arg\,min}_{M \in \mathcal{M}} \bigl( L(M) + L(D \mid M) \bigr),
+\]
+où $L(M)$ est la longueur, en bits, de la description du modèle et
+$L(D \mid M)$ celle des données encodées à l'aide du modèle.
+
+Le meilleur modèle est donc celui qui compresse le plus les données,
+description du modèle comprise : un modèle trop riche paie sa propre
+description, un modèle trop pauvre paie le résidu.
