@@ -1,0 +1,2 @@
+# Fixture files are hashed and the PDF has byte offsets: keep them byte for byte on every checkout.
+packages/fixtures/assets/** -text
