@@ -19,3 +19,4 @@ export * from './edit.ts';
 export * from './gestures.ts';
 export * from './selection.ts';
 export * from './menus.ts';
+export * from './connect.ts';

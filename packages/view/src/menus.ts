@@ -2,6 +2,7 @@ import { placementKey, type State } from '@cirrus/core';
 import type { Hit } from './hit.ts';
 import type { PlanScene } from './scene.ts';
 import type { Selection } from './selection.ts';
+import type { VisibleSet } from './visibility.ts';
 
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
@@ -32,13 +33,22 @@ const LABELS: Record<MenuAction, string> = {
 /**
  * The context menu of what is under the cursor (spec 9.1, 8.5, 11.3): a right click on an element of a selection of
  * several opens the selection menu (copy, hide, − and +); a phantom offers to teleport to its original and to join
- * the arm back; a stub, to import its node; the background, to create a node or paste.
+ * the arm back; a stub, to import its node; the background, to create a node or paste. On a connection: split the
+ * branch clicked if it leads to a node placed here, join the arm back on its far side; a line standing for several
+ * connections (a closed group) has no menu.
  */
-export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, canPaste: boolean): MenuItem[] {
+export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, canPaste: boolean, visible?: VisibleSet | null): MenuItem[] {
   const make = (actions: MenuAction[]) => actions.map((action) => ({ action, label: LABELS[action] }));
   if (hit.kind === 'background') return make(canPaste ? ['newNode', 'paste'] : ['newNode']);
   if (hit.kind === 'stub') return make(['importNode']);
-  if (hit.kind === 'connection') return make(['splitArm', 'layout', 'deleteConnection']);
+  if (hit.kind === 'connection') {
+    const vc = visible?.connections[hit.conn];
+    if (!vc || vc.conns.length > 1) return [];
+    const sc = scene.connections[vc.conns[0]];
+    if (sc.part === 'far') return make(['joinArm', 'deleteConnection']);
+    const placed = sc.ends.some((e) => e.key === hit.key && !e.dashed && scene.items[e.item].kind !== 'phantom');
+    return make(placed ? ['splitArm', 'layout', 'deleteConnection'] : ['layout', 'deleteConnection']);
+  }
   const it = scene.items[hit.item];
   if (it.kind === 'phantom') return make(it.phantom === 'absent' ? ['importNode'] : ['teleport', 'joinArm']);
   if (sel.items.has(it.id) && sel.items.size > 1) return make(['copy', 'hide', 'scaleDown', 'scaleUp', 'delete']);

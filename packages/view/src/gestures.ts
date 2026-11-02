@@ -15,7 +15,7 @@ export type Input =
 export type Mode = 'place' | 'connect' | 'exclude' | 'paste' | 'split';
 
 export type Intent =
-  | { t: 'click'; hit: Hit; ctrl: boolean; shift: boolean }
+  | { t: 'click'; hit: Hit; ctrl: boolean; shift: boolean; sx: number; sy: number }
   | { t: 'context'; hit: Hit; sx: number; sy: number }
   | { t: 'pan'; dxPx: number; dyPx: number }
   | { t: 'dragStart'; hit: Hit; alt: boolean }
@@ -97,7 +97,8 @@ export class GestureMachine {
         if (st.s === 'pressed') {
           if (Math.hypot(input.sx - st.x, input.sy - st.y) <= this.p.clickSlopPx) return [];
           if (st.button === 2) { this.st = { s: 'swallow' }; return []; }
-          if (st.button === 1 || (st.hit.kind !== 'item' && !st.ctrl)) {
+          // A stub is dragged like an element: it gets a place of its own (spec 8.5).
+          if (st.button === 1 || (st.hit.kind !== 'item' && st.hit.kind !== 'stub' && !st.ctrl)) {
             this.st = { s: 'pan', x: input.sx, y: input.sy };
             return [{ t: 'pan', dxPx: input.sx - st.x, dyPx: input.sy - st.y }];
           }
@@ -123,7 +124,7 @@ export class GestureMachine {
       case 'up': {
         this.st = { s: 'idle' };
         if (st.s === 'pressed') {
-          if (st.button === 0) return [{ t: 'click', hit: st.hit, ctrl: st.ctrl, shift: st.shift }];
+          if (st.button === 0) return [{ t: 'click', hit: st.hit, ctrl: st.ctrl, shift: st.shift, sx: st.x, sy: st.y }];
           if (st.button === 2) return [{ t: 'context', hit: st.hit, sx: st.x, sy: st.y }];
           return [];
         }

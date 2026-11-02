@@ -36,7 +36,6 @@ test('élément d’une sélection de plusieurs : le menu de sélection (spec 9.
 test('fantôme, amorce, connexion, fond', () => {
   expect(actions(menuFor(s, sc, item(sc, ids.phantoms.node), emptySelection(), false))).toEqual(['teleport', 'joinArm']);
   expect(actions(menuFor(s, these, { kind: 'stub', conn: 0, stub: 0 }, emptySelection(), false))).toEqual(['importNode']);
-  expect(actions(menuFor(s, sc, { kind: 'connection', conn: 0 }, emptySelection(), false))).toEqual(['splitArm', 'layout', 'deleteConnection']);
   expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode']);
   expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste']);
 });

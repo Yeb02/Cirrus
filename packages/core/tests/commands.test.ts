@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, include, joinArm, movePhantom,
-  placeNode, removeFromPlan, removeMember, restoreNode, setLayout, splitArm,
+  type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editConnection, editNode, include, joinArm,
+  movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, restoreNode, setBranches, setLayout, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
@@ -120,6 +120,45 @@ test('scinder un bras crée deux fantômes et retire la branche ; réunir rétab
   run(s, joinArm(s, p1, c, b));
   expect(s.phantoms.size).toBe(0);
   expect(s.branches.has(branchKey({ plan: p1, connection: c, node: b }))).toBe(true);
+});
+
+test('éditer une connexion change son titre et sa relation, rien d’autre', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A'), b = mk('B');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, editConnection(s, c, { title: 'Implique', relation: 'A \\Rightarrow B' }));
+  expect(s.connections.get(c)).toMatchObject({ title: 'Implique', relation: 'A \\Rightarrow B', members: [{ node: a }, { node: b }] });
+  expect(() => editConnection(s, 'inconnue', { title: 'x' })).toThrow(CommandError);
+});
+
+test('montrer une connexion dans d’autres plans ajoute ses branches ; les ôter d’un plan ôte aussi les fantômes du bras', () => {
+  const { s, p1, p2, mk } = world();
+  const a = mk('A'), b = mk('B'), x = mk('X');
+  for (const n of [a, b]) run(s, placeNode(s, p2, n, 0, 0, 0));
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, setBranches(s, c, [{ plan: p2, node: a }, { plan: p2, node: b }], true));
+  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
+  expect(() => setBranches(s, c, [{ plan: p2, node: x }], true)).toThrow(/membre/);
+  run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
+  run(s, setBranches(s, c, [{ plan: p1, node: b }], false));
+  expect([...s.phantoms.values()].filter((ph) => ph.plan === p1)).toHaveLength(0);
+  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
+  expect(s.connections.get(c)!.members).toHaveLength(2); // still a member, elsewhere
+});
+
+test('une amorce posée devient un fantôme « absent » ; importer le nœud l’efface', () => {
+  const { s, p1, p2, mk } = world();
+  const a = mk('A'), x = mk('X'), b = mk('B', p2);
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: x, role: 'target' }] })), 'connection');
+  run(s, setBranches(s, c, [], true)); // nothing to do is not an error
+  run(s, addMember(s, p1, c, { node: b, role: 'target' }));
+  run(s, placeAbsent(s, p1, c, b, 300, 40, 1));
+  const ph = [...s.phantoms.values()].find((x) => x.plan === p1)!;
+  expect(ph).toMatchObject({ connection: c, of: { kind: 'absent', node: b }, x: 300, y: 40, k: 1 });
+  expect(() => placeAbsent(s, p1, c, a, 0, 0, 0)).toThrow(/déjà dans ce plan/);
+  expect(() => placeAbsent(s, p1, c, b, 0, 0, 0)).toThrow(/déjà/);
+  run(s, placeNode(s, p1, b, 300, 40, 1));
+  expect(s.phantoms.has(ph.id)).toBe(false);
 });
 
 test('retirer un membre supprime les fantômes de son bras scindé', () => {

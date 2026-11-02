@@ -90,6 +90,8 @@ export interface RenderParams {
   fitMarginPx: number;
   settingsSaveDelayMs: number;
   toastMs: number;
+  /** The answer a « partout ou ici seulement » dialog proposes first (spec 19). */
+  defaultAnswer: 'here' | 'everywhere';
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -194,6 +196,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   fitMarginPx: 60,
   settingsSaveDelayMs: 300,
   toastMs: 4000,
+  defaultAnswer: 'here',
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -317,6 +320,10 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('fitMarginPx', 'Marge du cadrage (px)', A, 'Vue', 0, 300, 5),
   num('settingsSaveDelayMs', 'Délai avant d’enregistrer les réglages (ms)', A, 'Vue', 0, 5000, 50),
   num('toastMs', 'Durée d’affichage des notifications (ms)', A, 'Vue', 500, 20000, 100),
+  {
+    key: 'defaultAnswer', label: 'Réponse proposée par les dialogues « partout ou ici seulement »', section: A, group: 'Dialogues', kind: 'choice',
+    choices: [{ value: 'here', label: 'Ici seulement' }, { value: 'everywhere', label: 'Partout' }],
+  },
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

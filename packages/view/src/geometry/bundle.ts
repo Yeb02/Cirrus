@@ -20,8 +20,8 @@ export interface BundleEnd {
 
 export interface BundleInput {
   ends: BundleEnd[];
-  /** Absent members without a phantom (spec 11.3). */
-  stubs: { role: Role }[];
+  /** Absent members without a phantom (spec 11.3); key: the member. */
+  stubs: { role: Role; key?: Id }[];
   /** 'far' part of a split arm: the fixed centre phantom. */
   centre?: Vec2;
   layout?: Pick<ConnectionLayout, 'marker' | 'angle' | 'handles'>;
@@ -41,6 +41,8 @@ export interface Branch {
   hollow: boolean;
   dashed: boolean;
   stub: boolean;
+  /** The member this branch leads to (hit testing: which arm a click is on). */
+  key: Id | null;
 }
 
 export interface BundleGeometry { marker: Vec2; u: Vec2; kMax: number; trunk: [Vec2, Vec2] | null; branches: Branch[]; multi: boolean }
@@ -104,8 +106,8 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
   const handles = input.layout?.handles ?? {};
   const off = (key: Id) => handles[key] ?? { b1: { x: 0, y: 0 }, b2: { x: 0, y: 0 } };
   const branches: Branch[] = [];
-  const base = (e: { role: Role; k: number; hollow: boolean; dashed: boolean }, stub: boolean) =>
-    ({ role: pairNeu ? 'associate' as Role : e.role, kNode: e.k, kMarker: kMax, hollow: e.hollow, dashed: e.dashed, stub });
+  const base = (e: { role: Role; k: number; hollow: boolean; dashed: boolean }, stub: boolean, key: Id | null) =>
+    ({ role: pairNeu ? 'associate' as Role : e.role, kNode: e.k, kMarker: kMax, hollow: e.hollow, dashed: e.dashed, stub, key });
 
   const incoming = (a: Vec2, o: { b1: Vec2; b2: Vec2 }, extra: ReturnType<typeof base>) => {
     const t = p.trunkTension * len(sub(A, a));
@@ -127,9 +129,9 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
     branches.push({ p0: a, b1: add(add(a, mul(norm(sub(M, a), mul(n, -1)), t * 0.6)), o.b1), b2: add(add(M, mul(n, t)), o.b2), p3: M, nodeEnd: 'p0', ...extra });
   };
 
-  for (const e of S) incoming(anchor(e, A, p), off(e.key), base(e, false));
-  for (const e of T) outgoing(anchor(e, B, p), off(e.key), base(e, false));
-  for (const e of N) sideways(anchor(e, M, p), e.pos, off(e.key), base(e, false));
+  for (const e of S) incoming(anchor(e, A, p), off(e.key), base(e, false, e.key));
+  for (const e of T) outgoing(anchor(e, B, p), off(e.key), base(e, false, e.key));
+  for (const e of N) sideways(anchor(e, M, p), e.pos, off(e.key), base(e, false, e.key));
 
   // Absent members: a dashed stub of stubLength, fanned out by stubAngle (+a, −a, +2a, …).
   const L = p.stubLength * sc, none = { b1: { x: 0, y: 0 }, b2: { x: 0, y: 0 } };
@@ -137,7 +139,7 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
   for (const st of stubs) {
     const i = count[st.role]++;
     const ang = p.stubAngle * Math.ceil((i + 1) / 2) * (i % 2 === 0 ? 1 : -1);
-    const extra = base({ role: st.role, k: kMax, hollow: false, dashed: true }, true);
+    const extra = base({ role: st.role, k: kMax, hollow: false, dashed: true }, true, st.key ?? null);
     if (st.role === 'source') incoming(add(A, mul(rot(mul(u, -1), ang), L)), none, extra);
     else if (st.role === 'target') outgoing(add(B, mul(rot(u, ang), L)), none, extra);
     else {

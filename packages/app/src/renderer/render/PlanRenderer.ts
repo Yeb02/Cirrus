@@ -53,7 +53,7 @@ export class PlanRenderer {
   private worker: Worker | null = null;
   private seq = 0;
   private pending: { seq: number; origin: Vec2 } | null = null;
-  private hitInputs: { visible: VisibleSet; frame: Pick<PackedFrame, 'centerlines' | 'stubs'>; origin: Vec2 } | null = null;
+  private hitInputs: { visible: VisibleSet; frame: Pick<PackedFrame, 'centerlines' | 'stubs' | 'markers'>; origin: Vec2 } | null = null;
   private hasFrame = false;
   private originMoved = false;
   private p: RenderParams;
@@ -87,6 +87,8 @@ export class PlanRenderer {
   private selection: Selection = emptySelection();
   private dropTarget: number | null = null;
   private intruderItems: number[] = [];
+  private markers: PackedFrame['markers'] = [];
+  private allCores = false;
   private textZoom = -1;
   private stale = true;
 
@@ -206,6 +208,13 @@ export class PlanRenderer {
     if (item === this.dropTarget) return;
     this.dropTarget = item;
     this.slots.drop.update(...this.outlineArrays(item === null ? [] : [item]));
+  }
+
+  /** While a connection is drawn, 1-to-1 connections show their centre too: a target (spec 11.1). */
+  setCoresShown(on: boolean): void {
+    if (on === this.allCores) return;
+    this.allCores = on;
+    this.updateMarkers({ markers: this.markers });
   }
 
   /** Items an envelope covers without being its members (spec 10), with an orange ring. */
@@ -428,7 +437,7 @@ export class PlanRenderer {
     this.hot = -1;
     // Built on the first hover query: navigation does not wait for it.
     this.hits = null;
-    this.hitInputs = { visible, frame: { centerlines: f.centerlines, stubs: f.stubs }, origin };
+    this.hitInputs = { visible, frame: { centerlines: f.centerlines, stubs: f.stubs, markers: f.markers }, origin };
     this.slots.ribbon.update(f.ribbons, f.ribbonIndex);
     this.slots.glyph.update(f.glyphs, f.glyphIndex);
     this.slots.envelope.update(f.envelopes, f.envelopeIndex);
@@ -464,7 +473,8 @@ export class PlanRenderer {
   }
 
   private updateMarkers(f: Pick<PackedFrame, 'markers'>): void {
-    const multi = f.markers.filter((m) => m.multi);
+    this.markers = f.markers;
+    const multi = f.markers.filter((m) => m.multi || this.allCores);
     const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), index = new IndexList();
     multi.forEach((m, j) => {
       for (let c = 0; c < 4; c++) {

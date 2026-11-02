@@ -124,13 +124,14 @@ export function moveNodes(s: State, plan: Id, moves: { node: Id; x?: number; y?:
   return d.finish(moves.length === 1 ? 'Déplacer un nœud' : `Déplacer ${moves.length} nœuds`);
 }
 
-/** Adds an existing node to a plan (paste, add to the lobby). */
+/** Adds an existing node to a plan (paste, add to the lobby, import from a stub); it replaces its absent phantoms there. */
 export function placeNode(s: State, plan: Id, node: Id, x: number, y: number, k: number): Action {
   planOf(s, plan);
   const n = liveNodeOf(s, node);
   if (s.placements.has(placementKey(plan, node))) throw new CommandError('Ce nœud est déjà dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, { plan, node, x, y, k });
+  for (const ph of [...d.s.phantoms.values()]) if (ph.plan === plan && ph.of.kind === 'absent' && ph.of.node === node) d.phantom(ph.id, null);
   return d.finish(`Placer « ${n.title} »`);
 }
 
@@ -223,6 +224,43 @@ export function removeMember(s: State, connection: Id, node: Id): Action {
   if (members.length < 2) d.trashConnection(c, members);
   else d.connection(connection, { ...c, members });
   return d.finish('Retirer un nœud de la connexion');
+}
+
+export function editConnection(s: State, id: Id, patch: Partial<Pick<ConnectionRec, 'title' | 'relation' | 'tags'>>): Action {
+  const c = connectionOf(s, id);
+  const d = new Draft(s);
+  d.connection(id, { ...c, ...patch, tags: patch.tags ? normalizeTags(s, patch.tags) : c.tags });
+  return d.finish('Modifier une connexion');
+}
+
+/**
+ * Shows or hides members of a connection in given plans (spec 11.1, 11.2: « partout » or « ici seulement »); the
+ * membership itself does not change. Hiding a branch takes the phantoms of that member's arm in that plan with it.
+ */
+export function setBranches(s: State, connection: Id, branches: { plan: Id; node: Id }[], present: boolean): Action {
+  const c = connectionOf(s, connection);
+  const d = new Draft(s);
+  for (const b of branches) {
+    planOf(s, b.plan);
+    if (!c.members.some((m) => m.node === b.node)) throw new CommandError('Ce nœud n’est pas membre de la connexion.');
+    d.branch(b.plan, connection, b.node, present);
+    if (!present) for (const ph of [...d.s.phantoms.values()]) if (ph.plan === b.plan && ph.connection === connection && ph.of.node === b.node) d.phantom(ph.id, null);
+  }
+  return d.finish(present ? 'Montrer la connexion' : 'Ôter de ce plan');
+}
+
+/** A stub moved by hand (spec 8.5, 11.3): the absent member gets a phantom where it was put down. */
+export function placeAbsent(s: State, plan: Id, connection: Id, node: Id, x: number, y: number, k: number): Action {
+  connectionOf(s, connection);
+  if (!s.branches.has(branchKey({ plan, connection, node }))) throw new CommandError('Cette branche n’est pas affichée dans ce plan.');
+  if (s.placements.has(placementKey(plan, node))) throw new CommandError('Ce nœud est déjà dans ce plan.');
+  if ([...s.phantoms.values()].some((p) => p.plan === plan && p.connection === connection && p.of.kind === 'absent' && p.of.node === node)) {
+    throw new CommandError('Cette amorce a déjà sa place.');
+  }
+  const d = new Draft(s);
+  const id = uuidv7();
+  d.phantom(id, { id, plan, connection, of: { kind: 'absent', node }, x, y, k });
+  return d.finish('Déplacer une amorce');
 }
 
 export function setRole(s: State, connection: Id, node: Id, role: Role): Action {

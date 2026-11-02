@@ -1,4 +1,4 @@
-import type { Vec2 } from '@cirrus/core';
+import type { Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { FrameGeometry } from './frame.ts';
 import { offsetPolygon } from './geometry/hull.ts';
@@ -9,8 +9,8 @@ import type { VisibleSet } from './visibility.ts';
 
 export type Hit =
   | { kind: 'item'; item: number }
-  /** conn: visible connection index. */
-  | { kind: 'connection'; conn: number }
+  /** conn: visible connection index; key: the member whose branch is under the point (null: the trunk). */
+  | { kind: 'connection'; conn: number; key: Id | null }
   | { kind: 'stub'; conn: number; stub: number }
   | { kind: 'background' };
 
@@ -19,6 +19,8 @@ export interface HitIndex {
   hit(wx: number, wy: number, zoom: number): Hit;
   /** Open groups whose envelope contains the point, deepest first (the hierarchy reminder, spec 8.4). */
   openGroupsAt(wx: number, wy: number, zoom: number): number[];
+  /** The visible connection whose core (marker, or centre of a 1-to-1 curve) is under the point (spec 11.1), or null. */
+  markerAt(wx: number, wy: number, zoom: number): number | null;
 }
 
 function inPolygon(poly: Vec2[], x: number, y: number): boolean {
@@ -37,7 +39,9 @@ function segmentDistance(px: number, py: number, a: Vec2, b: Vec2): number {
 }
 
 /** Built at each rebuild from what is drawn; queries take the current zoom, since groups fold between rebuilds. */
-export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick<FrameGeometry, 'centerlines' | 'stubs'>, origin: Vec2, p: RenderParams): HitIndex {
+export function buildHitIndex(
+  scene: PlanScene, visible: VisibleSet, frame: Pick<FrameGeometry, 'centerlines' | 'stubs' | 'markers'>, origin: Vec2, p: RenderParams,
+): HitIndex {
   const items = scene.items;
   const abs = (q: Vec2): Vec2 => ({ x: q.x + origin.x, y: q.y + origin.y });
 
@@ -56,14 +60,15 @@ export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick
     }
     groupTree.finish();
   }
-  const segs: { conn: number; a: Vec2; b: Vec2 }[] = [];
-  for (const c of frame.centerlines) for (let i = 0; i < c.points.length - 1; i++) segs.push({ conn: c.conn, a: abs(c.points[i]), b: abs(c.points[i + 1]) });
+  const segs: { conn: number; key: Id | null; a: Vec2; b: Vec2 }[] = [];
+  for (const c of frame.centerlines) for (let i = 0; i < c.points.length - 1; i++) segs.push({ conn: c.conn, key: c.key, a: abs(c.points[i]), b: abs(c.points[i + 1]) });
   const segTree = segs.length > 0 ? new Flatbush(segs.length) : null;
   if (segTree) {
     for (const s of segs) segTree.add(Math.min(s.a.x, s.b.x), Math.min(s.a.y, s.b.y), Math.max(s.a.x, s.b.x), Math.max(s.a.y, s.b.y));
     segTree.finish();
   }
   const stubs = frame.stubs.map((s) => ({ ...s, pos: abs(s.pos) }));
+  const markers = frame.markers.map((m) => ({ conn: m.conn, pos: abs(m.pos) }));
 
   const folded = (g: number, zoom: number) => foldT(items[g].maxChildK!, zoom, p) >= p.foldClickable;
   /** Not inside a group that is more than half closed. */
@@ -91,7 +96,7 @@ export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick
           const d = segmentDistance(wx, wy, segs[j].a, segs[j].b);
           if (d <= bestD) { bestD = d; best = j; }
         }
-        if (best >= 0) return { kind: 'connection', conn: segs[best].conn };
+        if (best >= 0) return { kind: 'connection', conn: segs[best].conn, key: segs[best].key };
       }
       return { kind: 'background' };
     },
@@ -99,6 +104,12 @@ export function buildHitIndex(scene: PlanScene, visible: VisibleSet, frame: Pick
       return groupsAt(wx, wy)
         .filter((g) => !folded(g, zoom) && reachable(g, zoom))
         .sort((a, b) => items[b].depth - items[a].depth);
+    },
+    markerAt(wx, wy, zoom) {
+      // Markers keep their on-screen size: the reach is in pixels.
+      let best: number | null = null, bestD = (p.markerRadiusPx + p.hitTolerancePx) / zoom;
+      for (const m of markers) { const d = Math.hypot(m.pos.x - wx, m.pos.y - wy); if (d <= bestD) { bestD = d; best = m.conn; } }
+      return best;
     },
   };
 }

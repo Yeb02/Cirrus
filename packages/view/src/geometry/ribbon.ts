@@ -1,4 +1,4 @@
-import type { Vec2 } from '@cirrus/core';
+import type { Id, Vec2 } from '@cirrus/core';
 import type { RenderParams } from '../params.ts';
 import { FloatList, IndexList } from './arrays.ts';
 import type { Branch, BundleGeometry } from './bundle.ts';
@@ -80,14 +80,14 @@ const MODE = { none: 0, slide: 1, out: 2 } as const;
 
 /**
  * Appends one bundle: ribbons (trunk + branches) and glyphs (arrows, dots, hollow insides). Returns each line's
- * centerline in the open state, for hit testing and title placement. `closed` is the same bundle with the fading level
+ * centerline in the open state with the member it leads to (null: the trunk), for hit testing and title placement. `closed` is the same bundle with the fading level
  * closed: same branches in the same order, sampled with the same counts, so vertex i of one matches vertex i of the other.
  */
-export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: BundleGeometry | null, o: AppendOptions, p: RenderParams): Vec2[][] {
+export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: BundleGeometry | null, o: AppendOptions, p: RenderParams): { points: Vec2[]; key: Id | null }[] {
   const kTop = Math.max(open.kMax, closed?.kMax ?? -Infinity);
   if (Math.min(1, (p.widthBasePx * p.factor ** kTop * o.pxPerUnit) / p.widthMinPx) < p.ribbonCullAlpha) return [];
   const mode = MODE[o.fade], foldK = Number.isFinite(o.foldK) ? o.foldK : 0;
-  const lines: Vec2[][] = [];
+  const lines: { points: Vec2[]; key: Id | null }[] = [];
   const r = m.ribbons, g = m.glyphs;
 
   const ribbon = (P: Vec2[], Q: Vec2[], scales: number[], dists: number[]) => {
@@ -158,7 +158,7 @@ export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: 
   if (open.trunk) {
     const t2 = closed?.trunk ?? open.trunk, s = p.factor ** open.kMax;
     ribbon([open.trunk[0], open.trunk[1]], [t2[0], t2[1]], [s, s], [-1, -1]);
-    lines.push([open.trunk[0], open.trunk[1]]);
+    lines.push({ points: [open.trunk[0], open.trunk[1]], key: null });
   }
   open.branches.forEach((a, i) => {
     const b = closed?.branches[i] ?? a;
@@ -178,7 +178,7 @@ export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: 
       return acc;
     });
     ribbon(P, Q, scales, dists);
-    lines.push(P);
+    lines.push({ points: P, key: a.key });
 
     // Glyph at the node end, with the local width there.
     const sNode = p.factor ** a.kNode;

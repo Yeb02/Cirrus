@@ -1,7 +1,8 @@
 import {
-  type Action, combine, createNode, editNode, exclude, type Id, include, moveNodes, movePhantom, removeFromPlan, type State, type Vec2,
+  type Action, addMember, combine, connect, type ConnectionRec, createNode, editConnection, editNode, exclude, type Id, include, joinArm, moveNodes,
+  movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
-import { dropEffects, dropTarget, type PlanScene, type RenderParams, scaleMoves } from '@cirrus/view';
+import { type ConnectTarget, dropEffects, dropTarget, type PlanScene, type RenderParams, scaleMoves } from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -65,6 +66,15 @@ export function hideBuild(scene: PlanScene, ids: Id[]): Build {
   return (st) => combine(st, nodes.length === 1 ? 'Cacher dans ce plan' : `Cacher ${nodes.length} éléments dans ce plan`, nodes.map((n) => (x: State) => removeFromPlan(x, plan, n)));
 }
 
+/** The step whose text reads at the base size at this zoom (a node created or brought in from elsewhere). */
+export const readableStep = (zoom: number, p: RenderParams): number => Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor));
+
+/** The group whose envelope receives a node put down at `at`, if any (spec 10). */
+const groupAt = (scene: PlanScene, at: Vec2, zoom: number, p: RenderParams): Id | null => {
+  const target = dropTarget(scene, at, [], zoom, p);
+  return target !== null && scene.items[target].kind === 'group' ? scene.items[target].id : null;
+};
+
 /**
  * A new node placed at `at` (spec 12), at the step whose text reads at the base size at this zoom; dropped inside an
  * envelope, it enters that group like any free node (spec 10).
@@ -72,16 +82,91 @@ export function hideBuild(scene: PlanScene, ids: Id[]): Build {
 export function createBuild(scene: PlanScene, title: string, at: Vec2, zoom: number, p: RenderParams): Build {
   const name = title.trim();
   if (!name) return null;
-  const k = Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor));
-  const target = dropTarget(scene, at, [], zoom, p);
+  const k = readableStep(zoom, p);
+  const group = groupAt(scene, at, zoom, p);
   const plan = scene.plan.id;
   return (st) => {
     let id = '';
     return combine(st, `Créer « ${name} »`, [
       (x) => { const a = createNode(x, { plan, title: name, x: at.x, y: at.y, k }); id = (a.ops[0] as { after: { id: Id } }).after.id; return a; },
-      ...(target !== null && scene.items[target].kind === 'group' ? [(x: State) => include(x, plan, id, scene.items[target].id)] : []),
+      ...(group !== null ? [(x: State) => include(x, plan, id, group)] : []),
     ]);
   };
+}
+
+/** The id of the connection an action creates. */
+const createdConnection = (a: Action): Id => (a.ops.find((o) => o.t === 'connection' && o.before === null) as { after: ConnectionRec }).after.id;
+/** The branches of these members in these plans. */
+const branchesIn = (plans: Id[], nodes: Id[]) => plans.flatMap((plan) => nodes.map((node) => ({ plan, node })));
+
+/**
+ * A connection drawn from a node (spec 11.1): to another node, a new connection leaving `from`; to the core of a
+ * connection, `from` joins it as a source. `everywhere`: the other plans where it is shown too (« partout »).
+ */
+export function connectBuild(scene: PlanScene, from: number, target: ConnectTarget, everywhere: Id[]): Build {
+  const plan = scene.plan.id, source = scene.items[from].node;
+  if (target.kind === 'connection') return addMemberBuild(plan, scene.connections[target.conn].id, source, everywhere, 'source');
+  const to = scene.items[target.item].node;
+  return (st) => {
+    let id = '';
+    return combine(st, 'Créer une connexion', [
+      (x) => { const a = connect(x, { plan, members: [{ node: source, role: 'source' }, { node: to, role: 'target' }] }); id = createdConnection(a); return a; },
+      ...(everywhere.length > 0 ? [(x: State) => setBranches(x, id, branchesIn(everywhere, [source, to]), true)] : []),
+    ]);
+  };
+}
+
+/** A member added to a connection (spec 11.2), here and in `everywhere`; a node absent from a plan shows there as a stub. */
+export function addMemberBuild(plan: Id, connection: Id, node: Id, everywhere: Id[], role: Role = 'target'): Build {
+  return (st) => combine(st, 'Ajouter un nœud à la connexion', [
+    (x) => addMember(x, plan, connection, { node, role }),
+    ...(everywhere.length > 0 ? [(x: State) => setBranches(x, connection, branchesIn(everywhere, [node]), true)] : []),
+  ]);
+}
+
+/** « Ici seulement »: the member is no longer shown in this plan; « partout »: it leaves the connection (spec 11.2). */
+export function removeMemberBuild(plan: Id, connection: Id, node: Id, everywhere: boolean): Build {
+  return everywhere ? (st) => removeMember(st, connection, node) : (st) => setBranches(st, connection, [{ plan, node }], false);
+}
+
+export function roleBuild(connection: Id, node: Id, role: Role): Build {
+  return (st) => setRole(st, connection, node, role);
+}
+
+export function connectionTextBuild(connection: Id, patch: { title?: string; relation?: string }): Build {
+  return (st) => editConnection(st, connection, patch);
+}
+
+/** Split arm (spec 8.5): both phantoms take the far node's step. */
+export function splitBuild(scene: PlanScene, connection: Id, node: Id, near: Vec2, far: Vec2): Build {
+  const i = scene.byId.get(node);
+  if (i === undefined) return null;
+  const k = scene.items[i].k;
+  return (st) => splitArm(st, scene.plan.id, connection, node, { ...near, k }, { ...far, k });
+}
+
+export function joinBuild(plan: Id, connection: Id, node: Id): Build {
+  return (st) => joinArm(st, plan, connection, node);
+}
+
+/**
+ * A node brought into the plan from a stub or an absent phantom (spec 11.3), at the step readable at this zoom;
+ * inside an envelope, it enters that group.
+ */
+export function importBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams): Build {
+  const plan = scene.plan.id;
+  const group = groupAt(scene, at, zoom, p);
+  return (st) => combine(st, 'Importer un nœud dans ce plan', [
+    (x) => placeNode(x, plan, node, at.x, at.y, readableStep(zoom, p)),
+    ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
+  ]);
+}
+
+/** A stub put down by hand (spec 8.5): its absent phantom, at the largest step of the connection here. */
+export function absentBuild(scene: PlanScene, connection: Id, node: Id, at: Vec2): Build {
+  const ends = scene.connections.filter((c) => c.id === connection).flatMap((c) => c.ends);
+  const k = ends.length > 0 ? Math.max(...ends.map((e) => scene.items[e.item].k)) : 0;
+  return (st) => placeAbsent(st, scene.plan.id, connection, node, at.x, at.y, k);
 }
 
 export function renameBuild(id: Id, title: string): Build {

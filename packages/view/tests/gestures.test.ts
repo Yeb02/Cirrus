@@ -15,7 +15,7 @@ test('un mouvement sous le seuil reste un clic', () => {
   const g = new GestureMachine(P);
   g.feed(down(100, 100, item), cam);
   expect(g.feed(move(102, 101), cam)).toEqual([]);
-  expect(g.feed(up(102, 101), cam)).toEqual([{ t: 'click', hit: item, ctrl: false, shift: false }]);
+  expect(g.feed(up(102, 101), cam)).toEqual([{ t: 'click', hit: item, ctrl: false, shift: false, sx: 100, sy: 100 }]);
 });
 
 test('au-delà du seuil sur un élément : déplacement en coordonnées du monde, puis dépôt', () => {
@@ -72,6 +72,23 @@ test('geste sans bouton : suit le curseur, se pose au clic gauche, s’annule au
   expect(g.feed(down(0, 0, bg, { button: 2 }), cam)).toEqual([{ t: 'placeCancel', mode: 'connect' }]);
   g.start('paste');
   expect(g.feed({ t: 'key', key: 'Escape' }, cam)).toEqual([{ t: 'placeCancel', mode: 'paste' }]);
+});
+
+test('une amorce se tire comme un élément, pour lui donner une place (spec 8.5)', () => {
+  const g = new GestureMachine(P);
+  const stub: Hit = { kind: 'stub', conn: 0, stub: 0 };
+  g.feed(down(100, 100, stub), cam);
+  expect(g.feed(move(130, 100), cam)[0]).toEqual({ t: 'dragStart', hit: stub, alt: false });
+});
+
+test('scission d’un bras : deux poses de suite, le relâchement de la première ne compte pas', () => {
+  const g = new GestureMachine(P);
+  g.start('split');
+  expect(g.feed(down(10, 10, bg), cam)).toMatchObject([{ t: 'place', mode: 'split' }]);
+  g.start('split');
+  expect(g.feed(up(10, 10), cam)).toEqual([]);
+  expect(g.busy).toBe(true);
+  expect(g.feed({ t: 'key', key: 'Escape' }, cam)).toEqual([{ t: 'placeCancel', mode: 'split' }]);
 });
 
 test('Ctrl+molette : les crans d’un même geste s’additionnent, une pause ou une autre cible en commence un autre', () => {

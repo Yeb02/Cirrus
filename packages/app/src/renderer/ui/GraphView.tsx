@@ -1,8 +1,9 @@
-import { applyOp, cloneState, type Id, type State } from '@cirrus/core';
+import { applyOp, branchKey, cloneState, type Id, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps,
+  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
+  type Mode,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -12,8 +13,13 @@ import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
-import { type Build, createBuild, dropBuild, hideBuild, renameBuild, scaleBuild } from '../actions.ts';
+import {
+  absentBuild, addMemberBuild, type Build, connectBuild, createBuild, dropBuild, hideBuild, importBuild, joinBuild, removeMemberBuild, renameBuild,
+  scaleBuild, splitBuild,
+} from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
+import { ConnectionPopup } from './ConnectionPopup.tsx';
+import { AskDialog, type Question } from './Dialogs.tsx';
 
 const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
@@ -27,6 +33,17 @@ function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: R
 
 type Tip = { x: number; y: number; text: string } | null;
 type Chain = { item: number; title: string }[];
+/** What a gesture without a held button will do once placed (spec 9.1). */
+type Placing =
+  | { kind: 'newNode' }
+  | { kind: 'exclude'; base: PlanScene; items: number[]; from: Vec2 }
+  /** Drawing a connection from this node (spec 11.1). */
+  | { kind: 'connect'; node: Id }
+  /** Bringing in a node from a stub (spec 11.3). */
+  | { kind: 'import'; node: Id }
+  /** Splitting an arm (spec 8.5): the far node's phantom near the bundle, then the centre's near the far node. */
+  | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 };
+const MODE: Record<Placing['kind'], Mode> = { newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', split: 'split' };
 
 /**
  * Hosts the PixiJS canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
@@ -58,8 +75,13 @@ export function GraphView(props: {
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string } | null>(null);
-  /** What a gesture without a held button will do once placed. */
-  const placing = useRef<{ kind: 'newNode' } | { kind: 'exclude'; base: PlanScene; items: number[]; from: { x: number; y: number } } | null>(null);
+  const placing = useRef<Placing | null>(null);
+  /** The straight line that follows the cursor while a connection is drawn (screen coordinates). */
+  const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [question, setQuestion] = useState<Question | null>(null);
+  const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
+  /** A stub being dragged to a place of its own (spec 8.5). */
+  const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
 
   /** Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. */
   const edit = (build: Build, onRefused?: () => void) => {
@@ -89,6 +111,8 @@ export function GraphView(props: {
     e.renderer.setCamera(next);
     cameras.current.set(sc.plan.id, next);
     dirty.current = true;
+    // Wheel and arrows stay active while a connection is drawn: its line follows the node.
+    if (placing.current?.kind === 'connect' && lastPointer.current) aimLine(lastPointer.current.x, lastPointer.current.y);
   };
   const nav = (input: NavInput) => {
     const e = engine.current;
@@ -122,6 +146,82 @@ export function GraphView(props: {
     setChain([]);
   };
 
+  /** A gesture without a held button begins (spec 9.1): `text` follows the cursor, if any. */
+  const startPlacing = (what: Placing, text: string | null, at: { x: number; y: number }) => {
+    placing.current = what;
+    setGhost(text === null ? null : { x: at.x, y: at.y, text });
+    gestures.current.start(MODE[what.kind]);
+  };
+  /** The line of a connection being drawn: from the border of the node's box to the cursor (spec 11.1). */
+  const aimLine = (sx: number, sy: number) => {
+    const e = engine.current, sc = sceneRef.current, what = placing.current;
+    if (!e || !sc || what?.kind !== 'connect') return;
+    const i = sc.byId.get(what.node);
+    if (i === undefined) return;
+    const it = sc.items[i], cam = e.renderer.camera, c = worldToScreen(cam, it.x, it.y);
+    const dx = sx - c.x, dy = sy - c.y;
+    const f = Math.min(1, Math.abs(dx) > 1e-6 ? (it.halfW * cam.zoom) / Math.abs(dx) : Infinity, Math.abs(dy) > 1e-6 ? (it.halfH * cam.zoom) / Math.abs(dy) : Infinity);
+    setLine({ x1: c.x + dx * f, y1: c.y + dy * f, x2: sx, y2: sy });
+  };
+  /** The valid target under (sx, sy) while a connection is drawn, lit: a node's ring, or the connection (spec 11.1). */
+  const aimTarget = (sx: number, sy: number): ConnectTarget | null => {
+    const e = engine.current, sc = sceneRef.current, what = placing.current;
+    if (!e || !sc || what?.kind !== 'connect') return null;
+    const from = sc.byId.get(what.node);
+    const cam = e.renderer.camera, w = screenToWorld(cam, sx, sy);
+    const m = e.renderer.hitIndex?.markerAt(w.x, w.y, cam.zoom) ?? null;
+    const vc = m === null ? undefined : e.renderer.visible?.connections[m];
+    const t = from === undefined ? null : connectTarget(stateRef.current, sc, from, hitAt(sx, sy), vc && vc.conns.length === 1 ? vc.conns[0] : null);
+    e.renderer.setDropTarget(t?.kind === 'node' ? t.item : null);
+    e.renderer.setHover(t?.kind === 'connection' ? m : null);
+    dirty.current = true;
+    return t;
+  };
+  const endConnect = () => {
+    const r = engine.current?.renderer;
+    setLine(null);
+    r?.setCoresShown(false);
+    r?.setDropTarget(null);
+    r?.setHover(null);
+    dirty.current = true;
+  };
+  /** « Partout ou ici seulement » (spec 11, 19), asked only when other plans are concerned; `go` gets the plans chosen. */
+  const askWhere = (text: string, plans: Id[], go: (everywhere: Id[]) => void) => {
+    if (plans.length === 0) { go([]); return; }
+    const names = plans.map((id) => stateRef.current.plans.get(id)?.name ?? '?');
+    const n = plans.length, s = n > 1 ? 's' : '';
+    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: `Partout (${n} autre${s} plan${s})` };
+    setQuestion({
+      text, detail: `Autre${s} plan${s} concerné${s} : ${names.join(', ')}.`,
+      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
+      answer: (v) => { if (v !== null) go(v === 'everywhere' ? plans : []); },
+    });
+  };
+  /** Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the last ones. */
+  const removeMember = (connection: Id, node: Id) => {
+    const s = stateRef.current, plan = sceneRef.current?.plan.id, c = s.connections.get(connection);
+    if (!c || !plan) return;
+    const shownIn = [...s.plans.keys()].filter((p) => s.branches.has(branchKey({ plan: p, connection, node })));
+    const last = c.members.length <= 2;
+    const choices = [
+      ...(shownIn.includes(plan) ? [{ value: 'here', label: 'Ici seulement' }] : []),
+      { value: 'everywhere', label: last ? 'Partout (supprime la connexion)' : 'Partout' },
+    ];
+    if (paramsRef.current.defaultAnswer === 'everywhere') choices.reverse();
+    const n = shownIn.length;
+    setQuestion({
+      text: `Retirer « ${s.nodes.get(node)?.title ?? '?'} » de la connexion ?`,
+      detail: `Ce membre est affiché dans ${n} plan${n > 1 ? 's' : ''}.${last ? ' La connexion n’aurait plus qu’un membre : « partout » la met à la corbeille.' : ''}`,
+      choices,
+      answer: (v) => { if (v !== null) edit(removeMemberBuild(plan, connection, node, v === 'everywhere')); },
+    });
+  };
+  /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
+  const openPopup = (connections: Id[], sx: number, sy: number) => {
+    const r = root.current!.getBoundingClientRect();
+    setPopup({ connections, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
+  };
+
   // One PixiJS application for the window's lifetime.
   useEffect(() => {
     let cancelled = false, raf = 0;
@@ -149,11 +249,13 @@ export function GraphView(props: {
       engine.current = { app, renderer };
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
-      // Visual checks: CIRRUS_POINTER="down 700 370 ctrl; move 900 500; up 900 500" replays pointer events.
-      let launchPointer = window.cirrus.launch.pointer;
+      // Visual checks: CIRRUS_POINTER="down 700 370 ctrl; move 900 500; up 900 500" replays pointer events; phases
+      // separated by "|" are replayed a few frames apart (a menu opened, then chosen: "click .context-menu button").
+      const launchPhases = (window.cirrus.launch.pointer ?? '').split('|').map((x) => x.trim()).filter(Boolean);
       let settle = 0;
       const replay = (script: string) => {
         for (const step of script.split(';').map((x) => x.trim()).filter(Boolean)) {
+          if (step.startsWith('click ')) { document.querySelector<HTMLElement>(step.slice(6))?.click(); continue; }
           const [t, xs, ys, ...mods] = step.split(/\s+/);
           const sx = Number(xs), sy = Number(ys), button = mods.includes('right') ? 2 : 0;
           if (t === 'down') feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
@@ -198,8 +300,8 @@ export function GraphView(props: {
             if (firstPending.current) {
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
-              else if (launchPointer) { replay(launchPointer); launchPointer = undefined; settle = 5; dirty.current = true; }
               else if (settle > 0) { settle--; dirty.current = true; }
+              else if (launchPhases.length > 0) { replay(launchPhases.shift()!); settle = 5; dirty.current = true; }
               else {
                 firstPending.current = false;
                 props.onFirstFrame();
@@ -250,6 +352,7 @@ export function GraphView(props: {
     if (sceneRef.current && sceneRef.current.plan.id !== scene.plan.id) {
       feed({ t: 'cancel' });
       setSelection(emptySelection());
+      setPopup(null);
     }
     sceneRef.current = scene;
     e.renderer.setScene(scene);
@@ -266,6 +369,8 @@ export function GraphView(props: {
   useEffect(() => {
     const el = root.current!;
     const onWheel = (ev: WheelEvent) => {
+      // A pop-up or a question scrolls its own content.
+      if ((ev.target as Element).closest?.('.popup, .ask')) return;
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
@@ -306,8 +411,20 @@ export function GraphView(props: {
       case 'click': {
         // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1).
         const target = targetOf(intent.hit);
-        if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); }
-        else setSelection(target ? toggle(emptySelection(), target) : emptySelection());
+        if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
+        setSelection(target ? toggle(emptySelection(), target) : emptySelection());
+        // A stub or an absent phantom brings its node in (spec 11.3); a connection or a centre phantom opens its pop-up (spec 8.5).
+        const vis = e.renderer.visible, here = { x: intent.sx, y: intent.sy };
+        if (intent.hit.kind === 'stub' && vis) {
+          const st = vis.connections[intent.hit.conn].stubs[intent.hit.stub];
+          startPlacing({ kind: 'import', node: st.node }, st.title, here);
+        } else if (intent.hit.kind === 'connection' && vis) {
+          openPopup(vis.connections[intent.hit.conn].conns.map((c) => sc.connections[c].id), intent.sx, intent.sy);
+        } else if (intent.hit.kind === 'item') {
+          const it = sc.items[intent.hit.item];
+          if (it.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
+          else if (it.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
+        }
         break;
       }
       case 'context': {
@@ -315,7 +432,8 @@ export function GraphView(props: {
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
         if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) { sel = emptySelection(); setSelection(sel); }
-        setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items: menuFor(stateRef.current, sc, intent.hit, sel, false) });
+        const items = menuFor(stateRef.current, sc, intent.hit, sel, false, e.renderer.visible);
+        if (items.length > 0) setMenu({ x: intent.sx, y: intent.sy, hit: intent.hit, items });
         break;
       }
       case 'rectMove':
@@ -332,6 +450,12 @@ export function GraphView(props: {
         setRect(null);
         break;
       case 'dragStart': {
+        // A stub dragged gets a place of its own: an absent phantom (spec 8.5).
+        if (intent.hit.kind === 'stub') {
+          const vc = e.renderer.visible?.connections[intent.hit.conn], st = vc?.stubs[intent.hit.stub];
+          if (vc && st) stubDrag.current = { connection: sc.connections[vc.conns[0]].id, node: st.node, title: st.title };
+          break;
+        }
         // An element moves with the whole selection if it belongs to it (spec 9.1); a group with all it contains.
         if (intent.hit.kind !== 'item') break;
         const id = sc.items[intent.hit.item].id;
@@ -343,6 +467,8 @@ export function GraphView(props: {
         break;
       }
       case 'dragMove': {
+        const sd = stubDrag.current;
+        if (sd) { setGhost({ x: intent.sx, y: intent.sy, text: sd.title }); break; }
         const d = dragging.current;
         if (!d) break;
         d.dx = intent.dx;
@@ -353,6 +479,13 @@ export function GraphView(props: {
         break;
       }
       case 'dragEnd': {
+        const sd = stubDrag.current;
+        if (sd) {
+          stubDrag.current = null;
+          setGhost(null);
+          edit(absentBuild(sc, sd.connection, sd.node, intent.at));
+          break;
+        }
         const d = dragging.current;
         dragging.current = null;
         if (!d) break;
@@ -366,16 +499,53 @@ export function GraphView(props: {
       }
       case 'placeMove':
         setGhost((g) => (g ? { ...g, x: intent.sx, y: intent.sy } : g));
+        if (placing.current?.kind === 'connect') { aimLine(intent.sx, intent.sy); aimTarget(intent.sx, intent.sy); }
         break;
       case 'place': {
         const what = placing.current;
-        placing.current = null;
-        setGhost(null);
         if (!what) break;
         const zoom = e.renderer.camera.zoom, p = paramsRef.current;
-        if (what.kind === 'newNode') {
+        const sp = worldToScreen(e.renderer.camera, intent.at.x, intent.at.y);
+        if (what.kind === 'connect') {
+          const t = aimTarget(sp.x, sp.y);
+          // Elsewhere than on a valid target, the line keeps following the cursor.
+          if (!t) { gestures.current.start('connect'); break; }
+          placing.current = null;
+          endConnect();
+          const from = sc.byId.get(what.node);
+          if (from === undefined) break;
+          const s = stateRef.current;
+          if (t.kind === 'node') {
+            askWhere('Montrer aussi cette connexion dans les autres plans où ses deux nœuds sont présents ?',
+              otherPlans(s, sc.plan.id, [what.node, sc.items[t.item].node]), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
+          } else {
+            askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
+              otherPlans(s, sc.plan.id, [what.node], sc.connections[t.conn].id), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
+          }
+          break;
+        }
+        if (what.kind === 'split') {
+          if (what.step === 1) {
+            // The view jumps to the far node, where the centre's phantom is put down; then it comes back (spec 8.5).
+            const far = sc.byId.get(what.node);
+            if (far === undefined) { placing.current = null; setGhost(null); break; }
+            placing.current = { ...what, step: 2, near: intent.at };
+            moveCamera({ ...e.renderer.camera, x: sc.items[far].x, y: sc.items[far].y });
+            setGhost((g) => (g ? { ...g, text: 'centre de la connexion' } : g));
+            gestures.current.start('split');
+            break;
+          }
+          placing.current = null;
+          setGhost(null);
+          moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
+          edit(splitBuild(sc, what.connection, what.node, what.near!, intent.at));
+          break;
+        }
+        placing.current = null;
+        setGhost(null);
+        if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p));
+        else if (what.kind === 'newNode') {
           // The node is placed, then named in place (spec 12); the creation is written with its title, as one step.
-          const sp = worldToScreen(e.renderer.camera, intent.at.x, intent.at.y);
           const width = Math.max(140, (p.boxWidth - 2 * p.boxPadX) * p.textScale * zoom * p.factor ** Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor)));
           setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p)); } });
         } else if (what.kind === 'exclude') {
@@ -384,11 +554,16 @@ export function GraphView(props: {
         }
         break;
       }
-      case 'placeCancel':
+      case 'placeCancel': {
+        const what = placing.current;
         placing.current = null;
         setGhost(null);
+        if (what?.kind === 'connect') endConnect();
+        if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
         break;
+      }
       case 'dragCancel': {
+        if (stubDrag.current) { stubDrag.current = null; setGhost(null); break; }
         const d = dragging.current;
         dragging.current = null;
         e.renderer.setDropTarget(null);
@@ -472,8 +647,51 @@ export function GraphView(props: {
       case 'hide':
         edit(hideBuild(sc, targets.map((i) => sc.items[i].id)));
         break;
+      case 'connect':
+        // A straight line follows the cursor from the node; 1-to-1 connections show their centre, a target too (spec 11.1).
+        if (clicked < 0) break;
+        e.renderer.setCoresShown(true);
+        startPlacing({ kind: 'connect', node: sc.items[clicked].node }, null, at);
+        aimLine(at.x, at.y);
+        break;
+      case 'splitArm': {
+        const vc = hit.kind === 'connection' ? e.renderer.visible?.connections[hit.conn] : undefined;
+        const far = hit.kind === 'connection' && hit.key !== null ? sc.byId.get(hit.key) : undefined;
+        if (!vc || far === undefined) break;
+        const it = sc.items[far];
+        startPlacing({ kind: 'split', step: 1, connection: sc.connections[vc.conns[0]].id, node: it.id, title: it.title, home: e.renderer.camera }, `fantôme : ${it.title}`, at);
+        break;
+      }
+      case 'joinArm': {
+        if (clicked >= 0 && sc.items[clicked].kind === 'phantom') {
+          const it = sc.items[clicked];
+          edit(joinBuild(sc.plan.id, it.connection!, it.node));
+        } else if (hit.kind === 'connection') {
+          const vc = e.renderer.visible?.connections[hit.conn], c = vc && sc.connections[vc.conns[0]];
+          if (c && c.part === 'far') edit(joinBuild(sc.plan.id, c.id, c.ends[0].key));
+        }
+        break;
+      }
+      case 'teleport': {
+        // To the original (spec 8.5): the far node; for the centre, the far node's phantom by the bundle. Its place in
+        // the navigation history comes with plan 6.
+        if (clicked < 0) break;
+        const it = sc.items[clicked];
+        const dest = it.phantom === 'node'
+          ? sc.byId.get(it.node) ?? -1
+          : sc.items.findIndex((x) => x.phantom === 'node' && x.connection === it.connection && x.node === it.node);
+        if (dest < 0) { onResultRef.current({ ok: false, message: 'L’original n’est pas dans ce plan.' }); break; }
+        moveCamera({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
+        break;
+      }
+      case 'importNode': {
+        const st = hit.kind === 'stub' ? e.renderer.visible?.connections[hit.conn].stubs[hit.stub] : undefined;
+        const node = st ? st.node : clicked >= 0 ? sc.items[clicked].node : null;
+        if (node) startPlacing({ kind: 'import', node }, st ? st.title : sc.items[clicked].title, at);
+        break;
+      }
       default:
-        // Connections, phantoms, stubs, copy and paste, deletion: plan 3b, tasks 9 and 10.
+        // Copy and paste, deletion, adding to the lobby, a connection's layout: plan 3b, tasks 10 and 11.
         onResultRef.current({ ok: false, message: 'Cette action arrive avec une prochaine étape du plan 3b.' });
     }
     dirty.current = true;
@@ -544,6 +762,16 @@ export function GraphView(props: {
       {ghost && <Ghost x={ghost.x} y={ghost.y} text={ghost.text} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} onPick={(a) => pick(a, menu.hit, { x: menu.x, y: menu.y })} />}
       {editor && <TitleEditor x={editor.x} y={editor.y} width={editor.width} initial={editor.initial} onDone={(t) => { setEditor(null); editor.done(t); root.current?.focus(); }} />}
+      {line && <svg className="connect-line"><line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} /></svg>}
+      {popup && (
+        <ConnectionPopup
+          key={`${popup.connections.join()}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connections={popup.connections} x={popup.x} y={popup.y}
+          onEdit={(b) => edit(b)} onClose={() => setPopup(null)} onRemoveMember={removeMember}
+          onAddMember={(connection, node) => askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
+            otherPlans(stateRef.current, props.plan, [node], connection), (everywhere) => edit(addMemberBuild(props.plan, connection, node, everywhere)))}
+        />
+      )}
+      {question && <AskDialog q={question} onClose={() => { setQuestion(null); root.current?.focus(); }} />}
     </div>
   );
 }

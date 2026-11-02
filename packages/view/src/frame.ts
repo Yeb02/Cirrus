@@ -17,7 +17,8 @@ export interface FrameGeometry {
   origin: Vec2;
   connections: ConnectionMeshes;
   envelopes: EnvelopeMeshes;
-  centerlines: { conn: number; points: Vec2[] }[];
+  /** key: the member the line leads to, null for a trunk. */
+  centerlines: { conn: number; points: Vec2[]; key: Id | null }[];
   markers: { conn: number; pos: Vec2; kMax: number; multi: boolean }[];
   titles: { conn: number; id: Id; text: string; box: Rect; kMax: number; side: TitleSide }[];
   stubs: { conn: number; stub: number; pos: Vec2; title: string }[];
@@ -85,7 +86,7 @@ export function buildFrame(
       : undefined;
     return bundleGeometry({
       ends: vc.ends.map((e) => bundleEnd(closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key)),
-      stubs: vc.stubs.map((s) => ({ role: s.role })),
+      stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
       ...(vc.center !== undefined ? { centre: rel(items[vc.center]) } : {}),
       ...(layout ? { layout } : {}),
     }, p);
@@ -105,7 +106,7 @@ export function buildFrame(
       pxPerUnit, end0: [e0.q.x, e0.q.y, e0.e], end1: [e1.q.x, e1.q.y, e1.e], fade: vc.fade, foldK: vc.foldK, conn: ci,
     }, p);
     if (lines.length === 0) return;
-    for (const points of lines) frame.centerlines.push({ conn: ci, points });
+    for (const l of lines) frame.centerlines.push({ conn: ci, points: l.points, key: l.key });
     frame.markers.push({ conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi });
     open.branches.filter((b) => b.stub).forEach((b, si) => {
       frame.stubs.push({ conn: ci, stub: si, pos: b.nodeEnd === 'p0' ? b.p0 : b.p3, title: vc.stubs[si].title });
