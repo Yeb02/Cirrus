@@ -1,9 +1,9 @@
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy } from './invariants.ts';
-import type { BranchRec, ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
+import type { BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
-import { applyOp, branchKey, cloneState, parseBranchKey, placementKey, type State } from './state.ts';
+import { applyOp, branchKey, cloneState, layoutKey, parseBranchKey, placementKey, type State } from './state.ts';
 
 /** One user action: one undo step, one group of journal lines (spec 6.4). */
 export interface Action { id: Id; label: string; ops: Op[] }
@@ -114,11 +114,12 @@ export function editNode(s: State, id: Id, patch: Partial<Pick<NodeRec, 'title' 
   return d.finish(`Modifier « ${patch.title ?? n.title} »`);
 }
 
-export function moveNodes(s: State, plan: Id, moves: { node: Id; x: number; y: number; k?: number }[]): Action {
+/** Moves and/or rescales placed nodes; an omitted field keeps its value (a group's position is derived from its members). */
+export function moveNodes(s: State, plan: Id, moves: { node: Id; x?: number; y?: number; k?: number }[]): Action {
   const d = new Draft(s);
   for (const m of moves) {
     const p = placedIn(s, plan, m.node, 'Ce nœud n’est pas dans ce plan.');
-    d.placement(plan, m.node, { ...p, x: m.x, y: m.y, k: m.k ?? p.k });
+    d.placement(plan, m.node, { ...p, x: m.x ?? p.x, y: m.y ?? p.y, k: m.k ?? p.k });
   }
   return d.finish(moves.length === 1 ? 'Déplacer un nœud' : `Déplacer ${moves.length} nœuds`);
 }
@@ -303,4 +304,28 @@ export function movePhantom(s: State, phantom: Id, x: number, y: number, group?:
   else if (group !== undefined) next.group = group;
   d.phantom(phantom, next);
   return d.finish('Déplacer un fantôme');
+}
+
+/**
+ * Several commands as one action (spec 6.4: a complete gesture is one undo step). Each step sees the state left by the
+ * previous ones, on a working copy; a refused step refuses the whole action.
+ */
+export function combine(s: State, label: string, steps: ((s: State) => Action)[]): Action {
+  const work = cloneState(s);
+  const ops: Op[] = [];
+  for (const step of steps) {
+    const a = step(work);
+    for (const op of a.ops) applyOp(work, op);
+    ops.push(...a.ops);
+  }
+  return { id: uuidv7(), label, ops };
+}
+
+/** The layout of a connection in one plan (spec 5.5, 8.5): marker, trunk angle, Bézier handles; null restores the automatic one. */
+export function setLayout(s: State, plan: Id, connection: Id, layout: Omit<ConnectionLayout, 'plan' | 'connection'> | null): Action {
+  planOf(s, plan);
+  connectionOf(s, connection);
+  const d = new Draft(s);
+  d.push({ t: 'connLayout', before: s.connLayouts.get(layoutKey(plan, connection)) ?? null, after: layout && { plan, connection, ...layout } });
+  return d.finish(layout ? 'Disposer une connexion' : 'Rétablir la disposition automatique');
 }

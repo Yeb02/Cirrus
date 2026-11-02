@@ -1,11 +1,12 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addMember, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, include, joinArm, movePhantom,
-  placeNode, removeFromPlan, removeMember, restoreNode, splitArm,
+  type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, include, joinArm, movePhantom,
+  placeNode, removeFromPlan, removeMember, restoreNode, setLayout, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
-import { applyOp, branchKey, canonical, emptyState, placementKey, type State } from '../src/state.ts';
+import { invertAction } from '../src/history.ts';
+import { applyOp, branchKey, canonical, emptyState, layoutKey, placementKey, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
 const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => {
@@ -188,4 +189,46 @@ test("une commande ne modifie jamais l'état reçu", () => {
   removeFromPlan(s, p1, a);
   deleteEverywhere(s, a);
   expect(canonical({ nodes: [...s.nodes], placements: [...s.placements], branches: [...s.branches] })).toBe(before);
+});
+
+test('combine : plusieurs commandes forment une seule action, défaite d’un seul coup', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A');
+  let b = '';
+  const action = combine(s, 'Créer et relier', [
+    (st) => { const x = createNode(st, { plan: p1, title: 'B', x: 0, y: 0, k: 0 }); b = created(x, 'node'); return x; },
+    (st) => connect(st, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] }),
+  ]);
+  expect(action.label).toBe('Créer et relier');
+  const before = canonical({ nodes: [...s.nodes], connections: [...s.connections], branches: [...s.branches] });
+  run(s, action);
+  expect(s.nodes.has(b)).toBe(true);
+  expect([...s.connections.values()].some((c) => c.members.some((m) => m.node === b))).toBe(true);
+  run(s, invertAction(action));
+  expect(canonical({ nodes: [...s.nodes], connections: [...s.connections], branches: [...s.branches] })).toBe(before);
+});
+
+test('combine : une étape refusée interrompt tout, l’état reçu reste intact', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A');
+  const before = canonical({ nodes: [...s.nodes], placements: [...s.placements] });
+  expect(() => combine(s, 'x', [
+    (st) => createNode(st, { plan: p1, title: 'B', x: 0, y: 0, k: 0 }),
+    (st) => include(st, p1, a, a),
+  ])).toThrow(CommandError);
+  expect(canonical({ nodes: [...s.nodes], placements: [...s.placements] })).toBe(before);
+});
+
+test('disposition d’une connexion propre au plan : écrite, modifiée, effacée', () => {
+  const { s, p1, p2, mk } = world();
+  const a = mk('A'), b = mk('B');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, setLayout(s, p1, c, { marker: { x: 5, y: 6 }, handles: {} }));
+  expect(s.connLayouts.get(layoutKey(p1, c))).toEqual({ plan: p1, connection: c, marker: { x: 5, y: 6 }, handles: {} });
+  expect(s.connLayouts.has(layoutKey(p2, c))).toBe(false);
+  run(s, setLayout(s, p1, c, { angle: 1, handles: { [a]: { b1: { x: 1, y: 0 }, b2: { x: 0, y: 0 } } } }));
+  expect(s.connLayouts.get(layoutKey(p1, c))!.angle).toBe(1);
+  run(s, setLayout(s, p1, c, null));
+  expect(s.connLayouts.has(layoutKey(p1, c))).toBe(false);
+  expect(() => setLayout(s, p1, 'inconnue', null)).toThrow(/Connexion introuvable/);
 });
