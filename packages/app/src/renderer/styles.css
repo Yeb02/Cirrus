@@ -1,0 +1,52 @@
+/* The maquette's palette (maquettes/faisceaux-v2.html): sky, ink, blues. Graph colours themselves are settings. */
+:root {
+  --sky0: #0a1120;
+  --sky1: #14213a;
+  --sky2: #26395e;
+  --ink: #e9effb;
+  --muted: #9fb1cf;
+  --accent: #8fb8ff;
+  --edge: #4d6a9a;
+  --panel: rgba(14, 23, 41, 0.94);
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--sky0);
+  color: var(--ink);
+  font: 14px/1.45 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+button, input, select { font: inherit; color: var(--ink); }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+.main { flex: 1; display: flex; min-height: 0; }
+.graph { flex: 1; position: relative; min-width: 0; outline: none; }
+.graph canvas { position: absolute; inset: 0; display: block; }
+.placeholder { position: absolute; left: 16px; top: 12px; color: var(--muted); }
+
+.tabs {
+  display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0;
+  background: linear-gradient(180deg, #0d1628, var(--sky0));
+  border-bottom: 1px solid rgba(143, 184, 255, 0.18);
+}
+.tab {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 8px 8px 0 0;
+  background: rgba(38, 57, 94, 0.45); border: 1px solid transparent; border-bottom: none; cursor: pointer;
+  color: var(--muted);
+}
+.tab.on { background: var(--sky1); color: var(--ink); border-color: rgba(143, 184, 255, 0.25); }
+.tab .close { border: none; background: none; padding: 0 2px; color: var(--muted); cursor: pointer; line-height: 1; }
+.tab .close:hover { color: var(--ink); }
+.tab .kind { font-size: 11px; color: var(--muted); }
+.tabs .add { position: relative; }
+.tabs .add > button { border: none; background: none; padding: 4px 10px; cursor: pointer; color: var(--muted); font-size: 16px; }
+.menu {
+  position: absolute; top: 100%; left: 0; z-index: 10; min-width: 220px; padding: 4px;
+  background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.3); border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(2, 6, 16, 0.6);
+}
+.menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border: none; background: none; border-radius: 6px; cursor: pointer; }
+.menu button:hover { background: rgba(143, 184, 255, 0.14); }
+.menu .empty { padding: 6px 10px; color: var(--muted); }
