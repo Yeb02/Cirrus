@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Optional: a report name suffix and diagnostic query parameters, e.g. `node scripts/bench.mjs sans-enveloppes hide=hull`.
+const [suffix, extra] = process.argv.slice(2);
 const benchDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const electron = createRequire(import.meta.url)('electron'); // path to the binary when required from Node
 rmSync(join(benchDir, '..', '..', 'docs', 'bancs', '.rendu-runs.json'), { force: true });
@@ -20,7 +22,7 @@ passes.forEach((p, i) => {
   console.log(`Passe ${p.label}…`);
   const r = spawnSync(electron, ['.'], {
     cwd: benchDir,
-    env: { ...process.env, ...p.env, BENCH_QUERY: `bench=1&label=${p.label}&final=${final}` },
+    env: { ...process.env, ...p.env, BENCH_QUERY: `bench=1&label=${p.label}&final=${final}${suffix ? `&name=${suffix}` : ''}${extra ? `&${extra}` : ''}` },
     stdio: 'inherit',
     timeout: 300_000,
   });

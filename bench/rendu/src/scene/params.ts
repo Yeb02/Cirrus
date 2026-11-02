@@ -23,8 +23,8 @@ export interface RenderParams {
   connectionFadePx: number;
   /** Connections fainter than this at their widest point are not drawn (they would be invisible). */
   ribbonCullAlpha: number;
-  /** On-screen length of a stub (connections displayed as stubs). */
-  stubPx: number;
+  /** Bench placement of a far connection's phantom, in box widths of the endpoint (the app lets the user place it). */
+  phantomDistanceBoxes: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -47,7 +47,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   curveZoomHeadroom: 2,
   connectionFadePx: 150,
   ribbonCullAlpha: 0.03,
-  stubPx: 40,
+  phantomDistanceBoxes: 1.5,
 };
 
 export interface SceneSpec {

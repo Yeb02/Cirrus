@@ -60,6 +60,16 @@ test('shell escape refusé', async () => {
   expect(existsSync(join(workDir, 'pwned.txt'))).toBe(false);
 });
 
+test('préambule invalide : prepare échoue vite au lieu de bloquer', async () => {
+  const badPreamble = join(workDir, 'bad-preamble.tex');
+  writeFileSync(badPreamble, '\\documentclass{article}\n\\usepackage{paquet-inexistant-xyz}\n', 'utf8');
+  const bad = new WarmCompiler({ pdflatex, workDir, preamblePath: badPreamble, timeoutMs: 5_000 });
+  const t0 = performance.now();
+  await expect(bad.prepare()).rejects.toThrow();
+  expect(performance.now() - t0).toBeLessThan(6_000);
+  await bad.dispose();
+});
+
 test('nom de fichier accentué : résultat déterminé (Review Focus 5)', async () => {
   const r = await compiler.compile({ texPath: frag('accents.tex'), resourceDir: fragDir });
   expect(r.timedOut).toBe(false);

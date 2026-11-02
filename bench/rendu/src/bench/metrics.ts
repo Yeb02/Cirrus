@@ -1,5 +1,10 @@
 export interface Stats { p50: number; p95: number; max: number; n: number }
 
+/** Drops the samples taken during the first skipS seconds (window showing, fullscreen transition). */
+export function afterWarmup(times: number[], values: number[], skipS: number): number[] {
+  return values.filter((_, i) => times[i] >= skipS);
+}
+
 /** Nearest-rank percentiles. */
 export function summarize(samples: number[]): Stats {
   if (samples.length === 0) return { p50: NaN, p95: NaN, max: NaN, n: 0 };
@@ -20,6 +25,10 @@ export interface RunResult {
   cpuMs: Stats;
   /** Largest ribbon mesh drawn during the pass. */
   ribbonVerticesMax?: number;
+  /** The slowest frame after the warm-up second: when it happened and what it was. */
+  worstFrame?: { t: number; intervalMs: number; cpuMs: number; rebuilt: boolean };
+  /** Phase timings (ms) and sizes of the slowest rebuild. */
+  worstRebuild?: Record<string, number>;
   rebuilds: number;
   loadMs: number;
   memoryMb: number;
@@ -71,8 +80,14 @@ export function evaluate(runs: RunResult[], c: Criteria): Verdict {
   else lines.push('Processeur : passe throttled-x4 absente.');
   const vsync = runs.find((r) => r.label === 'vsync');
   if (vsync) {
-    const budget = 1000 / c.targetHz;
-    lines.push(`Avec synchronisation : p95 = ${vsync.frameIntervalMs.p95.toFixed(2)} ms pour un budget de ${budget.toFixed(2)} ms à ${c.targetHz} Hz (informatif).`);
+    // The vsync pass ticks at the rate Chromium follows, which may be another display's (ledger, Task 6).
+    const hz = COMMON_HZ.find((h) => Math.abs(vsync.frameIntervalMs.p50 - 1000 / h) / (1000 / h) < 0.03);
+    if (hz && hz !== c.targetHz) {
+      lines.push(`Avec synchronisation : cadence plafonnée à ${hz} Hz (médiane ${vsync.frameIntervalMs.p50.toFixed(2)} ms), celle d'un autre écran : la cible de ${c.targetHz} Hz n'a pas pu être observée (informatif).`);
+    } else {
+      const budget = 1000 / c.targetHz;
+      lines.push(`Avec synchronisation : p95 = ${vsync.frameIntervalMs.p95.toFixed(2)} ms pour un budget de ${budget.toFixed(2)} ms à ${c.targetHz} Hz (informatif).`);
+    }
   }
   return { pass: invalid ? 'invalide' : gpuOk && cpuOk, lines };
 }

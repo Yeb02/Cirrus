@@ -1,4 +1,4 @@
-import { DEFAULT_PARAMS, type RenderParams } from '../scene/params';
+import { BOX_WORLD_WIDTH, DEFAULT_PARAMS, type RenderParams } from '../scene/params';
 import type { Role, Vec2 } from '../scene/types';
 
 /** CPU reference of the ribbon shader (spec 8.5): bounded on-screen width, fading below the minimum. */
@@ -41,26 +41,15 @@ export function ribbonWorthDrawing(maxK: number, zoom: number, p: RenderParams):
 }
 
 /**
- * A stub (spec 8.5): a short straight ribbon from an endpoint toward the far end of its connection. Both centerline
- * points sit on the endpoint; the shader moves the second one by stubDir × stubPx / zoom, so the stub keeps a
- * constant on-screen length at every zoom instead of jumping at each rebuild.
+ * Far connections (spec 8.5): each endpoint links to a phantom of the far end. In the app the user places the
+ * phantom and it stays fixed in the plan; the bench puts it once, phantomDistanceBoxes box widths toward the far end.
+ * A fixed world position: the stub scales with the zoom like everything else.
  */
-export function stubAttributes(
-  from: Vec2,
-  toward: Vec2,
-  scale: number,
-): { position: Float32Array; normal: Float32Array; scale: Float32Array; stubDir: Float32Array; index: Uint32Array } {
+export function phantomPosition(from: Vec2, toward: Vec2, k: number, p: RenderParams): Vec2 {
   const dx = toward.x - from.x, dy = toward.y - from.y;
   const d = Math.hypot(dx, dy) || 1;
-  const ux = dx / d + 0, uy = dy / d + 0; // + 0 turns -0 into 0
-  const nx = -uy + 0, ny = ux + 0;
-  return {
-    position: new Float32Array([from.x, from.y, from.x, from.y, from.x, from.y, from.x, from.y]),
-    normal: new Float32Array([nx, ny, -nx + 0, -ny + 0, nx, ny, -nx + 0, -ny + 0]),
-    scale: new Float32Array([scale, scale, scale, scale]),
-    stubDir: new Float32Array([0, 0, 0, 0, ux, uy, ux, uy]),
-    index: new Uint32Array([0, 1, 2, 1, 3, 2]),
-  };
+  const L = p.phantomDistanceBoxes * BOX_WORLD_WIDTH * p.factor ** k;
+  return { x: from.x + (dx / d) * L, y: from.y + (dy / d) * L };
 }
 
 /** Scale along a branch, interpolated geometrically between the two ends' steps. */

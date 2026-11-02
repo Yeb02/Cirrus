@@ -1,0 +1,115 @@
+{
+  "date": "2026-11-02",
+  "runs": [
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 10.200000000000728,
+        "max": 1060,
+        "n": 3129
+      },
+      "steadyIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 20,
+        "n": 2895
+      },
+      "gpuMs": {
+        "p50": 0.273408,
+        "p95": 0.990208,
+        "max": 232.29952,
+        "n": 3129
+      },
+      "cpuMs": {
+        "p50": 1.2000000476837158,
+        "p95": 4.300000190734863,
+        "max": 1056.0999999046326,
+        "n": 3129
+      },
+      "ribbonVerticesMax": 198264,
+      "worstFrame": {
+        "t": 7.2003,
+        "intervalMs": 1060,
+        "cpuMs": 56.09999990463257,
+        "rebuilt": true
+      },
+      "worstRebuild": {
+        "t": 6.1403,
+        "totalMs": 1056.0999999046326,
+        "renderMs": 740.7999999523163,
+        "ribbonsOnly": 1,
+        "ribbonMs": 308.89999985694885,
+        "ribbonVertices": 198264
+      },
+      "rebuilds": 135,
+      "loadMs": 400.90000009536743,
+      "memoryMb": 116,
+      "display": "2561x1601 @165 Hz (interne)"
+    },
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "canvasPx": [
+        2561,
+        1601
+      ],
+      "frameIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 1100,
+        "n": 3790
+      },
+      "steadyIntervalMs": {
+        "p50": 10,
+        "p95": 10.100000000002183,
+        "max": 1100,
+        "n": 3467
+      },
+      "gpuMs": {
+        "p50": 0.305152,
+        "p95": 1.724416,
+        "max": 42.359808,
+        "n": 3790
+      },
+      "cpuMs": {
+        "p50": 0.39999985694885254,
+        "p95": 5.8999998569488525,
+        "max": 126.60000014305115,
+        "n": 3790
+      },
+      "ribbonVerticesMax": 198264,
+      "worstFrame": {
+        "t": 1.1,
+        "intervalMs": 1100,
+        "cpuMs": 2.299999952316284,
+        "rebuilt": false
+      },
+      "worstRebuild": {
+        "t": 4.3101,
+        "totalMs": 110.70000004768372,
+        "renderMs": 6.099999904632568,
+        "ribbonsOnly": 1,
+        "ribbonMs": 103.10000014305115,
+        "ribbonVertices": 196646
+      },
+      "rebuilds": 172,
+      "loadMs": 408.2999999523163,
+      "memoryMb": 116,
+      "display": "2561x1601 @165 Hz (interne)"
+    }
+  ],
+  "verdict": {
+    "pass": true,
+    "lines": [
+      "Carte graphique : p95 du temps GPU mesuré (passe vsync) = 1.72 ms (critère ≤ 2 ms) → tenu ; pire image 42.4 ms.",
+      "Processeur : p95 du temps par image sous ×4 = 4.30 ms (critère ≤ 16 ms) → tenu ; pire image 1056 ms.",
+      "Avec synchronisation : cadence plafonnée à 100 Hz (médiane 10.00 ms), celle d'un autre écran : la cible de 165 Hz n'a pas pu être observée (informatif)."
+    ]
+  }
+}

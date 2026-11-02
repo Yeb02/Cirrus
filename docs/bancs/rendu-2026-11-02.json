@@ -10,31 +10,45 @@
       ],
       "frameIntervalMs": {
         "p50": 10,
-        "p95": 10.299999999999272,
-        "max": 810,
-        "n": 3071
+        "p95": 10.200000000000728,
+        "max": 1280.000000000001,
+        "n": 3040
       },
       "steadyIntervalMs": {
         "p50": 10,
         "p95": 10.100000000002183,
-        "max": 30.200000000000728,
-        "n": 2862
+        "max": 40,
+        "n": 2819
       },
       "gpuMs": {
-        "p50": 0.862208,
-        "p95": 3.528704,
-        "max": 6.515712,
-        "n": 3072
+        "p50": 2.134016,
+        "p95": 3.827712,
+        "max": 312.055808,
+        "n": 3041
       },
       "cpuMs": {
-        "p50": 1.7999999523162842,
-        "p95": 7.5,
-        "max": 809.8000001907349,
-        "n": 3072
+        "p50": 1.5999999046325684,
+        "p95": 4.799999952316284,
+        "max": 1273.7999999523163,
+        "n": 3041
       },
       "ribbonVerticesMax": 198264,
-      "rebuilds": 123,
-      "loadMs": 414.7000000476837,
+      "worstFrame": {
+        "t": 7.260200000000001,
+        "intervalMs": 1280.000000000001,
+        "cpuMs": 73.79999995231628,
+        "rebuilt": true
+      },
+      "worstRebuild": {
+        "t": 5.9802,
+        "totalMs": 1273.7999999523163,
+        "renderMs": 902.0999999046326,
+        "ribbonsOnly": 1,
+        "ribbonMs": 351.7000000476837,
+        "ribbonVertices": 198264
+      },
+      "rebuilds": 130,
+      "loadMs": 437.19999980926514,
       "memoryMb": 116,
       "display": "2561x1601 @165 Hz (interne)"
     },
@@ -47,31 +61,45 @@
       ],
       "frameIntervalMs": {
         "p50": 10,
-        "p95": 10.100000000002183,
-        "max": 1180,
-        "n": 3772
+        "p95": 10.100000000000364,
+        "max": 130,
+        "n": 3774
       },
       "steadyIntervalMs": {
         "p50": 10,
-        "p95": 10.100000000002183,
-        "max": 1180,
-        "n": 3450
+        "p95": 10.100000000000364,
+        "max": 30.199999999999818,
+        "n": 3453
       },
       "gpuMs": {
-        "p50": 1.205248,
-        "p95": 3.566592,
-        "max": 44.521472,
-        "n": 3773
+        "p50": 1.823744,
+        "p95": 3.659776,
+        "max": 47.443968,
+        "n": 3775
       },
       "cpuMs": {
-        "p50": 0.40000009536743164,
-        "p95": 6.5,
-        "max": 132.69999980926514,
-        "n": 3773
+        "p50": 0.3000001907348633,
+        "p95": 5.799999952316284,
+        "max": 129.39999985694885,
+        "n": 3775
       },
       "ribbonVerticesMax": 198264,
-      "rebuilds": 171,
-      "loadMs": 440.39999985694885,
+      "worstFrame": {
+        "t": 6.0601,
+        "intervalMs": 130,
+        "cpuMs": 13.400000095367432,
+        "rebuilt": false
+      },
+      "worstRebuild": {
+        "t": 4.3101,
+        "totalMs": 123,
+        "renderMs": 5.5,
+        "ribbonsOnly": 1,
+        "ribbonMs": 116.09999990463257,
+        "ribbonVertices": 196646
+      },
+      "rebuilds": 170,
+      "loadMs": 480.59999990463257,
       "memoryMb": 116,
       "display": "2561x1601 @165 Hz (interne)"
     }
@@ -79,9 +107,9 @@
   "verdict": {
     "pass": false,
     "lines": [
-      "Carte graphique : p95 du temps GPU mesuré (passe vsync) = 3.57 ms (critère ≤ 2 ms) → non tenu ; pire image 44.5 ms.",
-      "Processeur : p95 du temps par image sous ×4 = 7.50 ms (critère ≤ 16 ms) → tenu ; pire image 810 ms.",
-      "Avec synchronisation : p95 = 10.10 ms pour un budget de 6.06 ms à 165 Hz (informatif)."
+      "Carte graphique : p95 du temps GPU mesuré (passe vsync) = 3.66 ms (critère ≤ 2 ms) → non tenu ; pire image 47.4 ms.",
+      "Processeur : p95 du temps par image sous ×4 = 4.80 ms (critère ≤ 16 ms) → tenu ; pire image 1274 ms.",
+      "Avec synchronisation : cadence plafonnée à 100 Hz (médiane 10.00 ms), celle d'un autre écran : la cible de 165 Hz n'a pas pu être observée (informatif)."
     ]
   }
 }

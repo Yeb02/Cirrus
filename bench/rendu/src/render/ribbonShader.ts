@@ -40,8 +40,6 @@ export function ribbonShader(p: RenderParams): Shader {
       vertex: /* glsl */ `#version 300 es
       in vec2 aPosition; in vec2 aNormal; in float aScale;
       in vec3 aEnd0; in vec3 aEnd1; // two endpoints of the connection: (x, y, half extent), local world units
-      in vec2 aStubDir;             // stubs: direction of the far end on the stub tip, 0 elsewhere
-      uniform float uStubPx;
       uniform float uWidthBase; uniform float uWidthMin; uniform float uWidthMax;
       uniform vec4 uScreen;     // screen rectangle in local world units: minX, minY, maxX, maxY
       uniform float uFadeWorld; // connectionFadePx / zoom
@@ -56,7 +54,7 @@ export function ribbonShader(p: RenderParams): Shader {
         float raw = uWidthBase * aScale * uZoom;
         float w = clamp(raw, uWidthMin, uWidthMax);
         vAlpha = min(1.0, raw / uWidthMin) * max(endpointFade(aEnd0), endpointFade(aEnd1));
-        gl_Position = project(aPosition + aStubDir * (uStubPx / uZoom) + aNormal * (0.5 * w / uZoom));
+        gl_Position = project(aPosition + aNormal * (0.5 * w / uZoom));
       }`,
       fragment: /* glsl */ `#version 300 es
       in float vAlpha; uniform vec4 uRibbonColor; out vec4 finalColor;
@@ -71,7 +69,6 @@ export function ribbonShader(p: RenderParams): Shader {
         uRibbonColor: { value: [0.56, 0.72, 1.0, 0.75], type: 'vec4<f32>' },
         uScreen: { value: [0, 0, 0, 0], type: 'vec4<f32>' },
         uFadeWorld: { value: p.connectionFadePx, type: 'f32' },
-        uStubPx: { value: p.stubPx, type: 'f32' },
       },
     },
   });

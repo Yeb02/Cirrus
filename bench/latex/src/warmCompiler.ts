@@ -69,7 +69,7 @@ export class WarmCompiler {
 
   private spawnWaiting(): Promise<Prepared> {
     const jobname = `job-${++this.counter}`;
-    const proc = spawn(this.opts.pdflatex, ['-no-shell-escape', '-interaction=scrollmode', `-jobname=${jobname}`, 'driver.tex'], {
+    const proc = spawn(this.opts.pdflatex, ['-no-shell-escape', '-interaction=nonstopmode', `-jobname=${jobname}`, 'driver.tex'], {
       cwd: this.opts.workDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -81,11 +81,15 @@ export class WarmCompiler {
       const onData = (d: Buffer) => {
         out += d.toString('latin1');
         if (out.includes('CIRRUS-READY')) {
+          clearTimeout(timer);
           proc.stdout!.off('data', onData);
           proc.stdout!.resume(); // keep draining so pdfLaTeX never blocks on a full pipe
           resolve({ proc, jobname, exited });
         }
       };
+      // A preamble that never reaches CIRRUS-READY (stuck or too slow) is killed after timeoutMs.
+      const timer = setTimeout(() => { proc.kill(); reject(new Error(`preamble not loaded after ${this.timeoutMs} ms`)); }, this.timeoutMs);
+      void exited.then(() => clearTimeout(timer));
       proc.stdout!.on('data', onData);
       proc.stderr!.resume();
       proc.on('error', reject);

@@ -42,6 +42,21 @@ export function toMarkdown(runs: RunResult[], v: Verdict, date: string): string 
     '|---|---|---|---|---|',
     ...runs.map((r) => `| ${r.label} | ${row(r.cpuMs)} |`),
     '',
+    '## Pires images',
+    '',
+    ...runs.flatMap((r) => {
+      const out: string[] = [];
+      if (r.worstFrame) {
+        const w = r.worstFrame;
+        out.push(`- **${r.label}** — Pire image à t = ${w.t.toFixed(1)} s : intervalle ${w.intervalMs.toFixed(0)} ms, processeur ${w.cpuMs.toFixed(0)} ms${w.rebuilt ? ', reconstruction' : ''}.`);
+      }
+      if (r.worstRebuild) {
+        const d = r.worstRebuild;
+        out.push(`  Pire reconstruction : ${Object.entries(d).map(([k, v]) => `${k} ${Math.round(v)}`).join(', ')}.`);
+      }
+      return out;
+    }),
+    '',
   ];
   return out.join('\n');
 }

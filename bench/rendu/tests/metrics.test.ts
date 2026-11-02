@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { CRITERIA, evaluate, summarize, type RunResult } from '../src/bench/metrics';
+import { CRITERIA, afterWarmup, evaluate, summarize, type RunResult } from '../src/bench/metrics';
 import { toMarkdown } from '../src/bench/report';
 
 test('percentiles', () => {
@@ -57,6 +57,29 @@ test('critère carte graphique sur le temps GPU mesuré quand il existe', () => 
   expect(v.lines.join(' ')).toMatch(/temps GPU mesuré/);
   runs[0].gpuMs!.p95 = 2.5;
   expect(evaluate(runs, CRITERIA).pass).toBe(false);
+});
+
+test('passe synchronisée plafonnée par un autre écran : signalée, pas comparée à 165 Hz', () => {
+  const runs: RunResult[] = [
+    { ...structuredClone(ok[0]), label: 'vsync', frameIntervalMs: { p50: 10, p95: 10.1, max: 40, n: 4000 }, gpuMs: { p50: 0.4, p95: 1.6, max: 9, n: 3990 } },
+    structuredClone(ok[1]),
+  ];
+  const text = evaluate(runs, CRITERIA).lines.join(' ');
+  expect(text).toMatch(/plafonnée à 100 Hz/);
+  expect(text).not.toMatch(/budget/);
+});
+
+test('la première seconde (apparition de la fenêtre) est écartée des mesures', () => {
+  expect(afterWarmup([0.1, 0.5, 0.99, 1.0, 2.5], [900, 50, 40, 10, 12], 1)).toEqual([10, 12]);
+});
+
+test('le rapport donne la pire image et la décomposition de la pire reconstruction', () => {
+  const runs = structuredClone(ok);
+  runs[1].worstFrame = { t: 39.2, intervalMs: 830, cpuMs: 810, rebuilt: true };
+  runs[1].worstRebuild = { t: 39.2, totalMs: 810, visibleMs: 60, boxHullMs: 8, ribbonMs: 120, textMs: 600, attachMs: 20, nodes: 0, closed: 811, connections: 9000 };
+  const md = toMarkdown(runs, evaluate(runs, CRITERIA), '2026-11-02');
+  expect(md).toMatch(/Pire image/);
+  expect(md).toMatch(/textMs.*600|600.*textes/);
 });
 
 test('le rapport montre p95 et maximum (Review Focus 3)', () => {
