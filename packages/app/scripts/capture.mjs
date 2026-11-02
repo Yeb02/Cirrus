@@ -1,4 +1,4 @@
-// Visual check: npm run capture -w packages/app -- <image.png> [--plan=<nom>] [--view=x,y,zoom] [--hover=x,y]
+// Visual check: npm run capture -w packages/app -- <image.png> [--plan=<nom>] [--view=x,y,zoom] [--hover=x,y] [--keys=ctrl+z,…]
 //   [--panel] [--size=w,h] [--data=<dossier>]
 // Without --data, the artificial test base is built in a temporary folder. The app quits once the image is written.
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -28,7 +28,7 @@ if (!data) {
 
 const electron = createRequire(import.meta.url)('electron');
 const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_CAPTURE: out };
-for (const [name, key] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['size', 'CIRRUS_SIZE']]) {
+for (const [name, key] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['size', 'CIRRUS_SIZE'], ['keys', 'CIRRUS_KEYS']]) {
   if (opt(name)) env[key] = opt(name);
 }
 if (args.includes('--panel')) env.CIRRUS_PANEL = '1';

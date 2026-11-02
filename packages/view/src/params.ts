@@ -76,6 +76,7 @@ export interface RenderParams {
   keyPanPx: number;
   fitMarginPx: number;
   settingsSaveDelayMs: number;
+  toastMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -160,6 +161,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   keyPanPx: 80,
   fitMarginPx: 60,
   settingsSaveDelayMs: 300,
+  toastMs: 4000,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -263,6 +265,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('keyPanPx', 'Pas du déplacement aux flèches (px)', A, 'Vue', 10, 400, 5),
   num('fitMarginPx', 'Marge du cadrage (px)', A, 'Vue', 0, 300, 5),
   num('settingsSaveDelayMs', 'Délai avant d’enregistrer les réglages (ms)', A, 'Vue', 0, 5000, 50),
+  num('toastMs', 'Durée d’affichage des notifications (ms)', A, 'Vue', 500, 20000, 100),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

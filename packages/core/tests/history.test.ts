@@ -58,3 +58,31 @@ test('annuler une action multi-opérations la défait entièrement', () => {
   run(s, stack.undo(s)!);
   expect(snapshot(s)).toBe(before);
 });
+
+test('préparer une annulation ne déplace la pile qu’une fois confirmée (écriture réussie)', () => {
+  const { s, plan, stack } = setup();
+  stack.record(run(s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 })));
+  const inverse = stack.prepareUndo(s)!;
+  expect(stack.canUndo).toBe(true); // not moved yet: the write may still fail
+  expect(stack.prepareUndo(s)!.ops).toEqual(inverse.ops);
+  run(s, inverse);
+  stack.confirmUndo();
+  expect(stack.canUndo).toBe(false);
+  expect(stack.canRedo).toBe(true);
+  const again = stack.prepareRedo(s)!;
+  expect(stack.canRedo).toBe(true);
+  run(s, again);
+  stack.confirmRedo();
+  expect(stack.canUndo).toBe(true);
+  expect(stack.canRedo).toBe(false);
+});
+
+test('un rétablissement refusé dit « rétablir » (M3 du plan 2)', () => {
+  const { s, plan, stack } = setup();
+  const a = run(s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  stack.record(a);
+  run(s, stack.undo(s)!);
+  // Someone else recreates a conflicting state: redoing would not apply.
+  for (const op of a.ops) applyOp(s, op);
+  expect(() => stack.redo(s)).toThrow(/rétablir/);
+});

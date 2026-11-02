@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { GraphView } from './ui/GraphView.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
+import { type Toast, Toasts } from './ui/Toasts.tsx';
+import { EditSession, type Result } from './session.ts';
 
 const TABS_KEY = 'cirrus.tabs';
 
@@ -27,9 +29,43 @@ export function App() {
   const [active, setActive] = useState<Id | null>(null);
   const [panel, setPanel] = useState(window.cirrus.launch.panel === true);
   const [error, setError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const readySent = useRef(false);
   /** The settings just read are not written back. */
   const loadedParams = useRef<RenderParams | null>(null);
+  const session = useRef<EditSession | null>(null);
+  const activeRef = useRef<Id | null>(null);
+  activeRef.current = active;
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
+
+  const toast = (text: string) => {
+    const id = Math.random();
+    setToasts((t) => [...t, { id, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), paramsRef.current.toastMs);
+  };
+  /** Reports a refused edit, or names the plan an undone step changed if it is not the one on screen (spec 6.4). */
+  const report = (r: Result, verb?: string) => {
+    if (!r.ok) { toast(r.message); return; }
+    const elsewhere = r.plans.filter((p) => p !== activeRef.current);
+    if (verb && elsewhere.length > 0 && !r.plans.includes(activeRef.current!)) {
+      const names = elsewhere.map((p) => `« ${session.current!.state.plans.get(p)?.name ?? '?'} »`).join(', ');
+      toast(`${verb} dans ${elsewhere.length > 1 ? 'les plans' : 'le plan'} ${names} : ${r.action.label}`);
+    }
+  };
+
+  // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field they belong to the text (spec 6.4).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!session.current || !e.ctrlKey || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); void session.current.undo().then((r) => report(r, 'Annulé')); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); void session.current.redo().then((r) => report(r, 'Rétabli')); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -47,6 +83,7 @@ export function App() {
         }
         const p = withOverrides(settings);
         loadedParams.current = p;
+        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (next) => setState(next));
         setParams(p);
         setTabs(open);
         setActive(current);
@@ -70,7 +107,17 @@ export function App() {
   const firstFrame = () => {
     if (readySent.current) return;
     readySent.current = true;
-    window.cirrus.ready();
+    // Visual checks: CIRRUS_KEYS="ctrl+z,Delete" presses those keys before the capture.
+    const keys = (window.cirrus.launch.keys ?? '').split(',').filter(Boolean);
+    void (async () => {
+      for (const combo of keys) {
+        const parts = combo.split('+');
+        const key = parts.pop()!;
+        window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: parts.includes('ctrl'), shiftKey: parts.includes('shift'), altKey: parts.includes('alt') }));
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      window.cirrus.ready();
+    })();
   };
   useEffect(() => { if (error) firstFrame(); }, [error]);
 
@@ -94,6 +141,7 @@ export function App() {
       <div className="main">
         <GraphView state={state} plan={active} params={params} onFirstFrame={firstFrame} />
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
+        <Toasts toasts={toasts} />
       </div>
     </div>
   );

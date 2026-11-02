@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type State, toSnapshot } from '@cirrus/core';
+import { type Action, OpConflictError, type State, toSnapshot } from '@cirrus/core';
 import { buildLargeState } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
@@ -25,6 +25,7 @@ const launch = {
   panel: process.env.CIRRUS_PANEL === '1',
   bench: bench ? (process.env.CIRRUS_BENCH_LABEL ?? 'vsync') : undefined,
   hide: process.env.CIRRUS_BENCH_HIDE,
+  keys: process.env.CIRRUS_KEYS,
 };
 if (bench) app.commandLine.appendSwitch('force_high_performance_gpu');
 
@@ -81,6 +82,16 @@ ipcMain.handle('cirrus:snapshot', () => JSON.stringify(toSnapshot(benchState ?? 
 // The bench runs on the defaults, or on CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting.
 ipcMain.handle('cirrus:settings:get', () => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir)));
 ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => { if (!bench) writeSettings(dir, overrides); });
+// An edit computed by the interface (spec 4: only this process writes). A conflicting record refuses it.
+ipcMain.handle('cirrus:commit', (_e, action: Action) => {
+  if (!store) throw new Error('Pas de base ouverte (mode banc).');
+  try {
+    store.commit(action);
+  } catch (e) {
+    if (e instanceof OpConflictError) throw new Error('La base a changé : action refusée.');
+    throw e;
+  }
+});
 ipcMain.handle('cirrus:bench:done', (_e, run) => {
   const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), run, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
   if (report) console.log(`Rapport écrit : ${report}`);
