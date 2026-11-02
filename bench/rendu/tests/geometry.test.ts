@@ -46,6 +46,20 @@ test('faisceau : marqueur au milieu des centres, arrivée tangente au tronc', ()
   }
 });
 
+test('faisceau : nombre de segments adapté à la longueur de chaque branche', () => {
+  const b = bundleBranches(
+    [
+      { pos: { x: 0, y: 0 }, role: 'source', k: 0 },
+      { pos: { x: 1000, y: 0 }, role: 'target', k: 0 },
+      { pos: { x: 500, y: 40 }, role: 'associate', k: 0 },
+    ],
+    (chord) => Math.ceil(chord / 10),
+  );
+  // marqueur en (500, 0) : branches de 500, 500 et 40 unités
+  expect(b[0].centerline.length).toBe(51);
+  expect(b[2].centerline.length).toBe(5);
+});
+
 test('enveloppe convexe', () => {
   expect(
     convexHull([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0.5, y: 0.5 }]),

@@ -15,6 +15,10 @@ export interface RenderParams {
   starCellWorld: number;
   starSpacingPx: [number, number];
   starSizePx: number;
+  /** Bézier sampling: one segment per this many on-screen px... */
+  curveSegmentPx: number;
+  /** ...valid until the zoom grows by this factor, then ribbons are resampled. */
+  curveZoomHeadroom: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -33,6 +37,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   starCellWorld: 40,
   starSpacingPx: [40, 160],
   starSizePx: 1,
+  curveSegmentPx: 6,
+  curveZoomHeadroom: 2,
 };
 
 export interface SceneSpec {

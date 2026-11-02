@@ -61,7 +61,8 @@ const centroid = (pts: Vec2[]): Vec2 => ({
  */
 export function bundleBranches(
   members: { pos: Vec2; role: Role; k: number }[],
-  segments: number,
+  /** Fixed count, or a count derived from the chord between the member and the marker (adaptive sampling). */
+  segments: number | ((chord: number) => number),
   factor: number = DEFAULT_PARAMS.factor,
 ): { centerline: Vec2[]; scales: number[] }[] {
   const sources = members.filter((m) => m.role === 'source').map((m) => m.pos);
@@ -87,8 +88,9 @@ export function bundleBranches(
     }
     const c1 = { x: marker.x + dx * L * 0.4, y: marker.y + dy * L * 0.4 };
     const c0 = { x: m.pos.x + (c1.x - m.pos.x) * 0.35, y: m.pos.y + (c1.y - m.pos.y) * 0.35 };
-    const centerline = sampleBranch(m.pos, c0, c1, marker, segments);
-    const scales = centerline.map((_, i) => localScale(i / segments, m.k, markerK, factor));
+    const segs = typeof segments === 'number' ? segments : Math.max(1, segments(L));
+    const centerline = sampleBranch(m.pos, c0, c1, marker, segs);
+    const scales = centerline.map((_, i) => localScale(i / segs, m.k, markerK, factor));
     return { centerline, scales };
   });
 }
