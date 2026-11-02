@@ -10,3 +10,7 @@ export * from './geometry/ribbon.ts';
 export * from './geometry/envelope.ts';
 export * from './geometry/stars.ts';
 export * from './geometry/grid.ts';
+export * from './visibility.ts';
+export * from './frame.ts';
+export * from './hit.ts';
+export * from './titles.ts';
