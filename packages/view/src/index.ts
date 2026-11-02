@@ -16,3 +16,5 @@ export * from './hit.ts';
 export * from './titles.ts';
 export * from './navigation.ts';
 export * from './edit.ts';
+export * from './gestures.ts';
+export * from './selection.ts';

@@ -1,5 +1,8 @@
 import type { Id, State } from '@cirrus/core';
-import { buildScene, type Camera, fitBounds, fitItem, navigate, type NavInput, type PlanScene, type RenderParams, sceneParamsKey, screenToWorld } from '@cirrus/view';
+import {
+  type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
+  type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, worldToScreen,
+} from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
@@ -35,7 +38,11 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
   const paramsRef = useRef(props.params);
   const dirty = useRef(true);
   const firstPending = useRef(true);
-  const drag = useRef<{ x: number; y: number } | null>(null);
+  const gestures = useRef(new GestureMachine(props.params));
+  const [selection, setSelection] = useState<Selection>(emptySelection);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const [rect, setRect] = useState<Bounds | null>(null);
   const [ready, setReady] = useState(false);
   const [scene, setScene] = useState<PlanScene | null>(null);
   const [tip, setTip] = useState<Tip>(null);
@@ -103,6 +110,19 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
       engine.current = { app, renderer };
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
+      // Visual checks: CIRRUS_POINTER="down 700 370 ctrl; move 900 500; up 900 500" replays pointer events.
+      let launchPointer = window.cirrus.launch.pointer;
+      let settle = 0;
+      const replay = (script: string) => {
+        for (const step of script.split(';').map((x) => x.trim()).filter(Boolean)) {
+          const [t, xs, ys, ...mods] = step.split(/\s+/);
+          const sx = Number(xs), sy = Number(ys), button = mods.includes('right') ? 2 : 0;
+          if (t === 'down') feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
+          else if (t === 'move') feed({ t: 'move', sx, sy });
+          else if (t === 'up') feed({ t: 'up', button, sx, sy });
+          else if (t === 'key') feed({ t: 'key', key: xs });
+        }
+      };
       const loop = () => {
         const e = engine.current;
         if (e && sceneRef.current) {
@@ -116,6 +136,8 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
             if (firstPending.current) {
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
+              else if (launchPointer) { replay(launchPointer); launchPointer = undefined; settle = 5; dirty.current = true; }
+              else if (settle > 0) { settle--; dirty.current = true; }
               else {
                 firstPending.current = false;
                 props.onFirstFrame();
@@ -162,6 +184,11 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
   useEffect(() => {
     const e = engine.current;
     if (!e || !scene) return;
+    // Another plan: the gesture in progress and the selection do not follow.
+    if (sceneRef.current && sceneRef.current.plan.id !== scene.plan.id) {
+      feed({ t: 'cancel' });
+      setSelection(emptySelection());
+    }
     sceneRef.current = scene;
     e.renderer.setScene(scene);
     clearHover();
@@ -186,45 +213,117 @@ export function GraphView(props: { state: State; plan: Id; params: RenderParams;
     const r = root.current!.getBoundingClientRect();
     return { sx: ev.clientX - r.left, sy: ev.clientY - r.top };
   };
+  const hitAt = (sx: number, sy: number): Hit => {
+    const e = engine.current, hits = e?.renderer.hitIndex;
+    if (!e || !hits) return { kind: 'background' };
+    const w = screenToWorld(e.renderer.camera, sx, sy);
+    return hits.hit(w.x, w.y, e.renderer.camera.zoom);
+  };
+  /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
+  const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
+    const sc = sceneRef.current, vis = engine.current?.renderer.visible;
+    if (!sc) return null;
+    if (h.kind === 'item') return { kind: 'item', id: sc.items[h.item].id };
+    if ((h.kind === 'connection' || h.kind === 'stub') && vis) return { kind: 'connection', id: sc.connections[vis.connections[h.conn].conns[0]].id };
+    return null;
+  };
+
+  const handle = (intent: Intent) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc) return;
+    switch (intent.t) {
+      case 'pan':
+        nav({ t: 'drag', dxPx: intent.dxPx, dyPx: intent.dyPx });
+        break;
+      case 'click': {
+        // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1).
+        const target = targetOf(intent.hit);
+        if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); }
+        else setSelection(target ? toggle(emptySelection(), target) : emptySelection());
+        break;
+      }
+      case 'context': {
+        // A right click outside the selection lets it go (spec 9.1); the menus come with task 7.
+        const target = targetOf(intent.hit);
+        const sel = selectionRef.current;
+        if (!target || !(target.kind === 'item' ? sel.items : sel.connections).has(target.id)) setSelection(emptySelection());
+        break;
+      }
+      case 'rectMove':
+        setRect(intent.rect);
+        break;
+      case 'rectEnd': {
+        // Ctrl+drag adds what the rectangle holds (spec 9.1, 9.3).
+        const ids = inRectangle(sc, intent.rect, e.renderer.camera.zoom, paramsRef.current);
+        setSelection((sel) => ({ items: new Set([...sel.items, ...ids]), connections: sel.connections }));
+        setRect(null);
+        break;
+      }
+      case 'rectCancel':
+        setRect(null);
+        break;
+      default:
+        break;
+    }
+    dirty.current = true;
+  };
+  const feed = (input: Input) => {
+    const e = engine.current;
+    if (!e) return;
+    for (const intent of gestures.current.feed(input, e.renderer.camera)) handle(intent);
+  };
+  const buttonOf = (b: number): 0 | 1 | 2 => (b === 2 ? 2 : b === 1 ? 1 : 0);
+
+  // A lost focus abandons the gesture in progress (Review Focus 2 of plan 3b).
+  useEffect(() => {
+    const onBlur = () => feed({ t: 'cancel' });
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, []);
+  useEffect(() => {
+    engine.current?.renderer.setSelection(selection);
+    dirty.current = true;
+  }, [selection, scene]);
+
+  const rectStyle = (() => {
+    const e = engine.current;
+    if (!rect || !e) return null;
+    const a = worldToScreen(e.renderer.camera, rect.minX, rect.minY), b = worldToScreen(e.renderer.camera, rect.maxX, rect.maxY);
+    return { left: a.x, top: a.y, width: b.x - a.x, height: b.y - a.y };
+  })();
 
   return (
     <div
       className="graph"
       ref={root}
       tabIndex={0}
+      onContextMenu={(ev) => ev.preventDefault()}
       onPointerDown={(ev) => {
         root.current!.focus();
-        if (ev.button !== 0) return;
-        const e = engine.current, hits = e?.renderer.hitIndex;
-        if (!e || !hits) return;
         const { sx, sy } = local(ev);
-        const w = screenToWorld(e.renderer.camera, sx, sy);
-        // Background (open groups' included, spec 9.1) pans the view; moving elements comes with plan 3b.
-        if (hits.hit(w.x, w.y, e.renderer.camera.zoom).kind !== 'background') return;
-        drag.current = { x: ev.clientX, y: ev.clientY };
         root.current!.setPointerCapture(ev.pointerId);
+        feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
       }}
       onPointerMove={(ev) => {
-        if (drag.current) {
-          nav({ t: 'drag', dxPx: ev.clientX - drag.current.x, dyPx: ev.clientY - drag.current.y });
-          drag.current = { x: ev.clientX, y: ev.clientY };
-          return;
-        }
         const { sx, sy } = local(ev);
-        hover(sx, sy);
+        if (!gestures.current.busy) hover(sx, sy);
+        feed({ t: 'move', sx, sy });
       }}
       onPointerUp={(ev) => {
-        if (drag.current) root.current!.releasePointerCapture(ev.pointerId);
-        drag.current = null;
+        const { sx, sy } = local(ev);
+        if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
+        feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
-      onPointerLeave={() => { if (!drag.current) clearHover(); }}
+      onPointerLeave={() => { if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
+        if (ev.key === 'Escape') { feed({ t: 'key', key: 'Escape' }); return; }
         if (!NAV_KEYS.has(ev.key)) return;
         ev.preventDefault();
         nav({ t: 'key', key: ev.key });
       }}
     >
       <div className="canvas-host" ref={host} />
+      {rectStyle && <div className="select-rect" style={rectStyle} />}
       <HierarchyCorner
         chain={chain}
         onPick={(item) => { const e = engine.current, sc = sceneRef.current; if (e && sc) moveCamera(fitItem(sc, item, e.renderer.camera, paramsRef.current)); }}

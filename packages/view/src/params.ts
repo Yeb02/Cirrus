@@ -71,6 +71,7 @@ export interface RenderParams {
   // View and navigation
   viewMarginPx: number;
   hitTolerancePx: number;
+  clickSlopPx: number;
   wheelZoomSpeed: number;
   keyZoomStep: number;
   keyPanPx: number;
@@ -97,6 +98,9 @@ export interface RenderParams {
   absentColor: Rgb;
   markerColor: Rgb;
   titleColor: Rgb;
+  selectionColor: Rgb;
+  selectionWidthPx: number;
+  selectionGapPx: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -156,6 +160,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   badgeRadiusPx: 3,
   viewMarginPx: 200,
   hitTolerancePx: 6,
+  clickSlopPx: 4,
   wheelZoomSpeed: 0.0015,
   keyZoomStep: 1.25,
   keyPanPx: 80,
@@ -180,6 +185,9 @@ export const DEFAULT_PARAMS: RenderParams = {
   absentColor: hexToRgb('#8494ae'),
   markerColor: hexToRgb('#14213a'),
   titleColor: hexToRgb('#cfdcf5'),
+  selectionColor: hexToRgb('#ffd9a0'),
+  selectionWidthPx: 2,
+  selectionGapPx: 3,
 };
 
 export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list';
@@ -260,6 +268,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('badgeRadiusPx', 'Rayon du badge des connexions absentes (px)', A, 'Fantômes et signes', 1, 8, 0.5),
   num('viewMarginPx', 'Marge préparée autour de l’écran (px)', A, 'Vue', 0, 1000, 10),
   num('hitTolerancePx', 'Tolérance de survol d’une connexion (px)', A, 'Vue', 1, 20, 0.5),
+  num('clickSlopPx', 'Mouvement en deçà duquel un appui reste un clic (px)', A, 'Vue', 0, 20, 1),
   num('wheelZoomSpeed', 'Vitesse du zoom à la molette', A, 'Vue', 0.0002, 0.01, 0.0001),
   num('keyZoomStep', 'Pas du zoom au clavier', A, 'Vue', 1.05, 3, 0.05),
   num('keyPanPx', 'Pas du déplacement aux flèches (px)', A, 'Vue', 10, 400, 5),
@@ -287,6 +296,9 @@ export const PARAM_SPECS: ParamSpec[] = [
   color('absentColor', 'Amorces'),
   color('markerColor', 'Intérieur des marqueurs'),
   color('titleColor', 'Titres des connexions'),
+  color('selectionColor', 'Sélection'),
+  num('selectionWidthPx', 'Épaisseur du contour de sélection (px)', A, 'Couleurs', 0.5, 8, 0.5),
+  num('selectionGapPx', 'Écart du contour de sélection (px)', A, 'Couleurs', 0, 12, 0.5),
 ];
 
 const SPEC_BY_KEY = new Map(PARAM_SPECS.map((s) => [s.key, s]));

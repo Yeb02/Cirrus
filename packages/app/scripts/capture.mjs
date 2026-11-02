@@ -28,7 +28,7 @@ if (!data) {
 
 const electron = createRequire(import.meta.url)('electron');
 const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_CAPTURE: out };
-for (const [name, key] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['size', 'CIRRUS_SIZE'], ['keys', 'CIRRUS_KEYS']]) {
+for (const [name, key] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['size', 'CIRRUS_SIZE'], ['keys', 'CIRRUS_KEYS'], ['pointer', 'CIRRUS_POINTER']]) {
   if (opt(name)) env[key] = opt(name);
 }
 if (args.includes('--panel')) env.CIRRUS_PANEL = '1';

@@ -26,6 +26,7 @@ const launch = {
   bench: bench ? (process.env.CIRRUS_BENCH_LABEL ?? 'vsync') : undefined,
   hide: process.env.CIRRUS_BENCH_HIDE,
   keys: process.env.CIRRUS_KEYS,
+  pointer: process.env.CIRRUS_POINTER,
 };
 if (bench) app.commandLine.appendSwitch('force_high_performance_gpu');
 

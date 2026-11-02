@@ -363,3 +363,38 @@ export function skyShader(p: RenderParams): Shader {
 export function setZoom(shaders: Shader[], zoom: number): void {
   for (const s of shaders) s.resources.lod.uniforms.uZoom = zoom;
 }
+
+/** Selection outlines: rings around selected boxes and envelopes, at a constant on-screen gap and width. */
+export function outlineShader(p: RenderParams): Shader {
+  return Shader.from({
+    gl: {
+      vertex: /* glsl */ `#version 300 es
+      in vec2 aPosition; in vec2 aNormal; in float aOuter;
+      out float vEdge;
+      uniform float uGapPx; uniform float uWidthPx;
+      ${COMMON}
+      void main() {
+        float px = uGapPx + aOuter * (uWidthPx + 1.0);
+        vEdge = aOuter * (uWidthPx + 1.0);
+        gl_Position = project(aPosition + aNormal * px / uZoom);
+      }`,
+      fragment: /* glsl */ `#version 300 es
+      precision highp float;
+      in float vEdge; out vec4 finalColor;
+      uniform vec3 uOutlineColor; uniform float uWidthPx;
+      void main() {
+        // One pixel of antialiasing on the outer side.
+        float a = clamp(uWidthPx + 0.5 - vEdge, 0.0, 1.0);
+        finalColor = vec4(uOutlineColor, 1.0) * a;
+      }`,
+    },
+    resources: {
+      lod: lod(p),
+      outline: {
+        uGapPx: { value: p.selectionGapPx, type: 'f32' },
+        uWidthPx: { value: p.selectionWidthPx, type: 'f32' },
+        uOutlineColor: { value: p.selectionColor, type: 'vec3<f32>' },
+      },
+    },
+  });
+}
