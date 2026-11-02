@@ -1,6 +1,7 @@
-import type { Id } from './model.ts';
+import type { BranchRec, ConnectionRec, Id } from './model.ts';
+import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
-import { branchKey, parseBranchKey, type State } from './state.ts';
+import { branchKey, parseBranchKey, placementKey, type State } from './state.ts';
 
 export interface Violation {
   code: 'members' | 'duplicateMember' | 'twoGroups' | 'cycle' | 'trashedPlaced' | 'structureOutsideDocument' | 'tag';
@@ -8,42 +9,113 @@ export interface Violation {
   subject: Id;
 }
 
-/** Direct groups of a node in a plan: inclusion connections whose two branches are shown in that plan. */
-function groupsOf(s: State, plan: Id, node: Id): Id[] {
-  const groups: Id[] = [];
-  for (const c of s.connections.values()) {
-    if (c.kind !== 'inclusion' || c.trashedAt !== undefined) continue;
-    const member = c.members.find((m) => m.role === 'source');
-    const group = c.members.find((m) => m.role === 'target');
-    if (!member || !group || member.node !== node) continue;
-    if (s.branches.has(branchKey({ plan, connection: c.id, node })) && s.branches.has(branchKey({ plan, connection: c.id, node: group.node }))) {
-      groups.push(group.node);
-    }
-  }
-  return groups;
+/** Direct groups per plan, then per member node. */
+export type GroupIndex = Map<Id, Map<Id, Id[]>>;
+
+/** The group an inclusion connection puts `node` in, in this plan: both of its branches are shown there. */
+function groupVia(s: State, plan: Id, c: ConnectionRec, node: Id): Id | undefined {
+  if (c.kind !== 'inclusion' || c.trashedAt !== undefined) return undefined;
+  const member = c.members.find((m) => m.role === 'source');
+  const group = c.members.find((m) => m.role === 'target');
+  if (!member || !group || member.node !== node) return undefined;
+  const shown = (n: Id) => s.branches.has(branchKey({ plan, connection: c.id, node: n }));
+  return shown(node) && shown(group.node) ? group.node : undefined;
 }
 
-/** The direct group of a node in a plan (spec 10: at most one). */
-export function groupOf(s: State, plan: Id, node: Id): Id | undefined {
-  return groupsOf(s, plan, node)[0];
+/** One pass over the branches: builds the group index and hands every branch to `visit`. */
+function scanBranches(s: State, visit?: (b: BranchRec, c: ConnectionRec) => void): GroupIndex {
+  const index: GroupIndex = new Map();
+  for (const key of s.branches) {
+    const b = parseBranchKey(key);
+    const c = s.connections.get(b.connection);
+    if (!c) continue;
+    visit?.(b, c);
+    const g = groupVia(s, b.plan, c, b.node);
+    if (g === undefined) continue;
+    let byNode = index.get(b.plan);
+    if (!byNode) index.set(b.plan, (byNode = new Map()));
+    const groups = byNode.get(b.node);
+    if (groups) groups.push(g);
+    else byNode.set(b.node, [g]);
+  }
+  return index;
+}
+
+/** Every direct group of every node in every plan, in one pass over the branches. For bulk queries (renderer). */
+export function groupIndex(s: State): GroupIndex {
+  return scanBranches(s);
+}
+
+/** The direct group of a node in a plan (spec 10: at most one). Without an index, scans the connections. */
+export function groupOf(s: State, plan: Id, node: Id, index?: GroupIndex): Id | undefined {
+  if (index) return index.get(plan)?.get(node)?.[0];
+  for (const c of s.connections.values()) {
+    const g = groupVia(s, plan, c, node);
+    if (g !== undefined) return g;
+  }
+  return undefined;
 }
 
 /** From the parent up to the root; stops on a cycle. */
-export function ancestors(s: State, plan: Id, node: Id): Id[] {
+export function ancestors(s: State, plan: Id, node: Id, index?: GroupIndex): Id[] {
   const out: Id[] = [];
   const seen = new Set<Id>([node]);
-  for (let g = groupOf(s, plan, node); g !== undefined && !seen.has(g); g = groupOf(s, plan, g)) {
+  for (let g = groupOf(s, plan, node, index); g !== undefined && !seen.has(g); g = groupOf(s, plan, g, index)) {
     out.push(g);
     seen.add(g);
   }
   return out;
 }
 
-/** Every violated rule; with `touched`, only violations about those objects. */
+/** The objects an action's operations can make wrong; undefined when everything must be checked (a plan or the tag registry changed). */
+export function touchedBy(ops: Op[]): Set<Id> | undefined {
+  const touched = new Set<Id>();
+  for (const op of ops) {
+    switch (op.t) {
+      case 'plan':
+      case 'tagKey':
+        return undefined;
+      case 'node':
+        touched.add((op.after ?? op.before)!.id);
+        break;
+      case 'connection':
+        for (const r of [op.before, op.after]) if (r) for (const id of [r.id, ...r.members.map((m) => m.node)]) touched.add(id);
+        break;
+      case 'placement':
+        touched.add((op.after ?? op.before)!.node);
+        break;
+      case 'branch':
+        touched.add(op.key.connection);
+        touched.add(op.key.node);
+        break;
+    }
+  }
+  return touched;
+}
+
+/**
+ * Every violated rule. With `touched`, only violations about those objects (and the members of touched inclusion
+ * connections), and only those are computed: commands pay for what they touch, not for the size of the base.
+ */
 export function checkState(s: State, touched?: Set<Id>): Violation[] {
   const out: Violation[] = [];
+  const scope = touched && new Set(touched);
+  if (scope) for (const id of touched!) {
+    const c = s.connections.get(id);
+    if (c?.kind === 'inclusion') for (const m of c.members) scope.add(m.node);
+  }
+  const inScope = (id: Id) => !scope || scope.has(id);
+  const pick = <V>(map: Map<Id, V>): V[] => (scope ? [...scope].flatMap((id) => { const v = map.get(id); return v ? [v] : []; }) : [...map.values()]);
+  const checkTags = (subject: Id, tags: { key: string; value?: string | number }[]) => {
+    for (const t of tags) {
+      try { normalizeTag(t, s.tagKeys); } catch (e) {
+        if (e instanceof TagError) out.push({ code: 'tag', subject, message: e.message });
+        else throw e;
+      }
+    }
+  };
 
-  for (const c of s.connections.values()) {
+  for (const c of pick(s.connections)) {
     if (c.trashedAt !== undefined) continue;
     if (c.kind === 'knowledge' && c.members.length < 2) {
       out.push({ code: 'members', subject: c.id, message: 'Une connexion doit relier au moins deux nœuds.' });
@@ -51,50 +123,25 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
     if (new Set(c.members.map((m) => m.node)).size !== c.members.length) {
       out.push({ code: 'duplicateMember', subject: c.id, message: 'Un nœud ne peut figurer qu’une fois dans une connexion.' });
     }
-    for (const t of c.tags) {
-      try { normalizeTag(t, s.tagKeys); } catch (e) {
-        if (e instanceof TagError) out.push({ code: 'tag', subject: c.id, message: e.message });
-        else throw e;
-      }
+    checkTags(c.id, c.tags);
+  }
+
+  for (const n of pick(s.nodes)) {
+    checkTags(n.id, n.tags);
+    if (n.trashedAt !== undefined && [...s.plans.keys()].some((plan) => s.placements.has(placementKey(plan, n.id)))) {
+      out.push({ code: 'trashedPlaced', subject: n.id, message: 'Un nœud à la corbeille ne peut pas être placé dans un plan.' });
     }
   }
 
-  for (const n of s.nodes.values()) {
-    for (const t of n.tags) {
-      try { normalizeTag(t, s.tagKeys); } catch (e) {
-        if (e instanceof TagError) out.push({ code: 'tag', subject: n.id, message: e.message });
-        else throw e;
-      }
-    }
-  }
-
-  for (const p of s.placements.values()) {
-    if (s.nodes.get(p.node)?.trashedAt !== undefined) {
-      out.push({ code: 'trashedPlaced', subject: p.node, message: 'Un nœud à la corbeille ne peut pas être placé dans un plan.' });
-    }
-  }
-
-  // Group hierarchy, per plan: one direct group, no cycle (spec 10).
-  const membersByPlan = new Map<Id, Set<Id>>();
-  for (const key of s.branches) {
-    const b = parseBranchKey(key);
-    const c = s.connections.get(b.connection);
-    if (!c) continue;
-    if (c.kind === 'inclusion') {
-      if (!membersByPlan.has(b.plan)) membersByPlan.set(b.plan, new Set());
-      membersByPlan.get(b.plan)!.add(b.node);
-    }
-    if (c.kind === 'structure' && s.plans.get(b.plan)?.type !== 'document') {
-      out.push({ code: 'structureOutsideDocument', subject: c.id, message: 'Une connexion de structure n’existe que dans un plan document.' });
-    }
-  }
-  for (const [plan, nodes] of membersByPlan) {
+  const structureOutside = (c: ConnectionRec) =>
+    out.push({ code: 'structureOutsideDocument', subject: c.id, message: 'Une connexion de structure n’existe que dans un plan document.' });
+  // Per plan: one direct group, no cycle (spec 10).
+  const hierarchy = (nodes: Iterable<Id>, groupsIn: (node: Id) => Id[]) => {
     for (const node of nodes) {
-      if (groupsOf(s, plan, node).length > 1) {
-        out.push({ code: 'twoGroups', subject: node, message: 'Ce nœud est déjà dans un groupe de ce plan.' });
-      }
+      const groups = groupsIn(node);
+      if (groups.length > 1) out.push({ code: 'twoGroups', subject: node, message: 'Ce nœud est déjà dans un groupe de ce plan.' });
       const seen = new Set<Id>([node]);
-      for (let g = groupOf(s, plan, node); g !== undefined; g = groupOf(s, plan, g)) {
+      for (let g: Id | undefined = groups[0]; g !== undefined; g = groupsIn(g)[0]) {
         if (seen.has(g)) {
           out.push({ code: 'cycle', subject: node, message: 'Un groupe ne peut pas être inclus dans lui-même ni dans un de ses descendants.' });
           break;
@@ -102,9 +149,31 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
         seen.add(g);
       }
     }
+  };
+
+  if (!scope) {
+    // Whole state: one pass over the branches.
+    const index = scanBranches(s, (b, c) => { if (c.kind === 'structure' && s.plans.get(b.plan)?.type !== 'document') structureOutside(c); });
+    for (const byNode of index.values()) hierarchy(byNode.keys(), (n) => byNode.get(n) ?? []);
+  } else if ([...scope].some((id) => s.connections.has(id))) {
+    // Touched objects only (groups and structure depend on connections and branches: an action touching neither skips this).
+    for (const c of pick(s.connections)) {
+      if (c.kind !== 'structure') continue;
+      for (const p of s.plans.values()) {
+        if (p.type !== 'document' && c.members.some((m) => s.branches.has(branchKey({ plan: p.id, connection: c.id, node: m.node })))) structureOutside(c);
+      }
+    }
+    const bySource = new Map<Id, ConnectionRec[]>();
+    for (const c of s.connections.values()) {
+      const m = c.kind === 'inclusion' ? c.members.find((r) => r.role === 'source') : undefined;
+      if (m) bySource.set(m.node, [...(bySource.get(m.node) ?? []), c]);
+    }
+    const nodes = [...scope].filter((id) => s.nodes.has(id));
+    for (const plan of s.plans.keys()) hierarchy(nodes, (n) => (bySource.get(n) ?? []).flatMap((c) => groupVia(s, plan, c, n) ?? []));
   }
 
-  // One violation per (code, subject).
-  const unique = [...new Map(out.map((v) => [`${v.code}|${v.subject}`, v])).values()];
-  return touched ? unique.filter((v) => touched.has(v.subject)) : unique;
+  return dedupe(out);
 }
+
+/** One violation per (code, subject). */
+const dedupe = (out: Violation[]): Violation[] => [...new Map(out.map((v) => [`${v.code}|${v.subject}`, v])).values()];

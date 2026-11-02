@@ -70,6 +70,18 @@ test('connexion de structure hors plan document refusée', () => {
   expect(codes(s)).toContain('structureOutsideDocument');
 });
 
+test('la vérification limitée aux objets touchés trouve les mêmes violations que la vérification complète', () => {
+  const s = base();
+  inclusion(s, 'A', 'G', 'p1');
+  inclusion(s, 'A', 'H', 'p1');
+  inclusion(s, 'G', 'H', 'p2');
+  inclusion(s, 'H', 'G', 'p2');
+  connection(s, { id: 'st', kind: 'structure', title: '', relation: '', tags: [], members: [{ node: 'G', role: 'source' }, { node: 'A', role: 'target' }] }, 'p1');
+  const keys = (vs: { code: string; subject: string }[]) => vs.map((v) => `${v.code}|${v.subject}`).sort();
+  expect(keys(checkState(s, new Set(['inc-A-H', 'inc-H-G', 'st'])))).toEqual(keys(checkState(s)));
+  expect(keys(checkState(s))).toEqual(['cycle|G', 'cycle|H', 'structureOutsideDocument|st', 'twoGroups|A']);
+});
+
 test('groupOf et ancestors suivent la hiérarchie du plan', () => {
   const s = base();
   inclusion(s, 'A', 'G', 'p1');

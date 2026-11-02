@@ -1,5 +1,5 @@
 import { uuidv7 } from './ids.ts';
-import { checkState } from './invariants.ts';
+import { checkState, touchedBy } from './invariants.ts';
 import type { ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag } from './registry.ts';
@@ -44,8 +44,9 @@ class Draft {
     this.push({ t: 'phantom', before: this.s.phantoms.get(id) ?? null, after });
   }
   finish(label: string): Action {
-    const known = new Set(checkState(this.original).map((v) => `${v.code}|${v.subject}`));
-    const added = checkState(this.s).filter((v) => !known.has(`${v.code}|${v.subject}`));
+    const touched = touchedBy(this.ops);
+    const known = new Set(checkState(this.original, touched).map((v) => `${v.code}|${v.subject}`));
+    const added = checkState(this.s, touched).filter((v) => !known.has(`${v.code}|${v.subject}`));
     if (added.length > 0) throw new CommandError(added[0].message);
     return { id: uuidv7(), label, ops: this.ops };
   }
