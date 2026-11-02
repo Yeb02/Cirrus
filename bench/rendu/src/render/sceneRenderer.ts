@@ -1,7 +1,7 @@
 import { type Application, BitmapText, Container, type Geometry, Mesh, type Shader } from 'pixi.js';
 
 type CustomMesh = Mesh<Geometry, Shader>;
-import { bezierSegments, bundleBranches, ribbonAttributes, ribbonWorthDrawing, stubLine } from '../geometry/ribbon';
+import { bezierSegments, bundleBranches, ribbonAttributes, ribbonWorthDrawing, stubAttributes } from '../geometry/ribbon';
 import { convexHull, featherRing } from '../geometry/hull';
 import { starLayerAlpha, starsInRect } from '../geometry/stars';
 import { textPx } from '../scene/lod';
@@ -79,7 +79,7 @@ export class SceneRenderer {
     const meshes = [
       new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aParentK: { data: three(1), size: 1 } }, tri), shader: this.shaders.box }),
       new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aAlpha: { data: three(1), size: 1 }, aK: { data: three(1), size: 1 }, aLevel: { data: three(1), size: 1 } }, tri), shader: this.shaders.hull }),
-      new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aNormal: { data: three(2), size: 2 }, aScale: { data: three(1), size: 1 }, aEnd0: { data: three(3), size: 3 }, aEnd1: { data: three(3), size: 3 } }, tri), shader: this.shaders.ribbon }),
+      new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aNormal: { data: three(2), size: 2 }, aScale: { data: three(1), size: 1 }, aEnd0: { data: three(3), size: 3 }, aEnd1: { data: three(3), size: 3 }, aStubDir: { data: three(2), size: 2 } }, tri), shader: this.shaders.ribbon }),
       ...this.shaders.star.map((shader) => new Mesh({ geometry: makeGeometry({ aPosition: { data: three(2), size: 2 }, aCorner: { data: three(2), size: 2 } }, tri), shader })),
     ];
     const text = new BitmapText({ text: 'Nœud θ∑', style: { fontFamily: FONT_FAMILY, fontSize: 16, fill: 0xe6eefc } });
@@ -264,7 +264,7 @@ export class SceneRenderer {
     this.ribbonZoom = this.cam.zoom;
     // Each branch also carries two endpoints of its connection (its own and the one nearest the camera at rebuild,
     // or the other one for a two-member connection), so the shader can fade the whole connection (spec 8.5).
-    const parts: { attrs: ReturnType<typeof ribbonAttributes>; end0: number[]; end1: number[] }[] = [];
+    const parts: { attrs: ReturnType<typeof ribbonAttributes> & { stubDir?: Float32Array }; end0: number[]; end1: number[] }[] = [];
     const endOf = (node: number): number[] => { const c = this.rel(node); return [c.x, c.y, this.index.extent[node]]; };
     const cx = this.cam.x - this.origin.x, cy = this.cam.y - this.origin.y;
     for (const vc of visible.connections) {
@@ -277,10 +277,8 @@ export class SceneRenderer {
         members.forEach((m, i) => {
           const others = members.filter((_, j) => j !== i);
           const toward = { x: others.reduce((s2, o) => s2 + o.pos.x, 0) / others.length, y: others.reduce((s2, o) => s2 + o.pos.y, 0) / others.length };
-          const line = stubLine(m.pos, toward, this.params.stubPx / this.cam.zoom);
-          const sc = this.params.factor ** m.k;
           const end = endOf(vc.branches[i].node);
-          parts.push({ attrs: ribbonAttributes(line, [sc, sc]), end0: end, end1: end });
+          parts.push({ attrs: stubAttributes(m.pos, toward, this.params.factor ** m.k), end0: end, end1: end });
         });
         continue;
       }
@@ -294,7 +292,7 @@ export class SceneRenderer {
     let nv = 0, ni = 0;
     for (const p of parts) { nv += p.attrs.scale.length; ni += p.attrs.index.length; }
     const position = new Float32Array(nv * 2), normal = new Float32Array(nv * 2), scale = new Float32Array(nv);
-    const end0 = new Float32Array(nv * 3), end1 = new Float32Array(nv * 3);
+    const end0 = new Float32Array(nv * 3), end1 = new Float32Array(nv * 3), stubDir = new Float32Array(nv * 2);
     const index = new Uint32Array(ni);
     let vo = 0, io = 0;
     for (const { attrs: p, end0: e0, end1: e1 } of parts) {
@@ -302,6 +300,7 @@ export class SceneRenderer {
       position.set(p.position, vo * 2);
       normal.set(p.normal, vo * 2);
       scale.set(p.scale, vo);
+      if (p.stubDir) stubDir.set(p.stubDir, vo * 2);
       for (let v = 0; v < count; v++) { end0.set(e0, (vo + v) * 3); end1.set(e1, (vo + v) * 3); }
       for (let i = 0; i < p.index.length; i++) index[io + i] = p.index[i] + vo;
       vo += count; io += p.index.length;
@@ -310,7 +309,7 @@ export class SceneRenderer {
     this.replaceMesh('ribbon', nv === 0 ? undefined : new Mesh({
       geometry: makeGeometry({
         aPosition: { data: position, size: 2 }, aNormal: { data: normal, size: 2 }, aScale: { data: scale, size: 1 },
-        aEnd0: { data: end0, size: 3 }, aEnd1: { data: end1, size: 3 },
+        aEnd0: { data: end0, size: 3 }, aEnd1: { data: end1, size: 3 }, aStubDir: { data: stubDir, size: 2 },
       }, index),
       shader: this.shaders.ribbon,
     }));

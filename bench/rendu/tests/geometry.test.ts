@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { widthPx, localScale, sampleBranch, ribbonAttributes, bundleBranches, endpointFade, bezierSegments, ribbonWorthDrawing, stubLine } from '../src/geometry/ribbon';
+import { widthPx, localScale, sampleBranch, ribbonAttributes, bundleBranches, endpointFade, bezierSegments, ribbonWorthDrawing, stubAttributes } from '../src/geometry/ribbon';
 import { convexHull } from '../src/geometry/hull';
 import { starsInRect, starLayerAlpha } from '../src/geometry/stars';
 import { DEFAULT_PARAMS } from '../src/scene/params';
@@ -84,9 +84,13 @@ test('connexion trop fine pour être vue : écartée, mais pas une fois le zoom 
   expect(ribbonWorthDrawing(0, 1, DEFAULT_PARAMS)).toBe(true);
 });
 
-test("amorce : segment court partant de l'extrémité vers l'autre bout", () => {
-  const l = stubLine({ x: 10, y: 0 }, { x: 1000, y: 0 }, 40);
-  expect(l).toEqual([{ x: 10, y: 0 }, { x: 50, y: 0 }]);
+test("amorce : géométrie fixe, longueur portée par le shader (pas de saut au zoom)", () => {
+  const a = stubAttributes({ x: 10, y: 0 }, { x: 1000, y: 0 }, 1);
+  // deux points au même endroit : l'extrémité ; le second s'écarte de dir × stubPx / zoom dans le shader
+  expect(Array.from(a.position)).toEqual([10, 0, 10, 0, 10, 0, 10, 0]);
+  expect(Array.from(a.stubDir)).toEqual([0, 0, 0, 0, 1, 0, 1, 0]);
+  // normales perpendiculaires à la direction de l'amorce
+  expect(Array.from(a.normal)).toEqual([0, 1, 0, -1, 0, 1, 0, -1]);
 });
 
 test('enveloppe convexe', () => {

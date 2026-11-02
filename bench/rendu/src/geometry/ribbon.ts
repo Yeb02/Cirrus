@@ -40,11 +40,27 @@ export function ribbonWorthDrawing(maxK: number, zoom: number, p: RenderParams):
   return widthPx(p.factor ** maxK, zoom, p).alpha >= p.ribbonCullAlpha;
 }
 
-/** A stub: a short straight line from an endpoint toward the far end of its connection (spec 8.5). */
-export function stubLine(from: Vec2, toward: Vec2, length: number): Vec2[] {
+/**
+ * A stub (spec 8.5): a short straight ribbon from an endpoint toward the far end of its connection. Both centerline
+ * points sit on the endpoint; the shader moves the second one by stubDir × stubPx / zoom, so the stub keeps a
+ * constant on-screen length at every zoom instead of jumping at each rebuild.
+ */
+export function stubAttributes(
+  from: Vec2,
+  toward: Vec2,
+  scale: number,
+): { position: Float32Array; normal: Float32Array; scale: Float32Array; stubDir: Float32Array; index: Uint32Array } {
   const dx = toward.x - from.x, dy = toward.y - from.y;
   const d = Math.hypot(dx, dy) || 1;
-  return [from, { x: from.x + (dx / d) * length, y: from.y + (dy / d) * length }];
+  const ux = dx / d + 0, uy = dy / d + 0; // + 0 turns -0 into 0
+  const nx = -uy + 0, ny = ux + 0;
+  return {
+    position: new Float32Array([from.x, from.y, from.x, from.y, from.x, from.y, from.x, from.y]),
+    normal: new Float32Array([nx, ny, -nx + 0, -ny + 0, nx, ny, -nx + 0, -ny + 0]),
+    scale: new Float32Array([scale, scale, scale, scale]),
+    stubDir: new Float32Array([0, 0, 0, 0, ux, uy, ux, uy]),
+    index: new Uint32Array([0, 1, 2, 1, 3, 2]),
+  };
 }
 
 /** Scale along a branch, interpolated geometrically between the two ends' steps. */
