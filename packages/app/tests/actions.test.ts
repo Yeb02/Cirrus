@@ -8,7 +8,8 @@ import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScen
 import { beforeEach, expect, test } from 'vitest';
 import {
   absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
-  layoutBuild, pasteBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
+  dropBuild, dropMemberships, layoutBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
+  withRepercussion,
 } from '../src/renderer/actions.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
@@ -149,4 +150,37 @@ test('disposer une connexion à la main, puis rétablir la disposition automatiq
   expect(s.connLayouts.get(layoutKey(plans.lobby, connections.twoToTwo))).toMatchObject({ marker: { x: 1, y: 2 } });
   run(layoutBuild(plans.lobby, connections.twoToTwo, null));
   expect(s.connLayouts.has(layoutKey(plans.lobby, connections.twoToTwo))).toBe(false);
+});
+
+test('un dépôt dit quels nœuds changent de groupe, d’où et vers où ; les fantômes n’en sont pas (spec 10)', () => {
+  const { nodes } = ids;
+  const g = sc.items[sc.byId.get(nodes.groupeML)!];
+  const poly = offsetPolygon(g.hull!, g.pad! * 0.4);
+  const at = poly.reduce((b, q) => (q.y > b.y ? q : b), poly[0]);
+  const monde = sc.byId.get(nodes.monde)!;
+  expect(dropMemberships(s, sc, [monde], at, false, 1, P)).toEqual([{ node: nodes.monde, from: null, to: nodes.groupeML }]);
+  const mdl = sc.byId.get(nodes.mdl)!;
+  expect(dropMemberships(s, sc, [mdl], { x: 5000, y: 5000 }, true, 1, P)).toEqual([{ node: nodes.mdl, from: nodes.groupeComplexite, to: null }]);
+  expect(dropMemberships(s, sc, [sc.byId.get(ids.phantoms.node)!], { x: 5000, y: 5000 }, true, 1, P)).toEqual([]);
+});
+
+test('répercussion : le dépôt et les plans automatiques en une action ; un plan à corriger se pose d’un bloc avec son appartenance', () => {
+  const { nodes, plans } = ids;
+  const mdl = sc.byId.get(nodes.mdl)!;
+  const drop = dropBuild(sc, [mdl], 4000, 0, { x: 4175, y: 140 }, true, 1, P);
+  const a = run(withRepercussion(drop, [{ plan: plans.these, node: nodes.mdl, to: null }]));
+  expect(groupOf(s, plans.lobby, nodes.mdl)).toBeUndefined();
+  expect(groupOf(s, plans.these, nodes.mdl)).toBeUndefined();
+  expect(a.label).toBe('Sortir du groupe'); // one action, named after the drop
+  const these = buildScene(s, plans.these, measure, P);
+  run(placeInPlanBuild(these, nodes.compression, { x: 900, y: 900 }, null));
+  expect(s.placements.get(placementKey(plans.these, nodes.compression))).toMatchObject({ x: 900, y: 900 });
+  expect(groupOf(s, plans.these, nodes.compression)).toBeUndefined();
+  // A group moves as a block: its members follow.
+  const lobby = buildScene(s, plans.lobby, measure, P);
+  const before = s.placements.get(placementKey(plans.lobby, nodes.solomonoff))!;
+  const gi = lobby.items[lobby.byId.get(nodes.groupeInduction)!];
+  run(placeInPlanBuild(lobby, nodes.groupeInduction, { x: gi.x + 100, y: gi.y }, nodes.groupeTheorie));
+  expect(s.placements.get(placementKey(plans.lobby, nodes.solomonoff))!.x).toBeCloseTo(before.x + 100, 9);
+  expect(groupOf(s, plans.lobby, nodes.groupeInduction)).toBe(nodes.groupeTheorie);
 });

@@ -1,6 +1,6 @@
 import {
   type Action, addMember, branchKey, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setLayout,
+  exclude, groupOf, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setLayout,
   setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
 import {
@@ -230,4 +230,49 @@ export function renameBuild(id: Id, title: string): Build {
 /** A connection's layout in this plan (spec 8.5): set by its handles, or null for the automatic one. */
 export function layoutBuild(plan: Id, connection: Id, layout: Layout | null): Build {
   return (st) => setLayout(st, plan, connection, layout);
+}
+
+/** The nodes whose group a drop changes in its plan (spec 10), for the « partout » question; phantoms' groups are their plan's only. */
+export function dropMemberships(s: State, base: PlanScene, items: number[], at: Vec2, alt: boolean, zoom: number, p: RenderParams): { node: Id; from: Id | null; to: Id | null }[] {
+  const target = dropTarget(base, at, items, zoom, p);
+  const plan = base.plan.id;
+  return dropEffects(base, items, target, alt)
+    .filter((f) => (f.leave || f.enter !== null) && base.items[f.item].kind !== 'phantom')
+    .map((f) => {
+      const node = base.items[f.item].id;
+      return { node, from: groupOf(s, plan, node) ?? null, to: f.enter !== null ? base.items[f.enter].id : null };
+    });
+}
+
+/** « Partout » (spec 10): the drop, then the plans whose change needs no hand placement, as one action. */
+export function withRepercussion(drop: Build, autos: { plan: Id; node: Id; to: Id | null }[]): Build {
+  if (!drop || autos.length === 0) return drop;
+  return (st) => {
+    const first = drop(st);
+    return combine(st, first.label, [() => first, ...autos.map((r) => (x: State) => (r.to !== null ? include(x, r.plan, r.node, r.to) : exclude(x, r.plan, r.node)))]);
+  };
+}
+
+/**
+ * A node put down by hand in a plan the repercussion touches (spec 10): it moves there with all it contains (a group
+ * moves as a block) and takes its new group, or leaves its group.
+ */
+export function placeInPlanBuild(scene: PlanScene, node: Id, at: Vec2, to: Id | null): Build {
+  const i = scene.byId.get(node);
+  if (i === undefined) return null;
+  const dx = at.x - scene.items[i].x, dy = at.y - scene.items[i].y;
+  const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number }[] = [];
+  const collect = (j: number) => {
+    const it = scene.items[j];
+    if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + dx, y: it.y + dy });
+    else if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
+    for (const c of it.children) collect(c);
+  };
+  collect(i);
+  const plan = scene.plan.id;
+  return (st) => combine(st, `Répercuter dans « ${scene.plan.name} »`, [
+    ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
+    ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+    (x: State) => (to !== null ? include(x, plan, node, to) : exclude(x, plan, node)),
+  ]);
 }

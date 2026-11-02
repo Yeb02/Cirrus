@@ -34,6 +34,18 @@ export class UndoStack {
     this.undone.length = 0;
   }
 
+  /**
+   * Completes the last step with a later action, when that step is `id` (a repercussion placed plan by plan, spec 10:
+   * the whole is one undo step); otherwise `a` is recorded on its own. Returns whether it was merged.
+   */
+  extend(id: string, a: Action): boolean {
+    const top = this.done.at(-1);
+    if (!top || top.id !== id) { this.record(a); return false; }
+    this.done[this.done.length - 1] = { ...top, ops: [...top.ops, ...a.ops] };
+    this.undone.length = 0;
+    return true;
+  }
+
   prepareUndo(s: State): Action | null {
     const a = this.done.at(-1);
     if (!a) return null;

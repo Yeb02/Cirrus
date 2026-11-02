@@ -1,5 +1,5 @@
 import type { Id, Vec2 } from '@cirrus/core';
-import { offsetPolygon } from './geometry/hull.ts';
+import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
@@ -40,15 +40,6 @@ export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: 
   return out;
 }
 
-function inPolygon(poly: Vec2[], x: number, y: number): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i], b = poly[j];
-    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
-}
-
 /** Not inside a group more than half folded at this zoom: what can be dropped onto. */
 const reachable = (scene: PlanScene, i: number, zoom: number, p: RenderParams) => {
   for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (foldT(scene.items[a].maxChildK!, zoom, p) >= p.foldClickable) return false;
@@ -69,7 +60,7 @@ export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: 
     const isBox = it.kind === 'node';
     const under = isBox
       ? Math.abs(at.x - it.x) <= it.halfW && Math.abs(at.y - it.y) <= it.halfH
-      : inPolygon(offsetPolygon(it.hull!, it.pad!), at.x, at.y);
+      : insidePolygon(offsetPolygon(it.hull!, it.pad!), at.x, at.y);
     if (!under) return;
     if (it.depth > bestDepth || (it.depth === bestDepth && isBox && !bestIsBox)) { best = i; bestDepth = it.depth; bestIsBox = isBox; }
   });
@@ -90,7 +81,7 @@ export function intruders(scene: PlanScene): Map<number, number> {
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
     scene.items.forEach((it, i) => {
       if (i === gi || it.x < x0 || it.x > x1 || it.y < y0 || it.y > y1) return;
-      if (isDescendant(i, gi) || isDescendant(gi, i) || !inPolygon(poly, it.x, it.y)) return;
+      if (isDescendant(i, gi) || isDescendant(gi, i) || !insidePolygon(poly, it.x, it.y)) return;
       const known = out.get(i);
       if (known === undefined || scene.items[known].depth < g.depth) out.set(i, gi);
     });

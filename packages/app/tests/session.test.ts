@@ -86,3 +86,21 @@ test('plans touchés : ceux des placements, branches, dispositions et fantômes'
   expect(plansOf(createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }))).toEqual([plan]);
   expect(plansOf(editNode({ ...s, nodes: new Map([['n', { id: 'n', title: 'x', summary: '', tags: [], files: [] }]]) } as State, 'n', { title: 'y' }))).toEqual([]);
 });
+
+test('une action complétée plus tard (répercussion plan par plan) se défait d’un seul Ctrl+Z (spec 10)', async () => {
+  const { s, plan } = world();
+  const session = new EditSession(s, async () => {}, () => {});
+  const first = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  const id = first.ok ? first.action.id : '';
+  const more = await session.run((st) => createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 }), { extend: id });
+  expect(more.ok).toBe(true);
+  expect(session.state.nodes.size).toBe(2);
+  expect((await session.undo()).ok).toBe(true);
+  expect(session.state.nodes.size).toBe(0);
+  // An id no longer on top of the stack: the step is recorded on its own.
+  const c = await session.run((st) => createNode(st, { plan, title: 'C', x: 0, y: 0, k: 0 }));
+  await session.run((st) => createNode(st, { plan, title: 'D', x: 0, y: 0, k: 0 }));
+  await session.run((st) => createNode(st, { plan, title: 'E', x: 0, y: 0, k: 0 }), { extend: c.ok ? c.action.id : '' });
+  await session.undo();
+  expect([...session.state.nodes.values()].map((n) => n.title).sort()).toEqual(['C', 'D']);
+});

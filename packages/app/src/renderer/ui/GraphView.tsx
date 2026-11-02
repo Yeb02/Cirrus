@@ -4,7 +4,7 @@ import {
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, withLayout,
+  type LayoutHandle, layoutHandles, withLayout, repercussion,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -16,7 +16,8 @@ import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
   absentBuild, addMemberBuild, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild, joinBuild,
-  layoutBuild, lobbyConnectionBuild, pasteBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
+  dropMemberships, layoutBuild, lobbyConnectionBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
+  withRepercussion,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
@@ -44,9 +45,13 @@ type Placing =
   | { kind: 'import'; node: Id; label?: string }
   /** Pasting the clip (spec 7). */
   | { kind: 'paste' }
+  /** A node put down by hand in a plan its change of group reaches (spec 10); `extend`: the action it completes. */
+  | { kind: 'repercussion'; node: Id; to: Id | null; extend: Id }
   /** Splitting an arm (spec 8.5): the far node's phantom near the bundle, then the centre's near the far node. */
   | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 };
-const MODE: Record<Placing['kind'], Mode> = { newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split' };
+const MODE: Record<Placing['kind'], Mode> = {
+  newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split', repercussion: 'place',
+};
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 /**
@@ -93,16 +98,22 @@ export function GraphView(props: {
   /** The layout handles of the selected connection (spec 8.5), drawn over the canvas; one may be dragged. */
   const handlesSvg = useRef<SVGSVGElement>(null);
   const handleDrag = useRef<{ handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene } | null>(null);
-  /** A gesture to begin once another plan is shown (« ajouter au lobby »). */
-  const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number } } | null>(null);
+  /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
+  const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
+  /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
+  const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[] } | null>(null);
 
-  /** Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. */
-  const edit = (build: Build, onRefused?: () => void) => {
+  /**
+   * Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. `extend`: the
+   * earlier action it completes, as one undo step (spec 10).
+   */
+  const edit = (build: Build, onRefused?: () => void, extend?: Id): Promise<Result | null> => {
     const session = sessionRef.current;
-    if (!build || !session) { onRefused?.(); return; }
-    void session.run(build).then((r) => {
+    if (!build || !session) { onRefused?.(); return Promise.resolve(null); }
+    return session.run(build, extend ? { extend } : {}).then((r) => {
       if (!r.ok) onRefused?.();
       onResultRef.current(r);
+      return r;
     });
   };
   // Handlers registered once (wheel, render loop) read the current state through this ref, never a stale closure.
@@ -357,6 +368,71 @@ export function GraphView(props: {
     if (!keep || !d.layout || d.layout === d.base) { restore(); return; }
     edit(layoutBuild(d.scene.plan.id, d.id, d.layout), restore);
   };
+  /**
+   * A drop that changes groups (spec 10): « partout ou ici seulement » when other plans would change, with its cost
+   * announced; « partout » writes the drop and the plans needing no hand, then opens the others one after the other.
+   */
+  const dropAsking = (base: PlanScene, items: number[], dx: number, dy: number, at: Vec2, alt: boolean, restore: () => void) => {
+    const p = paramsRef.current, zoom = engine.current?.renderer.camera.zoom ?? 1, s = stateRef.current;
+    const build = dropBuild(base, items, dx, dy, at, alt, zoom, p);
+    if (!build) { restore(); return; }
+    const plan = base.plan.id;
+    const reps = dropMemberships(s, base, items, at, alt, zoom, p).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, measureTitle(p), p) }));
+    const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
+    if (changed.length === 0) { void edit(build, restore); return; }
+    const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
+    const plans = new Set(changed.map((c) => c.plan)), manual = changed.filter((c) => c.manual);
+    const third = reps.flatMap((x) => x.r.third), loops = reps.flatMap((x) => x.r.loops);
+    const n = plans.size, m = new Set(manual.map((c) => c.plan)).size;
+    const detail = [
+      `Partout : ${n} plan${n > 1 ? 's' : ''}${m > 0 ? `, dont ${m} à placer à la main` : ''} (${names([...plans])}).`,
+      third.length > 0 ? `Laissé${third.length > 1 ? 's' : ''} tel${third.length > 1 ? 's' : ''} quel${third.length > 1 ? 's' : ''}, un autre groupe y contient le nœud : ${names(third)}.` : '',
+      loops.length > 0 ? `Ignoré${loops.length > 1 ? 's' : ''}, la répercussion y ferait une boucle : ${names(loops)}.` : '',
+    ].filter(Boolean).join(' ');
+    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: 'Partout' };
+    setQuestion({
+      text: 'Répercuter ce changement de groupe dans les autres plans ?', detail,
+      choices: p.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
+      answer: (v) => {
+        if (v === null) { restore(); return; }
+        if (v === 'here') { void edit(build, restore); return; }
+        void edit(withRepercussion(build, changed.filter((c) => !c.manual)), restore).then((r) => {
+          if (r?.ok && manual.length > 0) {
+            repQueue.current = { extend: r.action.id, home: plan, items: manual.map((c) => ({ plan: c.plan, node: c.node, to: c.to })) };
+            nextRepercussion();
+          }
+        });
+      },
+    });
+  };
+  /** The next plan to place by hand (spec 10): opened, framed on the group joined, the node at the cursor; at the end, back home. */
+  const nextRepercussion = () => {
+    const q = repQueue.current;
+    if (!q) return;
+    const item = q.items.shift();
+    if (!item) {
+      repQueue.current = null;
+      if (sceneRef.current?.plan.id !== q.home) props.onOpenPlan(q.home);
+      return;
+    }
+    const s = stateRef.current, title = s.nodes.get(item.node)?.title ?? '?';
+    const r = root.current?.getBoundingClientRect();
+    pendingPlace.current = {
+      plan: item.plan, what: { kind: 'repercussion', node: item.node, to: item.to, extend: q.extend },
+      text: item.to ? `${title} → « ${s.nodes.get(item.to)?.title ?? '?'} »` : `${title} → hors du groupe`,
+      at: { x: (r?.width ?? 0) / 2, y: (r?.height ?? 0) / 2 }, frame: item.to ?? item.node,
+    };
+    if (sceneRef.current?.plan.id === item.plan) startPending(); else props.onOpenPlan(item.plan);
+  };
+  /** Begins the gesture waiting for this plan, framing what it concerns. */
+  const startPending = () => {
+    const pend = pendingPlace.current, e = engine.current, sc = sceneRef.current;
+    if (!pend || !e || !sc || pend.plan !== sc.plan.id) return;
+    pendingPlace.current = null;
+    const f = pend.frame !== undefined ? sc.byId.get(pend.frame) : undefined;
+    if (f !== undefined) moveCamera(fitItem(sc, f, e.renderer.camera, paramsRef.current));
+    startPlacing(pend.what, pend.text, pend.at);
+  };
   /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
   const openPopup = (connections: Id[], sx: number, sy: number) => {
     const r = root.current!.getBoundingClientRect();
@@ -519,8 +595,7 @@ export function GraphView(props: {
     const { width, height } = e.app.screen;
     const known = cameras.current.get(scene.plan.id);
     moveCamera(known ? { ...known, widthPx: width, heightPx: height } : initialCamera(scene, width, height, props.params, window.cirrus.launch.view));
-    const pend = pendingPlace.current;
-    if (pend && pend.plan === scene.plan.id) { pendingPlace.current = null; startPlacing(pend.what, pend.text, pend.at); }
+    startPending();
   }, [scene]);
 
   // Wheel: a native, non-passive listener (React's is passive and could not keep the page from scrolling).
@@ -648,11 +723,11 @@ export function GraphView(props: {
         dragging.current = null;
         if (!d) break;
         e.renderer.setDropTarget(null);
-        // One action for the whole drop (spec 6.4): the moves, then the groups left and entered.
-        const build = dropBuild(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, e.renderer.camera.zoom, paramsRef.current);
-        if (!build) { e.renderer.setScene(d.base); break; }
-        // Refused: back to where it was. Written: the scene follows the state.
-        edit(build, () => { engine.current?.renderer.setScene(d.base); dirty.current = true; });
+        // The preview stays exactly where it was dropped while a question may be asked.
+        e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: intent.dx, y: intent.dy }])), paramsRef.current), true);
+        // One action for the whole drop (spec 6.4): the moves, then the groups left and entered; refused or given up,
+        // back to where it was; written, the scene follows the state.
+        dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, () => { engine.current?.renderer.setScene(d.base); dirty.current = true; });
         break;
       }
       case 'placeMove':
@@ -702,6 +777,10 @@ export function GraphView(props: {
         placing.current = null;
         setGhost(null);
         if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label));
+        else if (what.kind === 'repercussion') {
+          // Put down here, it takes its new group in this plan; the whole stays one undo step.
+          void edit(placeInPlanBuild(sc, what.node, intent.at, what.to), undefined, what.extend).then(() => nextRepercussion());
+        }
         else if (what.kind === 'paste' && clip.current) {
           const r = pasteBuild(stateRef.current, clip.current, sc, intent.at, zoom, p);
           edit(r.build);
@@ -718,7 +797,7 @@ export function GraphView(props: {
           setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p)); } });
         } else if (what.kind === 'exclude') {
           // Out of its group, put down where clicked; entering the group under the cursor if it is another (spec 10).
-          edit(dropBuild(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, zoom, p));
+          dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, () => {});
         }
         break;
       }
@@ -727,6 +806,8 @@ export function GraphView(props: {
         placing.current = null;
         setGhost(null);
         if (what?.kind === 'connect') endConnect();
+        // Escape leaves this plan as it is; the next one opens (spec 10).
+        if (what?.kind === 'repercussion') nextRepercussion();
         if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
         break;
       }

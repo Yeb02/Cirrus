@@ -22,3 +22,4 @@ export * from './menus.ts';
 export * from './connect.ts';
 export * from './clip.ts';
 export * from './layout.ts';
+export * from './repercussion.ts';

@@ -43,7 +43,8 @@ export class EditSession {
     return this.s;
   }
 
-  run(build: (s: State) => Action): Promise<Result> {
+  /** `extend`: the action completes that earlier one, which stays a single undo step if nothing came in between. */
+  run(build: (s: State) => Action, opts: { extend?: Id } = {}): Promise<Result> {
     return this.enqueue(async () => {
       let a: Action;
       try {
@@ -53,7 +54,10 @@ export class EditSession {
         throw e;
       }
       const r = await this.write(a);
-      if (r.ok) this.stack.record(a);
+      if (r.ok) {
+        if (opts.extend) this.stack.extend(opts.extend, a);
+        else this.stack.record(a);
+      }
       return r;
     });
   }

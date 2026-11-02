@@ -1,7 +1,7 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { FrameGeometry } from './frame.ts';
-import { offsetPolygon } from './geometry/hull.ts';
+import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
@@ -21,15 +21,6 @@ export interface HitIndex {
   openGroupsAt(wx: number, wy: number, zoom: number): number[];
   /** The visible connection whose core (marker, or centre of a 1-to-1 curve) is under the point (spec 11.1), or null. */
   markerAt(wx: number, wy: number, zoom: number): number | null;
-}
-
-function inPolygon(poly: Vec2[], x: number, y: number): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const a = poly[i], b = poly[j];
-    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 }
 
 function segmentDistance(px: number, py: number, a: Vec2, b: Vec2): number {
@@ -78,7 +69,7 @@ export function buildHitIndex(
   };
   const deepest = (list: number[]) => list.reduce((best, i) => (best < 0 || items[i].depth > items[best].depth ? i : best), -1);
   const groupsAt = (wx: number, wy: number) =>
-    groupTree ? groupTree.search(wx, wy, wx, wy).filter((j) => inPolygon(groups[j].poly, wx, wy)).map((j) => groups[j].g) : [];
+    groupTree ? groupTree.search(wx, wy, wx, wy).filter((j) => insidePolygon(groups[j].poly, wx, wy)).map((j) => groups[j].g) : [];
 
   return {
     hit(wx, wy, zoom) {

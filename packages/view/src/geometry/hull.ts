@@ -6,6 +6,16 @@ export function centroid(pts: Vec2[]): Vec2 {
   return { x: x / pts.length, y: y / pts.length };
 }
 
+/** Even-odd rule: whether (x, y) is inside the polygon. */
+export function insidePolygon(poly: Vec2[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 /** Andrew's monotone chain; counter-clockwise (y up), collinear points dropped. */
 export function convexHull(points: Vec2[]): Vec2[] {
   const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
