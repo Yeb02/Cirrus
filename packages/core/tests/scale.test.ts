@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { deleteEverywhere, include, moveNodes } from '../src/commands.ts';
-import { checkState } from '../src/invariants.ts';
-import { applyOp, emptyState, type State } from '../src/state.ts';
+import { combine, CommandError, deleteEverywhere, include, moveNodes } from '../src/commands.ts';
+import { checkState, groupOf } from '../src/invariants.ts';
+import { applyOp, branchKey, emptyState, placementKey, type State } from '../src/state.ts';
 
 /** One plan, 10 000 nodes in 100 groups, 50 000 knowledge connections: the scale the spec aims at. */
 function large(): State {
@@ -41,3 +41,40 @@ test('une commande reste rapide sur une grande base', () => {
   deleteEverywhere(s, 'hub');
   expect(performance.now() - t).toBeLessThan(300);
 }, 120_000);
+
+// Kept in this file: timed tests run one after the other, not against each other.
+/** 20 000 placed nodes and 20 000 connections, written straight into the maps (commands would take minutes). */
+function flat(): State {
+  const s = emptyState();
+  s.plans.set('p', { id: 'p', name: 'P', type: 'plan' });
+  for (let i = 0; i < 20_000; i++) {
+    const id = `n${i}`;
+    s.nodes.set(id, { id, title: id, summary: '', tags: [], files: [] });
+    s.placements.set(placementKey('p', id), { plan: 'p', node: id, x: i, y: 0, k: 0 });
+  }
+  for (let i = 0; i < 20_000; i++) {
+    const id = `c${i}`, a = `n${i}`, b = `n${(i + 1) % 20_000}`;
+    s.connections.set(id, { id, kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] });
+    s.branches.add(branchKey({ plan: 'p', connection: id, node: a }));
+    s.branches.add(branchKey({ plan: 'p', connection: id, node: b }));
+  }
+  return s;
+}
+
+test('une action composée de 300 étapes sur 20 000 nœuds ne copie pas l’état à chaque étape (C2 de la relecture 3b)', () => {
+  const s = flat();
+  const t0 = performance.now();
+  const a = combine(s, 'Coller', Array.from({ length: 300 }, (_, i) => (x: State) => moveNodes(x, 'p', [{ node: `n${i}`, x: -i }])));
+  expect(performance.now() - t0).toBeLessThan(600);
+  expect(a.ops).toHaveLength(300);
+  expect(s.placements.get(placementKey('p', 'n5'))!.x).toBe(5); // the state received is untouched
+  for (const op of a.ops) applyOp(s, op);
+  expect(s.placements.get(placementKey('p', 'n5'))!.x).toBe(-5);
+});
+
+test('une règle violée par l’ensemble des étapes est refusée, avec le message du socle', () => {
+  const s = flat();
+  // Each inclusion is fine alone; together they make a loop.
+  expect(() => combine(s, 'Boucle', [(x) => include(x, 'p', 'n1', 'n2'), (x) => include(x, 'p', 'n2', 'n1')])).toThrow(CommandError);
+  expect(groupOf(s, 'p', 'n1')).toBeUndefined();
+});

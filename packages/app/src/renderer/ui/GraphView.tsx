@@ -771,7 +771,7 @@ export function GraphView(props: {
           placing.current = null;
           setGhost(null);
           moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
-          edit(splitBuild(sc, what.connection, what.node, what.near!, intent.at));
+          edit(splitBuild(sc, what.connection, what.node, what.near!, intent.at, zoom, p));
           break;
         }
         placing.current = null;

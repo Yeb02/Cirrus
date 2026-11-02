@@ -12,6 +12,8 @@ export interface Clip {
   center: Vec2;
   /** parents: the node's groups in the plan of origin, nearest first. */
   nodes: { id: Id; x: number; y: number; k: number; parents: Id[] }[];
+  /** Where those groups were drawn in the plan of origin: a group already in the plan pasted into anchors its new members. */
+  groups: Record<Id, Vec2>;
   /** Connections with at least two nodes copied, with every member they show in the plan of origin. */
   connections: { id: Id; nodes: Id[] }[];
 }
@@ -34,35 +36,62 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
   const top = items.filter((i) => scene.items[i].kind !== 'phantom');
   const center = { x: top.reduce((a, i) => a + scene.items[i].x, 0) / top.length, y: top.reduce((a, i) => a + scene.items[i].y, 0) / top.length };
   const index = groupIndex(s);
+  // Where each node is drawn: a group's centre is its members' (its own position may be stale).
   const nodes = [...ids].map((id) => {
-    const pl = s.placements.get(placementKey(plan, id))!;
-    return { id, x: pl.x, y: pl.y, k: pl.k, parents: ancestors(s, plan, id, index) };
+    const it = scene.items[scene.byId.get(id)!];
+    return { id, x: it.x, y: it.y, k: it.k, parents: ancestors(s, plan, id, index) };
   });
+  const groups: Clip['groups'] = {};
+  for (const n of nodes) for (const g of n.parents) { const i = scene.byId.get(g); if (i !== undefined) groups[g] = { x: scene.items[i].x, y: scene.items[i].y }; }
+  // A split arm's member has no branch here but phantoms: it is shown all the same (I5 of the plan 3b review).
+  const split = new Map<Id, Set<Id>>();
+  for (const ph of s.phantoms.values()) {
+    if (ph.plan !== plan || ph.of.kind === 'absent') continue;
+    const set = split.get(ph.connection);
+    if (set) set.add(ph.of.node);
+    else split.set(ph.connection, new Set([ph.of.node]));
+  }
   const connections: Clip['connections'] = [];
   for (const c of s.connections.values()) {
-    if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
-    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has(branchKey({ plan, connection: c.id, node: n })));
+    // Only the connections of copied nodes are looked at closely.
+    if (c.kind !== 'knowledge' || c.trashedAt !== undefined || !c.members.some((m) => ids.has(m.node))) continue;
+    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has(branchKey({ plan, connection: c.id, node: n })) || split.get(c.id)?.has(n));
     if (shown.filter((n) => ids.has(n)).length >= 2) connections.push({ id: c.id, nodes: shown });
   }
-  return { plan, zoom, center, nodes, connections };
+  return { plan, zoom, center, nodes, groups, connections };
 }
 
 /**
  * Pasting a clip at `at` (spec 7), as the steps of one action. Every pasted node moves by the same Δk = round of
  * log_f(zoom at copy ÷ zoom at paste) and distances by f^Δk. Nodes already in the plan keep their place and group
  * (`present`). A pasted node joins its nearest group of origin present here; with none, the group `dropGroup` under the
- * point, if any (spec 10). The connections follow, their other branches becoming stubs; not into a document plan.
+ * point, if any (spec 10). One that joins a group already here lands next to it, where `drawn` says it is, with the
+ * offset it had from it (I4 of the plan 3b review); the others around the cursor. The connections follow, their other
+ * branches becoming stubs; not into a document plan.
  */
 export function pasteSteps(
   s: State, clip: Clip, plan: Id, at: Vec2, zoom: number, dropGroup: Id | null, p: RenderParams,
+  drawn: (id: Id) => Vec2 | undefined = () => undefined,
 ): { steps: ((s: State) => Action)[]; present: Id[]; placed: Id[] } {
   const dk = Math.round(Math.log(clip.zoom / zoom) / Math.log(p.factor));
   const scale = p.factor ** dk;
   const present = clip.nodes.filter((n) => s.placements.has(placementKey(plan, n.id))).map((n) => n.id);
   const fresh = clip.nodes.filter((n) => !present.includes(n.id) && s.nodes.has(n.id) && s.nodes.get(n.id)!.trashedAt === undefined);
-  const here = new Set([...present, ...fresh.map((n) => n.id)]);
-  const steps: ((s: State) => Action)[] = fresh.map((n) => (x: State) =>
-    placeNode(x, plan, n.id, at.x + (n.x - clip.center.x) * scale, at.y + (n.y - clip.center.y) * scale, n.k + dk));
+  const here = new Set([...present, ...fresh.map((n) => n.id)]), before = new Set(present);
+  const placeOf = (n: Clip['nodes'][number]): Vec2 => {
+    // Below a group present before the paste (through new groups or not): anchored to it.
+    for (const g of n.parents) {
+      if (!before.has(g) && !s.placements.has(placementKey(plan, g))) continue;
+      const there = drawn(g), was = clip.groups[g];
+      if (there && was) return { x: there.x + (n.x - was.x) * scale, y: there.y + (n.y - was.y) * scale };
+      break;
+    }
+    return { x: at.x + (n.x - clip.center.x) * scale, y: at.y + (n.y - clip.center.y) * scale };
+  };
+  const steps: ((s: State) => Action)[] = fresh.map((n) => {
+    const q = placeOf(n);
+    return (x: State) => placeNode(x, plan, n.id, q.x, q.y, n.k + dk);
+  });
   for (const n of fresh) {
     const group = n.parents.find((g) => here.has(g)) ?? dropGroup;
     if (group !== null) steps.push((x) => include(x, plan, n.id, group));

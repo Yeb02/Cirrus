@@ -65,3 +65,8 @@ test('effets d’un dépôt (spec 10) : un nœud libre entre, un membre ne desce
   expect(dropEffects(sc, [at(ids.nodes.mdl)], null, true)).toEqual([{ item: at(ids.nodes.mdl), leave: true, enter: null }]);
   expect(dropEffects(sc, [at(ids.nodes.mdl)], ml, true)).toEqual([{ item: at(ids.nodes.mdl), leave: true, enter: ml }]);
 });
+
+test('Alt ou « exclure » puis reposé dans son propre groupe : il ne fait que bouger (spec 10, I3 de la relecture 3b)', () => {
+  const cx = at(ids.nodes.groupeComplexite);
+  expect(dropEffects(sc, [at(ids.nodes.mdl)], cx, true)).toEqual([{ item: at(ids.nodes.mdl), leave: false, enter: null }]);
+});

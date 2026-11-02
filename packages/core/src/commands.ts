@@ -11,16 +11,26 @@ export interface Action { id: Id; label: string; ops: Op[] }
 export class CommandError extends Error {}
 
 /**
+ * The working state of the `combine` in progress: its steps write into it directly, without copying it each time,
+ * and the rules are checked once for the whole action (C2 of the plan 3b review). Actions made this way are recorded,
+ * so that `combine` does not apply their operations a second time.
+ */
+let batch: { work: State; applied: WeakSet<Action> } | null = null;
+
+/**
  * Collects operations against a draft copy, so each operation sees the effects of the previous ones. Before an
- * action is returned, the rules are checked on the draft: an action may not add a violation.
+ * action is returned, the rules are checked on the draft: an action may not add a violation. Inside `combine`, the
+ * draft is the combine's working state and the check waits for the end.
  */
 class Draft {
   readonly s: State;
   readonly ops: Op[] = [];
   private readonly original: State;
+  private readonly batched: boolean;
   constructor(original: State) {
     this.original = original;
-    this.s = cloneState(original);
+    this.batched = batch !== null && batch.work === original;
+    this.s = this.batched ? original : cloneState(original);
   }
   push(op: Op): void {
     applyOp(this.s, op);
@@ -54,12 +64,19 @@ class Draft {
     this.connection(c.id, { ...c, members, trashedAt: Date.now() });
   }
   finish(label: string): Action {
-    const touched = touchedBy(this.ops);
-    const known = new Set(checkState(this.original, touched).map((v) => `${v.code}|${v.subject}`));
-    const added = checkState(this.s, touched).filter((v) => !known.has(`${v.code}|${v.subject}`));
-    if (added.length > 0) throw new CommandError(added[0].message);
-    return { id: uuidv7(), label, ops: this.ops };
+    const a: Action = { id: uuidv7(), label, ops: this.ops };
+    if (this.batched) { batch!.applied.add(a); return a; }
+    checkAdded(this.original, this.s, this.ops);
+    return a;
   }
+}
+
+/** Refuses an action that adds a violation of the rules (one already there before is not its doing). */
+function checkAdded(before: State, after: State, ops: Op[]): void {
+  const touched = touchedBy(ops);
+  const known = new Set(checkState(before, touched).map((v) => `${v.code}|${v.subject}`));
+  const added = checkState(after, touched).filter((v) => !known.has(`${v.code}|${v.subject}`));
+  if (added.length > 0) throw new CommandError(added[0].message);
 }
 
 const need = <T>(value: T | undefined, message: string): T => {
@@ -341,12 +358,12 @@ export function joinArm(s: State, plan: Id, connection: Id, node: Id): Action {
   return d.finish('Réunir ce bras');
 }
 
-/** A phantom moves like a node and may sit in a group (spec 8.5). */
-export function movePhantom(s: State, phantom: Id, x: number, y: number, group?: Id | null): Action {
+/** A phantom moves like a node, changes its step like one, and may sit in a group (spec 8.5). */
+export function movePhantom(s: State, phantom: Id, x: number, y: number, group?: Id | null, k?: number): Action {
   const p = need(s.phantoms.get(phantom), 'Fantôme introuvable.');
   if (group) placedIn(s, p.plan, group, 'Ce groupe n’est pas dans ce plan.');
   const d = new Draft(s);
-  const next: PhantomRec = { ...p, x, y };
+  const next: PhantomRec = { ...p, x, y, k: k ?? p.k };
   if (group === null) delete next.group;
   else if (group !== undefined) next.group = group;
   d.phantom(phantom, next);
@@ -355,17 +372,29 @@ export function movePhantom(s: State, phantom: Id, x: number, y: number, group?:
 
 /**
  * Several commands as one action (spec 6.4: a complete gesture is one undo step). Each step sees the state left by the
- * previous ones, on a working copy; a refused step refuses the whole action.
+ * previous ones, on one working copy shared by all of them; the rules are checked once, on the whole. A refused step
+ * refuses the whole action, and the state received is never changed. Nested, it works in its parent's copy.
  */
 export function combine(s: State, label: string, steps: ((s: State) => Action)[]): Action {
-  const work = cloneState(s);
+  const nested = batch !== null && batch.work === s;
+  const outer = batch;
+  const work = nested ? s : cloneState(s);
+  if (!nested) batch = { work, applied: new WeakSet() };
   const ops: Op[] = [];
-  for (const step of steps) {
-    const a = step(work);
-    for (const op of a.ops) applyOp(work, op);
-    ops.push(...a.ops);
+  try {
+    for (const step of steps) {
+      const a = step(work);
+      // Steps made by a command wrote into the working copy already; others (an action computed beforehand) not.
+      if (!batch!.applied.has(a)) for (const op of a.ops) applyOp(work, op);
+      ops.push(...a.ops);
+    }
+  } finally {
+    if (!nested) batch = outer;
   }
-  return { id: uuidv7(), label, ops };
+  const action: Action = { id: uuidv7(), label, ops };
+  if (nested) { batch!.applied.add(action); return action; }
+  checkAdded(s, work, ops);
+  return action;
 }
 
 /** The layout of a connection in one plan (spec 5.5, 8.5): marker, trunk angle, Bézier handles; null restores the automatic one. */

@@ -1,4 +1,4 @@
-import { branchKey, combine, groupOf, placementKey, type State } from '@cirrus/core';
+import { branchKey, combine, groupOf, placementKey, removeFromPlan, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeEach, expect, test } from 'vitest';
 import { copyClip, deleteSummary, pasteSteps } from '../src/clip.ts';
@@ -9,7 +9,9 @@ let s: State, ids: FixtureIds;
 beforeEach(() => { ({ s, ids } = fixture()); });
 
 const paste = (clip: NonNullable<ReturnType<typeof copyClip>>, plan: string, at: { x: number; y: number }, zoom: number, group: string | null = null) => {
-  const r = pasteSteps(s, clip, plan, at, zoom, group, P);
+  const target = buildScene(s, plan, measure, P);
+  const drawn = (id: string) => { const i = target.byId.get(id); return i === undefined ? undefined : { x: target.items[i].x, y: target.items[i].y }; };
+  const r = pasteSteps(s, clip, plan, at, zoom, group, P, drawn);
   run(s, combine(s, 'Coller', r.steps));
   return r;
 };
@@ -40,7 +42,7 @@ test('coller dans un plan qui contient déjà un nœud : il garde sa place et so
   expect(s.placements.get(placementKey(these, ids.nodes.mdl))).toEqual(mdlBefore);
   expect(groupOf(s, these, ids.nodes.mdl)).toBe(ids.nodes.theseOnly);
   // Relative positions kept, scaled by f; steps raised by one.
-  const from = (id: string) => s.placements.get(placementKey(ids.plans.lobby, id))!;
+  const from = (id: string) => lobby.items[lobby.byId.get(id)!]; // where it was drawn when copied
   const to = (id: string) => s.placements.get(placementKey(these, id))!;
   const [a, b] = [ids.nodes.solomonoff, ids.nodes.groupeInduction];
   expect(to(a).x - to(b).x).toBeCloseTo((from(a).x - from(b).x) * P.factor, 9);
@@ -67,4 +69,32 @@ test('décompte avant suppression : instances, et les nœuds dont c’est le der
   const sum = deleteSummary(s, [ids.nodes.mdl, ids.nodes.monde]);
   expect(sum.instances).toBe(3 + 1); // MDL: lobby, Thèse, Article; Monde: lobby
   expect(sum.last).toEqual([ids.nodes.monde]);
+});
+
+test('copier un groupe retient la place où il est dessiné (centre de ses membres), pas sa position propre périmée', () => {
+  const sc = buildScene(s, ids.plans.lobby, measure, P);
+  const g = sc.byId.get(ids.nodes.groupeInduction)!;
+  const clip = copyClip(s, sc, [g], 1)!;
+  expect(clip.nodes.find((n) => n.id === ids.nodes.groupeInduction)).toMatchObject({ x: sc.items[g].x, y: sc.items[g].y });
+});
+
+test('des membres nouveaux d’un groupe déjà présent arrivent près de lui, pas au point de collage (I4 de la relecture 3b)', () => {
+  const lobby = buildScene(s, ids.plans.lobby, measure, P);
+  const clip = copyClip(s, lobby, [lobby.byId.get(ids.nodes.groupeInduction)!], 1)!; // Induction, Solomonoff, Priore
+  const these = ids.plans.these;
+  paste(clip, these, { x: 0, y: 3000 }, 1);
+  const priore = clip.nodes.find((n) => n.id !== ids.nodes.groupeInduction && n.id !== ids.nodes.solomonoff)!.id;
+  run(s, removeFromPlan(s, these, priore));
+  paste(clip, these, { x: -30_000, y: -30_000 }, 1);
+  const sc = buildScene(s, these, measure, P);
+  const pr = sc.items[sc.byId.get(priore)!], sol = sc.items[sc.byId.get(ids.nodes.solomonoff)!];
+  expect(groupOf(s, these, priore)).toBe(ids.nodes.groupeInduction);
+  expect(Math.hypot(pr.x - sol.x, pr.y - sol.y)).toBeLessThan(1000); // the group stays compact
+});
+
+test('une connexion à bras scindé suit la copie de ses deux nœuds (I5 de la relecture 3b)', () => {
+  const lobby = buildScene(s, ids.plans.lobby, measure, P);
+  const clip = copyClip(s, lobby, [lobby.byId.get(ids.nodes.mdl)!, lobby.byId.get(ids.nodes.universalite)!], 1)!;
+  const split = clip.connections.find((c) => c.id === ids.connections.split)!;
+  expect(split.nodes.sort()).toEqual([ids.nodes.mdl, ids.nodes.universalite].sort());
 });

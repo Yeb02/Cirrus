@@ -28,7 +28,8 @@ export function dropBuild(base: PlanScene, items: number[], dx: number, dy: numb
     const group = f?.enter != null ? targetId : f?.leave ? null : undefined;
     if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + dx, y: it.y + dy, ...(group !== undefined ? { group } : {}) });
     else {
-      if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
+      // A group's own position follows where it is drawn: emptied later, it stays there (I2 of the plan 3b review).
+      nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
       if (f?.enter != null) memberships.push((x) => include(x, plan, it.id, targetId!));
       else if (f?.leave) memberships.push((x) => exclude(x, plan, it.id));
     }
@@ -57,7 +58,7 @@ export function scaleBuild(scene: PlanScene, items: number[], delta: number, p: 
   const plan = scene.plan.id;
   return (st) => combine(st, delta > 0 ? 'Agrandir d’un cran' : 'Réduire d’un cran', [
     ...(m.nodes.length > 0 ? [(x: State) => moveNodes(x, plan, m.nodes)] : []),
-    ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+    ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, undefined, ph.k)),
   ]);
 }
 
@@ -114,7 +115,8 @@ export function lobbyConnectionBuild(lobby: Id, connection: Id): Build {
 
 /** Pasting a clip at `at` (spec 7) as one action; `present`: the nodes that were already there and kept their place. */
 export function pasteBuild(s: State, clip: Clip, scene: PlanScene, at: Vec2, zoom: number, p: RenderParams): { build: Build; present: Id[] } {
-  const r = pasteSteps(s, clip, scene.plan.id, at, zoom, groupAt(scene, at, zoom, p), p);
+  const drawn = (id: Id) => { const i = scene.byId.get(id); return i === undefined ? undefined : { x: scene.items[i].x, y: scene.items[i].y }; };
+  const r = pasteSteps(s, clip, scene.plan.id, at, zoom, groupAt(scene, at, zoom, p), p, drawn);
   const n = clip.nodes.length;
   return { build: r.steps.length === 0 ? null : (st) => combine(st, n === 1 ? 'Coller un nœud' : `Coller ${n} nœuds`, r.steps), present: r.present };
 }
@@ -190,12 +192,14 @@ export function connectionTextBuild(connection: Id, patch: { title?: string; rel
   return (st) => editConnection(st, connection, patch);
 }
 
-/** Split arm (spec 8.5): both phantoms take the far node's step. */
-export function splitBuild(scene: PlanScene, connection: Id, node: Id, near: Vec2, far: Vec2): Build {
+/**
+ * Split arm (spec 8.5): the far node's phantom, put down by the bundle, takes the step readable at this zoom; the
+ * centre's phantom, next to the far node, that node's step (I14 of the plan 3b review).
+ */
+export function splitBuild(scene: PlanScene, connection: Id, node: Id, near: Vec2, far: Vec2, zoom: number, p: RenderParams): Build {
   const i = scene.byId.get(node);
   if (i === undefined) return null;
-  const k = scene.items[i].k;
-  return (st) => splitArm(st, scene.plan.id, connection, node, { ...near, k }, { ...far, k });
+  return (st) => splitArm(st, scene.plan.id, connection, node, { ...near, k: readableStep(zoom, p) }, { ...far, k: scene.items[i].k });
 }
 
 export function joinBuild(plan: Id, connection: Id, node: Id): Build {
@@ -265,7 +269,7 @@ export function placeInPlanBuild(scene: PlanScene, node: Id, at: Vec2, to: Id | 
   const collect = (j: number) => {
     const it = scene.items[j];
     if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + dx, y: it.y + dy });
-    else if (it.kind === 'node') nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
+    else nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
     for (const c of it.children) collect(c);
   };
   collect(i);

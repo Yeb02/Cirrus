@@ -226,6 +226,8 @@ test("on n'inclut que dans un groupe présent dans le plan", () => {
   run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
   const phantom = [...s.phantoms.values()][0].id;
   expect(() => movePhantom(s, phantom, 0, 0, t)).toThrow(/pas dans ce plan/);
+  run(s, movePhantom(s, phantom, 7, 8, undefined, 3));
+  expect(s.phantoms.get(phantom)).toMatchObject({ x: 7, y: 8, k: 3 }); // its step can change too (I14 of the plan 3b review)
 });
 
 test("une valeur de tag inconnue est refusée par une CommandError", () => {

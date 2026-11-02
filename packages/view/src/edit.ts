@@ -1,4 +1,5 @@
 import type { Id, Vec2 } from '@cirrus/core';
+import Flatbush from 'flatbush';
 import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
@@ -7,7 +8,7 @@ import type { PlanScene } from './scene.ts';
 /** Placement changes for moveNodes and movePhantom, gathered by `combine` into one action. */
 export interface Moves {
   nodes: { node: Id; x?: number; y?: number; k?: number }[];
-  phantoms: { id: Id; x: number; y: number }[];
+  phantoms: { id: Id; x: number; y: number; k?: number }[];
 }
 
 /**
@@ -28,15 +29,12 @@ export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: 
   const at = (x: number, y: number) => ({ x: c.x + (x - c.x) * f, y: c.y + (y - c.y) * f });
   const visit = (i: number, own: boolean) => {
     const it = scene.items[i];
-    if (it.kind === 'phantom') out.phantoms.push({ id: it.id, ...at(it.x, it.y) });
-    // A group's stored position is not drawn (derived from its members): only its title's step changes.
-    else if (it.kind === 'group') out.nodes.push({ node: it.id, ...(own ? { k: it.k + delta } : {}) });
+    if (it.kind === 'phantom') out.phantoms.push({ id: it.id, ...at(it.x, it.y), ...(own ? { k: it.k + delta } : {}) });
+    // A group is drawn where its members are; its own position follows, for the day it is emptied (I2 of the review).
     else out.nodes.push({ node: it.id, ...at(it.x, it.y), ...(own ? { k: it.k + delta } : {}) });
     for (const child of it.children) visit(child, false);
   };
   for (const i of top) visit(i, true);
-  // A group member that is not scaled itself has nothing to write.
-  out.nodes = out.nodes.filter((m) => m.x !== undefined || m.k !== undefined);
   return out;
 }
 
@@ -73,18 +71,23 @@ export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: 
  */
 export function intruders(scene: PlanScene): Map<number, number> {
   const out = new Map<number, number>();
-  const isDescendant = (i: number, g: number) => { for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (a === g) return true; return false; };
-  scene.items.forEach((g, gi) => {
+  const items = scene.items;
+  if (items.length === 0) return out;
+  const isDescendant = (i: number, g: number) => { for (let a = items[i].parent; a >= 0; a = items[a].parent) if (a === g) return true; return false; };
+  // Centres indexed once: each envelope only looks at the items under its bounding box (C1 of the plan 3b review).
+  const centres = new Flatbush(items.length);
+  for (const it of items) centres.add(it.x, it.y, it.x, it.y);
+  centres.finish();
+  items.forEach((g, gi) => {
     if (g.kind !== 'group') return;
     const poly = offsetPolygon(g.hull!, g.pad!);
     const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    scene.items.forEach((it, i) => {
-      if (i === gi || it.x < x0 || it.x > x1 || it.y < y0 || it.y > y1) return;
-      if (isDescendant(i, gi) || isDescendant(gi, i) || !insidePolygon(poly, it.x, it.y)) return;
+    for (const i of centres.search(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))) {
+      const it = items[i];
+      if (i === gi || isDescendant(i, gi) || isDescendant(gi, i) || !insidePolygon(poly, it.x, it.y)) continue;
       const known = out.get(i);
-      if (known === undefined || scene.items[known].depth < g.depth) out.set(i, gi);
-    });
+      if (known === undefined || items[known].depth < g.depth) out.set(i, gi);
+    }
   });
   return out;
 }
@@ -94,13 +97,14 @@ export interface DropEffect { item: number; leave: boolean; enter: number | null
 /**
  * What a drop does to each moved item's group (spec 10): a free item enters the group it is dropped in; a member only
  * goes down into a subgroup of its group (else it just moves: changing groups goes through « exclure »); with Alt it
- * leaves its group, and enters the one under the cursor if that is another one.
+ * leaves its group, and enters the one under the cursor if that is another one; put back in its own group, it moves.
  */
 export function dropEffects(scene: PlanScene, items: number[], target: number | null, alt: boolean): DropEffect[] {
   const below = (t: number, g: number) => { for (let a = scene.items[t].parent; a >= 0; a = scene.items[a].parent) if (a === g) return true; return false; };
   return items.map((item) => {
     const g = scene.items[item].parent;
-    if (alt) return { item, leave: g >= 0, enter: target !== null && target !== g ? target : null };
+    // Put back in its own group, even with Alt or after « exclure »: it only moves (spec 10).
+    if (alt) return target !== null && target === g ? { item, leave: false, enter: null } : { item, leave: g >= 0, enter: target };
     if (target === null || target === g) return { item, leave: false, enter: null };
     return { item, leave: false, enter: g < 0 || below(target, g) ? target : null };
   });

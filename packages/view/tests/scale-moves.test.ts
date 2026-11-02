@@ -11,9 +11,10 @@ beforeAll(() => { ({ s, ids } = fixture()); });
 const apply = (st: State, plan: string, m: ReturnType<typeof scaleMoves>) =>
   run(st, combine(st, 'Échelle', [
     (x) => moveNodes(x, plan, m.nodes),
-    ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+    ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, undefined, ph.k)),
   ]));
-const positions = (st: State, plan: string) => JSON.stringify([...st.placements.values()].filter((p) => p.plan === plan).map((p) => [p.node, p.x, p.y, p.k]));
+/** Where each item is drawn, and its step (a group's own stored position is not drawn: it follows its centre). */
+const positions = (st: State, plan: string) => JSON.stringify(buildScene(st, plan, measure, P).items.map((it) => [it.id, it.x, it.y, it.k]));
 
 test('nœud seul : son cran change, sa position non', () => {
   const sc = buildScene(s, ids.plans.lobby, measure, P);
@@ -64,4 +65,21 @@ test('sélection : dilatée autour de son barycentre comme un seul élément ; u
   const biais = m.nodes.filter((n) => n.node === ids.nodes.biais);
   expect(biais).toHaveLength(1);
   expect(biais[0].k).toBeUndefined(); // a member keeps its step
+});
+
+test('échelle : un sous-groupe dilaté écrit aussi sa position propre, celle où il est dessiné (I2 de la relecture 3b)', () => {
+  const sc = buildScene(s, ids.plans.lobby, measure, P);
+  const g = sc.byId.get(ids.nodes.groupeComplexite)!, sub = sc.items[sc.byId.get(ids.nodes.groupeInduction)!];
+  const m = scaleMoves(sc, [g], 1, P);
+  const c = { x: sc.items[g].x, y: sc.items[g].y };
+  const written = m.nodes.find((n) => n.node === ids.nodes.groupeInduction)!;
+  expect(written.x).toBeCloseTo(c.x + (sub.x - c.x) * P.factor, 9);
+  expect(written.y).toBeCloseTo(c.y + (sub.y - c.y) * P.factor, 9);
+});
+
+test('un fantôme change de cran comme un nœud (I14 de la relecture 3b)', () => {
+  const sc = buildScene(s, ids.plans.lobby, measure, P);
+  const i = sc.byId.get(ids.phantoms.node)!;
+  const m = scaleMoves(sc, [i], 1, P);
+  expect(m.phantoms).toEqual([{ id: ids.phantoms.node, x: sc.items[i].x, y: sc.items[i].y, k: sc.items[i].k + 1 }]);
 });

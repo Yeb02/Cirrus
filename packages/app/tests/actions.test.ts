@@ -63,13 +63,14 @@ test('tracer vers un nœud crée la connexion, montrée « partout » où ses de
   expect(shown(plans.lobby, connections.twoToTwo, nodes.mdl)).toBe(true);
 });
 
-test('scinder un bras pose deux fantômes au cran du nœud lointain ; réunir les retire', () => {
+test('scinder un bras : le fantôme près du faisceau au cran lisible à ce zoom, le centre au cran du nœud lointain ; réunir les retire (I14)', () => {
   const { nodes, plans, connections } = ids;
   const before = s.phantoms.size;
-  run(splitBuild(sc, connections.twoToTwo, nodes.occam, { x: 500, y: 300 }, { x: 760, y: 60 }));
+  run(splitBuild(sc, connections.twoToTwo, nodes.occam, { x: 500, y: 300 }, { x: 760, y: 60 }, 0.25, P));
   const mine = [...s.phantoms.values()].filter((ph) => ph.connection === connections.twoToTwo);
   expect(mine.map((ph) => ph.of.kind).sort()).toEqual(['center', 'node']);
-  expect(mine.every((ph) => ph.k === s.placements.get(placementKey(plans.lobby, nodes.occam))!.k)).toBe(true);
+  expect(mine.find((ph) => ph.of.kind === 'node')!.k).toBe(2); // 16 px text at zoom 0.25 needs f^2
+  expect(mine.find((ph) => ph.of.kind === 'center')!.k).toBe(s.placements.get(placementKey(plans.lobby, nodes.occam))!.k);
   run(joinBuild(plans.lobby, connections.twoToTwo, nodes.occam));
   expect(s.phantoms.size).toBe(before);
 });
@@ -183,4 +184,16 @@ test('répercussion : le dépôt et les plans automatiques en une action ; un pl
   run(placeInPlanBuild(lobby, nodes.groupeInduction, { x: gi.x + 100, y: gi.y }, nodes.groupeTheorie));
   expect(s.placements.get(placementKey(plans.lobby, nodes.solomonoff))!.x).toBeCloseTo(before.x + 100, 9);
   expect(groupOf(s, plans.lobby, nodes.groupeInduction)).toBe(nodes.groupeTheorie);
+});
+
+test('un groupe déplacé emporte aussi sa position propre : vidé ensuite, il reste où il était dessiné (I2 de la relecture 3b)', () => {
+  const { nodes, plans } = ids;
+  const g = sc.byId.get(nodes.groupeInduction)!;
+  const drawn = { x: sc.items[g].x, y: sc.items[g].y };
+  run(dropBuild(sc, [g], 300, 40, { x: 9000, y: 9000 }, false, 1, P));
+  expect(s.placements.get(placementKey(plans.lobby, nodes.groupeInduction))).toMatchObject({ x: drawn.x + 300, y: drawn.y + 40 });
+  const lobby = buildScene(s, plans.lobby, measure, P);
+  const gi = lobby.items[lobby.byId.get(nodes.groupeInduction)!];
+  run(placeInPlanBuild(lobby, nodes.groupeInduction, { x: gi.x - 50, y: gi.y }, nodes.groupeTheorie));
+  expect(s.placements.get(placementKey(plans.lobby, nodes.groupeInduction))!.x).toBeCloseTo(gi.x - 50, 9);
 });
