@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { driverSource, texPath } from './driver';
+import { driverSource, texPath } from './driver.ts';
 
 export interface CompileJob { texPath: string; refs?: { label: string; title: string }[]; resourceDir?: string }
 export interface CompileResult { ok: boolean; ms: number; pdfPath?: string; logPath: string; error?: string; timedOut: boolean }
@@ -19,8 +19,10 @@ export class WarmCompiler {
   private counter = 0;
   private next: Promise<Prepared> | null = null;
   private live = new Set<ChildProcess>();
+  private readonly opts: WarmCompilerOptions;
 
-  constructor(private readonly opts: WarmCompilerOptions) {
+  constructor(opts: WarmCompilerOptions) {
+    this.opts = opts;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
     this.driverPath = join(opts.workDir, 'driver.tex');
     writeFileSync(this.driverPath, driverSource(opts.preamblePath), 'utf8');
@@ -28,7 +30,7 @@ export class WarmCompiler {
 
   /** Starts pdfLaTeX and resolves once the preamble is loaded and the driver waits for a job. */
   prepare(): Promise<void> {
-    this.next = this.spawnWaiting();
+    if (!this.next) this.next = this.spawnWaiting(); // reuse the process already being prepared
     return this.next.then(() => undefined);
   }
 
