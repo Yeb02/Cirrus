@@ -1,2 +1,3 @@
+export * from './files.ts';
 export * from './localStore.ts';
-export * from './schema.ts';
+export { migrate, SchemaError } from './schema.ts';
