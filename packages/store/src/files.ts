@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { FileRef } from '@cirrus/core';
 
@@ -36,6 +36,8 @@ export function importFile(storeDir: string, srcPath: string): FileRef {
   } finally {
     closeSync(src);
   }
+  // On disk before the base can refer to it: after a power cut, a reference never points at a truncated copy.
+  fsyncSync(out);
   closeSync(out);
   const ref: FileRef = { name: basename(srcPath), hash: hash.digest('hex'), size };
   const dest = filePath(storeDir, ref);
