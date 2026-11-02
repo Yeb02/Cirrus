@@ -3,6 +3,7 @@ import {
   type Action, CommandError, connect, createNode, createPlan, deleteEverywhere, include, joinArm, placeNode,
   removeFromPlan, removeMember, restoreNode, splitArm,
 } from '../src/commands.ts';
+import { ancestors, groupOf } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
 import { applyOp, branchKey, canonical, emptyState, placementKey, type State } from '../src/state.ts';
 
@@ -57,6 +58,27 @@ test('supprimer partout : connexion réduite à un membre jetée (Review Focus 5
   expect([...s.branches].some((k) => k.includes(c))).toBe(false);
 });
 
+test("retirer un groupe d'un plan garde la hiérarchie de ses membres (spec 7)", () => {
+  const { s, p1, mk } = world();
+  const m = mk('M'), g = mk('G'), h = mk('H');
+  run(s, include(s, p1, g, h));
+  run(s, include(s, p1, m, g));
+  run(s, removeFromPlan(s, p1, g));
+  // G is no longer shown; M's nearest ancestor present in the plan is H.
+  expect(ancestors(s, p1, m)).toEqual([g, h]);
+});
+
+test('un nœud sans membres retiré sort de son groupe, et les groupes cachés devenus vides aussi', () => {
+  const { s, p1, mk } = world();
+  const m = mk('M'), g = mk('G'), h = mk('H');
+  run(s, include(s, p1, g, h));
+  run(s, include(s, p1, m, g));
+  run(s, removeFromPlan(s, p1, g));
+  run(s, removeFromPlan(s, p1, m));
+  expect(groupOf(s, p1, m)).toBeUndefined();
+  expect(groupOf(s, p1, g)).toBeUndefined();
+});
+
 test('connecter crée les branches dans le plan seulement', () => {
   const { s, p1, p2, mk } = world();
   const a = mk('A'), b = mk('B');
@@ -67,9 +89,8 @@ test('connecter crée les branches dans le plan seulement', () => {
   expect(s.branches.has(branchKey({ plan: p2, connection: c, node: a }))).toBe(false);
 });
 
-test('inclure remplace le groupe direct dans ce plan seulement', async () => {
+test('inclure remplace le groupe direct dans ce plan seulement', () => {
   const { s, p1, p2, mk } = world();
-  const { groupOf } = await import('../src/invariants.ts');
   const n = mk('N'), g = mk('G'), h = mk('H');
   for (const id of [n, g, h]) run(s, placeNode(s, p2, id, 0, 0, 0));
   run(s, include(s, p1, n, g));

@@ -49,7 +49,10 @@ export function groupOf(s: State, plan: Id, node: Id, index?: GroupIndex): Id | 
   return undefined;
 }
 
-/** From the parent up to the root; stops on a cycle. */
+/**
+ * From the parent up to the root; stops on a cycle. Includes groups not placed in the plan (a removed group keeps its
+ * links, spec 7): a member is drawn in its nearest ancestor that is placed.
+ */
 export function ancestors(s: State, plan: Id, node: Id, index?: GroupIndex): Id[] {
   const out: Id[] = [];
   const seen = new Set<Id>([node]);

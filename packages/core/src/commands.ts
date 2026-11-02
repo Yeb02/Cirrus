@@ -1,5 +1,5 @@
 import { uuidv7 } from './ids.ts';
-import { checkState, touchedBy } from './invariants.ts';
+import { checkState, groupOf, touchedBy } from './invariants.ts';
 import type { BranchRec, ConnectionKind, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag } from './registry.ts';
@@ -117,18 +117,26 @@ export function placeNode(s: State, plan: Id, node: Id, x: number, y: number, k:
   return d.finish(`Placer « ${n.title} »`);
 }
 
+/** Nodes or phantoms placed in this group, in this plan. */
+const hasMembers = (s: State, plan: Id, group: Id): boolean =>
+  [...s.connections.values()].some((c) => c.kind === 'inclusion' && c.members.some((m) => m.role === 'target' && m.node === group)
+    && c.members.every((m) => s.branches.has(branchKey({ plan, connection: c.id, node: m.node }))))
+  || [...s.phantoms.values()].some((p) => p.plan === plan && p.group === group);
+
 /**
- * "Here only" removal (spec 7): the node leaves this plan, with its group links in this plan; its knowledge branches
- * stay and are drawn as stubs. Leaving its last plan sends it to the trash.
+ * "Here only" removal (spec 7): the node leaves this plan; its knowledge branches stay and are drawn as stubs. A group
+ * keeps its links, hidden, so that its members show in their nearest ancestor present in the plan; a node with no
+ * members leaves its group, and so do the hidden groups this leaves empty. Leaving its last plan sends it to the trash.
  */
 export function removeFromPlan(s: State, plan: Id, node: Id): Action {
   const n = nodeOf(s, node);
   need(s.placements.get(placementKey(plan, node)), 'Ce nœud n’est pas dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, null);
-  for (const b of branchesOf(d.s, (p, c) => p === plan && d.s.connections.get(c)?.kind === 'inclusion')) {
-    const c = d.s.connections.get(b.connection)!;
-    if (c.members.some((m) => m.node === node)) for (const m of c.members) d.branch(plan, c.id, m.node, false);
+  for (let x: Id | undefined = node; x !== undefined && !d.s.placements.has(placementKey(plan, x)) && !hasMembers(d.s, plan, x);) {
+    const parent = groupOf(d.s, plan, x);
+    leaveGroup(d, plan, x);
+    x = parent;
   }
   if (placementsOf(d.s, node).length === 0) d.node(node, { ...n, trashedAt: Date.now() });
   return d.finish(`Retirer « ${n.title} » de ce plan`);
