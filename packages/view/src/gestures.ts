@@ -138,15 +138,39 @@ export class GestureMachine {
   }
 }
 
-/** Scale steps under way with Ctrl+wheel; `flush` is the previous gesture, ended by a pause or another target. */
-export interface WheelSteps { target: string; delta: number; last: number; flush: { target: string; delta: number } | null }
+/** Scale steps under way with Ctrl+wheel; `rest`: small scrolls not yet a step; `flush` is the previous gesture, ended by a pause or another target. */
+export interface WheelSteps { target: string; delta: number; rest: number; last: number; flush: { target: string; delta: number } | null }
 
 /**
  * Ctrl+wheel changes the scale step of the selection or of the element under the cursor (spec 8.1): the notches of
- * one gesture add up into one action, written once the wheel pauses for scaleGesturePauseMs or the target changes.
+ * one gesture add up into one action, written once the wheel pauses for scaleGesturePauseMs or the target changes. A
+ * wheel notch (|deltaY| ≥ scaleWheelStepPx) is one step; smaller scrolls add up to one (I13 of the plan 3b review).
  */
 export function stepWheel(prev: WheelSteps | null, target: string, deltaY: number, now: number, p: RenderParams): WheelSteps {
-  const sign = deltaY < 0 ? 1 : -1;
-  if (prev && prev.target === target && now - prev.last <= p.scaleGesturePauseMs) return { target, delta: prev.delta + sign, last: now, flush: null };
-  return { target, delta: sign, last: now, flush: prev && prev.delta !== 0 ? { target: prev.target, delta: prev.delta } : null };
+  const same = prev !== null && prev.target === target && now - prev.last <= p.scaleGesturePauseMs;
+  const flush = same || !prev || prev.delta === 0 ? null : { target: prev.target, delta: prev.delta };
+  let delta = same ? prev.delta : 0, rest = same ? prev.rest : 0;
+  const up = -deltaY;
+  if (Math.abs(deltaY) >= p.scaleWheelStepPx) { delta += Math.sign(up); rest = 0; }
+  else {
+    rest += up;
+    while (Math.abs(rest) >= p.scaleWheelStepPx) { delta += Math.sign(rest); rest -= Math.sign(rest) * p.scaleWheelStepPx; }
+  }
+  return { target, delta, rest, last: now, flush };
+}
+
+/** A touchpad pinch reaches the page as Ctrl+wheel with fractional deltas: it zooms the view, it does not scale an element. */
+export const isPinch = (deltaY: number): boolean => !Number.isInteger(deltaY);
+
+/**
+ * The buttons pressed between two pointer events, as `button` numbers (0 left, 1 middle, 2 right), from the `buttons`
+ * masks (1 left, 2 right, 4 middle). A button pressed while another is held comes as a pointermove, not a pointerdown
+ * (I1 of the plan 3b review): a right click must still cancel a drag.
+ */
+export function newlyPressed(prev: number, now: number): (0 | 1 | 2)[] {
+  const out: (0 | 1 | 2)[] = [];
+  if (now & 1 && !(prev & 1)) out.push(0);
+  if (now & 4 && !(prev & 4)) out.push(1);
+  if (now & 2 && !(prev & 2)) out.push(2);
+  return out;
 }

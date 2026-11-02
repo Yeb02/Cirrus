@@ -1,10 +1,10 @@
-import { applyOp, branchKey, cloneState, type Id, type State, type Vec2 } from '@cirrus/core';
+import { branchKey, type Id, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, withLayout, repercussion,
+  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -90,6 +90,8 @@ export function GraphView(props: {
   /** The straight line that follows the cursor while a connection is drawn (screen coordinates). */
   const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [question, setQuestion] = useState<Question | null>(null);
+  const questionRef = useRef(question);
+  questionRef.current = question;
   const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
@@ -97,12 +99,25 @@ export function GraphView(props: {
   const clip = useRef<Clip | null>(null);
   /** The layout handles of the selected connection (spec 8.5), drawn over the canvas; one may be dragged. */
   const handlesSvg = useRef<SVGSVGElement>(null);
-  const handleDrag = useRef<{ handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene } | null>(null);
+  const handleDrag = useRef<{
+    handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene;
+    /** Where it was pressed; the drag begins beyond clickSlopPx, short of it the press is a plain click (I10 of the review). */
+    from: { x: number; y: number }; armed: boolean;
+  } | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
   /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
-  const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[] } | null>(null);
+  const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[]; expected: Id } | null>(null);
 
+  /**
+   * Back to the scene of the state, after a preview given up or refused: the current plan's, never one kept from
+   * before a change of tab (I7 of the plan 3b review).
+   */
+  const restoreScene = () => {
+    const e = engine.current, sc = sceneRef.current;
+    if (e && sc) e.renderer.setScene(sc);
+    dirty.current = true;
+  };
   /**
    * Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. `extend`: the
    * earlier action it completes, as one undo step (spec 10).
@@ -348,13 +363,15 @@ export function GraphView(props: {
     if (!handle) return false;
     const c = sc.connections[L.conn], l = c.layout;
     const base = l && { handles: l.handles, ...(l.marker ? { marker: l.marker } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
-    handleDrag.current = { handle, conn: L.conn, id: c.id, base, g: L.g, layout: base, scene: sc };
+    handleDrag.current = { handle, conn: L.conn, id: c.id, base, g: L.g, layout: base, scene: sc, from: { x: sx, y: sy }, armed: false };
     return true;
   };
   /** The connection redrawn with the handle under the cursor: a preview, nothing written. */
   const dragHandle = (sx: number, sy: number) => {
     const d = handleDrag.current, e = engine.current;
     if (!d || !e) return;
+    if (!d.armed && Math.hypot(sx - d.from.x, sy - d.from.y) <= paramsRef.current.clickSlopPx) return;
+    d.armed = true;
     d.layout = applyHandle(d.base, d.g, d.handle, screenToWorld(e.renderer.camera, sx, sy));
     e.renderer.setScene(withLayout(d.scene, d.conn, d.layout), true);
     dirty.current = true;
@@ -364,9 +381,16 @@ export function GraphView(props: {
     const d = handleDrag.current;
     handleDrag.current = null;
     if (!d) return;
-    const restore = () => { engine.current?.renderer.setScene(d.scene); dirty.current = true; };
-    if (!keep || !d.layout || d.layout === d.base) { restore(); return; }
-    edit(layoutBuild(d.scene.plan.id, d.id, d.layout), restore);
+    // Released without moving: a click on what lies under the handle (the marker opens its connection's pop-up).
+    if (!d.armed) {
+      if (keep) {
+        feed({ t: 'down', button: 0, sx: d.from.x, sy: d.from.y, ctrl: false, alt: false, shift: false, hit: hitAt(d.from.x, d.from.y) });
+        feed({ t: 'up', button: 0, sx: d.from.x, sy: d.from.y });
+      }
+      return;
+    }
+    if (!keep || !d.layout || d.layout === d.base) { restoreScene(); return; }
+    edit(layoutBuild(d.scene.plan.id, d.id, d.layout), restoreScene);
   };
   /**
    * A drop that changes groups (spec 10): « partout ou ici seulement » when other plans would change, with its cost
@@ -398,7 +422,7 @@ export function GraphView(props: {
         if (v === 'here') { void edit(build, restore); return; }
         void edit(withRepercussion(build, changed.filter((c) => !c.manual)), restore).then((r) => {
           if (r?.ok && manual.length > 0) {
-            repQueue.current = { extend: r.action.id, home: plan, items: manual.map((c) => ({ plan: c.plan, node: c.node, to: c.to })) };
+            repQueue.current = { extend: r.action.id, home: plan, items: manual.map((c) => ({ plan: c.plan, node: c.node, to: c.to })), expected: plan };
             nextRepercussion();
           }
         });
@@ -415,6 +439,7 @@ export function GraphView(props: {
       if (sceneRef.current?.plan.id !== q.home) props.onOpenPlan(q.home);
       return;
     }
+    q.expected = item.plan;
     const s = stateRef.current, title = s.nodes.get(item.node)?.title ?? '?';
     const r = root.current?.getBoundingClientRect();
     pendingPlace.current = {
@@ -580,8 +605,19 @@ export function GraphView(props: {
   useEffect(() => {
     const e = engine.current;
     if (!e || !scene) return;
-    // Another plan: the gesture in progress and the selection do not follow.
+    // Another plan: the gesture in progress, the selection, a question and a dragged handle do not follow; the scale
+    // gesture waiting for its pause is written for its plan (I7 of the review).
     if (sceneRef.current && sceneRef.current.plan.id !== scene.plan.id) {
+      const q = repQueue.current;
+      if (q && scene.plan.id !== q.expected) {
+        // The user went elsewhere: the repercussion stops there (I8 of the review); what was placed stays.
+        repQueue.current = null;
+        const left = q.items.length + (placing.current?.kind === 'repercussion' ? 1 : 0);
+        notify(`Répercussion interrompue : ${left} plan${left > 1 ? 's' : ''} non placé${left > 1 ? 's' : ''} à la main.`);
+      }
+      settleWheel();
+      dropHandle(false);
+      setQuestion(null);
       feed({ t: 'cancel' });
       setSelection(emptySelection());
       setPopup(null);
@@ -607,7 +643,8 @@ export function GraphView(props: {
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
-      if (ev.ctrlKey) { wheelScale(sx, sy, ev.deltaY); return; }
+      // A touchpad pinch comes as Ctrl+wheel with fractional deltas: it zooms the view (I13 of the review).
+      if (ev.ctrlKey && !isPinch(ev.deltaY)) { wheelScale(sx, sy, ev.deltaY); return; }
       nav({ t: 'wheel', sx, sy, deltaY: ev.deltaY, ctrl: false });
       hover(sx, sy);
     };
@@ -727,7 +764,7 @@ export function GraphView(props: {
         e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: intent.dx, y: intent.dy }])), paramsRef.current), true);
         // One action for the whole drop (spec 6.4): the moves, then the groups left and entered; refused or given up,
         // back to where it was; written, the scene follows the state.
-        dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, () => { engine.current?.renderer.setScene(d.base); dirty.current = true; });
+        dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, restoreScene);
         break;
       }
       case 'placeMove':
@@ -797,7 +834,7 @@ export function GraphView(props: {
           setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p)); } });
         } else if (what.kind === 'exclude') {
           // Out of its group, put down where clicked; entering the group under the cursor if it is another (spec 10).
-          dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, () => {});
+          dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, restoreScene);
         }
         break;
       }
@@ -816,7 +853,7 @@ export function GraphView(props: {
         const d = dragging.current;
         dragging.current = null;
         e.renderer.setDropTarget(null);
-        if (d) e.renderer.setScene(d.base);
+        if (d) restoreScene();
         break;
       }
       default:
@@ -828,34 +865,37 @@ export function GraphView(props: {
    * Ctrl+wheel (spec 8.1): the step of the selection or of the element under the cursor. The notches of one gesture
    * are previewed at once and written as one action when the wheel pauses (stepWheel).
    */
-  const wheelGesture = useRef<{ steps: WheelSteps; base: PlanScene; items: number[]; timer: number } | null>(null);
+  const wheelGesture = useRef<{ steps: WheelSteps; base: PlanScene; preview: PlanScene; items: number[]; timer: number } | null>(null);
   const commitScale = (g: { steps: WheelSteps; base: PlanScene; items: number[] }) => {
-    if (g.steps.delta === 0) { engine.current?.renderer.setScene(g.base); return; }
-    edit(scaleBuild(g.base, g.items, g.steps.delta, paramsRef.current), () => { engine.current?.renderer.setScene(g.base); dirty.current = true; });
+    if (g.steps.delta === 0) { restoreScene(); return; }
+    edit(scaleBuild(g.base, g.items, g.steps.delta, paramsRef.current), restoreScene);
+  };
+  /** Writes now the Ctrl+wheel gesture waiting for its pause (before an undo, a change of plan). */
+  const settleWheel = () => {
+    const g = wheelGesture.current;
+    if (!g) return;
+    window.clearTimeout(g.timer);
+    wheelGesture.current = null;
+    commitScale(g);
   };
   const wheelScale = (sx: number, sy: number, deltaY: number) => {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
     const h = hitAt(sx, sy);
     const prev = wheelGesture.current;
-    // Within a gesture the scene shown is a preview: the target is read on the scene the gesture started from.
-    const base = prev ? prev.base : sc;
     if (h.kind !== 'item') return;
     const id = sc.items[h.item].id, sel = selectionRef.current;
     const ids = sel.items.has(id) ? [...sel.items] : [id];
-    const items = ids.flatMap((x) => { const i = base.byId.get(x); return i === undefined ? [] : [i]; });
     const steps = stepWheel(prev?.steps ?? null, [...ids].sort().join(','), deltaY, performance.now(), paramsRef.current);
     if (prev) window.clearTimeout(prev.timer);
     if (steps.flush && prev) commitScale(prev);
-    const gesture = { steps, base: steps.flush || !prev ? sc : prev.base, items, timer: 0 };
-    gesture.items = ids.flatMap((x) => { const i = gesture.base.byId.get(x); return i === undefined ? [] : [i]; });
-    // Preview: the state as the action would leave it, drawn without writing anything.
-    const build = scaleBuild(gesture.base, gesture.items, steps.delta, paramsRef.current);
-    if (build) {
-      const preview = cloneState(stateRef.current);
-      for (const op of build(preview).ops) applyOp(preview, op);
-      e.renderer.setScene(buildScene(preview, gesture.base.plan.id, measureTitle(paramsRef.current), paramsRef.current), true);
-    } else e.renderer.setScene(gesture.base, true);
+    // A new gesture starts from what the screen shows: after the one just written, its preview (I6 of the review).
+    const base = !prev ? sc : steps.flush ? prev.preview : prev.base;
+    const items = ids.flatMap((x) => { const i = base.byId.get(x); return i === undefined ? [] : [i]; });
+    // Preview: the placements as the action would leave them, without rebuilding the scene (I15 of the review).
+    const preview = steps.delta === 0 ? base : withMoves(base, scaleMoves(base, items, steps.delta, paramsRef.current), paramsRef.current);
+    e.renderer.setScene(preview, true);
+    const gesture = { steps, base, preview, items, timer: 0 };
     gesture.timer = window.setTimeout(() => { wheelGesture.current = null; commitScale(gesture); }, paramsRef.current.scaleGesturePauseMs);
     wheelGesture.current = gesture;
     dirty.current = true;
@@ -992,13 +1032,26 @@ export function GraphView(props: {
     for (const intent of gestures.current.feed(input, e.renderer.camera)) handle(intent);
   };
   const buttonOf = (b: number): 0 | 1 | 2 => (b === 2 ? 2 : b === 1 ? 1 : 0);
+  /** The buttons held, as the last pointer event gave them. */
+  const buttons = useRef(0);
 
   // A lost focus abandons the gesture in progress (Review Focus 2 of plan 3b).
   useEffect(() => {
-    const onBlur = () => { dropHandle(false); feed({ t: 'cancel' }); };
+    // A plan of a repercussion waits instead: Alt+Tab must not skip it (I8 of the review).
+    const onBlur = () => { dropHandle(false); if (placing.current?.kind !== 'repercussion') feed({ t: 'cancel' }); };
     window.addEventListener('blur', onBlur);
     return () => window.removeEventListener('blur', onBlur);
   }, []);
+  // Ctrl+Z and Ctrl+Y (spec 6.4) wait for what is under way: a scale gesture before its pause is written first; a
+  // gesture, a question or a repercussion in progress refuses them (I6 of the plan 3b review).
+  useEffect(() => {
+    props.session?.setGuard(() => {
+      settleWheel();
+      const busy = gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
+        || repQueue.current !== null || questionRef.current !== null;
+      return busy ? 'Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’annuler ou de rétablir.' : null;
+    });
+  }, [props.session]);
   useEffect(() => {
     engine.current?.renderer.setSelection(selection);
     dirty.current = true;
@@ -1019,6 +1072,7 @@ export function GraphView(props: {
       onContextMenu={(ev) => ev.preventDefault()}
       onPointerDown={(ev) => {
         root.current!.focus();
+        buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         root.current!.setPointerCapture(ev.pointerId);
         if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && grabHandle(sx, sy)) return;
@@ -1027,11 +1081,19 @@ export function GraphView(props: {
       onPointerMove={(ev) => {
         const { sx, sy } = local(ev);
         lastPointer.current = { x: sx, y: sy };
+        // A second button pressed during a gesture (a right click cancelling a drag) only shows here (I1 of the review).
+        const pressed = newlyPressed(buttons.current, ev.buttons);
+        buttons.current = ev.buttons;
+        for (const b of pressed) {
+          if (handleDrag.current && b !== 0) { dropHandle(false); continue; }
+          feed({ t: 'down', button: b, sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
+        }
         if (handleDrag.current) { dragHandle(sx, sy); return; }
         if (!gestures.current.busy) hover(sx, sy);
         feed({ t: 'move', sx, sy });
       }}
       onPointerUp={(ev) => {
+        buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
         if (handleDrag.current) { dropHandle(true); return; }

@@ -84,6 +84,8 @@ export interface RenderParams {
   hitTolerancePx: number;
   clickSlopPx: number;
   scaleGesturePauseMs: number;
+  /** Scroll that makes one scale step with Ctrl+wheel; a wheel notch is one whatever its size (I13 of the plan 3b review). */
+  scaleWheelStepPx: number;
   /** Fold from which a group's members are no longer clickable: the group is taken whole (spec 9.3). */
   foldClickable: number;
   stubHitFactor: number;
@@ -193,6 +195,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   hitTolerancePx: 6,
   clickSlopPx: 4,
   scaleGesturePauseMs: 400,
+  scaleWheelStepPx: 100,
   foldClickable: 0.5,
   stubHitFactor: 1.5,
   wheelZoomSpeed: 0.0015,
@@ -319,6 +322,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('hitTolerancePx', 'Tolérance de survol d’une connexion (px)', A, 'Vue', 1, 20, 0.5),
   num('clickSlopPx', 'Mouvement en deçà duquel un appui reste un clic (px)', A, 'Vue', 0, 20, 1),
   num('scaleGesturePauseMs', 'Pause qui termine un geste d’échelle à Ctrl+molette (ms)', A, 'Vue', 100, 3000, 50),
+  num('scaleWheelStepPx', 'Défilement qui fait un cran d’échelle à Ctrl+molette (px)', A, 'Vue', 10, 500, 5),
   num('foldClickable', 'Repli à partir duquel les membres d’un groupe ne sont plus cliquables', A, 'Vue', 0.05, 0.95, 0.05),
   num('stubHitFactor', 'Tolérance de survol du bout d’une amorce (× tolérance)', A, 'Vue', 1, 5, 0.1),
   num('wheelZoomSpeed', 'Vitesse du zoom à la molette', A, 'Vue', 0.0002, 0.01, 0.0001),

@@ -9,6 +9,9 @@ import type { PlanScene } from './scene.ts';
 export interface Moves {
   nodes: { node: Id; x?: number; y?: number; k?: number }[];
   phantoms: { id: Id; x: number; y: number; k?: number }[];
+  /** The dilation: around `center`, by `factor` (what moves with it, a connection's layout, follows). */
+  center: Vec2;
+  factor: number;
 }
 
 /**
@@ -22,10 +25,10 @@ export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: 
     for (let a = scene.items[i].parent; a >= 0; a = scene.items[a].parent) if (selected.has(a)) return false;
     return true;
   });
-  const out: Moves = { nodes: [], phantoms: [] };
-  if (top.length === 0) return out;
+  if (top.length === 0) return { nodes: [], phantoms: [], center: { x: 0, y: 0 }, factor: 1 };
   const f = p.factor ** delta;
   const c = { x: top.reduce((s, i) => s + scene.items[i].x, 0) / top.length, y: top.reduce((s, i) => s + scene.items[i].y, 0) / top.length };
+  const out: Moves = { nodes: [], phantoms: [], center: c, factor: f };
   const at = (x: number, y: number) => ({ x: c.x + (x - c.x) * f, y: c.y + (y - c.y) * f });
   const visit = (i: number, own: boolean) => {
     const it = scene.items[i];

@@ -32,6 +32,7 @@ export class EditSession {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly commit: (a: Action) => Promise<void>;
   private readonly onChange: (s: State, a: Action) => void;
+  private guard: () => string | null = () => null;
 
   constructor(state: State, commit: (a: Action) => Promise<void>, onChange: (s: State, a: Action) => void) {
     this.s = state;
@@ -62,7 +63,17 @@ export class EditSession {
     });
   }
 
+  /**
+   * Called before an undo or a redo: it may write what is waiting (it runs first, the queue keeps the order), or refuse
+   * with a message while a gesture is under way (I6 of the plan 3b review).
+   */
+  setGuard(guard: () => string | null): void {
+    this.guard = guard;
+  }
+
   undo(): Promise<Result> {
+    const refused = this.guard();
+    if (refused) return Promise.resolve({ ok: false, message: refused });
     return this.enqueue(async () => {
       let a: Action | null;
       try {
@@ -79,6 +90,8 @@ export class EditSession {
   }
 
   redo(): Promise<Result> {
+    const refused = this.guard();
+    if (refused) return Promise.resolve({ ok: false, message: refused });
     return this.enqueue(async () => {
       let a: Action | null;
       try {

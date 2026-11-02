@@ -2,7 +2,7 @@ import { combine, moveNodes, movePhantom, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { scaleMoves } from '../src/edit.ts';
-import { buildScene } from '../src/scene.ts';
+import { buildScene, withMoves } from '../src/scene.ts';
 import { fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds;
@@ -82,4 +82,23 @@ test('un fantôme change de cran comme un nœud (I14 de la relecture 3b)', () =>
   const i = sc.byId.get(ids.phantoms.node)!;
   const m = scaleMoves(sc, [i], 1, P);
   expect(m.phantoms).toEqual([{ id: ids.phantoms.node, x: sc.items[i].x, y: sc.items[i].y, k: sc.items[i].k + 1 }]);
+});
+
+test('aperçu d’un changement de cran sans reconstruire la scène : comme si l’action était écrite (I15 de la relecture 3b)', () => {
+  const st = structuredClone(s) as State;
+  const plan = ids.plans.lobby;
+  const sc = buildScene(st, plan, measure, P);
+  const m = scaleMoves(sc, [sc.byId.get(ids.nodes.groupeComplexite)!, sc.byId.get(ids.phantoms.center)!], 1, P);
+  const mdlBefore = sc.items[sc.byId.get(ids.nodes.mdl)!].x;
+  const preview = withMoves(sc, m, P);
+  apply(st, plan, m);
+  const real = buildScene(st, plan, measure, P);
+  real.items.forEach((it, i) => {
+    const q = preview.items[i];
+    expect(q.id).toBe(it.id);
+    for (const key of ['x', 'y', 'k', 'halfW', 'halfH'] as const) expect(q[key]).toBeCloseTo(it[key], 9);
+    if (it.pad !== undefined) expect(q.pad).toBeCloseTo(it.pad, 9);
+  });
+  expect(sc.items[sc.byId.get(ids.nodes.mdl)!].x).toBe(mdlBefore); // the scene received is untouched
+  expect(preview.items[sc.byId.get(ids.nodes.mdl)!].x).not.toBe(mdlBefore);
 });

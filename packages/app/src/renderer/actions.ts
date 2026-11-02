@@ -10,6 +10,32 @@ import {
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
 
+/** These items and everything they contain. */
+const subtree = (scene: PlanScene, items: number[]): Set<number> => {
+  const out = new Set<number>();
+  const take = (i: number) => { out.add(i); for (const c of scene.items[i].children) take(c); };
+  for (const i of items) take(i);
+  return out;
+};
+
+/**
+ * The connections whose every end moves keep their shape (spec 8.1, I10 of the plan 3b review): their pinned marker
+ * goes through `map`, their Bézier offsets are scaled by `scale`.
+ */
+function layoutsFollowing(scene: PlanScene, moved: Set<number>, map: (q: Vec2) => Vec2, scale: number): ((s: State) => Action)[] {
+  const out: ((s: State) => Action)[] = [];
+  for (const c of scene.connections) {
+    const l = c.layout;
+    if (c.part !== 'main' || !l || c.ends.length === 0 || !c.ends.every((e) => moved.has(e.item))) continue;
+    const handles = Object.fromEntries(Object.entries(l.handles).map(([k, h]) => [k, {
+      b1: { x: h.b1.x * scale, y: h.b1.y * scale }, b2: { x: h.b2.x * scale, y: h.b2.y * scale },
+    }]));
+    const next = { handles, ...(l.marker ? { marker: map(l.marker) } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
+    out.push((x) => setLayout(x, scene.plan.id, c.id, next));
+  }
+  return out;
+}
+
 /**
  * Moving items by (dx, dy) and dropping them at `at` (spec 10): one action for the moves, then the groups left and
  * entered (with Alt, leaving the group); a simple node receiving its first members becomes a group, groupOffsetSteps
@@ -42,12 +68,14 @@ export function dropBuild(base: PlanScene, items: number[], dx: number, dy: numb
     if (base.items[target].k < k) memberships.push((x) => moveNodes(x, plan, [{ node: targetId!, k }]));
   }
   const count = nodes.length + phantoms.length;
+  const follow = dx === 0 && dy === 0 ? [] : layoutsFollowing(base, subtree(base, items), (q) => ({ x: q.x + dx, y: q.y + dy }), 1);
   const label = targetId !== null && effects.some((f) => f.enter !== null) ? `Mettre dans « ${base.items[target!].title} »`
     : effects.some((f) => f.leave) ? 'Sortir du groupe' : count === 1 ? 'Déplacer un élément' : `Déplacer ${count} éléments`;
   return (st) => combine(st, label, [
     ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
     ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group)),
     ...memberships,
+    ...follow,
   ]);
 }
 
@@ -59,6 +87,7 @@ export function scaleBuild(scene: PlanScene, items: number[], delta: number, p: 
   return (st) => combine(st, delta > 0 ? 'Agrandir d’un cran' : 'Réduire d’un cran', [
     ...(m.nodes.length > 0 ? [(x: State) => moveNodes(x, plan, m.nodes)] : []),
     ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, undefined, ph.k)),
+    ...layoutsFollowing(scene, subtree(scene, items), (q) => ({ x: m.center.x + (q.x - m.center.x) * m.factor, y: m.center.y + (q.y - m.center.y) * m.factor }), m.factor),
   ]);
 }
 
@@ -277,6 +306,7 @@ export function placeInPlanBuild(scene: PlanScene, node: Id, at: Vec2, to: Id | 
   return (st) => combine(st, `Répercuter dans « ${scene.plan.name} »`, [
     ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
     ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
+    ...layoutsFollowing(scene, subtree(scene, [i]), (q) => ({ x: q.x + dx, y: q.y + dy }), 1),
     (x: State) => (to !== null ? include(x, plan, node, to) : exclude(x, plan, node)),
   ]);
 }

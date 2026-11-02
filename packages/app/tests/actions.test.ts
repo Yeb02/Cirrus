@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, branchKey, groupOf, layoutKey, placementKey, type State } from '@cirrus/core';
+import { applyOp, branchKey, groupOf, layoutKey, placementKey, setLayout, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
@@ -196,4 +196,21 @@ test('un groupe déplacé emporte aussi sa position propre : vidé ensuite, il r
   const gi = lobby.items[lobby.byId.get(nodes.groupeInduction)!];
   run(placeInPlanBuild(lobby, nodes.groupeInduction, { x: gi.x - 50, y: gi.y }, nodes.groupeTheorie));
   expect(s.placements.get(placementKey(plans.lobby, nodes.groupeInduction))!.x).toBeCloseTo(gi.x - 50, 9);
+});
+
+test('la disposition d’une connexion suit quand toutes ses extrémités bougent : translatée, ou dilatée avec le groupe (I10 de la relecture 3b)', () => {
+  const { nodes, plans } = ids;
+  const inner = [...s.connections.values()].find((c) => c.kind === 'knowledge' && c.members.length === 2
+    && c.members.some((m) => m.node === nodes.solomonoff && m.role === 'target') && !c.members.some((m) => m.node === nodes.mdl))!;
+  run((st: State) => setLayout(st, plans.lobby, inner.id, { marker: { x: 10, y: 20 }, handles: { [nodes.solomonoff]: { b1: { x: 1, y: 2 }, b2: { x: 3, y: 4 } } } }));
+  let scene = buildScene(s, plans.lobby, measure, P);
+  run(dropBuild(scene, [scene.byId.get(nodes.groupeInduction)!], 100, 50, { x: 9000, y: 9000 }, false, 1, P));
+  expect(s.connLayouts.get(layoutKey(plans.lobby, inner.id))!.marker).toEqual({ x: 110, y: 70 });
+  scene = buildScene(s, plans.lobby, measure, P);
+  const g = scene.items[scene.byId.get(nodes.groupeInduction)!];
+  run(scaleBuild(scene, [scene.byId.get(nodes.groupeInduction)!], 1, P));
+  const l = s.connLayouts.get(layoutKey(plans.lobby, inner.id))!;
+  expect(l.marker!.x).toBeCloseTo(g.x + (110 - g.x) * P.factor, 9);
+  expect(l.handles[nodes.solomonoff].b2).toEqual({ x: 3 * P.factor, y: 4 * P.factor });
+  // A connection with an end that does not move keeps its layout (Déduction jointe reaches Occam).
 });

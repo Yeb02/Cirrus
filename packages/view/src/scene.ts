@@ -199,6 +199,38 @@ export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: Ren
   return { ...scene, items, bounds: boundsOf(items) };
 }
 
+/**
+ * The scene with some placements changed (positions, steps), for the preview of a scale gesture (I15 of the plan 3b
+ * review): changed items and the groups above them are copied and derived again, everything else is shared, and the
+ * scene is not rebuilt from the state. The original scene is left unchanged.
+ */
+export function withMoves(
+  scene: PlanScene, m: { nodes: { node: Id; x?: number; y?: number; k?: number }[]; phantoms: { id: Id; x: number; y: number; k?: number }[] }, p: RenderParams,
+): PlanScene {
+  const items = [...scene.items];
+  const touched: number[] = [];
+  const update = (i: number | undefined, x: number | undefined, y: number | undefined, k: number | undefined) => {
+    if (i === undefined) return;
+    const it = items[i], nk = k ?? it.k;
+    const disc = it.kind === 'phantom' && it.phantom !== 'node';
+    const halves = nk === it.k ? {} : disc ? { halfW: p.centerRadius * stepScale(nk, p), halfH: p.centerRadius * stepScale(nk, p) } : boxHalves(it.lines, nk, p);
+    items[i] = { ...it, x: x ?? it.x, y: y ?? it.y, k: nk, ...halves };
+    touched.push(i);
+  };
+  for (const n of m.nodes) update(scene.byId.get(n.node), n.x, n.y, n.k);
+  for (const ph of m.phantoms) update(scene.byId.get(ph.id), ph.x, ph.y, ph.k);
+  const groups = new Set<number>();
+  for (const i of touched) {
+    if (items[i].kind === 'group') groups.add(i);
+    for (let a = items[i].parent; a >= 0; a = items[a].parent) groups.add(a);
+  }
+  for (const g of [...groups].sort((a, b) => items[b].depth - items[a].depth)) {
+    items[g] = { ...items[g] };
+    deriveGroup(items, g, p);
+  }
+  return { ...scene, items, bounds: boundsOf(items) };
+}
+
 function sceneConnections(
   s: State, plan: PlanRec, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>,
 ): SceneConnection[] {

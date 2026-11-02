@@ -104,3 +104,18 @@ test('une action complétée plus tard (répercussion plan par plan) se défait 
   await session.undo();
   expect([...session.state.nodes.values()].map((n) => n.title).sort()).toEqual(['C', 'D']);
 });
+
+test('une garde passe avant Ctrl+Z et Ctrl+Y : elle peut écrire ce qui attend, ou refuser pendant un geste (I6 de la relecture 3b)', async () => {
+  const { s, plan } = world();
+  const session = new EditSession(s, async () => {}, () => {});
+  await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  let busy = true;
+  session.setGuard(() => (busy ? 'Un geste est en cours.' : null));
+  expect(await session.undo()).toEqual({ ok: false, message: 'Un geste est en cours.' });
+  expect(session.state.nodes.size).toBe(1);
+  // What waits (a Ctrl+wheel gesture before its pause) is written first, then undone.
+  busy = false;
+  session.setGuard(() => { void session.run((st) => createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 })); return null; });
+  expect((await session.undo()).ok).toBe(true);
+  expect([...session.state.nodes.values()].map((n) => n.title)).toEqual(['A']);
+});

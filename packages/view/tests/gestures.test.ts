@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { GestureMachine, type Input, stepWheel } from '../src/gestures.ts';
+import { GestureMachine, type Input, isPinch, newlyPressed, stepWheel } from '../src/gestures.ts';
 import type { Hit } from '../src/hit.ts';
 import { P } from './helpers.ts';
 
@@ -102,4 +102,25 @@ test('Ctrl+molette : les crans d’un même geste s’additionnent, une pause ou
   expect(later).toMatchObject({ delta: 1, flush: { target: 'a', delta: 1 } });
   const other = stepWheel(later, 'b', 120, 1000, P);
   expect(other).toMatchObject({ target: 'b', delta: -1, flush: { target: 'a', delta: 1 } });
+});
+
+test('Ctrl+molette : un cran de molette vaut un cran, les petits défilements s’additionnent ; un pincement n’en est pas (I13 de la relecture 3b)', () => {
+  let acc = stepWheel(null, 'a', -40, 0, P);
+  expect(acc.delta).toBe(0);
+  acc = stepWheel(acc, 'a', -40, 10, P);
+  expect(acc.delta).toBe(0);
+  acc = stepWheel(acc, 'a', -40, 20, P); // 120 ≥ scaleWheelStepPx
+  expect(acc.delta).toBe(1);
+  acc = stepWheel(acc, 'a', -120, 30, P);
+  expect(acc.delta).toBe(2);
+  expect(isPinch(-3.25)).toBe(true);
+  expect(isPinch(-120)).toBe(false);
+  expect(isPinch(100)).toBe(false);
+});
+
+test('un second bouton pressé pendant un geste n’arrive qu’en mouvement : on le reconnaît au masque des boutons (I1 de la relecture 3b)', () => {
+  expect(newlyPressed(1, 3)).toEqual([2]); // right pressed while left is held
+  expect(newlyPressed(0, 1)).toEqual([0]);
+  expect(newlyPressed(3, 1)).toEqual([]);
+  expect(newlyPressed(1, 5)).toEqual([1]); // middle
 });
