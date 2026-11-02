@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, CommandError, connect, createNode, createPlan, deleteEverywhere, include, joinArm, placeNode,
-  removeFromPlan, removeMember, restoreNode, splitArm,
+  type Action, addMember, CommandError, connect, createNode, createPlan, deleteEverywhere, include, joinArm, movePhantom,
+  placeNode, removeFromPlan, removeMember, restoreNode, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
@@ -138,6 +138,38 @@ test('une connexion jetée perd tous ses fantômes', () => {
   run(s, deleteEverywhere(s, a));
   expect(s.connections.get(c)!.trashedAt).toBeDefined();
   expect(s.phantoms.size).toBe(0);
+});
+
+test('un nœud à la corbeille ne peut pas être connecté', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A'), b = mk('B'), t = mk('T');
+  run(s, removeFromPlan(s, p1, t));
+  expect(() => connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: t, role: 'target' }] })).toThrow(CommandError);
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  expect(() => addMember(s, p1, c, { node: t, role: 'target' })).toThrow(/corbeille/);
+});
+
+test('un plan inconnu est refusé', () => {
+  const { s, p1, mk } = world();
+  const a = mk('A'), b = mk('B'), g = mk('G'), t = mk('T');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  expect(() => addMember(s, 'pas-de-plan', c, { node: g, role: 'target' })).toThrow(/Plan introuvable/);
+  run(s, removeFromPlan(s, p1, t));
+  expect(() => restoreNode(s, t, 'pas-de-plan', 0, 0, 0)).toThrow(/Plan introuvable/);
+});
+
+test("on n'inclut que dans un groupe présent dans le plan", () => {
+  const { s, p1, p2, mk } = world();
+  const a = mk('A'), g = mk('G'), t = mk('T');
+  run(s, removeFromPlan(s, p1, t));
+  expect(() => include(s, p1, a, t)).toThrow(CommandError);
+  run(s, placeNode(s, p2, a, 0, 0, 0));
+  expect(() => include(s, p2, a, g)).toThrow(/pas dans ce plan/);
+  const b = mk('B');
+  const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
+  run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
+  const phantom = [...s.phantoms.values()][0].id;
+  expect(() => movePhantom(s, phantom, 0, 0, t)).toThrow(/pas dans ce plan/);
 });
 
 test("une commande ne modifie jamais l'état reçu", () => {

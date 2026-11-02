@@ -67,6 +67,14 @@ const need = <T>(value: T | undefined, message: string): T => {
   return value;
 };
 const nodeOf = (s: State, id: Id) => need(s.nodes.get(id), 'Nœud introuvable.');
+const planOf = (s: State, id: Id) => need(s.plans.get(id), 'Plan introuvable.');
+/** A node that can be linked or placed: not in the trash. */
+const liveNodeOf = (s: State, id: Id) => {
+  const n = nodeOf(s, id);
+  if (n.trashedAt !== undefined) throw new CommandError('Ce nœud est à la corbeille.');
+  return n;
+};
+const placedIn = (s: State, plan: Id, node: Id, message: string) => need(s.placements.get(placementKey(plan, node)), message);
 const connectionOf = (s: State, id: Id) => need(s.connections.get(id), 'Connexion introuvable.');
 const branchesOf = (s: State, pred: (plan: Id, connection: Id, node: Id) => boolean) =>
   [...s.branches].map(parseBranchKey).filter((b) => pred(b.plan, b.connection, b.node));
@@ -80,7 +88,7 @@ export function createPlan(s: State, name: string, type: PlanType): Action {
 }
 
 export function createNode(s: State, a: { plan: Id; title: string; x: number; y: number; k: number; summary?: string; tags?: TagValue[] }): Action {
-  need(s.plans.get(a.plan), 'Plan introuvable.');
+  planOf(s, a.plan);
   const d = new Draft(s);
   const id = uuidv7();
   const tags = (a.tags ?? []).map((t) => normalizeTag(t, s.tagKeys));
@@ -100,7 +108,7 @@ export function editNode(s: State, id: Id, patch: Partial<Pick<NodeRec, 'title' 
 export function moveNodes(s: State, plan: Id, moves: { node: Id; x: number; y: number; k?: number }[]): Action {
   const d = new Draft(s);
   for (const m of moves) {
-    const p = need(s.placements.get(placementKey(plan, m.node)), 'Ce nœud n’est pas dans ce plan.');
+    const p = placedIn(s, plan, m.node, 'Ce nœud n’est pas dans ce plan.');
     d.placement(plan, m.node, { ...p, x: m.x, y: m.y, k: m.k ?? p.k });
   }
   return d.finish(moves.length === 1 ? 'Déplacer un nœud' : `Déplacer ${moves.length} nœuds`);
@@ -108,9 +116,8 @@ export function moveNodes(s: State, plan: Id, moves: { node: Id; x: number; y: n
 
 /** Adds an existing node to a plan (paste, add to the lobby). */
 export function placeNode(s: State, plan: Id, node: Id, x: number, y: number, k: number): Action {
-  need(s.plans.get(plan), 'Plan introuvable.');
-  const n = nodeOf(s, node);
-  if (n.trashedAt !== undefined) throw new CommandError('Ce nœud est à la corbeille.');
+  planOf(s, plan);
+  const n = liveNodeOf(s, node);
   if (s.placements.has(placementKey(plan, node))) throw new CommandError('Ce nœud est déjà dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, { plan, node, x, y, k });
@@ -130,7 +137,7 @@ const hasMembers = (s: State, plan: Id, group: Id): boolean =>
  */
 export function removeFromPlan(s: State, plan: Id, node: Id): Action {
   const n = nodeOf(s, node);
-  need(s.placements.get(placementKey(plan, node)), 'Ce nœud n’est pas dans ce plan.');
+  placedIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, null);
   for (let x: Id | undefined = node; x !== undefined && !d.s.placements.has(placementKey(plan, x)) && !hasMembers(d.s, plan, x);) {
@@ -165,6 +172,7 @@ export function deleteEverywhere(s: State, node: Id): Action {
 export function restoreNode(s: State, node: Id, plan: Id, x: number, y: number, k: number): Action {
   const n = nodeOf(s, node);
   if (n.trashedAt === undefined) throw new CommandError('Ce nœud n’est pas à la corbeille.');
+  planOf(s, plan);
   const d = new Draft(s);
   const { trashedAt: _trashed, ...rest } = n;
   d.node(node, rest);
@@ -174,8 +182,8 @@ export function restoreNode(s: State, node: Id, plan: Id, x: number, y: number, 
 
 /** A new connection, shown in this plan only ("here only", spec 11.1). */
 export function connect(s: State, a: { plan: Id; members: Member[]; title?: string; relation?: string; kind?: ConnectionKind; tags?: TagValue[] }): Action {
-  need(s.plans.get(a.plan), 'Plan introuvable.');
-  for (const m of a.members) nodeOf(s, m.node);
+  planOf(s, a.plan);
+  for (const m of a.members) liveNodeOf(s, m.node);
   const d = new Draft(s);
   const id = uuidv7();
   const tags = (a.tags ?? []).map((t) => normalizeTag(t, s.tagKeys));
@@ -186,7 +194,8 @@ export function connect(s: State, a: { plan: Id; members: Member[]; title?: stri
 
 export function addMember(s: State, plan: Id, connection: Id, member: Member): Action {
   const c = connectionOf(s, connection);
-  nodeOf(s, member.node);
+  planOf(s, plan);
+  liveNodeOf(s, member.node);
   if (c.members.some((m) => m.node === member.node)) throw new CommandError('Ce nœud fait déjà partie de la connexion.');
   const d = new Draft(s);
   d.connection(connection, { ...c, members: [...c.members, member] });
@@ -227,6 +236,9 @@ export function include(s: State, plan: Id, node: Id, group: Id): Action {
   const n = nodeOf(s, node);
   const g = nodeOf(s, group);
   if (node === group) throw new CommandError('Un groupe ne peut pas être inclus dans lui-même ni dans un de ses descendants.');
+  // Placed implies not in the trash (rule trashedPlaced).
+  placedIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
+  placedIn(s, plan, group, 'Ce groupe n’est pas dans ce plan.');
   const d = new Draft(s);
   leaveGroup(d, plan, node);
   let link = [...d.s.connections.values()].find((c) =>
@@ -275,6 +287,7 @@ export function joinArm(s: State, plan: Id, connection: Id, node: Id): Action {
 /** A phantom moves like a node and may sit in a group (spec 8.5). */
 export function movePhantom(s: State, phantom: Id, x: number, y: number, group?: Id | null): Action {
   const p = need(s.phantoms.get(phantom), 'Fantôme introuvable.');
+  if (group) placedIn(s, p.plan, group, 'Ce groupe n’est pas dans ce plan.');
   const d = new Draft(s);
   const next: PhantomRec = { ...p, x, y };
   if (group === null) delete next.group;
