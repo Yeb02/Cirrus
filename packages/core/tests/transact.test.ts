@@ -128,6 +128,41 @@ test('un aperçu (une commande dans une transaction sans action) est vérifié :
   // A combine inside a preview checks itself.
   expect(() => transact(s, () => combine(s, 'Boucle', [(x) => include(x, P, H, M)]))).toThrow(/descendants/);
   expect(image(s)).toBe(before);
+  // A preview inside a combine's step: its command answers to the preview, not to the combine, which never sees its
+  // operations (the preview undoes them).
+  let leaked: Action | undefined;
+  expect(() => combine(s, 'Pas', [(x) => {
+    transact(x, () => { leaked = include(x, P, H, M); });
+    return moveNodes(x, P, [{ node: M, x: 1 }]);
+  }])).toThrow(/descendants/);
+  expect(leaked).toBeUndefined();
+  expect(image(s)).toBe(before);
+  // Accepted there, it is checked and undone with the preview; the combine has only its own step.
+  const ax = placementOf(s, P, A)!.x;
+  const a = combine(s, 'Pas', [(x) => {
+    const seen = transact(x, () => moveNodes(x, P, [{ node: A, x: 55 }]).ops.length);
+    expect([seen, placementOf(x, P, A)!.x]).toEqual([1, ax]);
+    return moveNodes(x, P, [{ node: M, x: 1 }]);
+  }]);
+  expect(a.ops).toEqual([expect.objectContaining({ t: 'placement', after: expect.objectContaining({ node: M, x: 1 }) })]);
+  expect(image(s)).toBe(before);
+});
+
+test('une action faite dans un aperçu puis défaite n’est plus tenue pour appliquée : un combine qui la reçoit applique ses opérations', () => {
+  const { s, P, A, M } = world();
+  const before = image(s), pa = placementOf(s, P, A)!;
+  // The step returns an action finished inside a preview, whose operations the preview then undid.
+  const a = combine(s, 'Après aperçu', [(x) => transact(x, () => moveNodes(x, P, [{ node: A, x: 5 }]))]);
+  expect(a.ops).toEqual([{ t: 'placement', before: pa, after: { ...pa, x: 5 } }]);
+  expect(image(s)).toBe(before);
+  // The same inside a combine nested in the step: forgotten at every level, applied once by the outer combine.
+  const b = combine(s, 'Dehors', [
+    (x) => combine(x, 'Dedans', [(y) => transact(y, () => moveNodes(y, P, [{ node: M, x: 9 }]))]),
+    (x) => transact(x, () => editNode(x, A, { title: 'aperçu' })),
+  ]);
+  expect(b.ops.map((o) => o.t)).toEqual(['placement', 'node']);
+  run(s, b);
+  expect([placementOf(s, P, M)!.x, s.nodes.get(A)!.title]).toEqual([9, 'aperçu']);
 });
 
 test('dropPhantom et trashConnection refusent un enregistrement qui n’est pas l’actuel', () => {

@@ -16,10 +16,10 @@ export class CommandError extends Error {}
 
 /**
  * The transaction open on a state: every operation applied to it since it began, in order; the actions finished inside
- * it; and how many combines are open in it, whose own `finish` checks the rules of the actions finished inside them.
+ * it whose operations are still applied; and its open drafts, the innermost last.
  */
-interface Transaction { readonly log: Op[]; readonly made: WeakSet<Action>; collecting: number }
-const open = new WeakMap<State, Transaction>();
+interface Transaction { readonly log: Op[]; readonly made: WeakSet<Action>; readonly drafts: Draft[] }
+const transactions = new WeakMap<State, Transaction>();
 
 const violationKey = (v: Violation) => `${v.code}|${v.subject}`;
 const stale = (what: string) => new OpConflictError(`${what} a changé depuis : l'opération ne s'applique plus.`);
@@ -27,52 +27,67 @@ const stale = (what: string) => new OpConflictError(`${what} a changé depuis : 
 /**
  * Writes operations into the state itself (plan 3c, decision 2), each seeing the effects of the previous ones. Made by
  * transact, which undoes them when it ends. In a transaction already open on the same state, a draft joins it: what it
- * finishes stays applied until the outermost one ends. Every action is checked once: inside a combine by the combine's
- * own `finish`, otherwise by its own.
+ * finishes stays applied until the outermost one ends. Every action is checked once: directly inside a combine, by the
+ * combine's own `finish`; otherwise by its own.
  */
 export class Draft {
   readonly s: State;
   private readonly tx: Transaction;
   /** Where this draft's operations begin in the transaction's log. */
   private readonly mark: number;
-  private readonly nested: boolean;
-  /** A combine's draft: the actions finished inside it wait for its own check. */
-  private collects: boolean;
+  /** The draft this one was opened in, if any. */
+  private readonly parent: Draft | undefined;
+  /** combine's draft: the actions finished directly inside it are checked by its own `finish`. */
+  private readonly collects: boolean;
+  /** The actions finished inside this draft, its own included: forgotten if its operations are undone. */
+  private readonly kept: Action[] = [];
   private finished = false;
 
-  private constructor(s: State, tx: Transaction, nested: boolean, collects: boolean) {
+  private constructor(s: State, tx: Transaction, parent: Draft | undefined, collects: boolean) {
     this.s = s;
     this.tx = tx;
     this.mark = tx.log.length;
-    this.nested = nested;
+    this.parent = parent;
     this.collects = collects;
-    if (collects) tx.collecting++;
   }
 
-  /** transact's body (see there); `collects` for combine's. */
-  static run<T>(s: State, fn: (d: Draft) => T, collects = false): T {
-    const outer = open.get(s);
-    const tx: Transaction = outer ?? { log: [], made: new WeakSet(), collecting: 0 };
-    if (!outer) open.set(s, tx);
-    const d = new Draft(s, tx, outer !== undefined, collects);
+  /** transact's body (see there). */
+  static run<T>(s: State, fn: (d: Draft) => T): T {
+    return Draft.within(s, fn, false);
+  }
+
+  /** combine's body (see there): the only draft that collects, and it always finishes or throws. */
+  static combine(s: State, label: string, steps: ((s: State) => Action)[]): Action {
+    return Draft.within(s, (d) => {
+      for (const step of steps) {
+        const a = step(s);
+        if (!d.made(a)) for (const op of a.ops) d.push(op);
+      }
+      return d.finish(label);
+    }, true);
+  }
+
+  private static within<T>(s: State, fn: (d: Draft) => T, collects: boolean): T {
+    let tx = transactions.get(s);
+    if (!tx) transactions.set(s, (tx = { log: [], made: new WeakSet(), drafts: [] }));
+    const d = new Draft(s, tx, tx.drafts.at(-1), collects);
+    tx.drafts.push(d);
     let threw = true;
     try {
       const out = fn(d);
       threw = false;
       return out;
     } finally {
-      d.stopCollecting();
-      if (!outer) {
-        open.delete(s);
+      tx.drafts.pop();
+      if (!d.parent) {
+        transactions.delete(s);
         rollback(s, tx.log, 0);
-      } else if (threw || !d.finished) rollback(s, tx.log, d.mark);
+      } else if (threw || !d.finished) {
+        // Its operations undone, the actions finished inside it no longer stand for applied operations.
+        rollback(s, tx.log, d.mark);
+        for (const a of d.kept) tx.made.delete(a);
+      } else d.parent.kept.push(...d.kept);
     }
-  }
-
-  private stopCollecting(): void {
-    if (!this.collects) return;
-    this.collects = false;
-    this.tx.collecting--;
   }
 
   /** An operation made elsewhere (an action computed beforehand, a dry run): its "before" is checked. */
@@ -121,36 +136,36 @@ export class Draft {
     this.dropPhantoms(c.id);
     this.write({ t: 'connection', before: c, after: { ...c, members, trashedAt: Date.now() } });
   }
-  /** Whether `a` was finished inside this transaction: its operations are applied already. */
-  made(a: Action): boolean {
+  /** Whether `a` was finished inside this transaction and its operations are still applied. */
+  private made(a: Action): boolean {
     return this.tx.made.has(a);
   }
   /**
    * The action of this draft's operations, its rules checked on what they touch: on the state with the operations
    * applied, then, if that finds violations, on the state as it was once they are undone; an action may not add a
    * violation (one already there is not its doing). Outermost, the state is left as it was received; nested, the
-   * operations stay applied for the enclosing transaction, and inside a combine the check is the combine's.
+   * operations stay applied for the enclosing draft, and directly inside a combine the check is the combine's.
    */
   finish(label: string): Action {
     const tx = this.tx, ops = tx.log.slice(this.mark), a: Action = { id: uuidv7(), label, ops };
     this.finished = true;
-    this.stopCollecting();
-    if (this.nested) {
+    if (this.parent) {
       tx.made.add(a);
-      if (tx.collecting > 0) return a;
+      this.kept.push(a);
+      if (this.parent.collects) return a;
     }
     const touched = touchedBy(this.s, ops);
     const after = checkState(this.s, touched);
     if (after.length === 0) {
-      if (!this.nested) rollback(this.s, tx.log, 0);
+      if (!this.parent) rollback(this.s, tx.log, 0);
       return a;
     }
     rollback(this.s, tx.log, this.mark);
     const known = new Set(checkState(this.s, touched).map(violationKey));
     const added = after.find((v) => !known.has(violationKey(v)));
     if (added) throw new CommandError(added.message);
-    // Nested (a preview, a dry run): applied again, for the enclosing transaction.
-    if (this.nested) for (const op of ops) this.write(op);
+    // Nested (a preview, a dry run): applied again, for the enclosing draft.
+    if (this.parent) for (const op of ops) this.write(op);
     return a;
   }
 }
@@ -512,17 +527,12 @@ export function movePhantom(s: State, phantom: Id, x: number, y: number, group?:
 /**
  * Several commands as one action (spec 6.4: a complete gesture is one undo step), in one transaction: each step sees
  * the state left by the previous ones, and the rules are checked once, on the whole. A step may also return an action
- * computed beforehand: its operations are applied here. A refused step refuses the whole action, and the state comes
- * back as it was received. Nested, it joins its parent's transaction; the outermost combine checks the rules.
+ * computed beforehand, or one whose operations were undone since (made in a preview): its operations are applied here.
+ * A refused step refuses the whole action, and the state comes back as it was received. Nested directly in a combine,
+ * it leaves the check to that one.
  */
 export function combine(s: State, label: string, steps: ((s: State) => Action)[]): Action {
-  return Draft.run(s, (d) => {
-    for (const step of steps) {
-      const a = step(s);
-      if (!d.made(a)) for (const op of a.ops) d.push(op);
-    }
-    return d.finish(label);
-  }, true);
+  return Draft.combine(s, label, steps);
 }
 
 /** The layout of a connection in one plan (spec 5.5, 8.5): marker, trunk angle, Bézier handles; null restores the automatic one. */
