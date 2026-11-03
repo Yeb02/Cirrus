@@ -115,8 +115,30 @@ export const memberAt = (s: State, row: number, i: number): number => {
   return pool.data[pool.start[row] + i];
 };
 export const placementOf = (s: State, plan: Id, node: Id): Placement | undefined => placementAt(dataOf(s).tables, plan, node);
+const NO_PLACEMENTS: ReadonlyMap<number, Placement> = new Map();
+/** The placements of plan row `plan`, by node row, read-only (a plan's scene reads them by row, without identifiers). */
+export const placementsIn = (s: State, plan: number): ReadonlyMap<number, Placement> => dataOf(s).tables.plans.placements[plan] ?? NO_PLACEMENTS;
+/** The record of node row `row`, or undefined. */
+export const nodeAt = (s: State, row: number): NodeRec | undefined => dataOf(s).tables.nodes.recs[row];
+/** Whether connection row `c` has a branch to node row `n` in plan row `p`. */
+export const hasBranch = (s: State, c: number, p: number, n: number): boolean => dataOf(s).tables.conns.branches.indexOf(c, p, n) >= 0;
+/** The node rows connection row `c` shows in plan row `p` (its branches there), as a new list. */
+export function branchNodes(s: State, c: number, p: number): number[] {
+  const v = dataOf(s).tables.conns.branches.view(c), out: number[] = [];
+  for (let i = 0; i < v.length; i += 2) if (v[i] === p) out.push(v[i + 1]);
+  return out;
+}
 /** The connection rows node row `row` is a member of, as a copy. */
 export const memberOf = (s: State, row: number): Int32Array => dataOf(s).index.memberOf.view(row).slice();
+/** Without a copy, for hot loops: how many connections node row `row` is a member of, and the `i`-th one's row. */
+export const memberOfCount = (s: State, row: number): number => {
+  const pool = dataOf(s).index.memberOf;
+  return row < pool.len.length ? pool.len[row] : 0;
+};
+export const memberOfAt = (s: State, row: number, i: number): number => {
+  const pool = dataOf(s).index.memberOf;
+  return pool.data[pool.start[row] + i];
+};
 /** The plan rows node row `row` is placed in, as a copy. */
 export const placedIn = (s: State, row: number): Int32Array => dataOf(s).index.placedIn.view(row).slice();
 /** The node rows whose direct group in plan row `plan` is node row `group`. */
@@ -127,7 +149,7 @@ export function directGroup(s: State, plan: number, node: number): number {
   return g !== undefined && node < g.group.length ? g.group[node] : -1;
 }
 export const phantomsOf = (s: State, connection: Id): readonly Id[] => dataOf(s).index.phantomsOf.get(connection) ?? [];
-/** Core only: the phantoms sitting in group `group` (any plan). */
+/** The identifiers of the phantoms sitting in group `group` (any plan). */
 export const phantomsIn = (s: State, group: Id): readonly Id[] => dataOf(s).index.phantomsIn.get(group) ?? [];
 /** Core only: whether `rec` is its connection's current record, in the sense of canonical (read from the columns). */
 export const isCurrentConnection = (s: State, rec: ConnectionRec): boolean => connectionIs(dataOf(s).tables, rec.id, rec);

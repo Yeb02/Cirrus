@@ -99,6 +99,11 @@ export interface RenderParams {
   defaultAnswer: 'here' | 'everywhere';
   /** When drawing stops: window hidden only, or also without the focus (battery). */
   backgroundPause: 'unfocused' | 'hidden';
+  // Scenes (plan 3c, task 5)
+  /** The scenes of the last tabs shown, kept and updated by each action: going back to one is immediate. */
+  cachedPlans: number;
+  /** Share of free slots beyond which an updated scene is built anew. */
+  sceneCompactShare: number;
   // Snapshot of the base (plan 3c, decision 4): the interface sends its state to be kept as the base's snapshot
   /** after this many actions, */
   snapshotAfterActions: number;
@@ -215,6 +220,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   toastMs: 4000,
   defaultAnswer: 'here',
   backgroundPause: 'unfocused',
+  cachedPlans: 4,
+  sceneCompactShare: 0.25,
   snapshotAfterActions: 200,
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
@@ -352,6 +359,8 @@ export const PARAM_SPECS: ParamSpec[] = [
     key: 'backgroundPause', label: 'Mise en pause du rendu', section: A, group: 'Vue', kind: 'choice',
     choices: [{ value: 'unfocused', label: 'Fenêtre cachée ou sans le focus' }, { value: 'hidden', label: 'Fenêtre cachée seulement' }],
   },
+  num('cachedPlans', 'Plans dont la scène reste prête (derniers onglets affichés)', A, 'Vue', 1, 32, 1),
+  num('sceneCompactShare', 'Part d’emplacements libres au-delà de laquelle une scène est reconstruite', A, 'Vue', 0.05, 1, 0.05),
   num('snapshotAfterActions', 'Actions après lesquelles l’instantané de la base est refait', A, 'Base', 10, 10000, 10),
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),

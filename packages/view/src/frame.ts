@@ -24,22 +24,14 @@ export interface FrameGeometry {
   stubs: { conn: number; stub: number; pos: Vec2; title: string }[];
 }
 
-/** Rank of each top-level group by creation (ids are UUIDv7): a group keeps its hue as others are added. */
-const hueRanks = new WeakMap<PlanScene, Map<number, number>>();
-
 /**
- * A group's colours (spec 8.4): top-level groups take groupHues in their order of creation, their subgroups the same
- * hue with a lightness offset per level.
+ * A group's colours (spec 8.4): top-level groups take groupHues in their order of creation (the scene's hue ranks),
+ * their subgroups the same hue with a lightness offset per level.
  */
 export function groupColors(scene: PlanScene, g: number, p: RenderParams): { open: Rgb; closed: Rgb } {
-  let ranks = hueRanks.get(scene);
-  if (!ranks) {
-    const tops = scene.roots.filter((i) => scene.items[i].kind === 'group').sort((a, b) => (scene.items[a].id < scene.items[b].id ? -1 : 1));
-    hueRanks.set(scene, (ranks = new Map(tops.map((i, r) => [i, r]))));
-  }
   let root = g;
   while (scene.items[root].parent >= 0) root = scene.items[root].parent;
-  const hue = p.groupHues[(ranks.get(root) ?? 0) % p.groupHues.length];
+  const hue = p.groupHues[(scene.hues.get(root) ?? 0) % p.groupHues.length];
   return groupPalette({ depth: scene.items[g].depth, hue }, p);
 }
 
@@ -116,8 +108,7 @@ export function bundleFor(
     if (it.kind === 'group') e.hull = { poly: it.hull!.map(rel), centre: rel(it), pad: it.pad! };
     return e;
   };
-  const sc = scene.connections[vc.conns[0]];
-  const own = layout ?? (vc.conns.length === 1 ? sc.layout : undefined);
+  const own = layout ?? (vc.conns.length === 1 ? scene.layout[vc.conns[0]] : undefined);
   return bundleGeometry({
     ends: vc.ends.map((e) => end(closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key)),
     stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
@@ -153,8 +144,7 @@ function placeTitles(
 
   for (const m of frame.markers) {
     const vc = visible.connections[m.conn];
-    const sc = scene.connections[vc.conns[0]];
-    const text = vc.conns.length > 1 ? `${vc.conns.length} connexions` : sc.title;
+    const text = vc.conns.length > 1 ? `${vc.conns.length} connexions` : scene.titles[vc.conns[0]];
     if (!text) continue;
     const size = p.titleFontPx * stepScale(m.kMax, p);
     // Unreadable until the next rebuild even at the deepest zoom it serves: skip (spec 8.2).
@@ -165,7 +155,7 @@ function placeTitles(
     const [qx0, qy0, qx1, qy1] = near(m.pos.x, m.pos.y, m.pos.x, m.pos.y);
     const samples = ptTree ? ptTree.search(qx0, qy0, qx1, qy1).map((i) => pts[i]) : [];
     const obs = [...(obTree ? obTree.search(qx0, qy0, qx1, qy1).map((i) => obstacles[i]) : []), ...placed];
-    const id = vc.conns.map((i) => scene.connections[i].id).join('+');
+    const id = vc.conns.map((i) => scene.ids[i]).join('+');
     const { side, rect } = placeTitle(m.pos, w, h, gap, samples, obs, prevSides?.get(id));
     placed.push(rect);
     frame.titles.push({ conn: m.conn, id, text, box: rect, kMax: m.kMax, side });

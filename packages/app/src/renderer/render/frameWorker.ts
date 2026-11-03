@@ -1,12 +1,13 @@
 import type { Id } from '@cirrus/core';
 import {
-  buildFrame, buildIndex, type Camera, computeVisible, type FrameGeometry, type PlanScene, type RenderParams, type SceneIndex, type TitleSide,
+  buildFrame, buildIndex, type Camera, computeVisible, type FrameGeometry, type PlanScene, type RenderParams, reviveScene, type SceneIndex, type TitleSide,
 } from '@cirrus/view';
 import { packFrame, transferables } from './frameData.ts';
 
 /**
  * Builds frames off the main thread (bench lesson: building them froze the view): what is visible from the camera,
- * then the meshes. The scene is sent once, with its index built here.
+ * then the meshes. The scene is sent once, with its index built here; it arrives as its data only (a structured
+ * clone: typed arrays and plain objects), its façades given back here (reviveScene).
  */
 export type FrameRequest =
   | { t: 'scene'; scene: PlanScene; params: RenderParams }
@@ -20,8 +21,8 @@ let reuse: FrameGeometry | undefined;
 scope.onmessage = (e) => {
   const m = e.data;
   if (m.t === 'scene') {
-    scene = m.scene;
-    index = buildIndex(m.scene, m.params);
+    scene = reviveScene(m.scene);
+    index = buildIndex(scene, m.params);
     reuse = undefined;
     return;
   }

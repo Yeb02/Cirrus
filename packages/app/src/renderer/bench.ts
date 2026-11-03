@@ -1,5 +1,5 @@
-import type { Id } from '@cirrus/core';
-import { type Camera, fitBounds, type Input, type PlanScene, type RenderParams } from '@cirrus/view';
+import { createPlan, type Id } from '@cirrus/core';
+import { type Camera, fitBounds, type Input, isLive, type PlanScene, type RenderParams } from '@cirrus/view';
 import type { Application, WebGLRenderer } from 'pixi.js';
 import { type Build, connectBuild, createBuild, renameBuild } from './actions.ts';
 import type { PlanRenderer } from './render/PlanRenderer.ts';
@@ -32,6 +32,9 @@ export interface EditMeasures {
   createMs: number;
   connectMs: number;
   undoMs: number[];
+  /** A tab opened on a new plan (its scene built), then back to the lobby, whose scene was kept (plan 3c, task 5). */
+  tabNewMs: number;
+  tabBackMs: number;
   notes: string[];
 }
 
@@ -78,6 +81,8 @@ export interface BenchView {
   /** An edit through the session, as a menu choice runs it. */
   edit(build: Build): Promise<Result | null>;
   undo(): Promise<Result>;
+  /** Shows a plan in its tab, as a click on the tab does. */
+  openPlan(plan: Id): void;
   /** Hands the drawing back to the view's loop, which then draws on demand (never paused in bench mode). */
   resume(): void;
   /** Resolves once the view's loop has drawn a frame for which `until()` holds: that step's main-thread time, its end. */
@@ -105,7 +110,7 @@ function path(scene: PlanScene, w: number, h: number, p: RenderParams): { keys: 
   const overview = { x: over.x, y: over.y, zoom: over.zoom };
   // The first of the deepest leaves (as the plan 1 bench): the descent crosses every level above it.
   let target = -1;
-  scene.items.forEach((it, i) => { if (it.kind !== 'group' && (target < 0 || it.depth > scene.items[target].depth)) target = i; });
+  scene.items.forEach((it, i) => { if (isLive(scene, i) && it.kind !== 'group' && (target < 0 || it.depth > scene.items[target].depth)) target = i; });
   if (target < 0) return { keys: [{ t: 0, cam: overview }, { t: 5, cam: overview }], deep: null };
   const chain: number[] = [];
   for (let a = scene.items[target].parent; a >= 0; a = scene.items[a].parent) chain.unshift(a);
@@ -156,7 +161,7 @@ async function editPass(v: BenchView, deep: Camera): Promise<EditMeasures | null
   let item = -1, best = Infinity;
   sc.items.forEach((it, i) => {
     const d = Math.hypot(it.x - deep.x, it.y - deep.y);
-    if (it.kind === 'node' && d < best) { best = d; item = i; }
+    if (isLive(sc, i) && it.kind === 'node' && d < best) { best = d; item = i; }
   });
   if (item < 0) return null;
   const it = sc.items[item], node = it.node;
@@ -190,7 +195,14 @@ async function editPass(v: BenchView, deep: Camera): Promise<EditMeasures | null
   // 5. Three Ctrl+Z.
   const undoMs: number[] = [];
   for (let i = 1; i <= 3; i++) undoMs.push(await timed(`Ctrl+Z n° ${i}`, () => v.undo()));
-  return { node: it.title, dragFrameMs: summarize(frames), dropMs, renameMs, createMs, connectMs, undoMs, notes };
+  // 6. A new plan opened in its tab (its scene built), then back to the lobby: its scene was kept, updated by every
+  // action (cachedPlans).
+  const lobby = v.scene().plan.id, made = await v.edit((st) => createPlan(st, 'Plan du banc', 'plan'));
+  const plan = made?.ok ? (made.action.ops[0] as { after: { id: Id } }).after.id : null;
+  if (!plan) notes.push('Plan du banc refusé.');
+  const tabNewMs = plan === null ? Number.NaN : await timed('Onglet neuf', () => v.openPlan(plan));
+  const tabBackMs = plan === null ? Number.NaN : await timed('Retour au lobby', () => v.openPlan(lobby));
+  return { node: it.title, dragFrameMs: summarize(frames), dropMs, renameMs, createMs, connectMs, undoMs, tabNewMs, tabBackMs, notes };
 }
 
 /** The interface's JS heap after two full collections (gc() exists with --js-flags=--expose-gc, bench mode). */

@@ -2,7 +2,7 @@ import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import type { BundleGeometry } from './geometry/bundle.ts';
 import { add, mul, sub } from './geometry/vec.ts';
 import type { RenderParams } from './params.ts';
-import type { PlanScene } from './scene.ts';
+import { type PlanScene, sceneWith } from './scene.ts';
 
 /** A connection's layout in one plan, without its keys (spec 5.5). */
 export type Layout = Omit<ConnectionLayout, 'plan' | 'connection'>;
@@ -52,10 +52,9 @@ export function handleAt(spots: HandleSpot[], wx: number, wy: number, zoom: numb
   return best;
 }
 
-/** The scene with one connection's layout replaced (a handle being dragged: the preview), everything else shared. */
+/** The scene with one part's layout replaced (a handle being dragged: the preview), everything else shared. */
 export function withLayout(scene: PlanScene, conn: number, layout: Layout): PlanScene {
-  return {
-    ...scene,
-    connections: scene.connections.map((c) => (c.index === conn ? { ...c, layout: { plan: scene.plan.id, connection: c.id, ...layout } } : c)),
-  };
+  const layouts = scene.layout.slice();
+  layouts[conn] = { plan: scene.plan.id, connection: scene.ids[conn], ...layout };
+  return sceneWith(scene, { layout: layouts });
 }

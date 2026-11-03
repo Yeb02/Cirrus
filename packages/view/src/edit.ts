@@ -3,7 +3,7 @@ import Flatbush from 'flatbush';
 import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
-import type { PlanScene } from './scene.ts';
+import { isLive, type PlanScene } from './scene.ts';
 
 /** Placement changes for moveNodes and movePhantom, gathered by `combine` into one action. */
 export interface Moves {
@@ -57,7 +57,7 @@ export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: 
   for (const i of dragged) mark(i);
   let best = -1, bestDepth = -1, bestIsBox = false;
   scene.items.forEach((it, i) => {
-    if (excluded.has(i) || it.kind === 'phantom' || !reachable(scene, i, zoom, p)) return;
+    if (excluded.has(i) || !isLive(scene, i) || it.kind === 'phantom' || !reachable(scene, i, zoom, p)) return;
     const isBox = it.kind === 'node';
     const under = isBox
       ? Math.abs(at.x - it.x) <= it.halfW && Math.abs(at.y - it.y) <= it.halfH
@@ -75,18 +75,20 @@ export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: 
 export function intruders(scene: PlanScene): Map<number, number> {
   const out = new Map<number, number>();
   const items = scene.items;
-  if (items.length === 0) return out;
+  const live = items.flatMap((_it, i) => (isLive(scene, i) ? [i] : []));
+  if (live.length === 0) return out;
   const isDescendant = (i: number, g: number) => { for (let a = items[i].parent; a >= 0; a = items[a].parent) if (a === g) return true; return false; };
   // Centres indexed once: each envelope only looks at the items under its bounding box (C1 of the plan 3b review).
-  const centres = new Flatbush(items.length);
-  for (const it of items) centres.add(it.x, it.y, it.x, it.y);
+  const centres = new Flatbush(live.length);
+  for (const i of live) centres.add(items[i].x, items[i].y, items[i].x, items[i].y);
   centres.finish();
-  items.forEach((g, gi) => {
+  live.forEach((gi) => {
+    const g = items[gi];
     if (g.kind !== 'group') return;
     const poly = offsetPolygon(g.hull!, g.pad!);
     const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
-    for (const i of centres.search(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))) {
-      const it = items[i];
+    for (const j of centres.search(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))) {
+      const i = live[j], it = items[i];
       if (i === gi || isDescendant(i, gi) || isDescendant(gi, i) || !insidePolygon(poly, it.x, it.y)) continue;
       const known = out.get(i);
       if (known === undefined || items[known].depth < g.depth) out.set(i, gi);

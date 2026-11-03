@@ -145,6 +145,7 @@ function report(name: string, scale: string, runs: PassRecord[]): string {
       `| Création d'un nœud au centre | ${f(e.createMs, 0)} |`,
       `| Connexion des deux | ${f(e.connectMs, 0)} |`,
       ...e.undoMs.map((ms, i) => `| Ctrl+Z n° ${i + 1} | ${f(ms, 0)} |`),
+      ...(e.tabNewMs !== undefined ? [`| Onglet d'un plan neuf (scène construite) | ${f(e.tabNewMs, 0)} |`, `| Retour à l'onglet du lobby (scène gardée) | ${f(e.tabBackMs, 0)} |`] : []),
     ] : ['Passe d\'édition absente.']),
     '',
     '## Critères (spec 21)',

@@ -4,7 +4,7 @@ import type { FrameGeometry } from './frame.ts';
 import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT, stepScale, textPx } from './lod.ts';
 import type { RenderParams } from './params.ts';
-import type { PlanScene } from './scene.ts';
+import { PART_FAR, type PlanScene } from './scene.ts';
 import type { VisibleSet } from './visibility.ts';
 
 /**
@@ -99,7 +99,7 @@ export function buildHitIndex(
       stubs.forEach((s, j) => { const d = Math.hypot(s.pos.x - wx, s.pos.y - wy); if (d <= bestStubD) { bestStubD = d; bestStub = j; } });
       if (bestStub >= 0) {
         const st = stubs[bestStub], vc = visible.connections[st.conn];
-        return { kind: 'stub', conn: st.conn, stub: st.stub, connection: scene.connections[vc.conns[0]].id, node: vc.stubs[st.stub].node, title: vc.stubs[st.stub].title };
+        return { kind: 'stub', conn: st.conn, stub: st.stub, connection: scene.ids[vc.conns[0]], node: vc.stubs[st.stub].node, title: vc.stubs[st.stub].title };
       }
       if (segTree) {
         let best = -1, bestD = tol;
@@ -109,7 +109,9 @@ export function buildHitIndex(
         }
         if (best >= 0) {
           const vc = visible.connections[segs[best].conn];
-          return { kind: 'connection', conn: segs[best].conn, key: segs[best].key, ids: vc.conns.map((c) => scene.connections[c].id), part: scene.connections[vc.conns[0]].part };
+          return {
+            kind: 'connection', conn: segs[best].conn, key: segs[best].key, ids: vc.conns.map((c) => scene.ids[c]), part: scene.part[vc.conns[0]] === PART_FAR ? 'far' : 'main',
+          };
         }
       }
       return { kind: 'background' };

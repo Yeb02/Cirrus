@@ -199,7 +199,7 @@ export class PlanRenderer {
   /** The visible connection lit: the hovered one, else the first selected one shown. */
   private lit(): number {
     if (this.hot >= 0 || !this.scene || !this.visibleSet || this.selection.connections.size === 0) return this.hot;
-    const i = this.visibleSet.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(this.scene!.connections[c].id)));
+    const i = this.visibleSet.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(this.scene!.ids[c])));
     return i;
   }
 

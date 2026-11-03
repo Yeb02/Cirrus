@@ -1,10 +1,11 @@
 import {
   type Action, addMember, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, groupOf, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setLayout,
-  setRole, splitArm, type State, type Vec2,
+  exclude, groupOf, type Id, include, joinArm, moveNodes, movePhantom, phantomsOf, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches,
+  setLayout, setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
 import {
-  type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, pasteSteps, type PlanScene, type RenderParams, scaleMoves,
+  type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
+  scaleMoves,
 } from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
@@ -20,18 +21,22 @@ const subtree = (scene: PlanScene, items: number[]): Set<number> => {
 
 /**
  * The connections whose every end moves keep their shape (spec 8.1, I10 of the plan 3b review): their pinned marker
- * goes through `map`, their Bézier offsets are scaled by `scale`.
+ * goes through `map`, their Bézier offsets are scaled by `scale`. Only the connections with a layout in this plan are
+ * looked at (the state's layouts, then their parts), never every part of the scene.
  */
-function layoutsFollowing(scene: PlanScene, moved: Set<number>, map: (q: Vec2) => Vec2, scale: number): ((s: State) => Action)[] {
+function layoutsFollowing(s: State, scene: PlanScene, moved: Set<number>, map: (q: Vec2) => Vec2, scale: number): ((s: State) => Action)[] {
   const out: ((s: State) => Action)[] = [];
-  for (const c of scene.connections) {
-    const l = c.layout;
-    if (c.part !== 'main' || !l || c.ends.length === 0 || !c.ends.every((e) => moved.has(e.item))) continue;
-    const handles = Object.fromEntries(Object.entries(l.handles).map(([k, h]) => [k, {
-      b1: { x: h.b1.x * scale, y: h.b1.y * scale }, b2: { x: h.b2.x * scale, y: h.b2.y * scale },
-    }]));
-    const next = { handles, ...(l.marker ? { marker: map(l.marker) } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
-    out.push((x) => setLayout(x, scene.plan.id, c.id, next));
+  for (const own of s.connLayouts.values()) {
+    if (own.plan !== scene.plan.id) continue;
+    for (const i of partOf(scene, own.connection)) {
+      const l = scene.layout[i], ends = partEnds(scene, i);
+      if (scene.part[i] !== PART_MAIN || !l || ends.length === 0 || !ends.every((e) => moved.has(e.item))) continue;
+      const handles = Object.fromEntries(Object.entries(l.handles).map(([k, h]) => [k, {
+        b1: { x: h.b1.x * scale, y: h.b1.y * scale }, b2: { x: h.b2.x * scale, y: h.b2.y * scale },
+      }]));
+      const next = { handles, ...(l.marker ? { marker: map(l.marker) } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
+      out.push((x) => setLayout(x, scene.plan.id, own.connection, next));
+    }
   }
   return out;
 }
@@ -68,14 +73,14 @@ export function dropBuild(base: PlanScene, items: number[], dx: number, dy: numb
     if (base.items[target].k < k) memberships.push((x) => moveNodes(x, plan, [{ node: targetId!, k }]));
   }
   const count = nodes.length + phantoms.length;
-  const follow = dx === 0 && dy === 0 ? [] : layoutsFollowing(base, subtree(base, items), (q) => ({ x: q.x + dx, y: q.y + dy }), 1);
+  const moved = subtree(base, items);
   const label = targetId !== null && effects.some((f) => f.enter !== null) ? `Mettre dans « ${base.items[target!].title} »`
     : effects.some((f) => f.leave) ? 'Sortir du groupe' : count === 1 ? 'Déplacer un élément' : `Déplacer ${count} éléments`;
   return (st) => combine(st, label, [
     ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
     ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group)),
     ...memberships,
-    ...follow,
+    ...(dx === 0 && dy === 0 ? [] : layoutsFollowing(st, base, moved, (q) => ({ x: q.x + dx, y: q.y + dy }), 1)),
   ]);
 }
 
@@ -83,11 +88,11 @@ export function dropBuild(base: PlanScene, items: number[], dx: number, dy: numb
 export function scaleBuild(scene: PlanScene, items: number[], delta: number, p: RenderParams): Build {
   const m = scaleMoves(scene, items, delta, p);
   if (m.nodes.length === 0 && m.phantoms.length === 0) return null;
-  const plan = scene.plan.id;
+  const plan = scene.plan.id, moved = subtree(scene, items);
   return (st) => combine(st, delta > 0 ? 'Agrandir d’un cran' : 'Réduire d’un cran', [
     ...(m.nodes.length > 0 ? [(x: State) => moveNodes(x, plan, m.nodes)] : []),
     ...m.phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, undefined, ph.k)),
-    ...layoutsFollowing(scene, subtree(scene, items), (q) => ({ x: m.center.x + (q.x - m.center.x) * m.factor, y: m.center.y + (q.y - m.center.y) * m.factor }), m.factor),
+    ...layoutsFollowing(st, scene, moved, (q) => ({ x: m.center.x + (q.x - m.center.x) * m.factor, y: m.center.y + (q.y - m.center.y) * m.factor }), m.factor),
   ]);
 }
 
@@ -137,7 +142,7 @@ export function deleteConnectionBuild(plan: Id, connection: Id, everywhere: bool
   return (st) => {
     const c = st.connections.get(connection);
     const shown = (node: Id) => st.branches.has({ plan, connection, node })
-      || [...st.phantoms.values()].some((ph) => ph.plan === plan && ph.connection === connection && ph.of.node === node);
+      || phantomsOf(st, connection).some((id) => { const ph = st.phantoms.get(id); return ph !== undefined && ph.plan === plan && ph.of.node === node; });
     const nodes = (c?.members ?? []).map((m) => m.node).filter(shown);
     return combine(st, 'Ôter la connexion de ce plan', [(x) => setBranches(x, connection, nodes.map((node) => ({ plan, node })), false)]);
   };
@@ -197,7 +202,7 @@ const branchesIn = (plans: Id[], nodes: Id[]) => plans.flatMap((plan) => nodes.m
  */
 export function connectBuild(scene: PlanScene, from: number, target: ConnectTarget, everywhere: Id[]): Build {
   const plan = scene.plan.id, source = scene.items[from].node;
-  if (target.kind === 'connection') return addMemberBuild(plan, scene.connections[target.conn].id, source, everywhere, 'source');
+  if (target.kind === 'connection') return addMemberBuild(plan, scene.ids[target.conn], source, everywhere, 'source');
   const to = scene.items[target.item].node;
   return (st) => {
     let id = '';
@@ -258,7 +263,7 @@ export function importBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, 
 
 /** A stub put down by hand (spec 8.5): its absent phantom, at the largest step of the connection here. */
 export function absentBuild(scene: PlanScene, connection: Id, node: Id, at: Vec2): Build {
-  const ends = scene.connections.filter((c) => c.id === connection).flatMap((c) => c.ends);
+  const ends = partOf(scene, connection).flatMap((i) => partEnds(scene, i));
   const k = ends.length > 0 ? Math.max(...ends.map((e) => scene.items[e.item].k)) : 0;
   return (st) => placeAbsent(st, scene.plan.id, connection, node, at.x, at.y, k);
 }
@@ -310,11 +315,11 @@ export function placeInPlanBuild(scene: PlanScene, node: Id, at: Vec2, to: Id | 
     for (const c of it.children) collect(c);
   };
   collect(i);
-  const plan = scene.plan.id;
+  const plan = scene.plan.id, moved = subtree(scene, [i]);
   return (st) => combine(st, `Répercuter dans « ${scene.plan.name} »`, [
     ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
     ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y)),
-    ...layoutsFollowing(scene, subtree(scene, [i]), (q) => ({ x: q.x + dx, y: q.y + dy }), 1),
+    ...layoutsFollowing(st, scene, moved, (q) => ({ x: q.x + dx, y: q.y + dy }), 1),
     (x: State) => (to !== null ? include(x, plan, node, to) : exclude(x, plan, node)),
   ]);
 }

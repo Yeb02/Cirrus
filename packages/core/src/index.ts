@@ -9,9 +9,9 @@ export {
 } from './tables.ts';
 export { BranchSet } from './facades.ts';
 export {
-  applyOp, applyOps, canonical, checkRecord, connectionOfRow, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup, emptyState,
-  groupMembers, layoutKey, memberAt, memberCount, memberOf, membersOf, nodeId, nodeRow, OpConflictError, phantomsOf, placedIn, placementKey, placementOf, planId,
-  planRow, reindex, type State,
+  applyOp, applyOps, branchNodes, canonical, checkRecord, connectionOfRow, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup,
+  emptyState, groupMembers, hasBranch, layoutKey, memberAt, memberCount, memberOf, memberOfAt, memberOfCount, membersOf, nodeAt, nodeId, nodeRow, OpConflictError, phantomsIn, phantomsOf,
+  placedIn, placementKey, placementOf, placementsIn, planId, planRow, reindex, type State,
 } from './state.ts';
 export * from './invariants.ts';
 export * from './commands.ts';

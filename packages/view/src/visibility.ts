@@ -1,13 +1,14 @@
-import type { Id, Role } from '@cirrus/core';
+import { type Id, type Role, ROLES } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
-import type { PlanScene, SceneStub } from './scene.ts';
+import { END_DASHED, isLive, PART_GONE, type PlanScene, type SceneStub } from './scene.ts';
 
 const ROOT = -1;
 const ROLE_CODE: Record<Role, number> = { source: 0, target: 1, associate: 2 };
+const NO_STUBS: SceneStub[] = [];
 
 /** Flat, contiguous copies of what the per-rebuild visibility pass reads (bench lesson), plus connections by LCA. */
 export interface SceneIndex {
@@ -33,7 +34,10 @@ export function buildIndex(scene: PlanScene, _p: RenderParams): SceneIndex {
   const minX = new Float64Array(n), minY = new Float64Array(n), maxX = new Float64Array(n), maxY = new Float64Array(n);
   scene.items.forEach((it, i) => {
     parent[i] = it.parent;
-    if (it.kind === 'group') {
+    if (!isLive(scene, i)) {
+      // A free slot: out of every view, never an endpoint.
+      minX[i] = minY[i] = Infinity; maxX[i] = maxY[i] = -Infinity;
+    } else if (it.kind === 'group') {
       maxChildK[i] = it.maxChildK!;
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const q of offsetPolygon(it.hull!, it.pad!)) {
@@ -51,23 +55,28 @@ export function buildIndex(scene: PlanScene, _p: RenderParams): SceneIndex {
     for (const i of roots) rootTree.add(minX[i], minY[i], maxX[i], maxY[i]);
     rootTree.finish();
   }
-  const chain = (i: number) => {
-    const out: number[] = [];
-    for (let a = parent[i]; a !== ROOT; a = parent[a]) out.push(a);
-    return out;
+  // The lowest group containing all of a part's ends (and its centre): the deepest common strict ancestor, by depths.
+  const depth = new Int32Array(n);
+  scene.items.forEach((it, i) => { depth[i] = it.depth; });
+  /** The deepest group that is a or above a and b or above b (ROOT for none). */
+  const meet = (a: number, b: number) => {
+    while (a !== ROOT && b !== ROOT && a !== b) {
+      if (depth[a] >= depth[b]) a = parent[a];
+      else b = parent[b];
+    }
+    return a === b ? a : ROOT;
   };
   const lists = new Map<number, number[]>();
-  for (const c of scene.connections) {
-    const members = [...c.ends.map((e) => e.item), ...(c.center !== undefined ? [c.center] : [])];
-    let common = chain(members[0]);
-    for (let i = 1; i < members.length && common.length > 0; i++) {
-      const other = new Set(chain(members[i]));
-      common = common.filter((g) => other.has(g));
-    }
-    const lca = common.length > 0 ? common[0] : ROOT;
+  const { endStart, endCount, center, part } = scene, endItem = scene.ends.item;
+  for (let c = 0; c < scene.partCount; c++) {
+    if (part[c] === PART_GONE) continue;
+    const s0 = endStart[c], end = s0 + endCount[c];
+    let lca = parent[endItem[s0]];
+    for (let k = s0 + 1; k < end && lca !== ROOT; k++) lca = meet(lca, parent[endItem[k]]);
+    if (center[c] >= 0 && lca !== ROOT) lca = meet(lca, parent[center[c]]);
     let list = lists.get(lca);
     if (!list) lists.set(lca, (list = []));
-    list.push(c.index);
+    list.push(c);
   }
   const byLca = new Map<number, Int32Array>();
   for (const [lca, list] of lists) byLca.set(lca, Int32Array.from(list));
@@ -157,44 +166,47 @@ export function computeVisible(scene: PlanScene, index: SceneIndex, cam: Camera,
   };
 
   const aggregated = new Map<string, VisibleConnection>();
+  const { endStart, endCount, items } = scene, endItem = scene.ends.item, endMeta = scene.ends.meta, roles = ROLES;
   for (const lca of [ROOT, ...expanded]) {
     const list = index.byLca.get(lca);
     if (!list) continue;
     for (let li = 0; li < list.length; li++) {
-      const sc = scene.connections[list[li]];
+      const pi: number = list[li];
       const ends: VisibleEnd[] = [];
       let sliding = false, foldK = -Infinity, seen = false;
-      for (const e of sc.ends) {
-        lift(e.item);
-        const o = endO[e.item], c = endC[e.item];
+      for (let k = endStart[pi], end = k + endCount[pi]; k < end; k++) {
+        const item = endItem[k], meta = endMeta[k];
+        lift(item);
+        const o = endO[item], c = endC[item];
         if (o !== c) { sliding = true; foldK = Math.max(foldK, maxChildK[c]); }
         if (!seen && (inView(o) || inView(c))) seen = true;
-        ends.push({ item: o, item2: c, role: e.role, key: e.key, hollow: o !== e.item, hollow2: c !== e.item, dashed: e.dashed });
+        ends.push({ item: o, item2: c, role: roles[meta & 3], key: items[item].node, hollow: o !== item, hollow2: c !== item, dashed: (meta & END_DASHED) !== 0 });
       }
-      let center = sc.center;
+      const center = scene.center[pi] >= 0 ? scene.center[pi] : undefined;
       if (center !== undefined) {
         lift(center);
         if (endO[center] !== center) continue; // the centre phantom is folded away with its group
         if (!seen && inView(center)) seen = true;
       }
       if (!seen) continue;
-      const extra = sc.stubs.length + (center !== undefined ? 1 : 0);
+      const stubs = scene.stubs.size === 0 ? NO_STUBS : scene.stubs.get(pi) ?? NO_STUBS;
+      const extra = stubs.length + (center !== undefined ? 1 : 0);
       const distinct = (key: 'item' | 'item2') => new Set(ends.map((e) => e[key])).size + extra;
       if (distinct('item') < 2) continue;
       const fade: VisibleConnection['fade'] = !sliding ? 'none' : distinct('item2') < 2 ? 'out' : 'slide';
       if (fade !== 'none') {
-        out.connections.push({ conns: [sc.index], ends, stubs: sc.stubs, ...(center !== undefined ? { center } : {}), fade, foldK });
+        out.connections.push({ conns: [pi], ends, stubs, ...(center !== undefined ? { center } : {}), fade, foldK });
         continue;
       }
       // Static: merge ends that land on the same (item, role), then merge whole connections between the same ends.
       const merged: VisibleEnd[] = [];
       for (const e of ends) if (!merged.some((m) => m.item === e.item && m.role === e.role)) merged.push(e);
-      const vc: VisibleConnection = { conns: [sc.index], ends: merged, stubs: sc.stubs, ...(center !== undefined ? { center } : {}), fade, foldK: Number.NaN };
+      const vc: VisibleConnection = { conns: [pi], ends: merged, stubs, ...(center !== undefined ? { center } : {}), fade, foldK: Number.NaN };
       // Only ends lifted onto a closed group merge (spec 8.5, « Groupe replié »): open parallel connections stay apart.
-      if (sc.layout || sc.stubs.length > 0 || center !== undefined || merged.some((e) => e.dashed) || !merged.some((e) => e.hollow)) { out.connections.push(vc); continue; }
+      if (scene.layout[pi] || stubs.length > 0 || center !== undefined || merged.some((e) => e.dashed) || !merged.some((e) => e.hollow)) { out.connections.push(vc); continue; }
       const key = merged.map((e) => e.item * 3 + ROLE_CODE[e.role]).sort((a, b) => a - b).join(',');
       const existing = aggregated.get(key);
-      if (existing) existing.conns.push(sc.index);
+      if (existing) existing.conns.push(pi);
       else { aggregated.set(key, vc); out.connections.push(vc); }
     }
   }

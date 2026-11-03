@@ -1,10 +1,11 @@
-import { type Action, type Id, type State, type Vec2 } from '@cirrus/core';
+import { type Action, type Id, phantomsOf, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused,
+  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
+  PART_MAIN, partEnds, type Measure,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -157,10 +158,18 @@ export function GraphView(props: {
   sessionRef.current = props.session;
   const onResultRef = useRef(props.onResult);
   onResultRef.current = props.onResult;
+  const onOpenPlanRef = useRef(props.onOpenPlan);
+  onOpenPlanRef.current = props.onOpenPlan;
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
   const [ready, setReady] = useState(false);
   const [scene, setScene] = useState<PlanScene | null>(null);
+  /**
+   * The scenes of the last tabs shown (cachedPlans, the current one last), all at revision `rev` of the state: each
+   * action updates them by its operations (plan 3c, task 5), so that going back to one of these tabs is immediate.
+   * `key`: the parameters they were made with (sceneParamsKey), and their measure of titles.
+   */
+  const scenes = useRef<{ rev: number; key: string; measure: Measure | null; byPlan: Map<Id, PlanScene> }>({ rev: 0, key: '', measure: null, byPlan: new Map() });
   const [tip, setTip] = useState<Tip>(null);
   const [chain, setChain] = useState<Chain>([]);
   paramsRef.current = props.params;
@@ -331,8 +340,9 @@ export function GraphView(props: {
   const askDeleteConnection = (plan: Id, connection: Id) => {
     const s = stateRef.current, c = s.connections.get(connection);
     if (!c) return;
+    const phantoms = phantomsOf(s, connection).map((id) => s.phantoms.get(id));
     const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has({ plan: pl, connection, node: m.node }))
-      || [...s.phantoms.values()].some((ph) => ph.plan === pl && ph.connection === connection));
+      || phantoms.some((ph) => ph?.plan === pl));
     const n = shownIn.length;
     const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: n <= 1 ? 'Supprimer' : 'Partout' };
     setQuestion({
@@ -363,7 +373,7 @@ export function GraphView(props: {
     const e = engine.current, sc = sceneRef.current, sel = selectionRef.current, vis = e?.renderer.visible;
     if (!e || !sc || !vis || sel.items.size > 0 || sel.connections.size !== 1) return null;
     const id = [...sel.connections][0];
-    const vc = vis.connections.find((x) => x.conns.length === 1 && x.fade === 'none' && sc.connections[x.conns[0]].id === id && sc.connections[x.conns[0]].part === 'main');
+    const vc = vis.connections.find((x) => x.conns.length === 1 && x.fade === 'none' && sc.ids[x.conns[0]] === id && sc.part[x.conns[0]] === PART_MAIN);
     if (!vc) return null;
     const g = bundleFor(sc, vc, paramsRef.current, { x: 0, y: 0 }, handleDrag.current?.layout);
     return { spots: layoutHandles(g, e.renderer.camera.zoom, paramsRef.current), g, conn: vc.conns[0] };
@@ -393,9 +403,9 @@ export function GraphView(props: {
     const cam = e.renderer.camera, w = screenToWorld(cam, sx, sy);
     const handle = handleAt(L.spots, w.x, w.y, cam.zoom, paramsRef.current);
     if (!handle) return false;
-    const c = sc.connections[L.conn], l = c.layout;
+    const l = sc.layout[L.conn];
     const base = l && { handles: l.handles, ...(l.marker ? { marker: l.marker } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
-    handleDrag.current = { handle, conn: L.conn, id: c.id, base, g: L.g, layout: base, scene: sc, from: { x: sx, y: sy }, armed: false };
+    handleDrag.current = { handle, conn: L.conn, id: sc.ids[L.conn], base, g: L.g, layout: base, scene: sc, from: { x: sx, y: sy }, armed: false };
     return true;
   };
   /** The connection redrawn with the handle under the cursor: a preview, nothing written. */
@@ -629,6 +639,7 @@ export function GraphView(props: {
                     feed: (input) => { feed(input); redraw(); },
                     edit: (build) => edit(build),
                     undo: () => sessionRef.current!.undo(),
+                    openPlan: (plan) => onOpenPlanRef.current(plan),
                     resume: () => { stopped = false; redraw(); },
                     drawn: (until) => new Promise((done) => { frameWaiters.current.push({ until, done }); }),
                   };
@@ -658,7 +669,25 @@ export function GraphView(props: {
   const sceneKey = sceneParamsKey(props.params);
   useEffect(() => {
     if (!ready) return;
-    setScene(buildScene(props.state, props.plan, measureTitle(paramsRef.current), paramsRef.current));
+    const p = paramsRef.current, cache = scenes.current, s = props.state;
+    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureTitle(p); }
+    const measure = cache.measure!;
+    if (props.rev !== cache.rev) {
+      // One action since the scenes were made: its operations update every one (Review Focus 2). React may have
+      // gathered several actions into this render, of which only the last is known: the scenes are made anew then.
+      const ops = props.rev === cache.rev + 1 ? props.action?.ops : undefined;
+      for (const [plan, sc] of [...cache.byPlan]) {
+        if (!ops || !s.plans.has(plan)) cache.byPlan.delete(plan);
+        else cache.byPlan.set(plan, updateScene(sc, s, ops, measure, p).scene);
+      }
+      cache.rev = props.rev;
+    }
+    const sc = cache.byPlan.get(props.plan) ?? buildScene(s, props.plan, measure, p);
+    // The tab shown last goes last; beyond cachedPlans, the one shown longest ago is forgotten.
+    cache.byPlan.delete(props.plan);
+    cache.byPlan.set(props.plan, sc);
+    for (const plan of cache.byPlan.keys()) { if (cache.byPlan.size <= p.cachedPlans) break; cache.byPlan.delete(plan); }
+    setScene(sc);
     mark('sceneReady');
   }, [ready, props.state, props.rev, props.plan, sceneKey]);
 
@@ -858,7 +887,7 @@ export function GraphView(props: {
               otherPlans(s, sc.plan.id, [what.node, sc.items[t.item].node]), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
           } else {
             askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
-              otherPlans(s, sc.plan.id, [what.node], sc.connections[t.conn].id), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
+              otherPlans(s, sc.plan.id, [what.node], sc.ids[t.conn]), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
           }
           break;
         }
@@ -1063,9 +1092,9 @@ export function GraphView(props: {
         if (clicked >= 0 && sc.items[clicked].kind === 'phantom') {
           const it = sc.items[clicked];
           edit(joinBuild(sc.plan.id, it.connection!, it.node));
-        } else if (hit.kind === 'connection') {
-          const c = sc.connections.find((x) => x.id === line && x.part === 'far');
-          if (c) edit(joinBuild(sc.plan.id, c.id, c.ends[0].key));
+        } else if (hit.kind === 'connection' && line !== null) {
+          const far = partOf(sc, line).find((i) => sc.part[i] === PART_FAR);
+          if (far !== undefined) edit(joinBuild(sc.plan.id, line, partEnds(sc, far)[0].key));
         }
         break;
       }
@@ -1074,9 +1103,12 @@ export function GraphView(props: {
         // the navigation history comes with plan 6.
         if (clicked < 0) break;
         const it = sc.items[clicked];
-        const dest = it.phantom === 'node'
-          ? sc.byId.get(it.node) ?? -1
-          : sc.items.findIndex((x) => x.phantom === 'node' && x.connection === it.connection && x.node === it.node);
+        // The centre's: the far node's phantom of the same arm, among its connection's phantoms.
+        const twin = phantomsOf(stateRef.current, it.connection!).find((id) => {
+          const ph = stateRef.current.phantoms.get(id);
+          return ph?.plan === sc.plan.id && ph.of.kind === 'node' && ph.of.node === it.node;
+        });
+        const dest = it.phantom === 'node' ? sc.byId.get(it.node) ?? -1 : twin === undefined ? -1 : sc.byId.get(twin) ?? -1;
         if (dest < 0) { onResultRef.current({ ok: false, message: 'L’original n’est pas dans ce plan.' }); break; }
         moveCamera({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
         break;
