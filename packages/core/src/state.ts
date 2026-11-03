@@ -466,7 +466,48 @@ function unrefPlan(d: StateData, r: number): void {
   d.index.groupMembers[r] = undefined;
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isTagList = (v: unknown): boolean => Array.isArray(v) && v.every(isPlainObject);
+
+/**
+ * What the tables and the indices read of a node record, checked before anything is written: a string identifier, its
+ * tags (objects) and files as arrays (the tag index and reindex read them).
+ */
+function checkNode(n: NodeRec): void {
+  if (!isPlainObject(n) || typeof n.id !== 'string') throw new Error('invalid node record');
+  if (!isTagList(n.tags)) throw new Error(`invalid node tags: ${n.id}`);
+  if (!Array.isArray(n.files)) throw new Error(`invalid node files: ${n.id}`);
+}
+
+/**
+ * What the columns read of a connection record, checked before anything is written: a string identifier, a known
+ * kind, a numeric trashedAt or none, its tags (objects) as an array, its members as objects with a string node and a
+ * known role.
+ */
+function checkConnection(c: ConnectionRec): void {
+  if (!isPlainObject(c) || typeof c.id !== 'string') throw new Error('invalid connection record');
+  kindCode(c.kind);
+  if (c.trashedAt !== undefined && (typeof c.trashedAt !== 'number' || Number.isNaN(c.trashedAt))) throw new Error(`invalid trashedAt: ${String(c.trashedAt)}`);
+  if (!isTagList(c.tags)) throw new Error(`invalid connection tags: ${c.id}`);
+  if (!Array.isArray(c.members)) throw new Error(`invalid connection members: ${c.id}`);
+  for (const m of c.members) {
+    if (!isPlainObject(m) || typeof m.node !== 'string') throw new Error(`invalid member of connection ${c.id}`);
+    roleCode(m.role);
+  }
+}
+
+/**
+ * Throws when the "after" of a node or connection operation is a record the state cannot store: the one check the
+ * state's writes make (applyOp, a rollback, a bulk load) and the base makes before writing (LocalStore.commit), so
+ * the base never holds a record that its tables could not be loaded back with.
+ */
+export function checkRecord(op: Op): void {
+  if (op.t === 'node' && op.after) checkNode(op.after);
+  else if (op.t === 'connection' && op.after) checkConnection(op.after);
+}
+
 function writeNode(d: StateData, id: Id, after: NodeRec | null, indexed: boolean): void {
+  if (after) checkNode(after);
   const N = d.tables.nodes, r = N.rows.get(id), had = r >= 0 && N.recs[r] !== undefined;
   if (indexed) retag(d.index.tagged, id, had ? N.recs[r]!.tags ?? EMPTY_TAGS : EMPTY_TAGS, after?.tags ?? EMPTY_TAGS);
   if (after) {
@@ -517,10 +558,8 @@ function writeConnection(d: StateData, id: Id, after: ConnectionRec | null, inde
   // Every check before the first write: an invalid record throws and leaves the state as it was.
   let kind = NO_RECORD, tags = EMPTY_TAGS, fresh = NO_MEMBERS;
   if (after) {
+    checkConnection(after);
     kind = kindCode(after.kind);
-    if (after.trashedAt !== undefined && (typeof after.trashedAt !== 'number' || Number.isNaN(after.trashedAt))) {
-      throw new Error(`invalid trashedAt: ${String(after.trashedAt)}`);
-    }
     if (after.tags.length > 0) tags = after.tags;
     fresh = new Int32Array(after.members.length);
     after.members.forEach((m, i) => { fresh[i] = roleCode(m.role); });

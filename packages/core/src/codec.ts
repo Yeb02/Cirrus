@@ -1,6 +1,6 @@
 import type { ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef, TagValue } from './model.ts';
-import { dataOf, emptyState, layoutKey, reindexRest, type State } from './state.ts';
-import { EMPTY_TAGS, KINDS, NO_RECORD, type Pool, type Rows } from './tables.ts';
+import { dataOf, emptyState, type Indices, layoutKey, reindexRest, type State } from './state.ts';
+import { type ConnTable, EMPTY_TAGS, INCLUSION, KINDS, NO_RECORD, type Pool, type Rows, SOURCE, TARGET } from './tables.ts';
 
 // The state as one ArrayBuffer (plan 3c, decisions 4 and 5): the snapshot kept in the base and sent to the interface.
 // The tables go row for row (identifiers, reference counts, free lists, columns, pools packed); records as columns
@@ -527,12 +527,15 @@ export function decodeState(buf: ArrayBuffer): State {
   P.placementCount = i;
 
   // Connections: columns as views, texts and tags filled with their defaults then set where the sparse pairs say.
-  const kind = view(Uint8Array, 'connKind', connEnd), kinds = KINDS.length, none = NO_RECORD;
+  const kind = view(Uint8Array, 'connKind', connEnd), kinds = KINDS.length, none = NO_RECORD, inclusion = INCLUSION;
+  /** The inclusion rows, for the check of groupOf. */
+  const inclusions: number[] = [];
   count = 0;
   for (let r = 0; r < connEnd; r++) {
     const k = kind[r];
     if (k === none) continue;
     if (k >= kinds || connFree[r] !== 0) throw corrupt('genre de connexion');
+    if (k === inclusion) inclusions.push(r);
     count++;
   }
   C.count = count;
@@ -602,7 +605,9 @@ export function decodeState(buf: ArrayBuffer): State {
   }
   if (N.count !== counts.nodes || P.count !== counts.plans || C.count !== counts.connections || C.branchCount !== counts.branches) throw corrupt('comptes');
 
-  // The indices kept: memberOf (connection rows with a record, per node row), placedIn (plan rows), groupOf.
+  // The indices kept: memberOf (connection rows with a record, per node row), placedIn (plan rows), groupOf. Each is
+  // checked against the tables it derives from by what can be counted cheaply (R17): a wrong one, carried over from a
+  // session, sends the load back to the tables, which rebuild it.
   const I = dataOf(s).index;
   const memberOfData = i32('memberOf'), memberOfLen = i32('memberOfLen', nodeEnd);
   restorePool(I.memberOf, memberOfLen, memberOfData, 1);
@@ -610,13 +615,23 @@ export function decodeState(buf: ArrayBuffer): State {
     const c = memberOfData[k];
     if (!(c >= 0 && c < connEnd) || kind[c] === none) throw corrupt('index memberOf');
   }
+  // memberOf has one entry per member, unless a connection lists a node twice (rare): then the members are counted as
+  // memberOf counts them, each node once per connection.
+  if (memberOfData.length > memberData.length || (memberOfData.length < memberData.length && memberOfData.length !== distinctMembers(memberData, memberLen))) {
+    throw corrupt('index memberOf, autant d’entrées que de membres');
+  }
   const placedInData = i32('placedIn'), placedInLen = i32('placedInLen', nodeEnd);
   restorePool(I.placedIn, placedInLen, placedInData, 1);
   for (let k = 0; k < placedInData.length; k++) {
     const p = placedInData[k];
     if (!(p >= 0 && p < planEnd) || planFree[p] !== 0) throw corrupt('index placedIn');
   }
-  for (let r = 0; r < nodeEnd; r++) if (nodeFree[r] !== 0 && (memberOfLen[r] > 0 || placedInLen[r] > 0)) throw corrupt('index d’une rangée libre');
+  const placedCount = new Int32Array(nodeEnd);
+  for (let i = 0; i < placeNode.length; i++) placedCount[placeNode[i]]++;
+  for (let r = 0; r < nodeEnd; r++) {
+    if (nodeFree[r] !== 0 && (memberOfLen[r] > 0 || placedInLen[r] > 0)) throw corrupt('index d’une rangée libre');
+    if (placedInLen[r] !== placedCount[r]) throw corrupt('index placedIn, autant d’entrées que de placements');
+  }
   const groupLen = i32('groupLen', planEnd), groups = i32('groups');
   let at = 0;
   for (let p = 0; p < planEnd; p++) {
@@ -634,8 +649,63 @@ export function decodeState(buf: ArrayBuffer): State {
     if (pg === undefined || !(n >= 0 && n < nodeEnd) || !Array.isArray(gs)) throw corrupt('groupes multiples');
     pg.multi.set(n, gs);
   }
+  checkGroups(I.groupOf, C, inclusions, memberData, branchData, nodeEnd);
   reindexRest(s);
   return s;
+}
+
+/** The members of each connection counted as memberOf counts them: each node once per connection. */
+function distinctMembers(md: Int32Array, len: Int32Array): number {
+  let distinct = 0;
+  for (let c = 0, k = 0; c < len.length; c++) {
+    const n = len[c];
+    if (n === 2) distinct += md[k] >> 2 === md[k + 1] >> 2 ? 1 : 2;
+    else {
+      for (let i = k, end = k + n; i < end; i++) {
+        const node = md[i] >> 2;
+        let j = k;
+        while (j < i && md[j] >> 2 !== node) j++;
+        if (j === i) distinct++;
+      }
+    }
+    k += n;
+  }
+  return distinct;
+}
+
+/**
+ * groupOf against the inclusions it derives from (R17), in one pass over them: each (plan, node) that an inclusion not
+ * in the trash groups (first source in first target, both branches shown) has that group, or holds it among its
+ * several (multi), and no other (plan, node) has a group.
+ */
+function checkGroups(groupOf: Indices['groupOf'], C: ConnTable, inclusions: number[], md: Int32Array, bd: Int32Array, nodeEnd: number): void {
+  const source = SOURCE, target = TARGET, ms = C.members.start, ml = C.members.len, bs = C.branches.start, bl = C.branches.len;
+  const trashed = C.trashedAt, seen: (Uint8Array | undefined)[] = [];
+  let entries = 0, pairs = 0;
+  for (const pg of groupOf) if (pg) for (let k = 0; k < pg.group.length; k++) if (pg.group[k] >= 0) entries++;
+  for (const c of inclusions) {
+    if (!Number.isNaN(trashed[c]) || bl[c] === 0) continue;
+    let m = -1, g = -1;
+    for (let i = ms[c], end = i + ml[c]; i < end; i++) {
+      const role = md[i] & 3;
+      if (role === source && m < 0) m = md[i] >> 2;
+      else if (role === target && g < 0) g = md[i] >> 2;
+    }
+    if (m < 0 || g < 0) continue;
+    const b0 = bs[c], b1 = b0 + bl[c];
+    for (let i = b0; i < b1; i += 2) {
+      if (bd[i + 1] !== m) continue;
+      const p = bd[i];
+      let shown = false;
+      for (let j = b0; j < b1 && !shown; j += 2) shown = bd[j] === p && bd[j + 1] === g;
+      if (!shown) continue;
+      const pg = groupOf[p], has = pg !== undefined && m < pg.group.length ? pg.group[m] : -1;
+      if (has < 0 || (has !== g && !pg!.multi.get(m)?.includes(g))) throw corrupt('index groupOf');
+      const marks = (seen[p] ??= new Uint8Array(nodeEnd));
+      if (marks[m] === 0) { marks[m] = 1; pairs++; }
+    }
+  }
+  if (pairs !== entries) throw corrupt('index groupOf, autant de groupes que d’inclusions');
 }
 
 /**

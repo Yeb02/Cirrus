@@ -1,10 +1,10 @@
 import { expect, test } from 'vitest';
 import { checkState, groupOf, touchedBy } from '../src/invariants.ts';
-import type { ConnectionKind, ConnectionRec, Id, Member, PlanType, Role, TagKeyDef, TagValue } from '../src/model.ts';
+import type { ConnectionKind, ConnectionRec, Id, Member, NodeRec, PlanType, Role, TagKeyDef, TagValue } from '../src/model.ts';
 import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot } from '../src/snapshot.ts';
 import {
-  applyOp, canonical, connRow, dataOf, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf, placedIn,
+  applyOp, canonical, checkRecord, connRow, dataOf, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf, placedIn,
   placementOf, planRow, reindex, type State,
 } from '../src/state.ts';
 import * as oracleRules from './oracle/invariants.ts';
@@ -487,6 +487,35 @@ test('une opération sans effet ou invalide laisse l’état tel quel : branche 
   expect(() => applyOp(s, { t: 'connection', before: s.connections.get('X')!, after: { ...conn('X', ['a', 'c']), kind: 'bogus' as ConnectionKind } })).toThrow(/unknown/);
   expect(books()).toBe(before);
   expect(s.connections.has('K')).toBe(false);
+});
+
+test('un enregistrement que les colonnes ou les index ne savent pas lire est refusé avant toute écriture, par le même contrôle que la base (checkRecord)', () => {
+  const s = emptyState();
+  for (const id of ['a', 'b']) applyOp(s, nodeOp(id));
+  applyOp(s, { t: 'connection', before: null, after: conn('X', ['a', 'b']) });
+  const books = () => canonical({ view: view(s), dump: indexDump(s) });
+  const before = books();
+  const tagless: Partial<ConnectionRec> = conn('K', ['a', 'b']);
+  delete tagless.tags;
+  const x = s.connections.get('X')!, a = s.nodes.get('a')!;
+  const bad: Op[] = [
+    { t: 'connection', before: null, after: tagless as ConnectionRec },
+    { t: 'connection', before: x, after: { ...x, tags: undefined as never } },
+    { t: 'connection', before: null, after: { ...conn('K', ['a']), tags: [null] as never } },
+    { t: 'connection', before: null, after: { ...conn('K', ['a']), members: [null] as never } },
+    { t: 'connection', before: null, after: { ...conn('K', ['a']), members: [{ node: 7, role: 'source' }] as never } },
+    { t: 'connection', before: null, after: { ...conn('K', ['a']), members: 'a' as never } },
+    { t: 'connection', before: null, after: { ...conn('K', ['a']), id: 3 as never } },
+    { t: 'node', before: null, after: { id: 'n', title: 'n', summary: '', files: [] } as unknown as NodeRec },
+    { t: 'node', before: null, after: { id: 'n', title: 'n', summary: '', tags: [] } as unknown as NodeRec },
+    { t: 'node', before: a, after: { ...a, tags: 'x' as never } },
+  ];
+  for (const op of bad) {
+    expect(() => checkRecord(op), JSON.stringify(op)).toThrow(/invalid/);
+    expect(() => applyOp(s, op), JSON.stringify(op)).toThrow(/invalid/);
+    expect(books()).toBe(before);
+  }
+  expect(() => checkRecord({ t: 'connection', before: null, after: conn('K', ['a']) })).not.toThrow();
 });
 
 test('le « avant » d’une connexion se compare à ses colonnes comme canonical le compare au record', () => {

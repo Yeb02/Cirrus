@@ -102,6 +102,25 @@ test('un instantané d’une autre version n’est pas envoyé : le principal li
   store.close();
 });
 
+test('des tables qui ne se relisent pas au chemin de secours : l’erreur remonte, l’instantané gardé reste en place', async () => {
+  const store = open();
+  await openState(bridge(store));
+  const kept = store.readSnapshot()!;
+  store.loadState = () => { throw new Error('ligne illisible'); };
+  expect(() => loadPayload(store, true)).toThrow(/ligne illisible.*instantané est gardé/);
+  expect(store.readSnapshot()).toMatchObject({ seq: kept.seq, version: kept.version });
+  // A snapshot of another version, which would send the load to the tables: kept as well.
+  const other = encodeState(decodeState(kept.data));
+  new Uint32Array(other, 0, 2)[1] = SNAPSHOT_VERSION + 1;
+  store.dropSnapshot();
+  store.writeSnapshot(other, kept.seq);
+  expect(() => loadPayload(store, false)).toThrow(/ligne illisible/);
+  expect(store.readSnapshot()).toMatchObject({ seq: kept.seq, version: SNAPSHOT_VERSION + 1 });
+  // The interface, refused twice, reports it rather than opening an empty base.
+  await expect(openState(bridge(store))).rejects.toThrow(/ligne illisible/);
+  store.close();
+});
+
 test('un instantané qui ne couvre pas le numéro qu’il annonce : la fin du journal ne s’applique pas, retour aux tables', async () => {
   const store = open(), s = store.loadState(), stale = encodeState(s);
   const session = sessionOn(store, s, store.lastSeq());

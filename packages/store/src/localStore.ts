@@ -2,8 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
-  type Action, canonical, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, KINDS, type NodeRec, type Op, OpConflictError,
-  type PhantomRec, type Placement, type PlanRec, ROLES, snapshotVersion, type State, subjectOf, type TagKeyDef,
+  type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
+  OpConflictError, type PhantomRec, type Placement, type PlanRec, snapshotVersion, type State, subjectOf, type TagKeyDef,
 } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
@@ -46,13 +46,10 @@ function loadState(db: DatabaseSync): State {
 }
 
 /**
- * A connection as the state keeps it (its columns): known fields only, after the checks the state makes, which refuse
- * the record before anything is written. The tables then hold what the interface's copy holds.
+ * A connection as the state keeps it (its columns): known fields only (checkRecord has refused what they cannot hold).
+ * The tables then hold what the interface's copy holds.
  */
 function storedConnection(c: ConnectionRec): ConnectionRec {
-  if (!KINDS.includes(c.kind)) throw new Error(`unknown connection kind: ${c.kind}`);
-  for (const m of c.members) if (!ROLES.includes(m.role)) throw new Error(`unknown role: ${m.role}`);
-  if (c.trashedAt !== undefined && (typeof c.trashedAt !== 'number' || Number.isNaN(c.trashedAt))) throw new Error(`invalid trashedAt: ${String(c.trashedAt)}`);
   const out: ConnectionRec = { id: c.id, kind: c.kind, title: c.title, relation: c.relation, tags: c.tags, members: c.members.map((m) => ({ node: m.node, role: m.role })) };
   if (c.trashedAt !== undefined) out.trashedAt = c.trashedAt;
   return out;
@@ -194,9 +191,10 @@ export class LocalStore {
   }
 
   /**
-   * Writes an action in one transaction: each operation's "before" checked against the row it replaces, then its
-   * "after" written and its journal line added. The first that does not match throws OpConflictError and nothing is
-   * written (ROLLBACK). Returns the journal number of the action's last line.
+   * Writes an action in one transaction: each operation's record checked as the state checks it (checkRecord) and its
+   * "before" against the row it replaces, then its "after" written and its journal line added. The first that fails
+   * throws (OpConflictError for a "before" that no longer matches) and nothing is written (ROLLBACK). Returns the
+   * journal number of the action's last line.
    */
   commit(a: Action): number {
     const at = Date.now(), q = this.q;
@@ -205,6 +203,7 @@ export class LocalStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const op of a.ops) {
+        checkRecord(op);
         checkBefore(q, op);
         persistOp(q, op);
         seq = Number(insert.run(a.id, a.label, flowOf(op), at, this.pc, subjectOf(op), JSON.stringify(op)).lastInsertRowid);

@@ -7,7 +7,9 @@ import { decodeState, encodeState } from '../src/codec.ts';
 import { UndoStack } from '../src/history.ts';
 import { groupOf } from '../src/invariants.ts';
 import type { TagKeyDef } from '../src/model.ts';
-import { applyOp, applyOps, dataOf, directGroup, emptyState, groupMembers, nodeId, placementOf, planRow, reindex, type State } from '../src/state.ts';
+import {
+  applyOp, applyOps, connId, dataOf, directGroup, emptyState, groupMembers, nodeId, placementOf, planId, planRow, reindex, type State,
+} from '../src/state.ts';
 
 // Timed tests run one after the other in this file, not against each other.
 /** 20 000 placed nodes and 20 000 connections, written by raw operations (commands would take minutes). */
@@ -149,22 +151,32 @@ test('base de référence : une commande coûte ce qu’elle touche, appliquée 
  * and 292–361 ms. The gates are three times the best measure (global constraints, as R12): see the registry, task 4.
  */
 const ENCODE_CEILING_MS = 700, DECODE_CEILING_MS = 900;
+/** The first lookup by identifier after decoding builds the three identifier maps: 237–336 ms measured, gate three times the best. */
+const FIRST_LOOKUP_CEILING_MS = 750;
 
 test('base de référence : l’instantané binaire s’encode et se décode d’un trait (cibles 300 et 250 ms, plafonds à trois fois la mesure)', () => {
   const { state } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
   const encode = cost(() => encodeState(state));
-  // Each decode makes a whole state: the best of five after one to warm up, the others collected in between.
-  let best = Infinity, decoded: State | null = null;
+  // Each decode makes a whole state: the best of five after one to warm up, the others collected in between. Then the
+  // first lookup by identifier in each table, which builds its identifier map (Rows.restored): the cost decoding leaves.
+  let best = Infinity, firstLookup = Infinity, decoded: State | null = null;
   for (let i = 0; i < 6; i++) {
     const buf = encode.out.slice(0);
     decoded = null;
     forceGc();
     const t = performance.now();
-    decoded = decodeState(buf);
-    if (i > 0) best = Math.min(best, performance.now() - t);
+    const d = (decoded = decodeState(buf));
+    const t1 = performance.now();
+    const found = [d.nodes.has(nodeId(d, 7)), d.plans.has(planId(d, 0)), d.connections.has(connId(d, 11))];
+    const t2 = performance.now();
+    expect(found).toEqual([true, true, true]);
+    if (i > 0) { best = Math.min(best, t1 - t); firstLookup = Math.min(firstLookup, t2 - t1); }
   }
-  if (process.env.CIRRUS_COSTS) console.log(`encodeState ${encode.ms.toFixed(1)} ms, decodeState ${best.toFixed(1)} ms, ${(encode.out.byteLength / 1e6).toFixed(1)} Mo`);
+  if (process.env.CIRRUS_COSTS) {
+    console.log(`encodeState ${encode.ms.toFixed(1)} ms, decodeState ${best.toFixed(1)} ms, première recherche par identifiant ${firstLookup.toFixed(1)} ms, ${(encode.out.byteLength / 1e6).toFixed(1)} Mo`);
+  }
   expect(encode.ms).toBeLessThanOrEqual(ENCODE_CEILING_MS);
   expect(best).toBeLessThanOrEqual(DECODE_CEILING_MS);
+  expect(firstLookup).toBeLessThanOrEqual(FIRST_LOOKUP_CEILING_MS);
   expect([decoded!.nodes.size, decoded!.connections.size, decoded!.branches.size]).toEqual([state.nodes.size, state.connections.size, state.branches.size]);
 }, 180_000);

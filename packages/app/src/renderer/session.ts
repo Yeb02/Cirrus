@@ -201,18 +201,23 @@ export class EditSession {
 export interface SnapshotTiming { snapshotAfterActions: number; snapshotIdleMs: number }
 
 /**
- * When the interface sends its state to be kept as the base's snapshot (plan 3c, decision 4): after
- * `snapshotAfterActions` actions, once nothing has happened for `snapshotIdleMs` (no action, no input: touch), and at
- * closing (flush); never while nothing changed since the last one, nor from a broken session. A snapshot found stale at
- * load (the journal's tail was replayed) is redone once the app is at rest. The state is encoded at once, between two
- * actions: what is sent is exactly the state at `seq`.
+ * When the interface sends its state to be kept as the base's snapshot (plan 3c, decision 4; R16). A snapshot is due
+ * once `snapshotAfterActions` actions are unsaved, or when the one found at load was stale (the journal's tail was
+ * replayed); a due snapshot is taken at rest only, once nothing has happened for `snapshotIdleMs` (no action, no input:
+ * touch), never inside an action, and not before the first frame (start). Closing (flush) takes one whenever anything
+ * is unsaved. Never from a broken session. The state is encoded at once, between two actions: what is sent is exactly
+ * the state at `seq`.
  */
 export class SnapshotSaver {
   private readonly session: EditSession;
   private readonly save: (data: ArrayBuffer, seq: number) => Promise<void>;
   private readonly timing: () => SnapshotTiming;
-  /** Actions applied since the last snapshot sent (one for a stale snapshot). */
-  private unsaved: number;
+  /** Actions applied since the last snapshot sent. */
+  private unsaved = 0;
+  /** The snapshot found at load did not cover the whole state. */
+  private stale: boolean;
+  /** The first frame is drawn: a due snapshot may wait for rest. */
+  private started = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private sending: Promise<void> = Promise.resolve();
 
@@ -220,15 +225,19 @@ export class SnapshotSaver {
     this.session = session;
     this.save = save;
     this.timing = timing;
-    this.unsaved = stale ? 1 : 0;
-    if (stale) this.rearm();
+    this.stale = stale;
   }
 
-  /** An action was applied to the session's state. */
+  /** The first frame is drawn (the app calls it once): from now on a due snapshot waits for rest. */
+  start(): void {
+    this.started = true;
+    if (this.due()) this.rearm();
+  }
+
+  /** An action was applied to the session's state: at most, the wait for rest starts again. */
   applied(): void {
     this.unsaved++;
-    if (this.unsaved >= this.timing().snapshotAfterActions) void this.saveNow();
-    else this.rearm();
+    if (this.started && this.due()) this.rearm();
   }
 
   /** The user did something (pointer, wheel, keys): the wait for rest starts again. */
@@ -236,9 +245,13 @@ export class SnapshotSaver {
     if (this.timer !== null) this.rearm();
   }
 
-  /** At closing: the snapshot if anything changed; resolves once the main process has it (or refused it). */
+  /** At closing: the snapshot if anything is unsaved; resolves once the main process has it (or refused it). */
   flush(): Promise<void> {
     return this.saveNow();
+  }
+
+  private due(): boolean {
+    return this.stale || this.unsaved >= this.timing().snapshotAfterActions;
   }
 
   private rearm(): void {
@@ -248,8 +261,8 @@ export class SnapshotSaver {
 
   private saveNow(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
-    if (this.unsaved === 0 || this.session.broken) return this.sending;
-    const seq = this.session.seq, count = this.unsaved;
+    if ((this.unsaved === 0 && !this.stale) || this.session.broken) return this.sending;
+    const seq = this.session.seq, count = this.unsaved, stale = this.stale;
     // Not kept, whatever failed: the journal still has everything, the next snapshot will cover it.
     const warn = (e: unknown) => console.warn(`Instantané de la base non enregistré : ${messageOf(e)}`);
     let data: ArrayBuffer;
@@ -260,8 +273,10 @@ export class SnapshotSaver {
       return this.sending;
     }
     this.unsaved = 0;
+    this.stale = false;
     this.sending = this.sending.then(() => this.save(data, seq)).catch((e: unknown) => {
       this.unsaved += count;
+      this.stale ||= stale;
       warn(e);
     });
     return this.sending;

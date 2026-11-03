@@ -135,10 +135,11 @@ export function App() {
     return () => clearTimeout(timer);
   }, [params, state]);
 
-  /** Captures wait for the first drawn frame. */
+  /** Captures wait for the first drawn frame; a due snapshot waits for it too (R16). */
   const firstFrame = () => {
     if (readySent.current) return;
     readySent.current = true;
+    saver.current?.start();
     // Visual checks: CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys.
     const clicks = (window.cirrus.launch.click ?? '').split(',').filter(Boolean);
     const keys = (window.cirrus.launch.keys ?? '').split(',').filter(Boolean);

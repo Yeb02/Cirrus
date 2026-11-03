@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, applyOps, canonical, connect, createNode, createPlan, editNode, emptyState, encodeState, type Id, type NodeRec, OpConflictError, removeFromPlan,
-  SNAPSHOT_VERSION, type State, toSnapshot,
+  type Action, applyOps, canonical, type ConnectionLayout, connect, createNode, createPlan, editNode, emptyState, encodeState, type Id, type NodeRec,
+  OpConflictError, type PhantomRec, removeFromPlan, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
 
@@ -73,6 +73,13 @@ test('commit refuse un « avant » périmé, relu dans la base : ni ligne, ni jo
   const link = connect(s, { plan, members: [{ node: afterId(ok, 'node'), role: 'source' }, { node: afterId(other, 'node'), role: 'target' }] });
   write(store, s, link);
   const n = s.nodes.get(afterId(ok, 'node'))!, c = s.connections.get(afterId(link, 'connection'))!;
+  // A tag key, a layout and a phantom in the base, for their stale "befores" too.
+  const key: TagKeyDef = { key: 'mot', type: 'word', scope: 'both', multi: false, required: false };
+  const layout: ConnectionLayout = { plan, connection: c.id, marker: { x: 1, y: 2 }, handles: {} };
+  const phantom: PhantomRec = { id: 'f-1', plan, connection: c.id, of: { kind: 'node', node: n.id }, x: 3, y: 4, k: 0 };
+  write(store, s, { id: 'extra', label: 'extra', ops: [
+    { t: 'tagKey', before: null, after: key }, { t: 'connLayout', before: null, after: layout }, { t: 'phantom', before: null, after: phantom },
+  ] });
   const fresh: NodeRec = { id: 'n-new', title: 'Nouveau', summary: '', tags: [], files: [] };
   const stale: Op[][] = [
     [{ t: 'node', before: { ...n, title: 'périmé' }, after: { ...n, title: 'C' } }],
@@ -81,6 +88,11 @@ test('commit refuse un « avant » périmé, relu dans la base : ni ligne, ni jo
     [{ t: 'branch', key: { plan, connection: c.id, node: 'personne' }, before: true, after: false }],
     [{ t: 'placement', before: { plan, node: n.id, x: 9, y: 9, k: 0 }, after: null }],
     [{ t: 'plan', before: null, after: { id: plan, name: 'Double', type: 'plan' } }],
+    [{ t: 'tagKey', before: { ...key, multi: true }, after: null }],
+    [{ t: 'tagKey', before: null, after: { ...key, required: true } }],
+    [{ t: 'connLayout', before: { ...layout, angle: 1 }, after: null }],
+    [{ t: 'phantom', before: { ...phantom, x: 9 }, after: { ...phantom, x: 10 } }],
+    [{ t: 'phantom', before: null, after: { ...phantom, y: 0 } }],
   ];
   const tables = () => canonical(sorted(store.loadState()));
   const before = tables(), seq = store.lastSeq();
@@ -110,6 +122,25 @@ test('l’« avant » se compare au sens canonique (ordre des clés, propriété
   ] };
   write(store, s, twice);
   expect(store.loadState().nodes.get(n.id)!.title).toBe('A3');
+  store.close();
+});
+
+test('un enregistrement que l’état refuserait, sans tags, une connexion comme un nœud, est refusé avant toute écriture : la base se relit toujours', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const plan = withPlan(store, s);
+  write(store, s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  const node = [...s.nodes.keys()][0], seq = store.lastSeq(), tables = () => canonical(sorted(store.loadState())), before = tables();
+  const fresh: NodeRec = { id: 'n-new', title: 'Nouveau', summary: '', tags: [], files: [] };
+  const tagless: Op[] = [
+    { t: 'connection', before: null, after: { id: 'c-bad', kind: 'knowledge', title: '', relation: '', members: [{ node, role: 'source' }] } as never },
+    { t: 'node', before: null, after: { id: 'n-bad', title: 'Sans tags', summary: '', files: [] } as never },
+    { t: 'node', before: s.nodes.get(node)!, after: { ...s.nodes.get(node)!, tags: undefined } as never },
+  ];
+  for (const op of tagless) {
+    expect(() => store.commit({ id: 'b', label: 'b', ops: [{ t: 'node', before: null, after: fresh }, op] }), JSON.stringify(op)).toThrow(/invalid/);
+    expect(store.lastSeq()).toBe(seq);
+    expect(tables()).toBe(before);
+  }
   store.close();
 });
 

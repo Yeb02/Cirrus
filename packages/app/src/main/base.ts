@@ -41,7 +41,8 @@ export interface Payload { data: ArrayBuffer; tail: string; seq: number }
 /**
  * cirrus:load (plan 3c, decision 4): the base's snapshot and the journal after it. Without a snapshot of this format,
  * or when the interface could not use the one it got (`fromTables`), the state is built from the tables (the fallback
- * path), encoded, and forgotten; that bad snapshot is dropped and `rebuilt` asks for the new one to be kept once sent.
+ * path), encoded, and forgotten; only then is the stored snapshot dropped, and `rebuilt` asks for the new one to be
+ * kept once sent. Tables that cannot be loaded throw, the stored snapshot left in place.
  */
 export function loadPayload(store: LocalStore, fromTables: boolean): { payload: Payload; rebuilt: boolean } {
   const snap = fromTables ? null : store.readSnapshot();
@@ -50,9 +51,15 @@ export function loadPayload(store: LocalStore, fromTables: boolean): { payload: 
     const seq = rows.length > 0 ? rows[rows.length - 1].localSeq : snap.seq;
     return { payload: { data: snap.data, tail: JSON.stringify(rows.map((r) => r.op)), seq }, rebuilt: false };
   }
-  store.dropSnapshot();
   const seq = store.lastSeq();
-  return { payload: { data: encodeState(store.loadState()), tail: '[]', seq }, rebuilt: true };
+  let data: ArrayBuffer;
+  try {
+    data = encodeState(store.loadState());
+  } catch (e) {
+    throw new Error(`Les tables de la base n’ont pas pu être relues (${e instanceof Error ? e.message : String(e)}) : son instantané est gardé.`);
+  }
+  store.dropSnapshot();
+  return { payload: { data, tail: '[]', seq }, rebuilt: true };
 }
 
 /** Keeps a snapshot the main process built itself (after it was sent): a failure is only reported, the tables have everything. */

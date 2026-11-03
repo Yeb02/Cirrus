@@ -192,6 +192,27 @@ test('internement : sur 1 000 références tirées au hasard, members[i].node et
   expect(checked).toBe(1000);
 }, 60_000);
 
+test('un index gardé faux (memberOf, placedIn, groupOf), écrit tel quel dans l’instantané, est refusé (SnapshotError) : retour aux tables (R17)', () => {
+  /** The first node row whose list in `pool` is not empty. */
+  const owner = (pool: { len: Int32Array }) => pool.len.findIndex((n) => n > 0);
+  const tamper: [string, (s: State) => void][] = [
+    ['memberOf sans une entrée', (s) => { const I = dataOf(s).index; I.memberOf.removeAt(owner(I.memberOf), 0); }],
+    ['memberOf avec une entrée de trop', (s) => { const I = dataOf(s).index, n = owner(I.memberOf); I.memberOf.push(n, I.memberOf.view(n)[0]); }],
+    ['placedIn sans une entrée', (s) => { const I = dataOf(s).index; I.placedIn.removeAt(owner(I.placedIn), 0); }],
+    ['un groupe effacé', (s) => { const pg = dataOf(s).index.groupOf.find(Boolean)!; pg.group[pg.group.findIndex((g) => g >= 0)] = -1; }],
+    ['un groupe changé', (s) => {
+      const pg = dataOf(s).index.groupOf.find(Boolean)!, m = pg.group.findIndex((g) => g >= 0);
+      pg.group[m] = pg.group.find((g) => g >= 0 && g !== pg.group[m])!;
+    }],
+  ];
+  for (const [what, change] of tamper) {
+    const { state } = buildLargeState({ seed: 3, nodes: 300, connections: 2000 });
+    expect(() => decodeState(encodeState(state)), what).not.toThrow();
+    change(state);
+    expect(() => decodeState(encodeState(state)), what).toThrow(SnapshotError);
+  }
+});
+
 test('un instantané endommagé, tronqué ou d’une autre version est refusé (SnapshotError), jamais lu à moitié', () => {
   const { s } = oddities();
   const buf = encodeState(s);

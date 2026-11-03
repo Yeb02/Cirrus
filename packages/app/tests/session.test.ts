@@ -174,26 +174,28 @@ test('une action écrite qui ne s’applique plus à la copie : la session est r
   expect([session.broken, session.seq, s.nodes.has(id)]).toEqual([true, 2, true]);
 });
 
-/** A saver over a session, its snapshots recorded; timers are vitest's. */
-function saving(stale = false, timing = { snapshotAfterActions: 3, snapshotIdleMs: 2000 }) {
+/** A saver over a session, its snapshots recorded, started as the first frame starts it (unless `started` is false); timers are vitest's. */
+function saving(stale = false, started = true, timing = { snapshotAfterActions: 3, snapshotIdleMs: 2000 }) {
   const { s, plan } = world();
   const saved: { state: State; seq: number }[] = [];
   let saver: SnapshotSaver | null = null;
   const session = new EditSession(s, numbered(), () => saver!.applied(), 0);
   saver = new SnapshotSaver(session, async (data, seq) => { saved.push({ state: decodeState(data), seq }); }, () => timing, stale);
+  if (started) saver.start();
   const act = (title: string) => session.run((st) => createNode(st, { plan, title, x: 0, y: 0, k: 0 }));
   return { s, session, saver, saved, act };
 }
 
-test('instantané après snapshotAfterActions actions, avec le numéro couvert, et l’état décodé égal à celui de la session', async () => {
+test('R16 : la snapshotAfterActions-ième action rend l’instantané dû sans l’encoder ; il se prend au repos, au numéro couvert, égal à l’état de la session', async () => {
   vi.useFakeTimers();
   try {
     const { s, saved, act } = saving();
     await act('A');
     await act('B');
-    expect(saved).toHaveLength(0);
     await act('C');
     await vi.advanceTimersByTimeAsync(0);
+    expect(saved).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(saved.map((x) => x.seq)).toEqual([6]);
     expect(canonical(toSnapshot(saved[0].state))).toBe(canonical(toSnapshot(s)));
   } finally {
@@ -201,19 +203,23 @@ test('instantané après snapshotAfterActions actions, avec le numéro couvert, 
   }
 });
 
-test('instantané au repos : snapshotIdleMs sans action ni saisie ; une saisie relance l’attente ; rien quand rien n’a changé', async () => {
+test('R16 : le repos avec moins de snapshotAfterActions actions non gardées ne prend rien ; dû, une saisie ou une action relance l’attente', async () => {
   vi.useFakeTimers();
   try {
     const { saver, saved, act } = saving();
+    await act('A');
+    await act('B');
     await vi.advanceTimersByTimeAsync(10_000);
     expect(saved).toHaveLength(0);
-    await act('A');
+    await act('C');
     await vi.advanceTimersByTimeAsync(1500);
     saver.touch();
     await vi.advanceTimersByTimeAsync(1500);
+    await act('D');
+    await vi.advanceTimersByTimeAsync(1500);
     expect(saved).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(600);
-    expect(saved.map((x) => x.seq)).toEqual([2]);
+    expect(saved.map((x) => x.seq)).toEqual([8]);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(saved).toHaveLength(1);
   } finally {
@@ -221,7 +227,7 @@ test('instantané au repos : snapshotIdleMs sans action ni saisie ; une saisie r
   }
 });
 
-test('à la fermeture : instantané si quelque chose a changé, sinon rien ; un instantané périmé au chargement est refait au repos', async () => {
+test('R16 : la fermeture prend l’instantané dès qu’une action n’est pas gardée, sinon rien', async () => {
   vi.useFakeTimers();
   try {
     const { saver, saved, act } = saving();
@@ -232,9 +238,25 @@ test('à la fermeture : instantané si quelque chose a changé, sinon rien ; un 
     expect(saved.map((x) => x.seq)).toEqual([2]);
     await saver.flush();
     expect(saved).toHaveLength(1);
-    const stale = saving(true);
-    await vi.advanceTimersByTimeAsync(2000);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('R16 : un instantané périmé au chargement est dû au repos, attendu seulement après la première image ; la fermeture le prend aussi', async () => {
+  vi.useFakeTimers();
+  try {
+    const stale = saving(true, false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(stale.saved).toHaveLength(0);
+    stale.saver.start();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(stale.saved).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
     expect(stale.saved.map((x) => x.seq)).toEqual([0]);
+    const closing = saving(true, false);
+    await closing.saver.flush();
+    expect(closing.saved.map((x) => x.seq)).toEqual([0]);
   } finally {
     vi.useRealTimers();
   }
