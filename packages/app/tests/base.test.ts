@@ -10,7 +10,8 @@ test('première ouverture : un lobby et un identifiant de PC stable', () => {
   const pcA = readFileSync(join(dir, 'pc.json'), 'utf8');
   a.close();
   const b = openBase(dir);
-  expect([...b.state.plans.values()].filter((p) => p.type === 'lobby')).toHaveLength(1);
+  expect([...b.loadState().plans.values()].filter((p) => p.type === 'lobby')).toHaveLength(1);
+  expect(b.changesSince(0)).toHaveLength(1);
   expect(readFileSync(join(dir, 'pc.json'), 'utf8')).toBe(pcA);
   expect(JSON.parse(pcA).id).toMatch(/^[0-9a-f-]{36}$/);
   b.close();

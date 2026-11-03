@@ -26,6 +26,9 @@ const MIGRATIONS: string[] = [
   CREATE INDEX changes_action ON changes (action_id);
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  /* v2 (plan 3c): the binary snapshot of the state, a cache of the tables; seq is the last journal line it covers. */ `
+  CREATE TABLE snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL, seq INTEGER NOT NULL, data BLOB NOT NULL);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

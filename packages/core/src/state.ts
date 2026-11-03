@@ -324,25 +324,42 @@ export function reindex(s: State): void {
   // Hot loops read local copies and inline the member coding (node row = m >> 2): under vitest every imported binding
   // is a getter, four times slower here (bundled code is not affected).
   const none = NO_RECORD, inclusion = INCLUSION, source = SOURCE, target = TARGET;
-  // memberOf: each node once per connection, even when it is a member twice. Counted, then filled.
+  // memberOf: each node once per connection, even when it is a member twice. Counted, then filled; a connection of two
+  // members (most of them) without the inner loop.
   const kind = C.kind, md = C.members.data, ms = C.members.start, ml = C.members.len, connEnd = C.rows.end;
   const counts = new Int32Array(nodeCap);
-  let memberOf: Pool | undefined;
-  for (let pass = 0; pass < 2; pass++) {
-    if (pass === 1) memberOf = Pool.sized(1, counts);
-    const od = memberOf?.data, os = memberOf?.start, ol = memberOf?.len;
-    for (let c = 0; c < connEnd; c++) {
-      if (kind[c] === none) continue;
-      const s0 = ms[c], end = s0 + ml[c];
-      outer: for (let i = s0; i < end; i++) {
-        const n = md[i] >> 2;
-        for (let j = s0; j < i; j++) if (md[j] >> 2 === n) continue outer;
-        if (od) od[os![n] + ol![n]++] = c;
-        else counts[n]++;
-      }
+  for (let c = 0; c < connEnd; c++) {
+    if (kind[c] === none) continue;
+    const s0 = ms[c], len = ml[c];
+    if (len === 2) {
+      const a = md[s0] >> 2, b = md[s0 + 1] >> 2;
+      counts[a]++;
+      if (b !== a) counts[b]++;
+      continue;
+    }
+    outer: for (let i = s0, end = s0 + len; i < end; i++) {
+      const n = md[i] >> 2;
+      for (let j = s0; j < i; j++) if (md[j] >> 2 === n) continue outer;
+      counts[n]++;
     }
   }
-  I.memberOf = memberOf!;
+  const memberOf = Pool.sized(1, counts), od = memberOf.data, os = memberOf.start, ol = memberOf.len;
+  for (let c = 0; c < connEnd; c++) {
+    if (kind[c] === none) continue;
+    const s0 = ms[c], len = ml[c];
+    if (len === 2) {
+      const a = md[s0] >> 2, b = md[s0 + 1] >> 2;
+      od[os[a] + ol[a]++] = c;
+      if (b !== a) od[os[b] + ol[b]++] = c;
+      continue;
+    }
+    outer: for (let i = s0, end = s0 + len; i < end; i++) {
+      const n = md[i] >> 2;
+      for (let j = s0; j < i; j++) if (md[j] >> 2 === n) continue outer;
+      od[os[n] + ol[n]++] = c;
+    }
+  }
+  I.memberOf = memberOf;
   counts.fill(0);
   T.plans.placements.forEach((map) => { if (map) for (const n of map.keys()) counts[n]++; });
   const placed = Pool.sized(1, counts);
@@ -351,7 +368,6 @@ export function reindex(s: State): void {
   // Groups: each inclusion not in the trash puts its first source in its first target, in every plan where both
   // branches are shown. A node found twice in a plan is resolved by regroup, once the rest is in place.
   I.groupOf = [];
-  I.groupMembers = [];
   const twice: number[] = [];
   for (let c = 0; c < C.rows.end; c++) {
     if (kind[c] !== inclusion || !Number.isNaN(C.trashedAt[c]) || bp.len[c] === 0) continue;
@@ -365,12 +381,35 @@ export function reindex(s: State): void {
       else twice.push(p, m);
     }
   }
+  indexGroupMembers(d);
+  for (let i = 0; i < twice.length; i += 2) regroup(d, twice[i], twice[i + 1]);
+  indexByIdentifiers(d);
+}
+
+/**
+ * Core only (decodeState): the indices a snapshot does not keep, built from its tables and from the indices it keeps
+ * (memberOf, placedIn, groupOf with its multi): groupMembers, the phantoms' indices, structures and tagged.
+ */
+export function reindexRest(s: State): void {
+  const d = dataOf(s);
+  indexGroupMembers(d);
+  indexByIdentifiers(d);
+}
+
+/** groupMembers from groupOf: each plan's group → its members, in node order. */
+function indexGroupMembers(d: StateData): void {
+  const I = d.index;
+  I.groupMembers = [];
   I.groupOf.forEach((pg, p) => {
     if (!pg) return;
     const members = (I.groupMembers[p] = new Map<number, number[]>());
     pg.group.forEach((g, n) => { if (g >= 0) listAdd(members, g, n); });
   });
-  for (let i = 0; i < twice.length; i += 2) regroup(d, twice[i], twice[i + 1]);
+}
+
+/** The phantoms' indices, the structure connections and the tag index, from the tables. */
+function indexByIdentifiers(d: StateData): void {
+  const T = d.tables, C = T.conns, I = d.index, kind = C.kind, connEnd = C.rows.end, none = NO_RECORD;
   I.phantomsOf = new Map();
   I.phantomsIn = new Map();
   for (const ph of T.phantoms.values()) {

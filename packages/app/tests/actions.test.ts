@@ -18,7 +18,7 @@ beforeEach(() => {
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-actions-'));
   const store = LocalStore.open(dir, { pc: 'test' });
   ids = buildFixture(store, dir);
-  s = store.state;
+  s = store.loadState();
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
 const run = (build: ((st: State) => import('@cirrus/core').Action) | null) => { const a = build!(s); for (const op of a.ops) applyOp(s, op); return a; };

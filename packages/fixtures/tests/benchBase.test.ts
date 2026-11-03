@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { type Action, canonical, type Op, type State, toSnapshot } from '@cirrus/core';
+import { type Action, canonical, decodeState, type Op, type State, toSnapshot } from '@cirrus/core';
 import { LocalStore, writeBenchBase } from '@cirrus/store';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildLargeState } from '../src/large.ts';
@@ -26,13 +26,16 @@ function rows(dir: string): Record<string, string[]> {
   return out;
 }
 
-test('base du banc : écrite d’un coup, LocalStore.open rend le même état, journal vide', () => {
+test('base du banc : écrite d’un coup, LocalStore.open rend le même état, journal vide, instantané au numéro 0', () => {
   const { state } = buildLargeState({ seed: 1, nodes: 1000, connections: 10_000 });
   const dir = newDir();
   writeBenchBase(dir, state);
   const store = LocalStore.open(dir, { pc: 'banc' });
-  expect(canonical(sorted(store.state))).toBe(canonical(sorted(state)));
+  expect(canonical(sorted(store.loadState()))).toBe(canonical(sorted(state)));
   expect(store.changesSince(0)).toEqual([]);
+  const snap = store.readSnapshot()!;
+  expect(snap.seq).toBe(0);
+  expect(canonical(sorted(decodeState(snap.data)))).toBe(canonical(sorted(state)));
   store.close();
   expect(() => writeBenchBase(dir, state)).toThrow();
 }, 60_000);

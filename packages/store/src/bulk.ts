@@ -1,13 +1,13 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { State } from '@cirrus/core';
+import { encodeState, snapshotVersion, type State } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
 /**
  * Writes a whole state as a new base, in the store's format (the rows LocalStore.commit would write), in one
- * transaction and with an empty journal: the bench's base on disk (plan 3c), a million rows in seconds rather than an
- * action per record. Refuses a folder that already holds a base.
+ * transaction and with an empty journal, and its snapshot covering that journal (seq 0): the bench's base on disk
+ * (plan 3c), a million rows in seconds rather than an action per record. Refuses a folder that already holds a base.
  */
 export function writeBenchBase(dir: string, s: State): void {
   mkdirSync(dir, { recursive: true });
@@ -37,6 +37,8 @@ export function writeBenchBase(dir: string, s: State): void {
       for (const l of s.connLayouts.values()) layout.run(l.plan, l.connection, j(l));
       const phantom = db.prepare('INSERT INTO phantoms (id, plan, json) VALUES (?, ?, ?)');
       for (const p of s.phantoms.values()) phantom.run(p.id, p.plan, j(p));
+      const snapshot = encodeState(s);
+      db.prepare('INSERT INTO snapshot (id, version, seq, data) VALUES (1, ?, 0, ?)').run(snapshotVersion(snapshot), new Uint8Array(snapshot));
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');

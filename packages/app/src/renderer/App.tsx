@@ -1,4 +1,4 @@
-import { type Action, fromSnapshot, type Id, type Snapshot, type State } from '@cirrus/core';
+import { type Action, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { mark } from './bench.ts';
@@ -6,9 +6,11 @@ import { GraphView } from './ui/GraphView.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, Toasts } from './ui/Toasts.tsx';
-import { EditSession, type Result } from './session.ts';
+import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
 
 const TABS_KEY = 'cirrus.tabs';
+/** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
+const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 
 /** Open tabs are a per-PC convenience: kept in localStorage, which may be unavailable. */
 function loadTabs(): Id[] {
@@ -42,6 +44,7 @@ export function App() {
   /** The settings just read are not written back. */
   const loadedParams = useRef<RenderParams | null>(null);
   const session = useRef<EditSession | null>(null);
+  const saver = useRef<SnapshotSaver | null>(null);
   const activeRef = useRef<Id | null>(null);
   activeRef.current = active;
   const paramsRef = useRef(params);
@@ -75,12 +78,27 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // The snapshot is due once nothing has happened for a while: any input starts that wait again.
+  useEffect(() => {
+    const touch = () => saver.current?.touch();
+    const events = ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const;
+    for (const e of events) window.addEventListener(e, touch, { capture: true, passive: true });
+    return () => { for (const e of events) window.removeEventListener(e, touch, { capture: true }); };
+  }, []);
+
+  // Closing: the last snapshot, if anything changed since the one before, then the main process may close the window.
+  useEffect(() => window.cirrus.onQuit(() => {
+    void (saver.current?.flush() ?? Promise.resolve()).finally(() => window.cirrus.quitReady());
+  }), []);
+
   useEffect(() => {
     void (async () => {
       try {
-        const [snap, settings] = await Promise.all([window.cirrus.snapshot(), window.cirrus.getSettings()]);
-        mark('dataReceived');
-        const s = fromSnapshot(JSON.parse(snap) as Snapshot);
+        // The snapshot and the journal after it (plan 3c); the tables when the snapshot cannot be used.
+        const load = (fromTables: boolean) => window.cirrus.load(fromTables).then((l) => { mark('dataReceived'); return l; });
+        const [opened, settings] = await Promise.all([openState(load), window.cirrus.getSettings()]);
+        if (opened.fallback) console.warn(`Instantané de la base inutilisable (${opened.fallback}) : état relu dans ses tables.`);
+        const s = opened.state;
         const plans = [...s.plans.values()];
         const lobby = plans.find((p) => p.type === 'lobby')!;
         let open = loadTabs().filter((id) => s.plans.has(id) && id !== lobby.id);
@@ -92,7 +110,11 @@ export function App() {
         }
         const p = withOverrides(settings);
         loadedParams.current = p;
-        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (st, action, rev) => setShown({ state: st, rev, action }));
+        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (st, action, rev) => {
+          setShown({ state: st, rev, action });
+          saver.current?.applied();
+        }, opened.seq);
+        if (!measuring) saver.current = new SnapshotSaver(session.current, (data, seq) => window.cirrus.saveSnapshot(data, seq), () => paramsRef.current, opened.stale);
         mark('stateReady');
         setParams(p);
         setTabs(open);

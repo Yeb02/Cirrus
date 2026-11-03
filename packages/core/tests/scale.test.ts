@@ -3,6 +3,7 @@ import { expect, test } from 'vitest';
 import {
   type Action, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode, transact,
 } from '../src/commands.ts';
+import { decodeState, encodeState } from '../src/codec.ts';
 import { UndoStack } from '../src/history.ts';
 import { groupOf } from '../src/invariants.ts';
 import type { TagKeyDef } from '../src/model.ts';
@@ -142,3 +143,28 @@ test('base de référence : une commande coûte ce qu’elle touche, appliquée 
     console.log(Object.entries({ ...costs, deleteEverywhere: removal, combine50: paste, undoDryRun: undo }).map(([k, c]) => `${k} ${ms(c.ms)} ms (${c.out!.ops.length} op.)`).join('\n'));
   }
 }, 120_000);
+
+/**
+ * The plan aims at 300 ms to encode and 250 ms to decode; measured on a machine shared with a CPU-heavy program, 230–265
+ * and 292–361 ms. The gates are three times the best measure (global constraints, as R12): see the registry, task 4.
+ */
+const ENCODE_CEILING_MS = 700, DECODE_CEILING_MS = 900;
+
+test('base de référence : l’instantané binaire s’encode et se décode d’un trait (cibles 300 et 250 ms, plafonds à trois fois la mesure)', () => {
+  const { state } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
+  const encode = cost(() => encodeState(state));
+  // Each decode makes a whole state: the best of five after one to warm up, the others collected in between.
+  let best = Infinity, decoded: State | null = null;
+  for (let i = 0; i < 6; i++) {
+    const buf = encode.out.slice(0);
+    decoded = null;
+    forceGc();
+    const t = performance.now();
+    decoded = decodeState(buf);
+    if (i > 0) best = Math.min(best, performance.now() - t);
+  }
+  if (process.env.CIRRUS_COSTS) console.log(`encodeState ${encode.ms.toFixed(1)} ms, decodeState ${best.toFixed(1)} ms, ${(encode.out.byteLength / 1e6).toFixed(1)} Mo`);
+  expect(encode.ms).toBeLessThanOrEqual(ENCODE_CEILING_MS);
+  expect(best).toBeLessThanOrEqual(DECODE_CEILING_MS);
+  expect([decoded!.nodes.size, decoded!.connections.size, decoded!.branches.size]).toEqual([state.nodes.size, state.connections.size, state.branches.size]);
+}, 180_000);

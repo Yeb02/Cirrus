@@ -1,16 +1,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type Action, OpConflictError, toSnapshot } from '@cirrus/core';
+import { type Action, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
+import { withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
-import { dataDir, openBase } from './base.ts';
+import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun } from './bench.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
- * interface over IPC. CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
+ * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. Closing waits, at most
+ * snapshotQuitMs, for the interface's last snapshot. CIRRUS_CAPTURE=<png> captures the window once the first frame is
+ * drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand.
  */
@@ -61,6 +64,22 @@ function createWindow(): void {
     },
   });
   win.once('ready-to-show', () => win.show());
+  // Closing: the interface sends its snapshot (if anything changed) and says so; past snapshotQuitMs, the window closes
+  // anyway (the journal has every action). Bench and captures quit by app.exit, without this.
+  let closing = false;
+  win.on('close', (e) => {
+    if (closing || !store) return;
+    e.preventDefault();
+    closing = true;
+    const done = () => {
+      clearTimeout(timer);
+      ipcMain.removeListener('cirrus:quit:ready', done);
+      if (!win.isDestroyed()) win.destroy();
+    };
+    const timer = setTimeout(done, withOverrides(settings()).snapshotQuitMs);
+    ipcMain.on('cirrus:quit:ready', done);
+    win.webContents.send('cirrus:quit');
+  });
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(join(import.meta.dirname, '..', 'renderer', 'index.html'));
 
@@ -91,20 +110,26 @@ function createWindow(): void {
   }
 }
 
-// As JSON text: a string crosses IPC and the context bridge in one copy; a large object graph took minutes
-// (403 s for 50 000 nodes and 500 000 connections, against 1.3 s for a tenth of that).
-ipcMain.handle('cirrus:snapshot', () => {
-  const json = JSON.stringify(toSnapshot(store!.state));
+// The state as one ArrayBuffer (plan 3c, decision 5): the base's snapshot and the journal after it, or, without a
+// usable snapshot (or when the interface could not use it: fromTables), the state of the tables, kept as the new
+// snapshot once sent. An ArrayBuffer crosses IPC and the context bridge at the speed of memory.
+ipcMain.handle('cirrus:load', (_e, fromTables: unknown) => {
+  const { payload, rebuilt } = loadPayload(store!, fromTables === true);
   markNow('dataSent');
-  return json;
+  if (rebuilt) setImmediate(() => keepSnapshot(store!, payload.data, payload.seq));
+  return payload;
 });
-// The bench runs on the defaults, or on CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting.
-ipcMain.handle('cirrus:settings:get', () => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir)));
+// The interface's snapshot, at rest and at closing: checked, kept if later than the stored one.
+ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { saveSnapshot(store!, data, seq); });
+/** The settings: the defaults, or on the bench CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting. */
+const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir));
+ipcMain.handle('cirrus:settings:get', () => settings());
 ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => { if (!bench) writeSettings(dir, overrides); });
-// An edit computed by the interface (spec 4: only this process writes). A conflicting record refuses it.
+// An edit computed by the interface (spec 4: only this process writes), each "before" checked against the base. A
+// conflicting record refuses it. Returns the journal number of its last line.
 ipcMain.handle('cirrus:commit', (_e, action: Action) => {
   try {
-    store!.commit(action);
+    return store!.commit(action);
   } catch (e) {
     if (e instanceof OpConflictError) throw new Error('La base a changé : action refusée.');
     throw e;

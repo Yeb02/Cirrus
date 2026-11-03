@@ -21,7 +21,7 @@ beforeAll(() => {
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-view-'));
   const store = LocalStore.open(dir, { pc: 'test' });
   ids = buildFixture(store, dir);
-  s = store.state;
+  s = store.loadState();
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
 

@@ -20,14 +20,14 @@ const snapshot = (s: State) => canonical({
 test('la base de test se construit sans violation', () => {
   const store = LocalStore.open(dir, { pc: 'fixture' });
   buildFixture(store, dir);
-  expect(checkState(store.state)).toEqual([]);
+  expect(checkState(store.loadState())).toEqual([]);
   store.close();
 });
 
 test('chaque fonctionnalité est présente', () => {
   const store = LocalStore.open(dir, { pc: 'fixture' });
   const ids = buildFixture(store, dir);
-  const s = store.state;
+  const s = store.loadState();
   const live = [...s.connections.values()].filter((c) => c.trashedAt === undefined);
   const roles = (id: string) => s.connections.get(id)!.members.map((m) => m.role).sort().join(',');
   const placedIn = (node: string) => [...s.placements.values()].filter((p) => p.node === node).map((p) => p.plan);
@@ -97,9 +97,9 @@ test('chaque fonctionnalité est présente', () => {
 test('réouverture identique', () => {
   const store = LocalStore.open(dir, { pc: 'fixture' });
   buildFixture(store, dir);
-  const before = snapshot(store.state);
+  const before = snapshot(store.loadState());
   store.close();
   const again = LocalStore.open(dir, { pc: 'fixture' });
-  expect(snapshot(again.state)).toBe(before);
+  expect(snapshot(again.loadState())).toBe(before);
   again.close();
 });

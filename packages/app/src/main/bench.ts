@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { SNAPSHOT_VERSION } from '@cirrus/core';
 import { buildLargeState, LARGE_GENERATOR_VERSION, type LargeSpec } from '@cirrus/fixtures';
 import { SCHEMA_VERSION, writeBenchBase } from '@cirrus/store';
 import type { BenchRun, ProcessMb, Stats } from '../renderer/bench.ts';
@@ -19,7 +20,7 @@ export interface PassRecord extends BenchRun {
   processMb: ProcessMb;
 }
 
-/** The stamp next to the bench's base: the generator and the schema it was written with. */
+/** The stamp next to the bench's base: the generator, the schema and the snapshot format it was written with. */
 export const BENCH_STAMP = 'bench-base.json';
 
 /**
@@ -28,7 +29,9 @@ export const BENCH_STAMP = 'bench-base.json';
  * was built.
  */
 export function ensureBenchBase(dir: string, spec: LargeSpec): boolean {
-  const stamp = JSON.stringify({ generator: LARGE_GENERATOR_VERSION, schema: SCHEMA_VERSION, seed: spec.seed, nodes: spec.nodes, connections: spec.connections });
+  const stamp = JSON.stringify({
+    generator: LARGE_GENERATOR_VERSION, schema: SCHEMA_VERSION, snapshot: SNAPSHOT_VERSION, seed: spec.seed, nodes: spec.nodes, connections: spec.connections,
+  });
   try {
     if (readFileSync(join(dir, BENCH_STAMP), 'utf8') === stamp) return false;
   } catch {
@@ -89,9 +92,9 @@ function report(name: string, scale: string, runs: PassRecord[]): string {
   const lines = [
     `# Banc de rendu de l'application : ${name} (${new Date().toISOString().slice(0, 10)})`,
     '',
-    `Base synthétique : ${nodes} nœuds, ${connections} connexions de connaissance, graine 1 (générateur du plan 1, version ${LARGE_GENERATOR_VERSION} : identifiants de 36 caractères), lue sur disque dans une copie neuve à chaque passe. Parcours : vue d'ensemble, descente à travers tous les niveaux de groupes, déplacement de trois écrans, retour (40 s) ; première seconde écartée.`,
+    `Base synthétique : ${nodes} nœuds, ${connections} connexions de connaissance, graine 1 (générateur du plan 1, version ${LARGE_GENERATOR_VERSION} : identifiants de 36 caractères), lue sur disque dans une copie neuve à chaque passe, par son instantané binaire et la fin du journal (la passe \`secours\` exceptée). Parcours : vue d'ensemble, descente à travers tous les niveaux de groupes, déplacement de trois écrans, retour (40 s) ; première seconde écartée.`,
     '',
-    'Passes : `vsync` ; `plancher`, toutes couches masquées (une image vide) ; `throttled-x4`, processeur ralenti quatre fois ; `vide`, une base vide (le plancher d\'Electron).',
+    'Passes : `vsync` ; `plancher`, toutes couches masquées (une image vide) ; `throttled-x4`, processeur ralenti quatre fois ; `secours`, la même base sans son instantané (chargement depuis les tables) ; `vide`, une base vide (le plancher d\'Electron).',
     '',
     `Carte : ${runs[0]?.gpuName ?? '?'} ; canevas ${runs[0]?.canvasPx.join('×') ?? '?'} px.`,
     '',

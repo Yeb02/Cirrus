@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, connect, createNode, createPlan, editNode, type Id, include, type Member, movePhantom, placeNode, removeFromPlan, splitArm,
+  type Action, applyOps, connect, createNode, createPlan, editNode, type Id, include, type Member, movePhantom, placeNode, removeFromPlan, splitArm,
   type TagKeyDef, type TagValue, UndoStack, uuidv7,
 } from '@cirrus/core';
 import { importFile, type LocalStore } from '@cirrus/store';
@@ -53,13 +53,15 @@ const asc = (node: Id): Member => ({ node, role: 'associate' });
 
 /**
  * An artificial base that uses every feature of the model at least once (plan 2, task 9). The MDL, Solomonoff,
- * Universality and Algorithmic world nodes come from the user's example; everything else is invented.
+ * Universality and Algorithmic world nodes come from the user's example; everything else is invented. Each action is
+ * computed on a working copy of the state, written, then applied to the copy (as the interface does: the store keeps
+ * no state); read the result back with store.loadState().
  */
 export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
-  const run = (a: Action): Action => { store.commit(a); return a; };
+  const s = store.loadState();
+  const run = (a: Action): Action => { store.commit(a); applyOps(s, a.ops); return a; };
   const created = (a: Action, t: 'node' | 'plan' | 'connection'): Id =>
     (run(a).ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
-  const s = store.state;
 
   // Plans and tag registry.
   const lobby = created(createPlan(s, 'Lobby', 'lobby'), 'plan');

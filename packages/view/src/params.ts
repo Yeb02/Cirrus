@@ -99,6 +99,13 @@ export interface RenderParams {
   defaultAnswer: 'here' | 'everywhere';
   /** When drawing stops: window hidden only, or also without the focus (battery). */
   backgroundPause: 'unfocused' | 'hidden';
+  // Snapshot of the base (plan 3c, decision 4): the interface sends its state to be kept as the base's snapshot
+  /** after this many actions, */
+  snapshotAfterActions: number;
+  /** once nothing has happened for this long, */
+  snapshotIdleMs: number;
+  /** and at closing, which waits for it this long at most. */
+  snapshotQuitMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -208,6 +215,9 @@ export const DEFAULT_PARAMS: RenderParams = {
   toastMs: 4000,
   defaultAnswer: 'here',
   backgroundPause: 'unfocused',
+  snapshotAfterActions: 200,
+  snapshotIdleMs: 2000,
+  snapshotQuitMs: 2000,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -342,6 +352,9 @@ export const PARAM_SPECS: ParamSpec[] = [
     key: 'backgroundPause', label: 'Mise en pause du rendu', section: A, group: 'Vue', kind: 'choice',
     choices: [{ value: 'unfocused', label: 'Fenêtre cachée ou sans le focus' }, { value: 'hidden', label: 'Fenêtre cachée seulement' }],
   },
+  num('snapshotAfterActions', 'Actions après lesquelles l’instantané de la base est refait', A, 'Base', 10, 10000, 10),
+  num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
+  num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

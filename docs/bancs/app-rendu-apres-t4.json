@@ -1,0 +1,425 @@
+{
+  "name": "app-rendu-apres-t4",
+  "scale": "50000,500000",
+  "generator": 2,
+  "gpu": {
+    "raw": {
+      "p50": 2.226176,
+      "p95": 4.132864,
+      "p99": 6.700032,
+      "max": 10.493952,
+      "n": 2248
+    },
+    "floor": {
+      "p50": 0.0256,
+      "p95": 0.029696,
+      "p99": 0.031744,
+      "max": 3.253248,
+      "n": 2175
+    },
+    "content": {
+      "p50": 2.2005760000000003,
+      "p95": 4.103167999999999
+    }
+  },
+  "runs": [
+    {
+      "label": "vsync",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "timer": true,
+      "disjoint": 0,
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 2.239488,
+        "p95": 4.837376,
+        "p99": 14.665728,
+        "max": 20.501504,
+        "n": 2456
+      },
+      "gpuSteadyMs": {
+        "p50": 2.226176,
+        "p95": 4.132864,
+        "p99": 6.700032,
+        "max": 10.493952,
+        "n": 2248
+      },
+      "cpuMs": {
+        "p50": 0.5,
+        "p95": 1.7000000476837158,
+        "p99": 5.799999952316284,
+        "max": 12.200000047683716,
+        "n": 2456
+      },
+      "intervalMs": {
+        "p50": 10.799999999999272,
+        "p95": 11.69999999999709,
+        "p99": 140,
+        "max": 195,
+        "n": 2455
+      },
+      "rebuilds": 104,
+      "worstFrame": {
+        "t": 4.446200000000001,
+        "cpuMs": 12.200000047683716,
+        "rebuilt": true
+      },
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 79
+      },
+      "marks": {
+        "dataReceived": 1793724791534.4,
+        "stateReady": 1793724791798.3,
+        "engineReady": 1793724792159.8,
+        "sceneReady": 1793724795299,
+        "firstFrame": 1793724797612.5
+      },
+      "heapMb": 1326.922441,
+      "gc": true,
+      "edits": {
+        "node": "Nœud 44 ∑",
+        "dragFrameMs": {
+          "p50": 426.5,
+          "p95": 554.1000001430511,
+          "p99": 557.9000000953674,
+          "max": 557.9000000953674,
+          "n": 60
+        },
+        "dropMs": 5252.5,
+        "renameMs": 4967.5,
+        "createMs": 6080.200000047684,
+        "connectMs": 7265.399999856949,
+        "undoMs": [
+          7558.700000047684,
+          7311.200000047684,
+          7366.400000095367
+        ],
+        "notes": []
+      },
+      "beforeEdits": {
+        "heapMb": 327.177099,
+        "processMb": {
+          "browser": 37.167104,
+          "tab": 914.919424,
+          "gpu": 288.571392
+        }
+      },
+      "phases": {
+        "baseOpened": 124.492431640625,
+        "dataSent": 687.670654296875,
+        "dataReceived": 806.40185546875,
+        "stateReady": 1070.302001953125,
+        "engineReady": 1431.802001953125,
+        "sceneReady": 4571.001953125,
+        "firstFrame": 6884.501953125
+      },
+      "processMb": {
+        "browser": 35.913728,
+        "tab": 4464.566272,
+        "gpu": 225.28
+      }
+    },
+    {
+      "label": "plancher",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "timer": true,
+      "disjoint": 0,
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 0.0256,
+        "p95": 0.03072,
+        "p99": 0.032768,
+        "max": 3.253248,
+        "n": 2369
+      },
+      "gpuSteadyMs": {
+        "p50": 0.0256,
+        "p95": 0.029696,
+        "p99": 0.031744,
+        "max": 3.253248,
+        "n": 2175
+      },
+      "cpuMs": {
+        "p50": 0.20000004768371582,
+        "p95": 0.7999999523162842,
+        "p99": 1.6999998092651367,
+        "max": 2.8999998569488525,
+        "n": 2369
+      },
+      "intervalMs": {
+        "p50": 10.900000000001455,
+        "p95": 12.100000000002183,
+        "p99": 160.6999999999971,
+        "max": 271.59999999999854,
+        "n": 2368
+      },
+      "rebuilds": 97,
+      "worstFrame": {
+        "t": 1.3453000000000002,
+        "cpuMs": 2.8999998569488525,
+        "rebuilt": false
+      },
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 72
+      },
+      "marks": {
+        "dataReceived": 1793724916117.9,
+        "stateReady": 1793724916438.8,
+        "engineReady": 1793724916960.1,
+        "sceneReady": 1793724920866.6,
+        "firstFrame": 1793724923302.2
+      },
+      "heapMb": 325.767596,
+      "gc": true,
+      "edits": null,
+      "beforeEdits": null,
+      "phases": {
+        "baseOpened": 204.405517578125,
+        "dataSent": 1158.4345703125,
+        "dataReceived": 1340.095947265625,
+        "stateReady": 1660.99609375,
+        "engineReady": 2182.296142578125,
+        "sceneReady": 6088.796142578125,
+        "firstFrame": 8524.39599609375
+      },
+      "processMb": {
+        "browser": 36.70016,
+        "tab": 910.913536,
+        "gpu": 295.981056
+      }
+    },
+    {
+      "label": "throttled-x4",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "timer": true,
+      "disjoint": 0,
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 0.37888,
+        "p95": 3.675136,
+        "p99": 4.44416,
+        "max": 34.78528,
+        "n": 859
+      },
+      "gpuSteadyMs": {
+        "p50": 0.3584,
+        "p95": 3.544064,
+        "p99": 4.098048,
+        "max": 16.328704,
+        "n": 790
+      },
+      "cpuMs": {
+        "p50": 2.5,
+        "p95": 11.5,
+        "p99": 29.5,
+        "max": 44.89999985694885,
+        "n": 859
+      },
+      "intervalMs": {
+        "p50": 10.80000000000291,
+        "p95": 21.099999999998545,
+        "p99": 907.4000000000015,
+        "max": 1135.1000000000058,
+        "n": 858
+      },
+      "rebuilds": 35,
+      "worstFrame": {
+        "t": 26.389099999999992,
+        "cpuMs": 44.89999985694885,
+        "rebuilt": true
+      },
+      "reasons": {
+        "stale": 1,
+        "fold": 17,
+        "zoomIn": 3,
+        "rect": 16
+      },
+      "marks": {
+        "dataReceived": 1793724966093.7,
+        "stateReady": 1793724967251,
+        "engineReady": 1793724968053.1,
+        "sceneReady": 1793724991534.4001,
+        "firstFrame": 1793725004751.7
+      },
+      "heapMb": 326.767383,
+      "gc": true,
+      "edits": null,
+      "beforeEdits": null,
+      "phases": {
+        "baseOpened": 283.194091796875,
+        "dataSent": 1004.731689453125,
+        "dataReceived": 1547.11083984375,
+        "stateReady": 2704.410888671875,
+        "engineReady": 3506.510986328125,
+        "sceneReady": 26987.81103515625,
+        "firstFrame": 40205.11083984375
+      },
+      "processMb": {
+        "browser": 36.630528,
+        "tab": 850.71872,
+        "gpu": 243.945472
+      }
+    },
+    {
+      "label": "secours",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "timer": true,
+      "disjoint": 0,
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 0.356352,
+        "p95": 3.5328,
+        "p99": 4.004864,
+        "max": 12.909568,
+        "n": 2385
+      },
+      "gpuSteadyMs": {
+        "p50": 0.303104,
+        "p95": 3.437568,
+        "p99": 3.954688,
+        "max": 5.296992,
+        "n": 2190
+      },
+      "cpuMs": {
+        "p50": 0.5,
+        "p95": 2.799999952316284,
+        "p99": 7.299999952316284,
+        "max": 20.799999952316284,
+        "n": 2385
+      },
+      "intervalMs": {
+        "p50": 10.899999999997817,
+        "p95": 12,
+        "p99": 152.40000000000146,
+        "max": 230.29999999999563,
+        "n": 2384
+      },
+      "rebuilds": 98,
+      "worstFrame": {
+        "t": 21.737099999999998,
+        "cpuMs": 20.799999952316284,
+        "rebuilt": true
+      },
+      "reasons": {
+        "stale": 1,
+        "fold": 20,
+        "zoomIn": 5,
+        "rect": 73
+      },
+      "marks": {
+        "dataReceived": 1793725056902.5,
+        "stateReady": 1793725057609,
+        "engineReady": 1793725057991.7,
+        "sceneReady": 1793725061734.0999,
+        "firstFrame": 1793725064409.2
+      },
+      "heapMb": 327.180023,
+      "gc": true,
+      "edits": null,
+      "beforeEdits": null,
+      "phases": {
+        "baseOpened": 201.659912109375,
+        "dataSent": 9125.878662109375,
+        "dataReceived": 9253.093017578125,
+        "stateReady": 9959.593017578125,
+        "engineReady": 10342.29296875,
+        "sceneReady": 14084.69287109375,
+        "firstFrame": 16759.79296875
+      },
+      "processMb": {
+        "browser": 113.426432,
+        "tab": 918.85568,
+        "gpu": 357.797888
+      }
+    },
+    {
+      "label": "vide",
+      "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x00002860) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "timer": true,
+      "disjoint": 0,
+      "canvasPx": [
+        2561,
+        1544
+      ],
+      "gpuMs": {
+        "p50": 0.094208,
+        "p95": 0.100352,
+        "p99": 0.101376,
+        "max": 0.113664,
+        "n": 372
+      },
+      "gpuSteadyMs": {
+        "p50": 0.094208,
+        "p95": 0.100352,
+        "p99": 0.101376,
+        "max": 0.113664,
+        "n": 372
+      },
+      "cpuMs": {
+        "p50": 0.2999999523162842,
+        "p95": 0.5,
+        "p99": 1.5,
+        "max": 2.799999952316284,
+        "n": 372
+      },
+      "intervalMs": {
+        "p50": 10.900000000000091,
+        "p95": 11.599999999999909,
+        "p99": 12,
+        "max": 12.199999999999818,
+        "n": 371
+      },
+      "rebuilds": 0,
+      "worstFrame": {
+        "t": 1.3272,
+        "cpuMs": 2.799999952316284,
+        "rebuilt": false
+      },
+      "reasons": {
+        "stale": 1
+      },
+      "marks": {
+        "dataReceived": 1793725105905.9,
+        "stateReady": 1793725105915.0999,
+        "engineReady": 1793725106315.8,
+        "sceneReady": 1793725106320.0999,
+        "firstFrame": 1793725106356.5
+      },
+      "heapMb": 8.976651,
+      "gc": true,
+      "edits": null,
+      "beforeEdits": null,
+      "phases": {
+        "baseOpened": 197.177978515625,
+        "dataSent": 692.697998046875,
+        "dataReceived": 693.333984375,
+        "stateReady": 702.533935546875,
+        "engineReady": 1103.234130859375,
+        "sceneReady": 1107.533935546875,
+        "firstFrame": 1143.93408203125
+      },
+      "processMb": {
+        "browser": 38.084608,
+        "tab": 61.374464,
+        "gpu": 267.456512
+      }
+    }
+  ]
+}

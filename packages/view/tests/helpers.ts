@@ -15,7 +15,7 @@ export function fixture(): { s: State; ids: FixtureIds } {
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-view-'));
   const store = LocalStore.open(dir, { pc: 'test' });
   const ids = buildFixture(store, dir);
-  return { s: store.state, ids };
+  return { s: store.loadState(), ids };
 }
 
 export const run = (st: State, a: Action): Action => { for (const op of a.ops) applyOp(st, op); return a; };

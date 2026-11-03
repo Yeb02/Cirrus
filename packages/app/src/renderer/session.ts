@@ -1,4 +1,4 @@
-import { type Action, applyOps, CommandError, type Id, type State, UndoConflictError, UndoStack } from '@cirrus/core';
+import { type Action, applyOps, CommandError, decodeState, encodeState, type Id, type Op, type State, UndoConflictError, UndoStack } from '@cirrus/core';
 
 export type Result = { ok: true; action: Action; plans: Id[] } | { ok: false; message: string };
 
@@ -21,25 +21,59 @@ const messageOf = (e: unknown): string => {
   return i >= 0 ? m.slice(i + 'Error: '.length) : m;
 };
 
+/** What cirrus:load sends: a snapshot, the journal's operations after it (JSON), and the journal number they reach. */
+export interface Loaded { data: ArrayBuffer; tail: string; seq: number }
+
+/**
+ * The state the interface opens with (plan 3c, decision 4): `seq`, the journal number it covers; `stale`, whether the
+ * snapshot did not cover all of it (the journal's tail was replayed: one is due); `fallback`, why the snapshot sent
+ * first could not be used, when the state had to be read from the base's tables instead.
+ */
+export interface Opened { state: State; seq: number; stale: boolean; fallback?: string }
+
+/**
+ * Decodes the snapshot and replays the journal after it, each operation checked against the state (applyOps). Anything
+ * wrong in them (a damaged snapshot, one that does not cover what it claims) asks the main process for the state of
+ * its tables instead (`load(true)`), so nothing is lost; that one failing too rejects.
+ */
+export async function openState(load: (fromTables: boolean) => Promise<Loaded>): Promise<Opened> {
+  const open = (l: Loaded): Opened => {
+    const state = decodeState(l.data), ops = JSON.parse(l.tail) as Op[];
+    applyOps(state, ops);
+    return { state, seq: l.seq, stale: ops.length > 0 };
+  };
+  let fallback: string;
+  try {
+    return open(await load(false));
+  } catch (e) {
+    fallback = messageOf(e);
+  }
+  return { ...open(await load(true)), fallback };
+}
+
 /**
  * Every edit of the interface (spec 6.4): computed by a command on the interface's copy of the state (which it leaves as
  * it found it), written by the main process, then applied to that copy in place and recorded for undo. A refused
  * command or a failed write changes nothing. Calls are queued, so two quick actions never interleave. The state object
- * stays the same: `rev` counts the actions applied, and tells React it changed.
+ * stays the same: `rev` counts the actions applied, and tells React it changed. `seq` is the journal number the copy
+ * covers: the one the main process gave the last action applied (plan 3c), which a snapshot of the copy is saved with.
  */
 export class EditSession {
   private readonly s: State;
   private revision = 0;
+  private journalSeq: number;
+  private diverged = false;
   private readonly stack = new UndoStack();
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly commit: (a: Action) => Promise<void>;
+  private readonly commit: (a: Action) => Promise<number>;
   private readonly onChange: (s: State, a: Action, rev: number) => void;
   private guard: () => string | null = () => null;
 
-  constructor(state: State, commit: (a: Action) => Promise<void>, onChange: (s: State, a: Action, rev: number) => void) {
+  constructor(state: State, commit: (a: Action) => Promise<number>, onChange: (s: State, a: Action, rev: number) => void, seq = 0) {
     this.s = state;
     this.commit = commit;
     this.onChange = onChange;
+    this.journalSeq = seq;
   }
 
   get state(): State {
@@ -49,6 +83,19 @@ export class EditSession {
   /** The number of actions applied to the state so far. */
   get rev(): number {
     return this.revision;
+  }
+
+  /** The journal number the state covers. */
+  get seq(): number {
+    return this.journalSeq;
+  }
+
+  /**
+   * Whether a change written to the base could not be applied to the copy (it no longer matches the base): its snapshot
+   * must not be saved; the next start rebuilds the state from the journal, or from the tables.
+   */
+  get broken(): boolean {
+    return this.diverged;
   }
 
   /** `extend`: the action completes that earlier one, which stays a single undo step if nothing came in between. */
@@ -114,24 +161,31 @@ export class EditSession {
     });
   }
 
-  /** A change written elsewhere (another PC, plan 5): applied to the copy, not undoable here. */
-  receive(a: Action): void {
-    this.apply(a);
+  /** A change written elsewhere (another PC, plan 5), already in the journal at `seq`: applied to the copy, not undoable here. */
+  receive(a: Action, seq: number): void {
+    this.apply(a, seq);
   }
 
   private async write(a: Action): Promise<Result> {
+    let seq: number;
     try {
-      await this.commit(a);
+      seq = await this.commit(a);
     } catch (e) {
       return { ok: false, message: messageOf(e) };
     }
-    this.apply(a);
+    this.apply(a, seq);
     return { ok: true, action: a, plans: plansOf(a) };
   }
 
-  /** Applied in place, all or nothing; then one revision more. */
-  private apply(a: Action): void {
-    applyOps(this.s, a.ops);
+  /** Applied in place, all or nothing; then one revision more. Written but refused by the copy: the session is broken. */
+  private apply(a: Action, seq: number): void {
+    try {
+      applyOps(this.s, a.ops);
+    } catch (e) {
+      this.diverged = true;
+      throw e;
+    }
+    this.journalSeq = seq;
     this.revision++;
     this.onChange(this.s, a, this.revision);
   }
@@ -140,5 +194,76 @@ export class EditSession {
     const p = this.queue.then(job, job);
     this.queue = p.catch(() => undefined);
     return p;
+  }
+}
+
+/** When the snapshot is saved (RenderParams). */
+export interface SnapshotTiming { snapshotAfterActions: number; snapshotIdleMs: number }
+
+/**
+ * When the interface sends its state to be kept as the base's snapshot (plan 3c, decision 4): after
+ * `snapshotAfterActions` actions, once nothing has happened for `snapshotIdleMs` (no action, no input: touch), and at
+ * closing (flush); never while nothing changed since the last one, nor from a broken session. A snapshot found stale at
+ * load (the journal's tail was replayed) is redone once the app is at rest. The state is encoded at once, between two
+ * actions: what is sent is exactly the state at `seq`.
+ */
+export class SnapshotSaver {
+  private readonly session: EditSession;
+  private readonly save: (data: ArrayBuffer, seq: number) => Promise<void>;
+  private readonly timing: () => SnapshotTiming;
+  /** Actions applied since the last snapshot sent (one for a stale snapshot). */
+  private unsaved: number;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private sending: Promise<void> = Promise.resolve();
+
+  constructor(session: EditSession, save: (data: ArrayBuffer, seq: number) => Promise<void>, timing: () => SnapshotTiming, stale: boolean) {
+    this.session = session;
+    this.save = save;
+    this.timing = timing;
+    this.unsaved = stale ? 1 : 0;
+    if (stale) this.rearm();
+  }
+
+  /** An action was applied to the session's state. */
+  applied(): void {
+    this.unsaved++;
+    if (this.unsaved >= this.timing().snapshotAfterActions) void this.saveNow();
+    else this.rearm();
+  }
+
+  /** The user did something (pointer, wheel, keys): the wait for rest starts again. */
+  touch(): void {
+    if (this.timer !== null) this.rearm();
+  }
+
+  /** At closing: the snapshot if anything changed; resolves once the main process has it (or refused it). */
+  flush(): Promise<void> {
+    return this.saveNow();
+  }
+
+  private rearm(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = setTimeout(() => { this.timer = null; void this.saveNow(); }, this.timing().snapshotIdleMs);
+  }
+
+  private saveNow(): Promise<void> {
+    if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
+    if (this.unsaved === 0 || this.session.broken) return this.sending;
+    const seq = this.session.seq, count = this.unsaved;
+    // Not kept, whatever failed: the journal still has everything, the next snapshot will cover it.
+    const warn = (e: unknown) => console.warn(`Instantané de la base non enregistré : ${messageOf(e)}`);
+    let data: ArrayBuffer;
+    try {
+      data = encodeState(this.session.state);
+    } catch (e) {
+      warn(e);
+      return this.sending;
+    }
+    this.unsaved = 0;
+    this.sending = this.sending.then(() => this.save(data, seq)).catch((e: unknown) => {
+      this.unsaved += count;
+      warn(e);
+    });
+    return this.sending;
   }
 }

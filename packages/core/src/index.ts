@@ -17,3 +17,4 @@ export * from './invariants.ts';
 export * from './commands.ts';
 export * from './history.ts';
 export * from './snapshot.ts';
+export * from './codec.ts';

@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "@cirrus/core": "*"
+  },
+  "devDependencies": {
+    "@cirrus/fixtures": "*"
   }
 }

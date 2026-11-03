@@ -17,6 +17,6 @@ if (existsSync(join(dir, 'cirrus.db'))) {
 }
 const store = LocalStore.open(dir, { pc: 'fixture' });
 buildFixture(store, dir);
-const s = store.state;
+const s = store.loadState();
 console.log(`Base de test créée dans ${dir} : ${s.nodes.size} nœuds, ${s.connections.size} connexions, ${store.changesSince(0).length} lignes de journal.`);
 store.close();

@@ -2,7 +2,8 @@ import type { ConnectionKind, ConnectionLayout, Id, NodeRec, PhantomRec, Placeme
 
 // The state's storage (plan 3c, decision 1): nodes, plans and connections get integer rows; connections, their members
 // and their branches live in columns and pools; nodes, plans, placements, phantoms, layouts and tag keys stay objects.
-// Only state.ts writes here (applyOp); readers go through the façades or the accessors of state.ts.
+// Only state.ts writes here (applyOp), and codec.ts in bulk (decodeState); readers go through the façades or the
+// accessors of state.ts.
 
 /** Connection kinds and member roles stored as their index in these lists. */
 export const KINDS: readonly ConnectionKind[] = ['knowledge', 'inclusion', 'structure'];
@@ -47,20 +48,41 @@ const presized = <T extends Int32Array | Float64Array | Uint8Array>(a: T, n: num
  * placements) and freed at zero onto a last-in first-out list: undoing a removal gets the same row back.
  */
 export class Rows {
-  readonly row: Map<Id, number>;
-  /** The identifier of each row; '' for a free row. */
-  readonly ids: string[];
+  /** Identifier → row; null until first needed after a bulk restore (restored). */
+  private index: Map<Id, number> | null;
+  /** The identifier of each row; '' for a free row. Replaced whole only by a bulk restore. */
+  ids: string[];
   refs: Int32Array;
   readonly free: number[];
   /** Rows ever allocated: the per-row columns cover [0, end). */
   end: number;
 
   constructor() {
-    this.row = new Map();
+    this.index = new Map();
     this.ids = [];
     this.refs = new Int32Array(16);
     this.free = [];
     this.end = 0;
+  }
+
+  /** Identifier → row of the held rows. */
+  get row(): Map<Id, number> {
+    return (this.index ??= this.indexIds());
+  }
+
+  /**
+   * `ids`, `refs`, `free` and `end` were filled in bulk (decodeState): the identifier map is built at its first use, from
+   * `ids`. Hashing every identifier of a large base is most of a load's decoding, and a reader may never need some tables'.
+   */
+  restored(): void {
+    this.index = null;
+  }
+
+  private indexIds(): Map<Id, number> {
+    const free = new Uint8Array(this.end), ids = this.ids, map = new Map<Id, number>();
+    for (const r of this.free) free[r] = 1;
+    for (let r = 0; r < this.end; r++) if (free[r] === 0) map.set(ids[r], r);
+    return map;
   }
 
   get(id: Id): number {
@@ -331,9 +353,10 @@ export class ConnTable {
   readonly rows: Rows;
   /** Index in KINDS, or NO_RECORD. */
   kind: Uint8Array;
-  readonly title: string[];
-  readonly relation: string[];
-  readonly tags: (readonly TagValue[])[];
+  /** Per row; replaced whole only by a bulk restore, like the columns. */
+  title: string[];
+  relation: string[];
+  tags: (readonly TagValue[])[];
   /** NaN when not in the trash. */
   trashedAt: Float64Array;
   /** Per connection row: its members, node row × 4 + role, in order. */
