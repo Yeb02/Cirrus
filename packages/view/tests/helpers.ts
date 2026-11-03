@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Action, applyOp, type Id, type State } from '@cirrus/core';
+import { type Action, applyOp, fromSnapshot, type Id, type State, toSnapshot } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import type { Camera } from '../src/camera.ts';
@@ -19,6 +19,8 @@ export function fixture(): { s: State; ids: FixtureIds } {
 }
 
 export const run = (st: State, a: Action): Action => { for (const op of a.ops) applyOp(st, op); return a; };
+/** A copy of the state to change without touching the shared one (a state is changed in place since plan 3c, task 3). */
+export const copyOf = (st: State): State => fromSnapshot(toSnapshot(st));
 export const created = (a: Action, t: 'node' | 'plan' | 'connection'): Id =>
   (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 

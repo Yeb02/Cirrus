@@ -1,13 +1,14 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Action, applyOp, cloneState, connect, createNode, createPlan, emptyState, type Id, placeNode, removeFromPlan, type State } from '@cirrus/core';
+import { type Action, applyOp, connect, createNode, createPlan, emptyState, type Id, placeNode, removeFromPlan, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { beforeAll, expect, test } from 'vitest';
 import { offsetPolygon } from '../src/geometry/hull.ts';
 import { DEFAULT_PARAMS } from '../src/params.ts';
 import { buildScene, type Measure, type PlanScene } from '../src/scene.ts';
+import { copyOf } from './helpers.ts';
 
 const P = DEFAULT_PARAMS;
 const measure: Measure = (t) => Math.max(1, Math.ceil(t.length / 23));
@@ -110,7 +111,7 @@ test('document : structure dessinée, connaissance masquée ; inclusion jamais d
 });
 
 test('groupe retiré du plan : ses membres se dessinent dans le plus proche ancêtre placé (spec 7)', () => {
-  const s2 = cloneState(s);
+  const s2 = copyOf(s);
   run(s2, removeFromPlan(s2, ids.plans.lobby, ids.nodes.groupeInduction));
   const sc2 = buildScene(s2, ids.plans.lobby, measure, P);
   expect(sc2.byId.has(ids.nodes.groupeInduction)).toBe(false);

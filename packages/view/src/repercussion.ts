@@ -1,4 +1,4 @@
-import { ancestors, groupOf, type Id, placementKey, type State, type Vec2 } from '@cirrus/core';
+import { ancestors, groupOf, type Id, nodeRow, placedIn, placementKey, planId, type State, type Vec2 } from '@cirrus/core';
 import { convexHull, insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import type { RenderParams } from './params.ts';
 import { buildScene, type Measure, type PlanScene, type SceneItem } from './scene.ts';
@@ -33,8 +33,11 @@ const envelopeOf = (sc: PlanScene, kids: number[], pad: number): Vec2[] => {
 export function repercussion(s: State, plan: Id, node: Id, from: Id | null, to: Id | null, measure: Measure, p: RenderParams): Repercussion {
   const chain = to === null ? [] : [to, ...ancestors(s, plan, to)];
   const out: Repercussion = { changed: [], third: [], loops: [] };
-  for (const q of s.plans.values()) {
-    if (q.id === plan || q.type === 'document' || !s.placements.has(placementKey(q.id, node))) continue;
+  // The plans where the node is placed (placedIn), in row order as the plans' own.
+  const n = nodeRow(s, node);
+  const plans = n < 0 ? [] : [...placedIn(s, n)].sort((a, b) => a - b).flatMap((p) => s.plans.get(planId(s, p)) ?? []);
+  for (const q of plans) {
+    if (q.id === plan || q.type === 'document') continue;
     const current = groupOf(s, q.id, node) ?? null;
     if (current !== null && current !== from) {
       if (current !== to) out.third.push(q.id);

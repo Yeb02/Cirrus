@@ -2,8 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, applyOp, cloneState, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
-  type PhantomRec, type Placement, type PlanRec, type State, subjectOf, type TagKeyDef,
+  type Action, applyOps, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
+  type PhantomRec, type Placement, type PlanRec, type State, subjectOf, type TagKeyDef, transact,
 } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
@@ -99,7 +99,8 @@ function persistOp(db: DatabaseSync, op: Op): void {
 
 /**
  * The PC's local copy (spec 6): current state in tables, every change in an append-only journal, all in one SQLite
- * file. An action is all or nothing: checked on a draft, written in one transaction, then applied in memory.
+ * file. An action is all or nothing: tried on the state in memory and undone, written in one transaction, then applied
+ * in memory.
  */
 export class LocalStore {
   readonly state: State;
@@ -121,9 +122,8 @@ export class LocalStore {
   }
 
   commit(a: Action): ChangeRow[] {
-    // 1. Dry run: every "before" must match; throws before anything is written.
-    const draft = cloneState(this.state);
-    for (const op of a.ops) applyOp(draft, op);
+    // 1. Dry run on the state itself, undone at once (transact): every "before" must match; throws before anything is written.
+    transact(this.state, (d) => { for (const op of a.ops) d.push(op); });
     // 2. One transaction for the tables and the journal.
     const at = Date.now();
     const rows: ChangeRow[] = [];
@@ -142,7 +142,7 @@ export class LocalStore {
       throw e;
     }
     // 3. Only now does the in-memory state move (the dry run proved every operation applies).
-    for (const op of a.ops) applyOp(this.state, op);
+    applyOps(this.state, a.ops);
     return rows;
   }
 

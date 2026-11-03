@@ -1,9 +1,9 @@
-import { cloneState, combine, moveNodes, movePhantom, type State } from '@cirrus/core';
+import { combine, moveNodes, movePhantom, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { scaleMoves } from '../src/edit.ts';
 import { buildScene, withMoves } from '../src/scene.ts';
-import { fixture, measure, P, run } from './helpers.ts';
+import { copyOf, fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds;
 beforeAll(() => { ({ s, ids } = fixture()); });
@@ -25,7 +25,7 @@ test('nœud seul : son cran change, sa position non', () => {
 });
 
 test('groupe : titre +1, membres dilatés autour du centre, crans des membres inchangés ; − puis + rend tout (Review Focus 5)', () => {
-  const st = cloneState(s);
+  const st = copyOf(s);
   const plan = ids.plans.lobby;
   const before = positions(st, plan);
   const phantomBefore = st.phantoms.get(ids.phantoms.node)!;
@@ -85,7 +85,7 @@ test('un fantôme change de cran comme un nœud (I14 de la relecture 3b)', () =>
 });
 
 test('aperçu d’un changement de cran sans reconstruire la scène : comme si l’action était écrite (I15 de la relecture 3b)', () => {
-  const st = cloneState(s);
+  const st = copyOf(s);
   const plan = ids.plans.lobby;
   const sc = buildScene(st, plan, measure, P);
   const m = scaleMoves(sc, [sc.byId.get(ids.nodes.groupeComplexite)!, sc.byId.get(ids.phantoms.center)!], 1, P);

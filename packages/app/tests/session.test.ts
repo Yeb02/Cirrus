@@ -1,4 +1,4 @@
-import { type Action, applyOp, cloneState, createNode, createPlan, editNode, emptyState, type Id } from '@cirrus/core';
+import { type Action, applyOp, canonical, createNode, createPlan, editNode, emptyState, type Id, type State, toSnapshot } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { EditSession, plansOf } from '../src/renderer/session.ts';
 
@@ -27,6 +27,32 @@ test('une action réussie s’applique, s’annule et se rétablit ; les plans t
   expect(session.state.nodes.has(id)).toBe(true);
   expect(written).toHaveLength(3);
   expect(changes).toHaveLength(3);
+});
+
+test('l’action s’applique sur l’état même, et rev augmente à chaque changement', async () => {
+  const { s, plan } = world();
+  const changes: [State, Action, number][] = [];
+  const session = new EditSession(s, async () => {}, (st, a, rev) => { changes.push([st, a, rev]); });
+  expect(session.rev).toBe(0);
+  const r = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  expect(session.state).toBe(s);
+  expect(s.nodes.has(r.ok ? nodeId(r.action) : '')).toBe(true);
+  await session.undo();
+  session.receive(createNode(s, { plan, title: 'B', x: 0, y: 0, k: 0 }));
+  expect(changes.map(([st, a, rev]) => [st === s, a.label, rev])).toEqual([
+    [true, 'Créer « A »', 1], [true, 'Annuler : Créer « A »', 2], [true, 'Créer « B »', 3],
+  ]);
+  expect(session.rev).toBe(3);
+});
+
+test('un commit qui échoue laisse l’état et rev inchangés', async () => {
+  const { s, plan } = world();
+  let calls = 0;
+  const session = new EditSession(s, async () => { throw new Error('principal indisponible'); }, () => { calls++; });
+  const before = canonical(toSnapshot(s));
+  expect(await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }))).toEqual({ ok: false, message: 'principal indisponible' });
+  expect(canonical(toSnapshot(s))).toBe(before);
+  expect([session.rev, calls]).toEqual([0, 0]);
 });
 
 test('une écriture qui échoue laisse l’état intact et la pile en place', async () => {
@@ -84,9 +110,8 @@ test('deux actions lancées sans attendre s’exécutent dans l’ordre', async 
 test('plans touchés : ceux des placements, branches, dispositions et fantômes', () => {
   const { s, plan } = world();
   expect(plansOf(createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }))).toEqual([plan]);
-  const st = cloneState(s);
-  applyOp(st, { t: 'node', before: null, after: { id: 'n', title: 'x', summary: '', tags: [], files: [] } });
-  expect(plansOf(editNode(st, 'n', { title: 'y' }))).toEqual([]);
+  applyOp(s, { t: 'node', before: null, after: { id: 'n', title: 'x', summary: '', tags: [], files: [] } });
+  expect(plansOf(editNode(s, 'n', { title: 'y' }))).toEqual([]);
 });
 
 test('une action complétée plus tard (répercussion plan par plan) se défait d’un seul Ctrl+Z (spec 10)', async () => {

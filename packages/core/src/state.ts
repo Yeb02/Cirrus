@@ -3,8 +3,7 @@ import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRe
 import type { Op } from './ops.ts';
 import type { Snapshot } from './snapshot.ts';
 import {
-  cloneTables, EMPTY_TAGS, emptyTables, growInt32, INCLUSION, kindCode, memberCode, memberNode, NO_RECORD, Pool, roleCode, SOURCE,
-  type Tables, TARGET,
+  EMPTY_TAGS, emptyTables, growInt32, INCLUSION, kindCode, KINDS, memberCode, memberNode, NO_RECORD, Pool, roleCode, ROLES, SOURCE, type Tables, TARGET,
 } from './tables.ts';
 
 /** The direct groups of one plan (spec 10), by node row. */
@@ -27,12 +26,14 @@ export interface Indices {
   groupMembers: (Map<number, number[]> | undefined)[];
   /** Per connection identifier: its phantoms' identifiers. */
   phantomsOf: Map<Id, Id[]>;
+  /** Per group node identifier: the identifiers of the phantoms sitting in it (spec 8.5). */
+  phantomsIn: Map<Id, Id[]>;
 }
 
 /**
  * In-memory state (plan 3c): read-only Map façades over tables of rows, columns and pools, with derived indices; the
- * accessors below read rows directly. Only applyOp writes. Records are never mutated in place: operations replace
- * them, so copies can share them.
+ * accessors below read rows directly. Only applyOp writes, in place: a state is not a frozen snapshot, and a command
+ * that tries operations undoes them (transact). Records are never mutated in place: operations replace them.
  */
 export interface State {
   readonly nodes: ReadonlyMap<Id, NodeRec>;
@@ -61,17 +62,7 @@ export const placementKey = (plan: Id, node: Id): string => `${plan}|${node}`;
 export const layoutKey = (plan: Id, connection: Id): string => `${plan}|${connection}`;
 
 function emptyIndex(): Indices {
-  return { memberOf: new Pool(1), placedIn: new Pool(1), groupOf: [], groupMembers: [], phantomsOf: new Map() };
-}
-
-function cloneIndex(x: Indices): Indices {
-  const lists = (m: Map<number, number[]>) => new Map([...m].map(([k, v]) => [k, v.slice()]));
-  return {
-    memberOf: new Pool(1, x.memberOf), placedIn: new Pool(1, x.placedIn),
-    groupOf: x.groupOf.map((g) => g && { group: g.group.slice(), multi: lists(g.multi) }),
-    groupMembers: x.groupMembers.map((m) => m && lists(m)),
-    phantomsOf: new Map([...x.phantomsOf].map(([k, v]) => [k, v.slice()])),
-  };
+  return { memberOf: new Pool(1), placedIn: new Pool(1), groupOf: [], groupMembers: [], phantomsOf: new Map(), phantomsIn: new Map() };
 }
 
 function stateOf(tables: Tables, index: Indices): StateData {
@@ -85,12 +76,6 @@ function stateOf(tables: Tables, index: Indices): StateData {
 
 export function emptyState(): State {
   return stateOf(emptyTables(), emptyIndex());
-}
-
-/** A deep copy of the tables and indices (records shared): for drafts until commands apply in place (plan 3c, task 3). */
-export function cloneState(s: State): State {
-  const d = dataOf(s);
-  return stateOf(cloneTables(d.tables), cloneIndex(d.index));
 }
 
 // Direct accessors for hot paths: rows instead of identifiers, no record built, nothing to write through. A row comes
@@ -131,6 +116,8 @@ export function directGroup(s: State, plan: number, node: number): number {
   return g !== undefined && node < g.group.length ? g.group[node] : -1;
 }
 export const phantomsOf = (s: State, connection: Id): readonly Id[] => dataOf(s).index.phantomsOf.get(connection) ?? [];
+/** Core only: the phantoms sitting in group `group` (any plan). */
+export const phantomsIn = (s: State, group: Id): readonly Id[] => dataOf(s).index.phantomsIn.get(group) ?? [];
 
 export class OpConflictError extends Error {}
 
@@ -143,7 +130,38 @@ export function canonical(value: unknown): string {
   );
 }
 
+const CONNECTION_KEYS = new Set(['id', 'kind', 'title', 'relation', 'tags', 'members', 'trashedAt']);
+const MEMBER_KEYS = new Set(['node', 'role']);
+/** Whether `rec` has a defined property outside `keys` (canonical would see it). */
+const extra = (rec: object, keys: Set<string>): boolean => {
+  for (const k in rec) if (!keys.has(k) && (rec as Record<string, unknown>)[k] !== undefined) return true;
+  return false;
+};
+
+/**
+ * Whether connection `id` is `rec` (null: it has no record), in the sense of canonical, read from its columns without
+ * building its record or serialising either: a connection's "before" is checked at each operation and each undo.
+ */
+function connectionIs(T: Tables, id: Id, rec: ConnectionRec | null): boolean {
+  const C = T.conns, r = C.rows.get(id), has = r >= 0 && C.kind[r] !== NO_RECORD;
+  if (!rec || !has) return !rec && !has;
+  const at = C.trashedAt[r];
+  if (rec.id !== id || KINDS[C.kind[r]] !== rec.kind || C.title[r] !== rec.title || C.relation[r] !== rec.relation
+    || (Number.isNaN(at) ? rec.trashedAt !== undefined : rec.trashedAt !== at)) return false;
+  const tags = C.tags[r], theirs = rec.tags;
+  if (tags !== theirs && !(tags.length === 0 && Array.isArray(theirs) && theirs.length === 0) && canonical(tags) !== canonical(theirs)) return false;
+  const pool = C.members, start = pool.start[r], n = pool.len[r], ids = T.nodes.rows.ids, members = rec.members;
+  if (!Array.isArray(members) || members.length !== n || extra(rec, CONNECTION_KEYS)) return false;
+  for (let i = 0; i < n; i++) {
+    const m = pool.data[start + i], mine = members[i];
+    if (!mine || ids[m >> 2] !== mine.node || ROLES[m & 3] !== mine.role || extra(mine, MEMBER_KEYS)) return false;
+  }
+  return true;
+}
+
 function check(current: unknown, before: unknown, what: string): void {
+  // The same record (an action computed on this state, then applied for real): equal without serialising it.
+  if ((current ?? null) === (before ?? null)) return;
   if (canonical(current ?? null) !== canonical(before ?? null)) {
     throw new OpConflictError(`${what} a changé depuis : l'opération ne s'applique plus.`);
   }
@@ -154,60 +172,98 @@ function check(current: unknown, before: unknown, what: string): void {
  * record is invalid (every check comes before the first write).
  */
 export function applyOp(s: State, op: Op): void {
+  write(dataOf(s), op, true, false);
+}
+
+/**
+ * Core only: applies an operation whose "before" is the current record by construction, without checking it (a
+ * draft's own operation, read from the state at that moment). An invalid record still throws before any write.
+ */
+export function applyKnown(s: State, op: Op): void {
+  write(dataOf(s), op, false, false);
+}
+
+/** Applies operations in order, all or none: when one is refused, those before it are undone, and its error is thrown. */
+export function applyOps(s: State, ops: readonly Op[]): void {
+  const done: Op[] = [];
+  try {
+    for (const op of ops) {
+      applyOp(s, op);
+      done.push(op);
+    }
+  } catch (e) {
+    rollback(s, done, 0);
+    throw e;
+  }
+}
+
+/**
+ * Core only: undoes the operations of `log` after its first `to`, the last first, and removes them from it: each
+ * inverse puts back the "before" its operation replaced. Exact by construction (each was applied to this state, in
+ * this order, with nothing in between), so it is not checked.
+ */
+export function rollback(s: State, log: Op[], to: number): void {
   const d = dataOf(s);
+  while (log.length > to) write(d, log.pop()!, false, true);
+}
+
+/** Writes `op`, or its inverse when `back` (from "after" to "before", without building it), after checking it if `checked`. */
+function write(d: StateData, op: Op, checked: boolean, back: boolean): void {
   switch (op.t) {
     case 'node': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty node operation');
-      check(s.nodes.get(rec.id) ?? null, op.before, `Le nœud « ${rec.title} »`);
-      return writeNode(d, rec.id, op.after);
+      if (checked) check(d.nodes.get(rec.id) ?? null, before, `Le nœud « ${rec.title} »`);
+      return writeNode(d, rec.id, after);
     }
     case 'connection': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty connection operation');
-      check(s.connections.get(rec.id) ?? null, op.before, 'La connexion');
-      return writeConnection(d, rec.id, op.after, true);
+      if (checked && !connectionIs(d.tables, rec.id, before)) throw new OpConflictError("La connexion a changé depuis : l'opération ne s'applique plus.");
+      return writeConnection(d, rec.id, after, true);
     }
     case 'plan': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty plan operation');
-      check(s.plans.get(rec.id) ?? null, op.before, `Le plan « ${rec.name} »`);
-      return writePlan(d, rec.id, op.after);
+      if (checked) check(d.plans.get(rec.id) ?? null, before, `Le plan « ${rec.name} »`);
+      return writePlan(d, rec.id, after);
     }
     case 'tagKey': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty tagKey operation');
-      check(s.tagKeys.get(rec.key) ?? null, op.before, `Le tag « ${rec.key} »`);
-      if (op.after) d.tables.tagKeys.set(rec.key, op.after);
+      if (checked) check(d.tagKeys.get(rec.key) ?? null, before, `Le tag « ${rec.key} »`);
+      if (after) d.tables.tagKeys.set(rec.key, after);
       else d.tables.tagKeys.delete(rec.key);
       return;
     }
     case 'placement': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty placement operation');
-      check(placementOf(s, rec.plan, rec.node) ?? null, op.before, 'La position du nœud');
-      return writePlacement(d, rec.plan, rec.node, op.after, true);
+      if (checked) check(placementOf(d, rec.plan, rec.node) ?? null, before, 'La position du nœud');
+      return writePlacement(d, rec.plan, rec.node, after, true);
     }
     case 'connLayout': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty connLayout operation');
       const key = layoutKey(rec.plan, rec.connection);
-      check(d.tables.layouts.get(key) ?? null, op.before, 'La forme de la connexion');
-      if (op.after) d.tables.layouts.set(key, op.after);
+      if (checked) check(d.tables.layouts.get(key) ?? null, before, 'La forme de la connexion');
+      if (after) d.tables.layouts.set(key, after);
       else d.tables.layouts.delete(key);
       return;
     }
     case 'phantom': {
-      const rec = op.after ?? op.before;
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty phantom operation');
-      check(d.tables.phantoms.get(rec.id) ?? null, op.before, 'Le fantôme');
-      return writePhantom(d, rec.id, op.after, true);
+      // Unchecked, the "before" is the current record.
+      const current = checked ? d.tables.phantoms.get(rec.id) ?? null : before;
+      if (checked) check(current, before, 'Le fantôme');
+      return writePhantom(d, rec.id, current ?? undefined, after, true);
     }
     case 'branch': {
-      if (s.branches.has(op.key) !== op.before) throw new OpConflictError("La branche a changé depuis : l'opération ne s'applique plus.");
+      const before = back ? Boolean(op.after) : op.before, present = back ? op.before : Boolean(op.after);
+      if (checked && d.branches.has(op.key) !== before) throw new OpConflictError("La branche a changé depuis : l'opération ne s'applique plus.");
       // Added when there, removed when absent: nothing to do, as for a set.
-      const present = Boolean(op.after);
-      if (present === op.before) return;
+      if (present === before) return;
       return writeBranch(d, op.key, present, true);
     }
   }
@@ -245,7 +301,7 @@ export function loadRecords(s: State, x: Snapshot): void {
   for (let i = 0; i < rows.length; i += 3) C.branches.push(rows[i], rows[i + 1], rows[i + 2]);
   C.branchCount = x.branches.length;
   for (const l of x.connLayouts) T.layouts.set(layoutKey(l.plan, l.connection), l);
-  for (const p of x.phantoms) writePhantom(d, p.id, p, false);
+  for (const p of x.phantoms) writePhantom(d, p.id, T.phantoms.get(p.id), p, false);
 }
 
 /** Builds every index from the tables (at load, after loadRecords): O(base), once, each list exactly its size. */
@@ -303,7 +359,11 @@ export function reindex(s: State): void {
   });
   for (let i = 0; i < twice.length; i += 2) regroup(d, twice[i], twice[i + 1]);
   I.phantomsOf = new Map();
-  for (const ph of T.phantoms.values()) listAdd(I.phantomsOf, ph.connection, ph.id);
+  I.phantomsIn = new Map();
+  for (const ph of T.phantoms.values()) {
+    listAdd(I.phantomsOf, ph.connection, ph.id);
+    if (ph.group !== undefined) listAdd(I.phantomsIn, ph.group, ph.id);
+  }
 }
 
 // Rows: each reference to an identifier holds its row (Rows.ref), and gives it back (unref*) when it goes.
@@ -544,11 +604,14 @@ function writePlacement(d: StateData, plan: Id, node: Id, after: Placement | nul
   }
 }
 
-function writePhantom(d: StateData, id: Id, after: PhantomRec | null, indexed: boolean): void {
-  const T = d.tables, before = T.phantoms.get(id);
-  const moved = before?.connection !== after?.connection;
-  if (indexed && before && moved) listDrop(d.index.phantomsOf, before.connection, id);
+/** `before`: the phantom's current record (undefined: none). */
+function writePhantom(d: StateData, id: Id, before: PhantomRec | undefined, after: PhantomRec | null, indexed: boolean): void {
+  const T = d.tables, I = d.index;
+  const moved = before?.connection !== after?.connection, regrouped = before?.group !== after?.group;
+  if (indexed && before && moved) listDrop(I.phantomsOf, before.connection, id);
+  if (indexed && before?.group !== undefined && regrouped) listDrop(I.phantomsIn, before.group, id);
   if (after) T.phantoms.set(id, after);
   else T.phantoms.delete(id);
-  if (indexed && after && moved) listAdd(d.index.phantomsOf, after.connection, id);
+  if (indexed && after && moved) listAdd(I.phantomsOf, after.connection, id);
+  if (indexed && after?.group !== undefined && regrouped) listAdd(I.phantomsIn, after.group, id);
 }

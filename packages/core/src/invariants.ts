@@ -45,7 +45,11 @@ export function touchedBy(ops: Op[]): Set<Id> | undefined {
         touched.add((op.after ?? op.before)!.id);
         break;
       case 'connection':
-        for (const r of [op.before, op.after]) if (r) for (const id of [r.id, ...r.members.map((m) => m.node)]) touched.add(id);
+        for (const r of [op.before, op.after]) {
+          if (!r) continue;
+          touched.add(r.id);
+          for (const m of r.members) touched.add(m.node);
+        }
         break;
       case 'placement':
         touched.add((op.after ?? op.before)!.node);
@@ -60,21 +64,30 @@ export function touchedBy(ops: Op[]): Set<Id> | undefined {
 }
 
 /**
- * Every violated rule. With `touched`, only violations about those objects (and the members of touched inclusion
- * connections), and only those are computed: commands pay for what they touch, not for the size of the base.
+ * Every violated rule. With `touched`, exactly the violations about those objects and the members of touched inclusion
+ * connections, and only those are computed, from the indices: commands pay for what they touch, not for the size of
+ * the base.
  */
 export function checkState(s: State, touched?: Set<Id>): Violation[] {
   const out: Violation[] = [];
-  const { tables: T, index: I } = dataOf(s), C = T.conns, nodeIds = T.nodes.rows.ids;
+  const { tables: T, index: I } = dataOf(s), C = T.conns, N = T.nodes, nodeIds = N.rows.ids;
   const scope = touched && new Set(touched);
   if (scope) for (const id of touched!) {
     const c = C.rows.get(id);
     if (c >= 0 && C.kind[c] === INCLUSION) for (const m of C.members.view(c)) scope.add(nodeIds[memberNode(m)]);
   }
-  // Connection rows with a record: those in scope, or all.
-  const conns: number[] = [];
-  if (scope) for (const id of scope) { const c = C.rows.get(id); if (c >= 0 && C.kind[c] !== NO_RECORD) conns.push(c); }
-  else for (let c = 0; c < C.rows.end; c++) if (C.kind[c] !== NO_RECORD) conns.push(c);
+  // Rows in scope, or all: connections with a record, nodes with a row (a record or only references).
+  const conns: number[] = [], nodeRows: number[] = [];
+  if (scope) {
+    for (const id of scope) {
+      const c = C.rows.get(id), n = N.rows.get(id);
+      if (c >= 0 && C.kind[c] !== NO_RECORD) conns.push(c);
+      if (n >= 0) nodeRows.push(n);
+    }
+  } else {
+    for (let c = 0; c < C.rows.end; c++) if (C.kind[c] !== NO_RECORD) conns.push(c);
+    for (let n = 0; n < N.rows.end; n++) if (nodeIds[n] !== '') nodeRows.push(n);
+  }
   const checkTags = (subject: Id, tags: readonly TagValue[]) => {
     for (const t of tags) {
       try { normalizeTag(t, s.tagKeys); } catch (e) {
@@ -96,18 +109,14 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
     checkTags(id, C.tags[c]);
   }
 
-  const nodes = scope ? [...scope].flatMap((id) => { const n = T.nodes.rows.get(id); return n >= 0 && T.nodes.recs[n] ? [n] : []; }) : [];
-  if (!scope) for (let n = 0; n < T.nodes.recs.length; n++) if (T.nodes.recs[n]) nodes.push(n);
-  for (const n of nodes) {
-    const rec = T.nodes.recs[n]!;
+  for (const n of nodeRows) {
+    const rec = N.recs[n];
+    if (!rec) continue;
     checkTags(rec.id, rec.tags);
     if (rec.trashedAt !== undefined && I.placedIn.view(n).some((p) => T.plans.recs[p] !== undefined)) {
       out.push({ code: 'trashedPlaced', subject: rec.id, message: 'Un nœud à la corbeille ne peut pas être placé dans un plan.' });
     }
   }
-
-  // Branches and groups depend on connections and branches only: an action touching no connection skips the rest.
-  if (scope && ![...scope].some((id) => s.connections.has(id))) return dedupe(out);
 
   for (const c of conns) {
     const id = C.rows.ids[c], b = C.branches.view(c), members = C.members.view(c);
@@ -121,23 +130,24 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
     }
   }
 
-  // Per plan: one direct group, no cycle (spec 10). Without scope, every node with a group, in every plan with groups;
-  // with one, the nodes in scope, in every plan.
-  const groupNodes = scope ? nodes : undefined;
-  I.groupOf.forEach((pg, p) => {
-    if (!pg || (scope && T.plans.recs[p] === undefined)) return;
-    const groupsIn = (n: number): readonly number[] => pg.multi.get(n) ?? (n < pg.group.length && pg.group[n] >= 0 ? [pg.group[n]] : []);
-    const list = groupNodes ?? Array.from(pg.group.keys()).filter((n) => pg.group[n] >= 0);
-    for (const n of list) {
-      const groups = groupsIn(n);
-      if (groups.length > 1) out.push({ code: 'twoGroups', subject: nodeIds[n], message: 'Ce nœud est déjà dans un groupe de ce plan.' });
-      const seen = new Set<number>([n]);
-      for (let g: number | undefined = groups[0]; g !== undefined; g = groupsIn(g)[0]) {
-        if (seen.has(g)) {
+  // Per plan: one direct group, no cycle (spec 10), for each node with a group there, in every plan with groups (with a
+  // record or only references). A node's first group is `group` (multi lists it first): its chain follows that one.
+  const chain: number[] = [];
+  I.groupOf.forEach((pg) => {
+    if (!pg) return;
+    const groups = pg.group, first = (n: number) => (n < groups.length ? groups[n] : -1);
+    for (const n of scope ? nodeRows : groups.keys()) {
+      const g0 = first(n);
+      if (g0 < 0) continue;
+      if (pg.multi.has(n)) out.push({ code: 'twoGroups', subject: nodeIds[n], message: 'Ce nœud est déjà dans un groupe de ce plan.' });
+      chain.length = 0;
+      chain.push(n);
+      for (let g = g0; g >= 0; g = first(g)) {
+        if (chain.includes(g)) {
           out.push({ code: 'cycle', subject: nodeIds[n], message: 'Un groupe ne peut pas être inclus dans lui-même ni dans un de ses descendants.' });
           break;
         }
-        seen.add(g);
+        chain.push(g);
       }
     }
   });

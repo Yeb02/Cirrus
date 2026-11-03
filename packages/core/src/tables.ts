@@ -55,12 +55,12 @@ export class Rows {
   /** Rows ever allocated: the per-row columns cover [0, end). */
   end: number;
 
-  constructor(from?: Rows) {
-    this.row = from ? new Map(from.row) : new Map();
-    this.ids = from ? from.ids.slice() : [];
-    this.refs = from ? from.refs.slice() : new Int32Array(16);
-    this.free = from ? from.free.slice() : [];
-    this.end = from ? from.end : 0;
+  constructor() {
+    this.row = new Map();
+    this.ids = [];
+    this.refs = new Int32Array(16);
+    this.free = [];
+    this.end = 0;
   }
 
   get(id: Id): number {
@@ -125,14 +125,14 @@ export class Pool {
   len: Int32Array;
   cap: Int32Array;
 
-  constructor(stride: number, from?: Pool) {
+  constructor(stride: number) {
     this.stride = stride;
-    this.data = from ? from.data.slice() : new Int32Array(16);
-    this.top = from ? from.top : 0;
-    this.waste = from ? from.waste : 0;
-    this.start = from ? from.start.slice() : new Int32Array(16);
-    this.len = from ? from.len.slice() : new Int32Array(16);
-    this.cap = from ? from.cap.slice() : new Int32Array(16);
+    this.data = new Int32Array(16);
+    this.top = 0;
+    this.waste = 0;
+    this.start = new Int32Array(16);
+    this.len = new Int32Array(16);
+    this.cap = new Int32Array(16);
   }
 
   /** An empty pool where owner o has room for exactly counts[o] entries, packed (loading: push fills it without moving). */
@@ -276,10 +276,10 @@ export class NodeTable {
   readonly recs: (NodeRec | undefined)[];
   count: number;
 
-  constructor(from?: NodeTable) {
-    this.rows = new Rows(from?.rows);
-    this.recs = from ? from.recs.slice() : [];
-    this.count = from ? from.count : 0;
+  constructor() {
+    this.rows = new Rows();
+    this.recs = [];
+    this.count = 0;
   }
 
   ref(id: Id): number {
@@ -304,12 +304,12 @@ export class PlanTable {
   count: number;
   placementCount: number;
 
-  constructor(from?: PlanTable) {
-    this.rows = new Rows(from?.rows);
-    this.recs = from ? from.recs.slice() : [];
-    this.placements = from ? from.placements.map((m) => m && new Map(m)) : [];
-    this.count = from ? from.count : 0;
-    this.placementCount = from ? from.placementCount : 0;
+  constructor() {
+    this.rows = new Rows();
+    this.recs = [];
+    this.placements = [];
+    this.count = 0;
+    this.placementCount = 0;
   }
 
   ref(id: Id): number {
@@ -343,17 +343,17 @@ export class ConnTable {
   count: number;
   branchCount: number;
 
-  constructor(from?: ConnTable) {
-    this.rows = new Rows(from?.rows);
-    this.kind = from ? from.kind.slice() : new Uint8Array(16).fill(NO_RECORD);
-    this.title = from ? from.title.slice() : [];
-    this.relation = from ? from.relation.slice() : [];
-    this.tags = from ? from.tags.slice() : [];
-    this.trashedAt = from ? from.trashedAt.slice() : new Float64Array(16).fill(NaN);
-    this.members = new Pool(1, from?.members);
-    this.branches = new Pool(2, from?.branches);
-    this.count = from ? from.count : 0;
-    this.branchCount = from ? from.branchCount : 0;
+  constructor() {
+    this.rows = new Rows();
+    this.kind = new Uint8Array(16).fill(NO_RECORD);
+    this.title = [];
+    this.relation = [];
+    this.tags = [];
+    this.trashedAt = new Float64Array(16).fill(NaN);
+    this.members = new Pool(1);
+    this.branches = new Pool(2);
+    this.count = 0;
+    this.branchCount = 0;
   }
 
   /** Room for `n` connections and `members` members, exactly. */
@@ -402,12 +402,4 @@ export interface Tables {
 
 export function emptyTables(): Tables {
   return { nodes: new NodeTable(), plans: new PlanTable(), conns: new ConnTable(), phantoms: new Map(), layouts: new Map(), tagKeys: new Map() };
-}
-
-/** A deep copy of every column, pool and collection; the records themselves are shared (they are immutable). */
-export function cloneTables(t: Tables): Tables {
-  return {
-    nodes: new NodeTable(t.nodes), plans: new PlanTable(t.plans), conns: new ConnTable(t.conns),
-    phantoms: new Map(t.phantoms), layouts: new Map(t.layouts), tagKeys: new Map(t.tagKeys),
-  };
 }

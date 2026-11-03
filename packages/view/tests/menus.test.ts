@@ -1,11 +1,11 @@
-import { cloneState, setLayout, type State } from '@cirrus/core';
+import { setLayout, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
 import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { camAtTextPx, fixture, measure, P, run } from './helpers.ts';
+import { camAtTextPx, copyOf, fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene, these: PlanScene;
 beforeAll(() => {
@@ -52,7 +52,7 @@ test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
 });
 
 test('une connexion disposée à la main peut retrouver sa disposition automatique (spec 8.5)', () => {
-  const st = cloneState(s);
+  const st = copyOf(s);
   const conn = ids.connections.twoToTwo;
   run(st, setLayout(st, ids.plans.lobby, conn, { angle: 1, handles: {} }));
   const scene = buildScene(st, ids.plans.lobby, measure, P);

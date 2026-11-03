@@ -4,7 +4,7 @@ import type { ConnectionKind, ConnectionRec, Id, Member, PlanType, Role, TagKeyD
 import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot } from '../src/snapshot.ts';
 import {
-  applyOp, canonical, cloneState, connRow, dataOf, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsOf, placedIn,
+  applyOp, canonical, connRow, dataOf, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf, placedIn,
   placementOf, planRow, reindex, type State,
 } from '../src/state.ts';
 import * as oracleRules from './oracle/invariants.ts';
@@ -252,6 +252,7 @@ function indicesMatchOracle(s: State, o: oracle.State): void {
   for (const c of CONNS) {
     expect([...phantomsOf(s, c)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.connection === c).map((p) => p.id).sort());
   }
+  for (const g of NODES) expect([...phantomsIn(s, g)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.group === g).map((p) => p.id).sort());
   for (const plan of PLANS) {
     const members = new Map<Id, Id[]>();
     for (const n of NODES) {
@@ -290,6 +291,7 @@ function indexDump(s: State) {
   });
   I.groupMembers.forEach((gm, p) => { for (const [g, ms] of gm ?? []) out.push(`groupMembers ${pid(p)} ${nid(g)} ${ms.map(nid).sort()}`); });
   for (const [c, ids] of I.phantomsOf) out.push(`phantomsOf ${c} ${[...ids].sort()}`);
+  for (const [g, ids] of I.phantomsIn) out.push(`phantomsIn ${g} ${[...ids].sort()}`);
   return out.sort();
 }
 
@@ -303,10 +305,13 @@ function rebuilt(o: oracle.State): State {
 const ruleStats = { compared: 0, ambiguous: 0 };
 
 /**
- * The rule checks against the old implementation (oracle/invariants.ts), on the whole state and on scopes. A cycle is
- * found by following each node's first group; with several groups (rule twoGroups, reported by both) the old model's
- * first depended on the order of its branch set, the columns take the inclusion of smallest identifier: a cycle
- * violation whose chain meets such a node is left out of the comparison, nothing else is.
+ * The rule checks against the old implementation (oracle/invariants.ts): on the whole state, its whole check; on a
+ * scope, the violations of its whole check about the scope, which is exactly what a scoped check gives since plan 3c,
+ * task 3 (the old scoped check also skipped the rules of groups and branches when no connection was in scope, and
+ * nodes and plans without a record). A cycle is found by following each node's first group; with several groups (rule
+ * twoGroups, reported by both) the old model's first depended on the order of its branch set, the columns take the
+ * inclusion of smallest identifier: a cycle violation whose chain meets such a node is left out of the comparison,
+ * nothing else is.
  */
 function rulesMatchOracle(s: State, o: oracle.State, scopes: (Set<Id> | undefined)[]): void {
   const ambiguous = (subject: Id) => PLANS.some((plan) => {
@@ -321,8 +326,16 @@ function rulesMatchOracle(s: State, o: oracle.State, scopes: (Set<Id> | undefine
   const keys = (vs: readonly { code: string; subject: Id; message: string }[]) => vs
     .filter((v) => { const skip = v.code === 'cycle' && ambiguous(v.subject); if (skip) ruleStats.ambiguous++; return !skip; })
     .map((v) => `${v.code}|${v.subject}|${v.message}`).sort();
+  const whole = oracleRules.checkState(o);
+  /** The scope as checkState reads it: the touched objects, and the members of touched inclusions. */
+  const read = (scope: Set<Id>) => {
+    const out = new Set(scope);
+    for (const id of scope) { const c = o.connections.get(id); if (c?.kind === 'inclusion') for (const m of c.members) out.add(m.node); }
+    return out;
+  };
   for (const scope of scopes) {
-    expect(keys(checkState(s, scope))).toEqual(keys(oracleRules.checkState(o, scope)));
+    const about = scope && read(scope);
+    expect(keys(checkState(s, scope))).toEqual(keys(about ? whole.filter((v) => about.has(v.subject)) : whole));
     ruleStats.compared++;
   }
 }
@@ -372,9 +385,9 @@ test('index : tenus par applyOp, égaux à leur définition et à ceux de reinde
       bookkeeping(s, o);
       const dump = indexDump(s);
       expect(indexDump(rebuilt(o))).toEqual(dump);
-      const again = cloneState(s);
-      reindex(again);
-      expect(indexDump(again)).toEqual(dump);
+      // Built again over the same tables, rows included; the operations that follow go on from these indices.
+      reindex(s);
+      expect(indexDump(s)).toEqual(dump);
     }
   }
 });
@@ -421,9 +434,9 @@ test('plusieurs groupes : le retenu est celui de l’inclusion au plus petit ide
     expect(multi && ids(multi)).toEqual(groups.length > 1 ? groups : undefined);
     for (const g of ['g1', 'g2']) expect(ids(groupMembers(s, planRow(s, 'p'), nodeRow(s, g)))).toEqual(g === groups[0] ? ['m'] : []);
     expect(checkState(s).some((v) => v.code === 'twoGroups' && v.subject === 'm')).toBe(groups.length > 1);
-    const again = cloneState(s);
-    reindex(again);
-    expect(indexDump(again)).toEqual(indexDump(s));
+    const dump = indexDump(s);
+    reindex(s);
+    expect(indexDump(s)).toEqual(dump);
   };
   expectGroups(['g2', 'g1']);
   // Each inclusion goes (its record, then one of its branches), and comes back by the inverse operation.
@@ -467,6 +480,34 @@ test('une opération sans effet ou invalide laisse l’état tel quel : branche 
   expect(() => applyOp(s, { t: 'connection', before: s.connections.get('X')!, after: { ...conn('X', ['a', 'c']), kind: 'bogus' as ConnectionKind } })).toThrow(/unknown/);
   expect(books()).toBe(before);
   expect(s.connections.has('K')).toBe(false);
+});
+
+test('le « avant » d’une connexion se compare à ses colonnes comme canonical le compare au record', () => {
+  const s = emptyState();
+  for (const id of ['a', 'b']) applyOp(s, nodeOp(id));
+  const c: ConnectionRec = { ...conn('X', ['a', 'b']), tags: [{ key: 'k', value: 1 }], trashedAt: 7 };
+  applyOp(s, { t: 'connection', before: null, after: c });
+  /** Whether an operation with this "before" applies (it is then undone). */
+  const accepts = (before: unknown) => {
+    try {
+      applyOp(s, { t: 'connection', before: before as ConnectionRec, after: { ...c, title: 'T' } });
+    } catch (e) {
+      expect(e).toBeInstanceOf(OpConflictError);
+      return false;
+    }
+    applyOp(s, { t: 'connection', before: { ...c, title: 'T' }, after: c });
+    return true;
+  };
+  const m = c.members;
+  const variants: unknown[] = [
+    c, { ...c }, { ...c, extra: undefined }, { trashedAt: 7, members: m, tags: c.tags, relation: '', title: '', kind: 'knowledge', id: 'X' },
+    { ...c, tags: [{ value: 1, key: 'k' }] }, { ...c, members: m.map((x) => ({ role: x.role, node: x.node })) },
+    { ...c, color: 'rouge' }, { ...c, members: [{ ...m[0], x: 1 }, m[1]] }, { ...c, members: [m[1], m[0]] }, { ...c, members: [m[0]] },
+    { ...c, members: [m[0], { ...m[1], role: 'associate' }] }, { ...c, title: undefined }, { ...c, tags: [] }, { ...c, tags: [{ key: 'k', value: '1' }] },
+    { ...c, trashedAt: undefined }, { ...c, trashedAt: 8 }, { ...c, id: 'Y' }, { ...c, kind: 'inclusion' }, null,
+  ];
+  for (const v of variants) expect(accepts(v), canonical(v)).toBe(canonical(v) === canonical(s.connections.get('X')));
+  expect(variants.filter(accepts)).toHaveLength(6);
 });
 
 test('pools : une connexion qui grandit est relogée en fin de pool, et grandit sur place quand elle y est déjà', () => {

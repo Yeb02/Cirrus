@@ -9,7 +9,7 @@ export {
 } from './tables.ts';
 export { BranchSet } from './facades.ts';
 export {
-  applyOp, canonical, cloneState, connectionOfRow, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup, emptyState,
+  applyOp, applyOps, canonical, connectionOfRow, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup, emptyState,
   groupMembers, layoutKey, memberAt, memberCount, memberOf, membersOf, nodeId, nodeRow, OpConflictError, phantomsOf, placedIn, placementKey, placementOf, planId,
   planRow, reindex, type State,
 } from './state.ts';

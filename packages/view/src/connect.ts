@@ -30,11 +30,8 @@ export function connectTarget(s: State, scene: PlanScene, from: number, hit: Hit
  * is placed — and, for an existing connection, where it is already shown (a plan without it does not change).
  */
 export function otherPlans(s: State, plan: Id, nodes: Id[], connection?: Id): Id[] {
-  const shownIn = new Set<Id>();
-  if (connection !== undefined) {
-    const members = s.connections.get(connection)?.members ?? [];
-    for (const p of s.plans.keys()) if (members.some((m) => s.branches.has({ plan: p, connection, node: m.node }))) shownIn.add(p);
-  }
+  // Where the connection has branches, from its own (BranchSet.plansOf).
+  const shownIn = new Set(connection === undefined ? [] : s.branches.plansOf(connection));
   return [...s.plans.values()]
     .filter((p) => p.id !== plan && p.type !== 'document' && nodes.every((n) => s.placements.has(placementKey(p.id, n))))
     .filter((p) => connection === undefined || shownIn.has(p.id))

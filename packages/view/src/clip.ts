@@ -1,5 +1,6 @@
 import {
-  type Action, ancestors, connectionOfRow, type Id, include, memberOf, nodeRow, placeNode, placementKey, setBranches, type State, type Vec2,
+  type Action, ancestors, connectionOfRow, type Id, include, memberOf, nodeRow, phantomsOf, placedIn, placeNode, placementKey, setBranches, type State,
+  type Vec2,
 } from '@cirrus/core';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
@@ -42,14 +43,6 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
   });
   const groups: Clip['groups'] = {};
   for (const n of nodes) for (const g of n.parents) { const i = scene.byId.get(g); if (i !== undefined) groups[g] = { x: scene.items[i].x, y: scene.items[i].y }; }
-  // A split arm's member has no branch here but phantoms: it is shown all the same (I5 of the plan 3b review).
-  const split = new Map<Id, Set<Id>>();
-  for (const ph of s.phantoms.values()) {
-    if (ph.plan !== plan || ph.of.kind === 'absent') continue;
-    const set = split.get(ph.connection);
-    if (set) set.add(ph.of.node);
-    else split.set(ph.connection, new Set([ph.of.node]));
-  }
   // Only the connections of copied nodes (memberOf), in row order.
   const rows = new Set<number>();
   for (const id of ids) { const n = nodeRow(s, id); if (n >= 0) for (const c of memberOf(s, n)) rows.add(c); }
@@ -57,7 +50,10 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
   for (const r of [...rows].sort((a, b) => a - b)) {
     const c = connectionOfRow(s, r);
     if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
-    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has({ plan, connection: c.id, node: n }) || split.get(c.id)?.has(n));
+    // A split arm's member has no branch here but phantoms: it is shown all the same (I5 of the plan 3b review).
+    const split = new Set<Id>();
+    for (const id of phantomsOf(s, c.id)) { const ph = s.phantoms.get(id)!; if (ph.plan === plan && ph.of.kind !== 'absent') split.add(ph.of.node); }
+    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has({ plan, connection: c.id, node: n }) || split.has(n));
     if (shown.filter((n) => ids.has(n)).length >= 2) connections.push({ id: c.id, nodes: shown });
   }
   return { plan, zoom, center, nodes, groups, connections };
@@ -109,9 +105,8 @@ export function pasteSteps(
   return { steps, present, placed: fresh.map((n) => n.id) };
 }
 
-/** Before a deletion (spec 7): how many placements the nodes have in all, and those whose plan is the last one. */
+/** Before a deletion (spec 7): how many placements the nodes have in all (placedIn), and those whose plan is the last one. */
 export function deleteSummary(s: State, ids: Id[]): { instances: number; last: Id[] } {
-  const count = new Map<Id, number>(ids.map((id) => [id, 0]));
-  for (const pl of s.placements.values()) if (count.has(pl.node)) count.set(pl.node, count.get(pl.node)! + 1);
+  const count = new Map<Id, number>(ids.map((id) => { const n = nodeRow(s, id); return [id, n < 0 ? 0 : placedIn(s, n).length]; }));
   return { instances: [...count.values()].reduce((a, b) => a + b, 0), last: ids.filter((id) => count.get(id)! <= 1) };
 }

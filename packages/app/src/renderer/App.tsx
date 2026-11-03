@@ -1,4 +1,4 @@
-import { fromSnapshot, type Id, type Snapshot, type State } from '@cirrus/core';
+import { type Action, fromSnapshot, type Id, type Snapshot, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { mark } from './bench.ts';
@@ -23,8 +23,15 @@ function saveTabs(tabs: Id[]): void {
   try { localStorage.setItem(TABS_KEY, JSON.stringify(tabs)); } catch { /* not kept */ }
 }
 
+/**
+ * The state shown, with its revision and the last action applied to it: the state object stays the same, edits change
+ * it in place (plan 3c), so React sees a change by `rev`.
+ */
+interface Shown { state: State; rev: number; action: Action | null }
+
 export function App() {
-  const [state, setState] = useState<State | null>(null);
+  const [shown, setShown] = useState<Shown | null>(null);
+  const state = shown?.state ?? null;
   const [params, setParams] = useState<RenderParams>(DEFAULT_PARAMS);
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
@@ -85,12 +92,12 @@ export function App() {
         }
         const p = withOverrides(settings);
         loadedParams.current = p;
-        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (next) => setState(next));
+        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (st, action, rev) => setShown({ state: st, rev, action }));
         mark('stateReady');
         setParams(p);
         setTabs(open);
         setActive(current);
-        setState(s);
+        setShown({ state: s, rev: 0, action: null });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -130,7 +137,7 @@ export function App() {
   useEffect(() => { if (error) firstFrame(); }, [error]);
 
   if (error) return <div className="app"><div className="placeholder">Impossible d’ouvrir la base : {error}</div></div>;
-  if (!state || !active) return <div className="app"><div className="placeholder">Ouverture de la base…</div></div>;
+  if (!shown || !state || !active) return <div className="app"><div className="placeholder">Ouverture de la base…</div></div>;
   return (
     <div className="app">
       <Tabs
@@ -148,7 +155,8 @@ export function App() {
       />
       <div className="main">
         <GraphView
-          state={state} plan={active} params={params} onFirstFrame={firstFrame} session={session.current} onResult={(r) => report(r)}
+          state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
+          onResult={(r) => report(r)}
           // The lobby has its own tab, always there: only another plan is added to the open ones.
           onOpenPlan={(id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); }}
         />

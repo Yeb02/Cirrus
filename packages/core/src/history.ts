@@ -1,7 +1,7 @@
-import type { Action } from './commands.ts';
+import { type Action, transact } from './commands.ts';
 import { uuidv7 } from './ids.ts';
 import { invertOp } from './ops.ts';
-import { applyOp, cloneState, OpConflictError, type State } from './state.ts';
+import { OpConflictError, type State } from './state.ts';
 
 /** Inverse operations in reverse order. Undoing appends this action to the journal; nothing is erased (spec 6.4). */
 export function invertAction(a: Action): Action {
@@ -10,10 +10,10 @@ export function invertAction(a: Action): Action {
 
 export class UndoConflictError extends Error {}
 
+/** Applies the action to the state itself, then undoes it (transact); `message` if one of its operations no longer applies. */
 function dryRun(s: State, a: Action, message: string): void {
-  const draft = cloneState(s);
   try {
-    for (const op of a.ops) applyOp(draft, op);
+    transact(s, (d) => { for (const op of a.ops) d.push(op); });
   } catch (e) {
     if (e instanceof OpConflictError) throw new UndoConflictError(message);
     throw e;

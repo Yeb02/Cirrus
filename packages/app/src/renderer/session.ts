@@ -1,4 +1,4 @@
-import { type Action, applyOp, cloneState, CommandError, type Id, type State, UndoConflictError, UndoStack } from '@cirrus/core';
+import { type Action, applyOps, CommandError, type Id, type State, UndoConflictError, UndoStack } from '@cirrus/core';
 
 export type Result = { ok: true; action: Action; plans: Id[] } | { ok: false; message: string };
 
@@ -22,19 +22,21 @@ const messageOf = (e: unknown): string => {
 };
 
 /**
- * Every edit of the interface (spec 6.4): computed by a pure command on the interface's copy of the state, written by
- * the main process, then applied to the copy and recorded for undo. A refused command or a failed write changes
- * nothing. Calls are queued, so two quick actions never interleave.
+ * Every edit of the interface (spec 6.4): computed by a command on the interface's copy of the state (which it leaves as
+ * it found it), written by the main process, then applied to that copy in place and recorded for undo. A refused
+ * command or a failed write changes nothing. Calls are queued, so two quick actions never interleave. The state object
+ * stays the same: `rev` counts the actions applied, and tells React it changed.
  */
 export class EditSession {
-  private s: State;
+  private readonly s: State;
+  private revision = 0;
   private readonly stack = new UndoStack();
   private queue: Promise<unknown> = Promise.resolve();
   private readonly commit: (a: Action) => Promise<void>;
-  private readonly onChange: (s: State, a: Action) => void;
+  private readonly onChange: (s: State, a: Action, rev: number) => void;
   private guard: () => string | null = () => null;
 
-  constructor(state: State, commit: (a: Action) => Promise<void>, onChange: (s: State, a: Action) => void) {
+  constructor(state: State, commit: (a: Action) => Promise<void>, onChange: (s: State, a: Action, rev: number) => void) {
     this.s = state;
     this.commit = commit;
     this.onChange = onChange;
@@ -42,6 +44,11 @@ export class EditSession {
 
   get state(): State {
     return this.s;
+  }
+
+  /** The number of actions applied to the state so far. */
+  get rev(): number {
+    return this.revision;
   }
 
   /** `extend`: the action completes that earlier one, which stays a single undo step if nothing came in between. */
@@ -122,12 +129,11 @@ export class EditSession {
     return { ok: true, action: a, plans: plansOf(a) };
   }
 
-  /** Applied to a copy (until edits apply in place, plan 3c task 3): a new state object tells React it changed. */
+  /** Applied in place, all or nothing; then one revision more. */
   private apply(a: Action): void {
-    const next = cloneState(this.s);
-    for (const op of a.ops) applyOp(next, op);
-    this.s = next;
-    this.onChange(next, a);
+    applyOps(this.s, a.ops);
+    this.revision++;
+    this.onChange(this.s, a, this.revision);
   }
 
   private enqueue(job: () => Promise<Result>): Promise<Result> {

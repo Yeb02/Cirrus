@@ -1,4 +1,4 @@
-import { type Id, type State, type Vec2 } from '@cirrus/core';
+import { type Action, type Id, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
@@ -68,7 +68,12 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
  * phantoms, and shows the groups under the cursor.
  */
 export function GraphView(props: {
-  state: State; plan: Id; params: RenderParams; onFirstFrame(): void;
+  /**
+   * The state, changed in place by the edits: `rev` counts them, and what depends on the state follows `rev`, not the
+   * state's identity (plan 3c). `action`: the last one applied, null at load.
+   */
+  state: State; rev: number; action: Action | null;
+  plan: Id; params: RenderParams; onFirstFrame(): void;
   /** Edits go through the session (written, undoable); their outcome is reported (toasts). */
   session: EditSession | null; onResult(r: Result): void;
   /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
@@ -648,14 +653,14 @@ export function GraphView(props: {
     };
   }, []);
 
-  // The scene depends on the state, the plan and the few parameters it reads (box sizes): a colour or a threshold
-  // changed in the settings panel does not rebuild it. The measure needs the font loaded.
+  // The scene depends on the state (its revision), the plan and the few parameters it reads (box sizes): a colour or a
+  // threshold changed in the settings panel does not rebuild it. The measure needs the font loaded.
   const sceneKey = sceneParamsKey(props.params);
   useEffect(() => {
     if (!ready) return;
     setScene(buildScene(props.state, props.plan, measureTitle(paramsRef.current), paramsRef.current));
     mark('sceneReady');
-  }, [ready, props.state, props.plan, sceneKey]);
+  }, [ready, props.state, props.rev, props.plan, sceneKey]);
 
   useEffect(() => {
     const e = engine.current;
