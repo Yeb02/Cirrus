@@ -3,6 +3,11 @@ import { offsetPolygon } from './geometry/hull.ts';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
 
+/** Whether drawing waits: a hidden window never draws; one without the focus neither, unless set otherwise (battery). */
+export function renderPaused(w: { hidden: boolean; focused: boolean }, p: RenderParams): boolean {
+  return w.hidden || (p.backgroundPause === 'unfocused' && !w.focused);
+}
+
 export type NavInput =
   | { t: 'wheel'; sx: number; sy: number; deltaY: number; ctrl: boolean }
   | { t: 'key'; key: string }

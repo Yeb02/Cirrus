@@ -650,6 +650,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
      - **Portable principal :** viser autant que possible la fréquence de son écran, 165 Hz.
      - Si les marges ne sont pas tenues, on ajoute le mode performance (section 19) plutôt que de changer de moteur.
      - Le rendu ne doit traiter que ce qui est visible et déplié : il faut un index spatial par plan et une gestion des niveaux de détail, plutôt que de tout envoyer à la carte graphique.
+     - **Arrière-plan :** fenêtre cachée ou sans le focus, le rendu est en pause (réglage avancé « Mise en pause du rendu »). Le reste du temps, une image n'est dessinée que si quelque chose a changé.
    - **compilation :** TinyTeX, processus préparé à l'avance et objectif de 300 ms, mesurés sur le portable principal.
 2. **Base de test artificielle :** juste ce qu'il faut pour exercer chaque fonctionnalité, avec des tests automatiques par fonctionnalité.
 3. **Serveur en local :** tout fonctionne en local, y compris la synchro entre deux instances de l'app, avant de louer le serveur.

@@ -97,6 +97,8 @@ export interface RenderParams {
   toastMs: number;
   /** The answer a « partout ou ici seulement » dialog proposes first (spec 19). */
   defaultAnswer: 'here' | 'everywhere';
+  /** When drawing stops: window hidden only, or also without the focus (battery). */
+  backgroundPause: 'unfocused' | 'hidden';
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -205,6 +207,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   settingsSaveDelayMs: 300,
   toastMs: 4000,
   defaultAnswer: 'here',
+  backgroundPause: 'unfocused',
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -334,6 +337,10 @@ export const PARAM_SPECS: ParamSpec[] = [
   {
     key: 'defaultAnswer', label: 'Réponse proposée par les dialogues « partout ou ici seulement »', section: A, group: 'Dialogues', kind: 'choice',
     choices: [{ value: 'here', label: 'Ici seulement' }, { value: 'everywhere', label: 'Partout' }],
+  },
+  {
+    key: 'backgroundPause', label: 'Mise en pause du rendu', section: A, group: 'Vue', kind: 'choice',
+    choices: [{ value: 'unfocused', label: 'Fenêtre cachée ou sans le focus' }, { value: 'hidden', label: 'Fenêtre cachée seulement' }],
   },
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',

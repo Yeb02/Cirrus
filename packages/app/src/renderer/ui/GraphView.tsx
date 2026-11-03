@@ -4,7 +4,7 @@ import {
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed,
+  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -73,6 +73,10 @@ export function GraphView(props: {
   const sceneRef = useRef<PlanScene | null>(null);
   const paramsRef = useRef(props.params);
   const dirty = useRef(true);
+  /** Wakes the drawing loop; set once the loop exists. */
+  const wake = useRef<() => void>(() => {});
+  /** Asks for a frame: the loop only runs while there is something to draw. */
+  const redraw = () => { dirty.current = true; wake.current(); };
   const firstPending = useRef(true);
   const gestures = useRef(new GestureMachine(props.params));
   const [selection, setSelection] = useState<Selection>(emptySelection);
@@ -116,7 +120,7 @@ export function GraphView(props: {
   const restoreScene = () => {
     const e = engine.current, sc = sceneRef.current;
     if (e && sc) e.renderer.setScene(sc);
-    dirty.current = true;
+    redraw();
   };
   /**
    * Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. `extend`: the
@@ -151,7 +155,7 @@ export function GraphView(props: {
     if (!e || !sc) return;
     e.renderer.setCamera(next);
     cameras.current.set(sc.plan.id, next);
-    dirty.current = true;
+    redraw();
     // Wheel and arrows stay active while a connection is drawn: its line follows the node.
     if (placing.current?.kind === 'connect' && lastPointer.current) aimLine(lastPointer.current.x, lastPointer.current.y);
   };
@@ -168,7 +172,7 @@ export function GraphView(props: {
     const w = screenToWorld(cam, sx, sy);
     const h = hits.hit(w.x, w.y, cam.zoom);
     e.renderer.setHover(h.kind === 'connection' || h.kind === 'stub' ? h.conn : null);
-    dirty.current = true;
+    redraw();
     let text: string | null = null;
     if (h.kind === 'stub') text = `absent : ${h.title}`;
     else if (h.kind === 'item' && intrudersRef.current.has(h.item)) text = `intrus dans le groupe « ${sc.items[intrudersRef.current.get(h.item)!].title} »`;
@@ -182,7 +186,7 @@ export function GraphView(props: {
   };
   const clearHover = () => {
     engine.current?.renderer.setHover(null);
-    dirty.current = true;
+    redraw();
     setTip(null);
     setChain([]);
   };
@@ -215,7 +219,7 @@ export function GraphView(props: {
     const t = from === undefined ? null : connectTarget(stateRef.current, sc, from, hitAt(sx, sy), vc && vc.conns.length === 1 ? vc.conns[0] : null);
     e.renderer.setDropTarget(t?.kind === 'node' ? t.item : null);
     e.renderer.setHover(t?.kind === 'connection' ? m : null);
-    dirty.current = true;
+    redraw();
     return t;
   };
   const endConnect = () => {
@@ -224,7 +228,7 @@ export function GraphView(props: {
     r?.setCoresShown(false);
     r?.setDropTarget(null);
     r?.setHover(null);
-    dirty.current = true;
+    redraw();
   };
   /** « Partout ou ici seulement » (spec 11, 19), asked only when other plans are concerned; `go` gets the plans chosen. */
   const askWhere = (text: string, plans: Id[], go: (everywhere: Id[]) => void) => {
@@ -387,7 +391,7 @@ export function GraphView(props: {
     d.armed = true;
     d.layout = applyHandle(d.base, d.g, d.handle, screenToWorld(e.renderer.camera, sx, sy));
     e.renderer.setScene(withLayout(d.scene, d.conn, d.layout), true);
-    dirty.current = true;
+    redraw();
   };
   /** Released: the layout is written for this plan (one step); Escape or a refusal brings the old one back. */
   const dropHandle = (keep: boolean) => {
@@ -490,9 +494,9 @@ export function GraphView(props: {
       if (cancelled) { app.destroy(true); return; }
       app.ticker.stop();
       // A resized canvas is cleared: draw again even if the CSS size (the camera's) did not change.
-      app.renderer.on('resize', () => { dirty.current = true; });
+      app.renderer.on('resize', () => { redraw(); });
       // The host also resizes without the window (the settings panel opening): Pixi only listens to the window (C2).
-      resizeObserver = new ResizeObserver(() => { app.resize(); dirty.current = true; });
+      resizeObserver = new ResizeObserver(() => { app.resize(); redraw(); });
       resizeObserver.observe(host.current!);
       host.current!.appendChild(app.canvas);
       Assets.setPreferences({ preferWorkers: false }); // no blob workers: the page's CSP forbids them
@@ -500,7 +504,7 @@ export function GraphView(props: {
       const renderer = new PlanRenderer(app, props.params);
       console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
       for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
-      renderer.onUpdate = () => { dirty.current = true; };
+      renderer.onUpdate = () => { redraw(); };
       engine.current = { app, renderer };
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
@@ -537,12 +541,23 @@ export function GraphView(props: {
           }
         }
       };
-      // One exception must not stop the drawing for good (C1 of the plan 3 review): it is reported and the loop goes on.
-      const loop = () => {
-        try { step(); } catch (err) { console.error('Erreur de rendu :', err); }
-        if (!stopped) raf = requestAnimationFrame(loop);
+      // Frames are drawn on demand: the loop waits for the screen only while something is to be drawn, and not at all
+      // while the window is hidden or, by default, without the focus (battery). The first frame (captures, bench) is
+      // drawn regardless. One exception must not stop the drawing for good (C1 of the plan 3 review): it is reported.
+      let stopped = false, scheduled = false;
+      const paused = () => !firstPending.current && renderPaused({ hidden: document.hidden, focused: document.hasFocus() }, paramsRef.current);
+      const schedule = () => {
+        if (scheduled || stopped || paused()) return;
+        scheduled = true;
+        raf = requestAnimationFrame(loop);
       };
-      let stopped = false;
+      const loop = () => {
+        scheduled = false;
+        if (stopped || paused()) return;
+        try { step(); } catch (err) { console.error('Erreur de rendu :', err); }
+        if (dirty.current || dragging.current?.dirty) schedule();
+      };
+      wake.current = schedule;
       const step = () => {
         const e = engine.current;
         if (e && sceneRef.current) {
@@ -588,10 +603,11 @@ export function GraphView(props: {
           }
         }
       };
-      raf = requestAnimationFrame(loop);
+      schedule();
     })();
     return () => {
       cancelled = true;
+      wake.current = () => {};
       resizeObserver?.disconnect();
       cancelAnimationFrame(raf);
       engine.current?.renderer.destroy();
@@ -612,7 +628,7 @@ export function GraphView(props: {
     const e = engine.current;
     if (!e || !ready) return;
     e.renderer.setParams(props.params);
-    dirty.current = true;
+    redraw();
   }, [ready, props.params]);
 
   useEffect(() => {
@@ -873,7 +889,7 @@ export function GraphView(props: {
       default:
         break;
     }
-    dirty.current = true;
+    redraw();
   };
   /**
    * Ctrl+wheel (spec 8.1): the step of the selection or of the element under the cursor. The notches of one gesture
@@ -912,7 +928,7 @@ export function GraphView(props: {
     const gesture = { steps, base, preview, items, timer: 0 };
     gesture.timer = window.setTimeout(() => { wheelGesture.current = null; commitScale(gesture); }, paramsRef.current.scaleGesturePauseMs);
     wheelGesture.current = gesture;
-    dirty.current = true;
+    redraw();
   };
 
   /** A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. */
@@ -1036,7 +1052,7 @@ export function GraphView(props: {
       default:
         break;
     }
-    dirty.current = true;
+    redraw();
   };
   const feed = (input: Input) => {
     const e = engine.current;
@@ -1047,6 +1063,22 @@ export function GraphView(props: {
   /** The buttons held, as the last pointer event gave them. */
   const buttons = useRef(0);
 
+  // The loop sleeps when idle: an input (a drag's preview is drawn from the loop), the window shown again or focused
+  // again, and any render of this view (a new state) wake it.
+  useEffect(() => {
+    const onInput = () => wake.current();
+    const onBack = () => redraw();
+    const inputs = ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup'] as const;
+    for (const ev of inputs) window.addEventListener(ev, onInput, true);
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    return () => {
+      for (const ev of inputs) window.removeEventListener(ev, onInput, true);
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+    };
+  }, []);
+  useEffect(() => wake.current());
   // A lost focus abandons the gesture in progress (Review Focus 2 of plan 3b).
   useEffect(() => {
     // A plan of a repercussion waits instead: Alt+Tab must not skip it (I8 of the review).
@@ -1066,7 +1098,7 @@ export function GraphView(props: {
   }, [props.session]);
   useEffect(() => {
     engine.current?.renderer.setSelection(selection);
-    dirty.current = true;
+    redraw();
   }, [selection, scene]);
 
   const rectStyle = (() => {

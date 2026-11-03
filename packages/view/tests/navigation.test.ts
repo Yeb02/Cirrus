@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { screenToWorld } from '../src/camera.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
-import { fitItem, navigate } from '../src/navigation.ts';
+import { fitItem, navigate, renderPaused } from '../src/navigation.ts';
 import { buildScene } from '../src/scene.ts';
 import { fixture, measure, P } from './helpers.ts';
 
@@ -51,4 +51,13 @@ test('cadrer un groupe contient son enveloppe élargie', () => {
   }
   const n = sc.byId.get(ids.nodes.monde)!;
   expect(fitItem(sc, n, cam, P)).toMatchObject({ x: sc.items[n].x, y: sc.items[n].y });
+});
+
+test('le rendu s’arrête fenêtre cachée, et par défaut fenêtre sans le focus ; réglable', () => {
+  expect(renderPaused({ hidden: false, focused: true }, P)).toBe(false);
+  expect(renderPaused({ hidden: true, focused: true }, P)).toBe(true);
+  expect(renderPaused({ hidden: false, focused: false }, P)).toBe(true);
+  const onlyHidden = { ...P, backgroundPause: 'hidden' as const };
+  expect(renderPaused({ hidden: false, focused: false }, onlyHidden)).toBe(false);
+  expect(renderPaused({ hidden: true, focused: false }, onlyHidden)).toBe(true);
 });
