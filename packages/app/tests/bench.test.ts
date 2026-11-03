@@ -20,7 +20,7 @@ function pass(label: string, steady: [number, number]): PassRecord {
   return {
     label, gpuName: 'carte d’essai', timer: true, disjoint: 0, canvasPx: [1600, 1000], gpuMs: stats(steady[0] + 0.1, steady[1] + 1), gpuSteadyMs: stats(...steady),
     cpuMs: stats(0.5, 2), intervalMs: stats(16.6, 17), rebuilds: 3, worstFrame: { t: 2, cpuMs: 12, rebuilt: true }, reasons: { rect: 3 },
-    marks: {}, heapMb: 400, gc: true, edits: null,
+    marks: {}, heapMb: 400, gc: true, edits: null, beforeEdits: null,
     phases: { baseOpened: 900, dataSent: 1500, dataReceived: 2100, stateReady: 3000, sceneReady: 6500, engineReady: 3400, firstFrame: 6800 },
     processMb: { browser: 700, tab: 900, gpu: 300 },
   };
@@ -28,7 +28,8 @@ function pass(label: string, steady: [number, number]): PassRecord {
 
 test('rapport à trois passes : le contenu vaut brut moins plancher ; le nom suit CIRRUS_BENCH_NAME', () => {
   process.env.CIRRUS_BENCH_NAME = 'essai-banc';
-  expect(recordRun(dir, pass('vsync', [2.42, 4.79]), false, '1000,10000')).toBeNull();
+  const vsync = { ...pass('vsync', [2.42, 4.79]), heapMb: 1672, beforeEdits: { heapMb: 557, processMb: { browser: 460, tab: 1300, gpu: 210 } } };
+  expect(recordRun(dir, vsync, false, '1000,10000')).toBeNull();
   expect(recordRun(dir, pass('plancher', [0.78, 1.58]), false, '1000,10000')).toBeNull();
   const report = recordRun(dir, pass('throttled-x4', [2.5, 5]), true, '1000,10000');
   expect(report).toBe(join(dir, 'essai-banc.md'));
@@ -40,6 +41,10 @@ test('rapport à trois passes : le contenu vaut brut moins plancher ; le nom sui
   expect(json.gpu.content.p95).toBeCloseTo(3.21, 9);
   const md = readFileSync(report!, 'utf8');
   for (const s of ['1.64', '3.21', 'plancher', 'première image', 'Mémoire', 'Intervalle']) expect(md).toContain(s);
+  // The edit pass's memory, before and after it; the other passes once.
+  expect(md).toContain('| vsync, après chargement | 557 | 460 | 1300 | 210 |');
+  expect(md).toContain('| vsync, après éditions | 1672 | 700 | 900 | 300 |');
+  expect(md).toContain('| plancher | 400 | 700 | 900 | 300 |');
 });
 
 test('nom du rapport par défaut : app-rendu-<date>', () => {

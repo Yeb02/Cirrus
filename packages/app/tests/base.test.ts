@@ -24,3 +24,12 @@ test('dossier des données : variable CIRRUS_DATA, sinon sous les données de l�
   expect(dataDir(join('C:', 'u'))).toBe(join('D:', 'test'));
   if (before === undefined) delete process.env.CIRRUS_DATA; else process.env.CIRRUS_DATA = before;
 });
+
+test('banc et captures : sans CIRRUS_DATA, refus d’ouvrir la base de l’utilisateur', () => {
+  const before = process.env.CIRRUS_DATA;
+  delete process.env.CIRRUS_DATA;
+  expect(() => dataDir(join('C:', 'u'), true)).toThrow(/CIRRUS_DATA/);
+  process.env.CIRRUS_DATA = join('D:', 'banc');
+  expect(dataDir(join('C:', 'u'), true)).toBe(join('D:', 'banc'));
+  if (before === undefined) delete process.env.CIRRUS_DATA; else process.env.CIRRUS_DATA = before;
+});

@@ -1,16 +1,31 @@
-// The reference captures (plan 3c): npm run captures -w packages/app [-- <dossier>]
-// Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into
-// docs/captures/reference-3c/ by default. compare-captures.mjs then compares two such folders: after each task that
-// touches the rendering, a new suite against this reference.
+// The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace]
+// Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
+// compare-captures.mjs then compares two such folders: after each task that touches the rendering, a new suite (in a
+// new folder) against docs/captures/reference-3c. A folder that already holds files is refused, so the reference is
+// never replaced by mistake; --replace removes its captures first (to remake the reference on purpose).
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const out = process.argv[2] ? resolve(process.env.INIT_CWD ?? process.cwd(), process.argv[2]) : join(appDir, '..', '..', 'docs', 'captures', 'reference-3c');
+const args = process.argv.slice(2);
+const targets = args.filter((a) => !a.startsWith('--'));
+const replace = args.includes('--replace');
+if (targets.length !== 1 || args.some((a) => a.startsWith('--') && a !== '--replace')) {
+  console.error('Usage : npm run captures -w packages/app -- <dossier> [--replace]');
+  process.exit(2);
+}
+const out = resolve(process.env.INIT_CWD ?? process.cwd(), targets[0]);
+if (existsSync(out) && readdirSync(out).length > 0) {
+  if (!replace) {
+    console.error(`${out} n’est pas vide : choisis un dossier neuf, ou --replace pour remplacer ses captures.`);
+    process.exit(2);
+  }
+  for (const f of readdirSync(out)) if (f.toLowerCase().endsWith('.png')) rmSync(join(out, f));
+}
 const electron = createRequire(import.meta.url)('electron');
 
 // The window's content is 1584×961 px at this size, its graph 1584×923 (under the tabs): the view's centre is at

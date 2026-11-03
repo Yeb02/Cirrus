@@ -58,7 +58,12 @@ export interface BenchRun {
   /** Whether gc() was there (bench mode starts the interface with --expose-gc). */
   gc: boolean;
   edits: EditMeasures | null;
+  /** The memory after the load and the camera path, read before the edit pass (null without one): the heap and the processes (Mo). */
+  beforeEdits: { heapMb: number; processMb: ProcessMb } | null;
 }
+
+/** Private memory (Mo) of the main process (Browser), the interface (Tab) and the GPU process, from app.getAppMetrics(). */
+export interface ProcessMb { browser: number; tab: number; gpu: number }
 
 /** What the bench drives in the view (GraphView): its camera, the gesture machine, the session and the drawing loop. */
 export interface BenchView {
@@ -249,9 +254,12 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
   for (let i = 0; i < 30 && pending.length > 0; i++) { await new Promise((r) => requestAnimationFrame(r)); collect(); }
   const reasons = { ...renderer.reasons };
 
-  const edits = label === 'vsync' && deep ? await editPass(v, { ...deep, widthPx: app.screen.width, heightPx: app.screen.height }) : null;
+  // The memory is read before the edit pass too: what the load keeps, apart from what the edits add.
+  const editFrom = label === 'vsync' && deep ? { ...deep, widthPx: app.screen.width, heightPx: app.screen.height } : null;
+  const beforeEdits = editFrom ? { heapMb: heapAfterGc().heapMb, processMb: await window.cirrus.benchMemory() } : null;
+  const edits = editFrom ? await editPass(v, editFrom) : null;
   return {
     label, gpuName, timer: timer !== null, disjoint, canvasPx: [app.canvas.width, app.canvas.height], gpuMs: summarize(gpu), gpuSteadyMs: summarize(gpuSteady),
-    cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, worstFrame: worst, reasons, marks: { ...marks }, ...heapAfterGc(), edits,
+    cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, worstFrame: worst, reasons, marks: { ...marks }, ...heapAfterGc(), edits, beforeEdits,
   };
 }

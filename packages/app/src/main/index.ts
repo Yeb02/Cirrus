@@ -40,6 +40,8 @@ if (bench) {
   app.commandLine.appendSwitch('js-flags', '--expose-gc');
   app.commandLine.appendSwitch('enable-precise-memory-info');
 }
+// Bench and captures keep their own profile: the tabs they open (localStorage) never replace the user's.
+if (bench || capture) app.setPath('userData', join(app.getPath('temp'), 'cirrus-mesure'));
 
 function createWindow(): void {
   const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
@@ -108,10 +110,12 @@ ipcMain.handle('cirrus:commit', (_e, action: Action) => {
     throw e;
   }
 });
-// The pass is over: its load phases since this process started and every process's memory, collections forced here too.
+/** Every process's private memory, the collections of this one forced first (the interface forced its own). */
+const processMemory = () => { forceGc(); return processMemoryMb(app.getAppMetrics()); };
+ipcMain.handle('cirrus:bench:memory', () => processMemory());
+// The pass is over: its load phases since this process started and every process's memory.
 ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'processMb'>) => {
-  forceGc();
-  const record: PassRecord = { ...run, phases: loadPhases({ ...benchMarks, ...run.marks }, performance.timeOrigin), processMb: processMemoryMb(app.getAppMetrics()) };
+  const record: PassRecord = { ...run, phases: loadPhases({ ...benchMarks, ...run.marks }, performance.timeOrigin), processMb: processMemory() };
   const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), record, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
   if (report) console.log(`Rapport écrit : ${report}`);
   app.exit(0);
@@ -127,7 +131,13 @@ void app.whenReady().then(() => {
     app.exit(0);
     return;
   }
-  dir = dataDir(app.getPath('userData'));
+  try {
+    dir = dataDir(app.getPath('userData'), bench !== undefined || capture !== undefined);
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : String(e));
+    app.exit(2);
+    return;
+  }
   store = openBase(dir);
   markNow('baseOpened');
   createWindow();

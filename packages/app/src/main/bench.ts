@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { buildLargeState, LARGE_GENERATOR_VERSION, type LargeSpec } from '@cirrus/fixtures';
 import { SCHEMA_VERSION, writeBenchBase } from '@cirrus/store';
-import type { BenchRun, Stats } from '../renderer/bench.ts';
+import type { BenchRun, ProcessMb, Stats } from '../renderer/bench.ts';
 
 /** The load phases, in order, with their names in the report: the first two are the main process's, the rest the interface's. */
 export const PHASES = [
@@ -15,8 +15,8 @@ export type Phase = (typeof PHASES)[number][0];
 export interface PassRecord extends BenchRun {
   /** Ms since the main process started. */
   phases: Partial<Record<Phase, number>>;
-  /** Private memory (Mo) of the main process, the interface and the GPU process, after the collections. */
-  processMb: { browser: number; tab: number; gpu: number };
+  /** Private memory of the processes at the end of the pass, after the collections. */
+  processMb: ProcessMb;
 }
 
 /** The stamp next to the bench's base: the generator and the schema it was written with. */
@@ -121,9 +121,13 @@ function report(name: string, scale: string, runs: PassRecord[]): string {
     '',
     '| Passe | Tas JS de l\'interface | Principal (Browser, privée) | Interface (Tab, privée) | Carte (GPU, privée) |',
     '|---|---|---|---|---|',
-    ...runs.map((r) => `| ${r.label} | ${f(r.heapMb, 0)} | ${f(r.processMb.browser, 0)} | ${f(r.processMb.tab, 0)} | ${f(r.processMb.gpu, 0)} |`),
+    ...runs.flatMap((r) => {
+      const row = (label: string, heap: number, p: ProcessMb) => `| ${label} | ${f(heap, 0)} | ${f(p.browser, 0)} | ${f(p.tab, 0)} | ${f(p.gpu, 0)} |`;
+      const b = r.beforeEdits;
+      return b ? [row(`${r.label}, après chargement`, b.heapMb, b.processMb), row(`${r.label}, après éditions`, r.heapMb, r.processMb)] : [row(r.label, r.heapMb, r.processMb)];
+    }),
     '',
-    'Le tas JS est `performance.memory.usedJSHeapSize` (mémoire précise) après deux `gc()` dans l\'interface ; la mémoire privée vient de `app.getAppMetrics()`, le principal ayant aussi forcé ses collections.',
+    'Le tas JS est `performance.memory.usedJSHeapSize` (mémoire précise) après deux `gc()` dans l\'interface ; la mémoire privée vient de `app.getAppMetrics()`, le principal ayant aussi forcé ses collections. Relevés en fin de passe ; pour la passe d\'édition, aussi avant elle (« après chargement » : le chargement et le parcours de 40 s faits, avant la première édition).',
     '',
     '## Édition (fin de la passe vsync)',
     '',

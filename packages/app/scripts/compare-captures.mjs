@@ -1,7 +1,9 @@
 // Compares two folders of captures (plan 3c): node scripts/compare-captures.mjs <dossierA> <dossierB> [--max=0.5]
 // For each PNG of either folder, the share of its pixels where a channel differs by more than 16 levels. Exits with 1
 // when one exceeds --max percent (0.5 by default, the plan's tolerance), differs in size or is missing on one side;
-// with 2 when a folder holds no capture.
+// with 2 on a usage error or when a folder holds no capture. An image that differs at all, within the tolerance, is
+// listed « à regarder »: a lost selection ring, hover light, stub or phantom stays under 0.5 %, and the suite repeats
+// to the pixel from one run to the next, so it is looked at.
 // The images are decoded by Electron's nativeImage: run with Node, the script starts itself again under Electron.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -10,11 +12,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const LEVELS = 16;
+const USAGE = 'Usage : node scripts/compare-captures.mjs <dossierA> <dossierB> [--max=0.5] (--max : un pourcentage positif ou nul)';
 const args = process.argv.slice(2);
 const dirs = args.filter((a) => !a.startsWith('--'));
-const max = Number(args.find((a) => a.startsWith('--max='))?.slice(6) ?? 0.5);
-if (dirs.length !== 2) {
-  console.error('Usage : node scripts/compare-captures.mjs <dossierA> <dossierB> [--max=0.5]');
+const maxArg = args.find((a) => a.startsWith('--max='))?.slice(6);
+const max = maxArg === undefined ? 0.5 : maxArg.trim() === '' ? Number.NaN : Number(maxArg);
+if (dirs.length !== 2 || !Number.isFinite(max) || max < 0 || args.some((a) => a.startsWith('--') && !a.startsWith('--max='))) {
+  console.error(USAGE);
   process.exit(2);
 }
 const [a, b] = dirs.map((d) => resolve(process.env.INIT_CWD ?? process.cwd(), d));
@@ -38,6 +42,7 @@ const { app, nativeImage } = await import('electron');
 void app.whenReady().then(() => {
   const names = [...new Set([a, b].flatMap((d) => readdirSync(d).filter((f) => f.toLowerCase().endsWith('.png'))))].sort();
   let bad = 0;
+  const toLook = [];
   for (const name of names) {
     const [pa, pb] = [join(a, name), join(b, name)];
     if (!existsSync(pa) || !existsSync(pb)) { bad++; console.log(`${name} : absente de ${existsSync(pa) ? b : a}`); continue; }
@@ -51,8 +56,10 @@ void app.whenReady().then(() => {
     }
     const share = (100 * differ) / (sa.width * sa.height);
     if (share > max) bad++;
+    else if (differ > 0) toLook.push(`${name} : ${share.toFixed(3)} % (${differ} pixels)`);
     console.log(`${name} : ${share.toFixed(3)} % des pixels diffèrent de plus de ${LEVELS} niveaux (${differ} pixels)${share > max ? ` : au-delà de ${max} %` : ''}`);
   }
-  console.log(`${names.length} images comparées, ${bad} hors tolérance.`);
+  console.log(`${names.length} images comparées, ${bad} hors tolérance, ${toLook.length} à regarder.`);
+  for (const line of toLook) console.log(`À regarder : ${line}`);
   app.exit(bad > 0 ? 1 : 0);
 });

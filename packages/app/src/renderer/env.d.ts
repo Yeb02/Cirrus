@@ -8,6 +8,8 @@ export interface CirrusBridge {
   setSettings(overrides: Record<string, unknown>): Promise<void>;
   /** Writes an edit to the local base; rejects with the reason. */
   commit(action: unknown): Promise<void>;
+  /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
+  benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */
   benchDone(run: unknown): Promise<void>;
   /** The first frame is drawn (captures wait for it). */

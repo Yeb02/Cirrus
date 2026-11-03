@@ -192,7 +192,7 @@ Pour chaque décision : les options, celle qui est choisie, pourquoi, ses consé
   5. trois Ctrl+Z.
 
   On mesure la **latence**, de l'appel (`session.run`, annulation, dépôt) à la fin du rendu de la nouvelle scène, par une promesse que résout la boucle. Pour le glissement, on mesure le temps du fil principal par image d'aperçu.
-- **Captures de référence :** `npm run captures -w packages/app` produit `docs/captures/reference-3c/*.png` à partir d'une liste de scènes dans `captures.mjs` :
+- **Captures de référence :** `npm run captures -w packages/app -- <dossier>` produit `<dossier>/*.png` à partir d'une liste de scènes dans `captures.mjs`. Le dossier doit être neuf ; la référence, `docs/captures/reference-3c/`, ne se refait qu'avec `--replace`. Les scènes :
   - lobby en vue d'ensemble ;
   - zoom profond ;
   - groupe à mi-repli ;
@@ -204,7 +204,7 @@ Pour chaque décision : les options, celle qui est choisie, pourquoi, ses consé
   - plan document ;
   - survol d'une connexion.
 
-  `compare-captures.mjs <dossierA> <dossierB>` décode les PNG par `nativeImage` et rapporte, par image, la part des pixels qui diffèrent de plus de 16 niveaux.
+  `compare-captures.mjs <dossierA> <dossierB> [--max=0.5]` décode les PNG par `nativeImage` et rapporte, par image, la part des pixels qui diffèrent de plus de 16 niveaux. Il échoue au-delà de `--max`, et liste « à regarder » toute image qui diffère sans le dépasser.
 
 - [ ] **Step 1 : tests.**
   - `benchId` : 36 caractères, unique sur 600 000 valeurs, déterministe, croissant.

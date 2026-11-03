@@ -3,8 +3,12 @@ import { join } from 'node:path';
 import { createPlan, uuidv7 } from '@cirrus/core';
 import { LocalStore } from '@cirrus/store';
 
-/** Where the base lives: CIRRUS_DATA (tests, captures, a dev copy), else under the app's data folder. */
-export function dataDir(userData: string): string {
+/**
+ * Where the base lives: CIRRUS_DATA (tests, captures, a dev copy), else under the app's data folder. `measuring` (bench
+ * and capture modes, which edit what they open) requires CIRRUS_DATA: they never open the user's own base.
+ */
+export function dataDir(userData: string, measuring = false): string {
+  if (measuring && !process.env.CIRRUS_DATA) throw new Error('Mode banc ou capture sans CIRRUS_DATA : la base de l’utilisateur n’est pas ouverte.');
   return process.env.CIRRUS_DATA ?? join(userData, 'base');
 }
 

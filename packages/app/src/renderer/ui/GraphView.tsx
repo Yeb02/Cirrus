@@ -26,9 +26,12 @@ import { AskDialog, type Question } from './Dialogs.tsx';
 const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
 /**
  * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
- * may depend on it. They lift the pause of the drawing and the gesture abandoned on a lost focus; the normal mode keeps both.
+ * may depend on it, nor on where the user's mouse lies. They lift the pause of the drawing and the gesture abandoned on
+ * a lost focus, and ignore the physical pointer and keyboard; the normal mode keeps all three.
  */
 const measuring = () => window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
+/** A real input event in bench or capture mode: ignored (their replayed events are not trusted, the user's are). */
+const ignored = (ev: { isTrusted: boolean }) => ev.isTrusted && measuring();
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** The camera a plan opens with: the launch option "x,y,zoom" for visual checks, else the plan framed. */
@@ -698,7 +701,7 @@ export function GraphView(props: {
     const el = root.current!;
     const onWheel = (ev: WheelEvent) => {
       // A pop-up or a question scrolls its own content.
-      if ((ev.target as Element).closest?.('.popup, .ask')) return;
+      if (ignored(ev) || (ev.target as Element).closest?.('.popup, .ask')) return;
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
@@ -1149,6 +1152,7 @@ export function GraphView(props: {
       tabIndex={0}
       onContextMenu={(ev) => ev.preventDefault()}
       onPointerDown={(ev) => {
+        if (ignored(ev)) return;
         root.current!.focus();
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
@@ -1157,6 +1161,7 @@ export function GraphView(props: {
         feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
       }}
       onPointerMove={(ev) => {
+        if (ignored(ev)) return;
         const { sx, sy } = local(ev);
         lastPointer.current = { x: sx, y: sy };
         // A second button pressed during a gesture (a right click cancelling a drag) only shows here (I1 of the review).
@@ -1171,14 +1176,16 @@ export function GraphView(props: {
         feed({ t: 'move', sx, sy });
       }}
       onPointerUp={(ev) => {
+        if (ignored(ev)) return;
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
         if (handleDrag.current) { dropHandle(true); return; }
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
-      onPointerLeave={() => { lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
+      onPointerLeave={(ev) => { if (ignored(ev)) return; lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
+        if (ignored(ev)) return;
         if (ev.key === 'Escape') { if (handleDrag.current) dropHandle(false); else feed({ t: 'key', key: 'Escape' }); return; }
         const sc = sceneRef.current;
         // Ctrl+C, Ctrl+V and Suppr (spec 7), outside a gesture in progress.
