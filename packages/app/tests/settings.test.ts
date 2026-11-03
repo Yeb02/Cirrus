@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
@@ -17,4 +17,5 @@ test('réglages : absents, corrompus, puis écrits', () => {
   writeSettings(dir, { factor: 3 });
   expect(readSettings(dir)).toEqual({ factor: 3 });
   expect(readdirSync(dir)).toEqual(['settings.json']); // no temporary file left
+  rmSync(dir, { recursive: true, force: true });
 });

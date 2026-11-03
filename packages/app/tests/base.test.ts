@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
@@ -15,6 +15,7 @@ test('première ouverture : un lobby et un identifiant de PC stable', () => {
   expect(readFileSync(join(dir, 'pc.json'), 'utf8')).toBe(pcA);
   expect(JSON.parse(pcA).id).toMatch(/^[0-9a-f-]{36}$/);
   b.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('dossier des données : variable CIRRUS_DATA, sinon sous les données de l’app', () => {

@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Action, applyOp, canonical, fromSnapshot, type Id, ROLES, type State, toSnapshot } from '@cirrus/core';
@@ -15,7 +15,10 @@ export function fixture(): { s: State; ids: FixtureIds } {
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-view-'));
   const store = LocalStore.open(dir, { pc: 'test' });
   const ids = buildFixture(store, dir);
-  return { s: store.loadState(), ids };
+  const s = store.loadState();
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+  return { s, ids };
 }
 
 export const run = (st: State, a: Action): Action => { for (const op of a.ops) applyOp(st, op); return a; };

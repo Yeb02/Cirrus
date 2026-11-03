@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyOp, groupOf, layoutKey, placementKey, setLayout, type State } from '@cirrus/core';
@@ -19,6 +19,8 @@ beforeEach(() => {
   const store = LocalStore.open(dir, { pc: 'test' });
   ids = buildFixture(store, dir);
   s = store.loadState();
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
 const run = (build: ((st: State) => import('@cirrus/core').Action) | null) => { const a = build!(s); for (const op of a.ops) applyOp(s, op); return a; };
