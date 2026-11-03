@@ -109,11 +109,13 @@ Machine partagée pendant toute la tâche : de 7 à 10 processus `SP_EXP7` puis 
 
 | Annulation de… | Avant | Après | Action elle-même | Plafond |
 |---|---|---|---|---|
-| une connexion | 23,4 ms | **1,6–1,8 ms** | 0,8–1,0 ms | 2 ms |
+| une connexion | 23,4 ms | **1,6–1,8 ms** | 0,8–1,0 ms | 2 ms (cible) ; test à 5 ms (R24) |
 | une création | 3,0 ms | **0,25 ms** | 0,6 ms | 2 ms |
 | une inclusion (l'enregistrement d'inclusion disparaît aussi) | 17,6 ms | **0,34–0,54 ms** | 0,3–0,6 ms | 5 ms |
-| la suppression du groupe de 202 éléments | 16,0 ms | **14,7–16,5 ms** | 10,8–13,6 ms | 20 ms |
+| la suppression du groupe de 202 éléments | 16,0 ms | **14,7–19,1 ms** | 10,8–13,6 ms | 20 ms (cible) ; test à 45 ms (R24) |
 | une suppression partout (nœud d'≈ 22 connexions) | — | 2,4–2,8 ms | 2,7–2,8 ms | 8 ms (trois fois la mesure) |
+
+  Ruling (R24, contrôleur) : les deux annulations proches du seuil sur la machine chargée (connexion, groupe) gardent le seuil du plan comme cible, mais leur test plafonne à environ trois fois la meilleure mesure (5 et 45 ms), comme R12, R15 et R20 — un plafond de 20 ms pour une mesure de 19 ms échoue au hasard — coût si faux : une régression entre la cible et le plafond passe jusqu'au banc de la tâche 10.
 
   L'annulation d'une connexion coûte deux fois l'action : la partie retirée remet à zéro ses extrémités et sa colonne de genre, deux colonnes copiées (≈ 0,5 ms) que l'ajout, au bout des colonnes partagées, ne copie pas. Celle du groupe passe surtout par l'étape des parties (≈ 13 ms des ≈ 16 : 4 400 connexions dérivées de nouveau, leurs colonnes copiées).
 - `buildScene`, du premier jet à la fin : 1 440 → 940 (badges sans copie de `memberOf`, accès du cœur liés une fois) → 740 (parties écrites dans les colonnes, sans objet par partie ; badges comptés dans le même passage) → 650 → 460 (tampon des extrémités typé : `length = 0` rendait le stockage du tableau à chaque connexion) → 432 (colonnes JS préallouées) → 394 ms (comptage des badges dans la boucle des membres, membres lus une fois, fantômes triés par connexion). Le reste, au mieux : passage des branches ≈ 200 ms (dont `forEachInPlan` ≈ 30), groupes (enveloppes) ≈ 65, éléments ≈ 50, hiérarchie ≈ 30.
