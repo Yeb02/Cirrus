@@ -1,7 +1,7 @@
 import type { Id, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
-import { directGroup, placedIn, type State } from './state.ts';
+import { dataOf, directGroup, nodeId, nodeRow, planRow, type State } from './state.ts';
 import { INCLUSION, KNOWLEDGE, memberNode, NO_RECORD, STRUCTURE } from './tables.ts';
 
 export interface Violation {
@@ -12,9 +12,9 @@ export interface Violation {
 
 /** The direct group of a node in a plan (spec 10: at most one), read from the index. */
 export function groupOf(s: State, plan: Id, node: Id): Id | undefined {
-  const p = s.tables.plans.rows.get(plan), n = s.tables.nodes.rows.get(node);
+  const p = planRow(s, plan), n = nodeRow(s, node);
   const g = p < 0 || n < 0 ? -1 : directGroup(s, p, n);
-  return g < 0 ? undefined : s.tables.nodes.rows.ids[g];
+  return g < 0 ? undefined : nodeId(s, g);
 }
 
 /**
@@ -22,12 +22,12 @@ export function groupOf(s: State, plan: Id, node: Id): Id | undefined {
  * links, spec 7): a member is drawn in its nearest ancestor that is placed.
  */
 export function ancestors(s: State, plan: Id, node: Id): Id[] {
-  const p = s.tables.plans.rows.get(plan), n = s.tables.nodes.rows.get(node);
+  const p = planRow(s, plan), n = nodeRow(s, node);
   if (p < 0 || n < 0) return [];
   const out: Id[] = [];
   const seen = new Set<number>([n]);
   for (let g = directGroup(s, p, n); g >= 0 && !seen.has(g); g = directGroup(s, p, g)) {
-    out.push(s.tables.nodes.rows.ids[g]);
+    out.push(nodeId(s, g));
     seen.add(g);
   }
   return out;
@@ -65,7 +65,7 @@ export function touchedBy(ops: Op[]): Set<Id> | undefined {
  */
 export function checkState(s: State, touched?: Set<Id>): Violation[] {
   const out: Violation[] = [];
-  const T = s.tables, C = T.conns, nodeIds = T.nodes.rows.ids;
+  const { tables: T, index: I } = dataOf(s), C = T.conns, nodeIds = T.nodes.rows.ids;
   const scope = touched && new Set(touched);
   if (scope) for (const id of touched!) {
     const c = C.rows.get(id);
@@ -101,7 +101,7 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
   for (const n of nodes) {
     const rec = T.nodes.recs[n]!;
     checkTags(rec.id, rec.tags);
-    if (rec.trashedAt !== undefined && Array.from(placedIn(s, n)).some((p) => T.plans.recs[p] !== undefined)) {
+    if (rec.trashedAt !== undefined && I.placedIn.view(n).some((p) => T.plans.recs[p] !== undefined)) {
       out.push({ code: 'trashedPlaced', subject: rec.id, message: 'Un nœud à la corbeille ne peut pas être placé dans un plan.' });
     }
   }
@@ -124,7 +124,7 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
   // Per plan: one direct group, no cycle (spec 10). Without scope, every node with a group, in every plan with groups;
   // with one, the nodes in scope, in every plan.
   const groupNodes = scope ? nodes : undefined;
-  s.index.groupOf.forEach((pg, p) => {
+  I.groupOf.forEach((pg, p) => {
     if (!pg || (scope && T.plans.recs[p] === undefined)) return;
     const groupsIn = (n: number): readonly number[] => pg.multi.get(n) ?? (n < pg.group.length && pg.group[n] >= 0 ? [pg.group[n]] : []);
     const list = groupNodes ?? Array.from(pg.group.keys()).filter((n) => pg.group[n] >= 0);

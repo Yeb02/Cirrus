@@ -1,10 +1,9 @@
 import { uuidv7 } from './ids.ts';
-import { connectionAt } from './facades.ts';
 import { checkState, groupOf, touchedBy } from './invariants.ts';
 import type { BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
-import { applyOp, cloneState, layoutKey, memberOf, nodeRow, placedIn, placementOf, type State } from './state.ts';
+import { applyOp, cloneState, connectionOfRow, dataOf, layoutKey, memberOf, nodeRow, placedIn, placementOf, type State } from './state.ts';
 
 /** One user action: one undo step, one group of journal lines (spec 6.4). */
 export interface Action { id: Id; label: string; ops: Op[] }
@@ -100,11 +99,11 @@ const branchesOf = (s: State, connection: Id): BranchRec[] =>
 /** The connections a node is a member of (any kind, trash included), from the index. */
 const connectionsOf = (s: State, node: Id): ConnectionRec[] => {
   const n = nodeRow(s, node);
-  return n < 0 ? [] : Array.from(memberOf(s, n), (c) => connectionAt(s.tables, c));
+  return n < 0 ? [] : Array.from(memberOf(s, n), (c) => connectionOfRow(s, c));
 };
 const placementsOf = (s: State, node: Id): Placement[] => {
   const n = nodeRow(s, node);
-  return n < 0 ? [] : Array.from(placedIn(s, n), (p) => s.tables.plans.placements[p]!.get(n)!);
+  return n < 0 ? [] : Array.from(placedIn(s, n), (p) => dataOf(s).tables.plans.placements[p]!.get(n)!);
 };
 /** Enumeration values stored by name; an unknown value is a user error like any other refused command. */
 const normalizeTags = (s: State, tags: TagValue[]): TagValue[] => {

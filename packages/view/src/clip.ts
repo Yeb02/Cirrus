@@ -1,5 +1,5 @@
 import {
-  type Action, ancestors, connectionAt, type Id, include, memberOf, nodeRow, placeNode, placementKey, setBranches, type State, type Vec2,
+  type Action, ancestors, connectionOfRow, type Id, include, memberOf, nodeRow, placeNode, placementKey, setBranches, type State, type Vec2,
 } from '@cirrus/core';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
@@ -55,7 +55,7 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
   for (const id of ids) { const n = nodeRow(s, id); if (n >= 0) for (const c of memberOf(s, n)) rows.add(c); }
   const connections: Clip['connections'] = [];
   for (const r of [...rows].sort((a, b) => a - b)) {
-    const c = connectionAt(s.tables, r);
+    const c = connectionOfRow(s, r);
     if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
     const shown = c.members.map((m) => m.node).filter((n) => s.branches.has({ plan, connection: c.id, node: n }) || split.get(c.id)?.has(n));
     if (shown.filter((n) => ids.has(n)).length >= 2) connections.push({ id: c.id, nodes: shown });

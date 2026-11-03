@@ -87,17 +87,24 @@ export class Rows {
 
   /** One more reference to a row already held, without looking its identifier up. */
   refAgain(r: number): number {
+    this.held(r);
     this.refs[r]++;
     return r;
   }
 
   /** One reference less; true when that frees the row. */
   unref(r: number): boolean {
+    this.held(r);
     if (--this.refs[r] > 0) return false;
     this.row.delete(this.ids[r]);
     this.ids[r] = '';
     this.free.push(r);
     return true;
+  }
+
+  /** A row no reference holds (−1 for an unknown identifier, a free row) means the books are wrong: fail loudly. */
+  private held(r: number): void {
+    if (!(r >= 0 && r < this.end && this.refs[r] > 0)) throw new Error(`rows: row ${r} is not held`);
   }
 }
 
@@ -157,14 +164,14 @@ export class Pool {
 
   /** The owner's integers, as a view: valid until the next change of the pool. */
   view(owner: number): Int32Array {
-    if (owner >= this.len.length) return this.data.subarray(0, 0);
+    if (!(owner >= 0 && owner < this.len.length)) return this.data.subarray(0, 0);
     const s = this.start[owner];
     return this.data.subarray(s, s + this.len[owner]);
   }
 
   /** The index of entry (a, b) in the owner's list (b only for pairs), or −1. */
   indexOf(owner: number, a: number, b = 0): number {
-    if (owner >= this.len.length) return -1;
+    if (!(owner >= 0 && owner < this.len.length)) return -1;
     const s = this.start[owner], end = s + this.len[owner], d = this.data;
     if (this.stride === 1) {
       for (let i = s; i < end; i++) if (d[i] === a) return i - s;
@@ -175,6 +182,7 @@ export class Pool {
   }
 
   push(owner: number, a: number, b = 0): void {
+    this.owner(owner);
     const n = this.len[owner];
     this.reserve(owner, n + this.stride);
     const i = this.start[owner] + n;
@@ -185,6 +193,8 @@ export class Pool {
 
   /** Removes entry `index`; the last entry takes its place. */
   removeAt(owner: number, index: number): void {
+    this.owner(owner);
+    if (!(index >= 0 && index * this.stride < this.len[owner])) throw new Error(`pool: owner ${owner} has no entry ${index}`);
     const s = this.start[owner], last = this.len[owner] - this.stride, at = index * this.stride;
     for (let k = 0; k < this.stride; k++) this.data[s + at + k] = this.data[s + last + k];
     this.len[owner] = last;
@@ -192,6 +202,7 @@ export class Pool {
 
   /** Replaces the owner's list. */
   set(owner: number, values: ArrayLike<number>): void {
+    this.owner(owner);
     this.len[owner] = 0;
     this.reserve(owner, values.length);
     this.data.set(values, this.start[owner]);
@@ -200,10 +211,17 @@ export class Pool {
 
   /** Gives up the owner's list and its space. */
   release(owner: number): void {
-    if (owner >= this.cap.length || this.cap[owner] === 0) return;
+    if (owner >= this.cap.length) return;
+    this.owner(owner);
+    if (this.cap[owner] === 0) return;
     this.waste += this.cap[owner];
     this.start[owner] = this.len[owner] = this.cap[owner] = 0;
     this.settle();
+  }
+
+  /** An owner outside the pool (−1 for an unknown row) means the books are wrong: fail loudly. */
+  private owner(owner: number): void {
+    if (!(owner >= 0 && owner < this.start.length)) throw new Error(`pool: no owner ${owner}`);
   }
 
   private reserve(owner: number, need: number): void {

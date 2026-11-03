@@ -1,6 +1,6 @@
 import {
-  ancestors, type ConnectionLayout, connRow, type Id, KNOWLEDGE, membersOf, NO_RECORD, type PhantomRec, type PlanRec, type Role, ROLES, type State,
-  STRUCTURE, type Vec2,
+  ancestors, type ConnectionLayout, connId, connKind, connRow, connRowCount, connTitle, connTrashed, type Id, KNOWLEDGE, memberAt, memberCount, NO_RECORD,
+  nodeId, nodeRow, type PhantomRec, type PlanRec, type Role, ROLES, type State, STRUCTURE, type Vec2,
 } from '@cirrus/core';
 import type { Bounds } from './camera.ts';
 import { convexHull, offsetPolygon } from './geometry/hull.ts';
@@ -102,12 +102,11 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     add({ id: n.id, kind: 'node', node: n.id, title: n.title, lines: l, x: pl.x, y: pl.y, k: pl.k, ...boxHalves(l, pl.k, p), parent: -1, children: [], depth: 0, badge: false });
   }
   const phantoms: PhantomRec[] = [];
-  const C = s.tables.conns;
   for (const ph of s.phantoms.values()) {
     if (ph.plan !== planId) continue;
     const c = connRow(s, ph.connection);
     const represented = s.nodes.get(ph.of.node);
-    const title = ph.of.kind === 'center' ? ((c >= 0 && C.kind[c] !== NO_RECORD && C.title[c]) || 'Connexion') : (represented?.title ?? '');
+    const title = ph.of.kind === 'center' ? ((c >= 0 && connKind(s, c) !== NO_RECORD && connTitle(s, c)) || 'Connexion') : (represented?.title ?? '');
     const l = linesOf(title);
     const halves = ph.of.kind === 'node'
       ? boxHalves(l, ph.k, p)
@@ -148,8 +147,8 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
 
   // The plan's branches grouped by connection, once: connections and badges read it.
   const shown = new Map<Id, Id[]>();
-  const nodeIds = s.tables.nodes.rows.ids;
-  s.branches.forEachInPlan(planId, (c, nodes) => { shown.set(C.rows.ids[c], Array.from(nodes, (n) => nodeIds[n])); });
+  const idOfNode = nodeId, idOfConn = connId;
+  s.branches.forEachInPlan(planId, (c, nodes) => { shown.set(idOfConn(s, c), Array.from(nodes, (n) => idOfNode(s, n))); });
   const connections = sceneConnections(s, plan, items, byId, phantoms, shown);
   markBadges(s, items, byId, phantoms, shown, new Set(connections.map((c) => c.id)));
   return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
@@ -241,19 +240,21 @@ function sceneConnections(
   const placed = (node: Id) => { const i = byId.get(node); return i !== undefined && items[i].kind !== 'phantom'; };
 
   const out: SceneConnection[] = [];
-  // Read from the columns, without building every connection's record (the lobby shows them all).
-  const C = s.tables.conns, nodeRows = s.tables.nodes.rows;
+  // Read by row, without building every connection's record (the lobby shows them all). Accessors in locals: under
+  // vitest an imported binding is a getter at every use.
+  const rowOfConn = connRow, rowOfNode = nodeRow, kindOf = connKind, trashed = connTrashed, titleOf = connTitle, count = memberCount, at = memberAt;
+  const roles = ROLES;
   const roleIn = (c: number, node: Id): Role | undefined => {
-    const n = nodeRows.get(node), members = membersOf(s, c);
-    for (let i = 0; i < members.length; i++) if (members[i] >> 2 === n) return ROLES[members[i] & 3];
+    const n = rowOfNode(s, node);
+    for (let i = 0, k = count(s, c); i < k; i++) { const m = at(s, c, i); if (m >> 2 === n) return roles[m & 3]; }
     return undefined;
   };
   for (const id of new Set([...shown.keys(), ...phantomsOf.keys()])) {
-    const c = connRow(s, id);
-    if (c < 0 || C.kind[c] !== kind || !Number.isNaN(C.trashedAt[c])) continue;
+    const c = rowOfConn(s, id);
+    if (c < 0 || kindOf(s, c) !== kind || trashed(s, c)) continue;
     const layout = layouts.get(id);
     const ph = phantomsOf.get(id) ?? [];
-    const main: SceneConnection = { index: 0, id, part: 'main', title: C.title[c], ends: [], stubs: [], ...(layout ? { layout } : {}) };
+    const main: SceneConnection = { index: 0, id, part: 'main', title: titleOf(s, c), ends: [], stubs: [], ...(layout ? { layout } : {}) };
     for (const node of shown.get(id) ?? []) {
       const role = roleIn(c, node);
       if (!role) continue;
@@ -270,7 +271,7 @@ function sceneConnections(
     for (const x of ph) {
       const role = roleIn(c, x.of.node);
       if (x.of.kind !== 'center' || !role || !byId.has(x.of.node)) continue;
-      out.push({ index: 0, id, part: 'far', title: C.title[c], ends: [{ item: byId.get(x.of.node)!, role, key: x.of.node, dashed: false }], stubs: [], center: byId.get(x.id)! });
+      out.push({ index: 0, id, part: 'far', title: titleOf(s, c), ends: [{ item: byId.get(x.of.node)!, role, key: x.of.node, dashed: false }], stubs: [], center: byId.get(x.id)! });
     }
   }
   out.forEach((c, i) => { c.index = i; });
@@ -281,13 +282,13 @@ function sceneConnections(
 function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>, drawn: Set<Id>): void {
   const split = new Map<Id, Id[]>();
   for (const ph of phantoms) if (ph.of.kind === 'center') split.set(ph.connection, [...(split.get(ph.connection) ?? []), ph.of.node]);
-  // Every knowledge connection, read from the columns.
-  const C = s.tables.conns, nodeIds = s.tables.nodes.rows.ids, knowledge = KNOWLEDGE;
-  for (let c = 0; c < C.rows.end; c++) {
-    if (C.kind[c] !== knowledge || !Number.isNaN(C.trashedAt[c])) continue;
-    const id = C.rows.ids[c], here = shown.get(id), splitHere = split.get(id), members = membersOf(s, c);
-    for (let k = 0; k < members.length; k++) {
-      const node = nodeIds[members[k] >> 2], i = byId.get(node);
+  // Every knowledge connection, read by row (accessors in locals, as in sceneConnections).
+  const kindOf = connKind, trashed = connTrashed, idOfConn = connId, idOfNode = nodeId, count = memberCount, at = memberAt, knowledge = KNOWLEDGE;
+  for (let c = 0, end = connRowCount(s); c < end; c++) {
+    if (kindOf(s, c) !== knowledge || trashed(s, c)) continue;
+    const id = idOfConn(s, c), here = shown.get(id), splitHere = split.get(id);
+    for (let k = 0, n = count(s, c); k < n; k++) {
+      const node = idOfNode(s, at(s, c, k) >> 2), i = byId.get(node);
       if (i === undefined || items[i].kind === 'phantom' || items[i].badge) continue;
       // No branch here, or a connection masked here (fewer than two nodes shown): it exists but is not seen.
       if ((!here?.includes(node) || !drawn.has(id)) && !splitHere?.includes(node)) items[i].badge = true;
