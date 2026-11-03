@@ -33,14 +33,32 @@ export function ancestors(s: State, plan: Id, node: Id): Id[] {
   return out;
 }
 
-/** The objects an action's operations can make wrong; undefined when everything must be checked (a plan or the tag registry changed). */
-export function touchedBy(ops: Op[]): Set<Id> | undefined {
+/**
+ * The objects an action's operations can make wrong, read in `s` with them applied: those they write, and those a plan
+ * or a tag key decides, from the indices — never the whole base. A plan's record coming or going decides the trashed
+ * nodes placed in it (rule trashedPlaced); its type, the structure connections shown in it (structureOutsideDocument);
+ * its name, nothing. A tag key decides the nodes and connections whose tags use it.
+ */
+export function touchedBy(s: State, ops: readonly Op[]): Set<Id> {
   const touched = new Set<Id>();
+  const { tables: T, index: I } = dataOf(s);
   for (const op of ops) {
     switch (op.t) {
-      case 'plan':
+      case 'plan': {
+        const p = T.plans.rows.get((op.after ?? op.before)!.id);
+        if (p < 0 || op.before?.type === op.after?.type) break;
+        if ((op.before === null) !== (op.after === null)) {
+          for (const n of T.plans.placements[p]?.keys() ?? []) if (T.nodes.recs[n]?.trashedAt !== undefined) touched.add(T.nodes.rows.ids[n]);
+        }
+        for (const c of I.structures) {
+          const b = T.conns.branches.view(c);
+          for (let i = 0; i < b.length; i += 2) if (b[i] === p) { touched.add(T.conns.rows.ids[c]); break; }
+        }
+        break;
+      }
       case 'tagKey':
-        return undefined;
+        for (const id of I.tagged.get((op.after ?? op.before)!.key) ?? []) touched.add(id);
+        break;
       case 'node':
         touched.add((op.after ?? op.before)!.id);
         break;

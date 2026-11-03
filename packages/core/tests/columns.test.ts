@@ -253,6 +253,11 @@ function indicesMatchOracle(s: State, o: oracle.State): void {
     expect([...phantomsOf(s, c)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.connection === c).map((p) => p.id).sort());
   }
   for (const g of NODES) expect([...phantomsIn(s, g)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.group === g).map((p) => p.id).sort());
+  expect([...I.structures].map((c) => T.conns.rows.ids[c]).sort()).toEqual([...o.connections.values()].filter((c) => c.kind === 'structure').map((c) => c.id).sort());
+  for (const key of KEYS) {
+    const carriers = [...o.nodes.values(), ...o.connections.values()].filter((r) => r.tags.some((t) => t.key === key)).map((r) => r.id).sort();
+    expect([...(I.tagged.get(key) ?? [])].sort()).toEqual(carriers);
+  }
   for (const plan of PLANS) {
     const members = new Map<Id, Id[]>();
     for (const n of NODES) {
@@ -292,6 +297,8 @@ function indexDump(s: State) {
   I.groupMembers.forEach((gm, p) => { for (const [g, ms] of gm ?? []) out.push(`groupMembers ${pid(p)} ${nid(g)} ${ms.map(nid).sort()}`); });
   for (const [c, ids] of I.phantomsOf) out.push(`phantomsOf ${c} ${[...ids].sort()}`);
   for (const [g, ids] of I.phantomsIn) out.push(`phantomsIn ${g} ${[...ids].sort()}`);
+  out.push(`structures ${[...I.structures].map((c) => T.conns.rows.ids[c]).sort()}`);
+  for (const [key, ids] of I.tagged) out.push(`tagged ${key} ${[...ids].sort()}`);
   return out.sort();
 }
 
@@ -350,7 +357,7 @@ test('oracle : 2 000 opérations au hasard, les façades égalent le modèle obj
     both(s, o, op);
     if (!INVALID.has(op)) window.push(op);
     if (i % 20 === 0) {
-      rulesMatchOracle(s, o, [undefined, touchedBy(window), someIds(), someIds(), someIds()]);
+      rulesMatchOracle(s, o, [undefined, touchedBy(s, window), someIds(), someIds(), someIds()]);
       window.length = 0;
     }
     if (i % 100 === 0) {
@@ -371,7 +378,7 @@ test('oracle : 2 000 opérations au hasard, les façades égalent le modèle obj
     expect(rows.refs.every((n) => n === 0)).toBe(true);
   }
   for (const pool of [T.conns.members, T.conns.branches, I.memberOf, I.placedIn]) expect(pool.top).toBe(pool.waste);
-  expect(I.phantomsOf.size).toBe(0);
+  expect([I.phantomsOf.size, I.phantomsIn.size, I.structures.size, I.tagged.size]).toEqual([0, 0, 0, 0]);
   expect(I.groupMembers.every((m) => !m || m.size === 0)).toBe(true);
 });
 

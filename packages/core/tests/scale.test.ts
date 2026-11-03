@@ -1,10 +1,11 @@
 import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
 import {
-  type Action, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode,
+  type Action, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode, transact,
 } from '../src/commands.ts';
 import { UndoStack } from '../src/history.ts';
 import { groupOf } from '../src/invariants.ts';
+import type { TagKeyDef } from '../src/model.ts';
 import { applyOp, applyOps, dataOf, directGroup, emptyState, groupMembers, nodeId, placementOf, planRow, reindex, type State } from '../src/state.ts';
 
 // Timed tests run one after the other in this file, not against each other.
@@ -92,6 +93,13 @@ test('base de référence : une commande coûte ce qu’elle touche, appliquée 
   }
   expect(Math.abs(I.memberOf.len[hub] - 500)).toBeLessThan(10);
   const node = nodeId(s, leaf), other = nodeId(s, far), group = nodeId(s, directGroup(s, p, far));
+  // An enumeration tag carried by a thousand nodes, for an edit of its key.
+  const def: TagKeyDef = { key: 'pertinence', type: 'enum', scope: 'both', multi: false, required: false, enumValues: [{ name: 'faible', rank: 1 }, { name: 'forte', rank: 2 }] };
+  applyOp(s, { t: 'tagKey', before: null, after: def });
+  for (let n = 0; n < 1000; n++) {
+    const r = s.nodes.get(nodeId(s, 50 * n))!;
+    applyOp(s, { t: 'node', before: r, after: { ...r, tags: [{ key: 'pertinence', value: 'forte' }] } });
+  }
   const books = () => [T.nodes.count, T.conns.count, T.conns.branchCount, T.plans.placementCount, s.phantoms.size, I.memberOf.len[hub], groupOf(s, lobby, node)];
   const before = books(), rec = s.nodes.get(node), at = placementOf(s, lobby, node);
   const costs: Record<string, { ms: number; out: Action }> = {
@@ -101,10 +109,16 @@ test('base de référence : une commande coûte ce qu’elle touche, appliquée 
     connect: cost(() => connect(s, { plan: lobby, members: [{ node, role: 'source' }, { node: other, role: 'target' }] })),
     include: cost(() => include(s, lobby, node, group)),
     exclude: cost(() => exclude(s, lobby, node)),
+    createPlan: cost(() => createPlan(s, 'Nouveau', 'plan')),
+    tagKey: cost(() => transact(s, (d) => {
+      d.push({ t: 'tagKey', before: def, after: { ...def, enumValues: [...def.enumValues!, { name: 'centrale', rank: 3 }] } });
+      return d.finish('Modifier le tag « pertinence »');
+    })),
   };
   for (const [name, c] of Object.entries(costs)) expect(c.ms, name).toBeLessThanOrEqual(2);
+  // The plan aims at 10 ms (met at ≈ 5 ms on a quiet machine); the gate is three times that measure (R12, registry).
   const removal = cost(() => deleteEverywhere(s, nodeId(s, hub)));
-  expect(removal.ms).toBeLessThanOrEqual(10);
+  expect(removal.ms).toBeLessThanOrEqual(15);
   expect(removal.out.ops.length).toBeGreaterThan(1000);
   expect(books()).toEqual(before);
   expect([s.nodes.get(node), placementOf(s, lobby, node)]).toEqual([rec, at]);

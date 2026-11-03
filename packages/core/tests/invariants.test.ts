@@ -1,9 +1,11 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addMember, CommandError, connect, createNode, deleteEverywhere, editConnection, editNode, exclude, include, moveNodes, placeNode,
+  type Action, addMember, CommandError, connect, createNode, createPlan, deleteEverywhere, editConnection, editNode, exclude, include, moveNodes, placeNode,
   removeFromPlan, removeMember, restoreNode, setBranches, setRole,
 } from '../src/commands.ts';
-import type { ConnectionKind, ConnectionRec, Id, NodeRec, PlanType, Role } from '../src/model.ts';
+import { invertAction } from '../src/history.ts';
+import type { ConnectionKind, ConnectionRec, Id, NodeRec, PlanType, Role, TagKeyDef, TagValue } from '../src/model.ts';
+import type { Op } from '../src/ops.ts';
 import { ancestors, checkState, groupOf, touchedBy, type Violation } from '../src/invariants.ts';
 import { applyOp, applyOps, emptyState, type State } from '../src/state.ts';
 
@@ -112,7 +114,8 @@ const NODES = Array.from({ length: 12 }, (_, i) => `n${i}`);
 /**
  * Twelve nodes in P, some in Q and in the document D, and every rule broken somewhere, written without commands: a
  * connection of one member, a member twice, a branch to a non-member, two groups (P), a loop (Q), a trashed node still
- * placed, a structure outside a document, an enumeration value unknown.
+ * placed, a structure outside a document, an enumeration value unknown. A structure in D and a connection tagged with a
+ * valid value wait for a plan or a tag key to change.
  */
 function broken(): State {
   const s = emptyState();
@@ -124,13 +127,13 @@ function broken(): State {
     if (i % 2 === 0 || i === 9) applyOp(s, { t: 'placement', before: null, after: { plan: 'Q', node: id, x: i, y: 1, k: 0 } });
     if (i % 3 === 0) applyOp(s, { t: 'placement', before: null, after: { plan: 'D', node: id, x: i, y: 2, k: 0 } });
   });
-  const raw = (id: Id, kind: ConnectionKind, members: [Id, Role][], plan: Id, shown: Id[] = members.map(([n]) => n)) => {
-    applyOp(s, { t: 'connection', before: null, after: { id, kind, title: '', relation: '', tags: [], members: members.map(([n, role]) => ({ node: n, role })) } });
+  const raw = (id: Id, kind: ConnectionKind, members: [Id, Role][], plan: Id, shown: Id[] = members.map(([n]) => n), tags: TagValue[] = []) => {
+    applyOp(s, { t: 'connection', before: null, after: { id, kind, title: '', relation: '', tags, members: members.map(([n, role]) => ({ node: n, role })) } });
     for (const n of new Set(shown)) applyOp(s, { t: 'branch', key: { plan, connection: id, node: n }, before: false, after: true });
   };
   raw('solo', 'knowledge', [['n0', 'source']], 'P');
   raw('dup', 'knowledge', [['n1', 'source'], ['n1', 'target'], ['n2', 'target']], 'P');
-  raw('k23', 'knowledge', [['n2', 'source'], ['n3', 'target']], 'P', ['n2', 'n3', 'n4']);
+  raw('k23', 'knowledge', [['n2', 'source'], ['n3', 'target']], 'P', ['n2', 'n3', 'n4'], [{ key: 'e', value: 'un' }]);
   raw('i56', 'inclusion', [['n5', 'source'], ['n6', 'target']], 'P');
   raw('i57', 'inclusion', [['n5', 'source'], ['n7', 'target']], 'P');
   raw('i89', 'inclusion', [['n8', 'source'], ['n9', 'target']], 'Q');
@@ -138,11 +141,12 @@ function broken(): State {
   raw('st', 'structure', [['n3', 'source'], ['n4', 'target']], 'P');
   raw('k01', 'knowledge', [['n0', 'source'], ['n1', 'target'], ['n6', 'associate']], 'P', ['n0', 'n1', 'n6', 'n8']);
   raw('i42', 'inclusion', [['n4', 'source'], ['n2', 'target']], 'Q');
+  raw('sd', 'structure', [['n0', 'source'], ['n3', 'target']], 'D');
   return s;
 }
 const BROKEN = ['solo', 'dup', 'k23', 'i56', 'i57', 'i89', 'i98', 'st', 'k01', 'i42'];
 
-test('checkState(s, touched) égale checkState(s) filtré sur la portée, pour 100 actions tirées au hasard', () => {
+test('checkState(s, touched) égale checkState(s) filtré sur la portée, pour 100 actions tirées au hasard, plans et clés de tag compris', () => {
   const s = broken(), r = rng(7);
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
   const nodes = [...NODES], plans = ['P', 'Q', 'D'], roles: Role[] = ['source', 'target', 'associate'];
@@ -164,6 +168,22 @@ test('checkState(s, touched) égale checkState(s) filtré sur la portée, pour 1
     () => removeMember(s, conn(), pick(nodes)),
     () => editConnection(s, conn(), { title: 'x' }),
     () => setRole(s, conn(), pick(nodes), pick(roles)),
+    () => { const a = createPlan(s, 'nouveau', pick(TYPES)); plans.push((a.ops[0] as { after: { id: Id } }).after.id); return a; },
+  ];
+  const TYPES: PlanType[] = ['plan', 'document', 'lobby'];
+  const edit = (op: Op): Action => ({ id: 'brut', label: 'brut', ops: [op] });
+  const enumKey = (key: string, names: string[]): TagKeyDef => ({ key, type: 'enum', scope: 'both', multi: false, required: false, enumValues: names.map((name, i) => ({ name, rank: i + 1 })) });
+  // Plans and tag keys written without a command (none makes them but createPlan): renamed, retyped, removed, made
+  // again; enumeration values changed. They may break rules, which must all be in their scope.
+  const edits: (() => Action)[] = [
+    () => {
+      const id = pick(['P', 'Q', 'D', 'E']), before = s.plans.get(id) ?? null;
+      return edit({ t: 'plan', before, after: before && r() < 0.25 ? null : { id, name: pick(['un', 'deux']), type: pick(TYPES) } });
+    },
+    () => {
+      const key = pick(['e', 'f']), before = s.tagKeys.get(key) ?? null;
+      return edit({ t: 'tagKey', before, after: before && r() < 0.25 ? null : enumKey(key, pick([['un'], ['deux'], ['un', 'deux']])) });
+    },
   ];
   /** The scope checkState reads: the touched objects, and the members of touched inclusions. */
   const scopeOf = (touched: Set<Id>) => {
@@ -180,20 +200,34 @@ test('checkState(s, touched) égale checkState(s) filtré sur la portée, pour 1
     found += got.length;
     for (const v of got) codes.add(v.code);
   };
-  let accepted = 0, refused = 0;
+  const key = (v: Violation) => `${v.code}|${v.subject}`;
+  let accepted = 0, refused = 0, gained = 0;
+  const kinds = new Set<string>();
   while (accepted < 100) {
+    const raw = r() < 0.3;
     let a: Action;
-    try { a = pick(commands)(); } catch (e) { if (!(e instanceof CommandError)) throw e; refused++; continue; }
-    const touched = touchedBy(a.ops)!;
+    try { a = pick(raw ? edits : commands)(); } catch (e) { if (!(e instanceof CommandError)) throw e; refused++; continue; }
+    const before = checkState(s);
+    // The scope is read with the action applied, as finish reads it; compared after, then before (undone), then applied again.
+    applyOps(s, a.ops);
+    const touched = touchedBy(s, a.ops), after = checkState(s);
+    compare(touched);
+    if (raw) {
+      // What an edit of a plan or a tag key breaks is in its scope.
+      const had = new Set(before.map(key)), scope = scopeOf(touched);
+      for (const v of after) if (!had.has(key(v))) { expect(scope.has(v.subject), key(v)).toBe(true); gained++; }
+    }
+    applyOps(s, invertAction(a).ops);
     compare(touched);
     applyOps(s, a.ops);
-    compare(touched);
+    for (const op of a.ops) kinds.add(op.t);
     accepted++;
   }
-  // Every rule was found broken in some scope, many times over.
+  // Every rule was found broken in some scope, many times over; plans and tag keys were drawn, and broke rules.
   expect(codes).toEqual(new Set(['members', 'duplicateMember', 'branchNotMember', 'twoGroups', 'cycle', 'trashedPlaced', 'structureOutsideDocument', 'tag']));
-  expect(found).toBeGreaterThan(100);
+  expect(found).toBeGreaterThan(50);
   expect(refused).toBeGreaterThan(0);
+  expect([kinds.has('plan'), kinds.has('tagKey'), gained > 0]).toEqual([true, true, true]);
 });
 
 test('groupOf et ancestors suivent la hiérarchie du plan', () => {

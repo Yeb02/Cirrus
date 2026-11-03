@@ -1,9 +1,10 @@
 import { BranchSet, connectionAt, ConnectionsFacade, MapFacade, PlacementsFacade, placementAt, RecordFacade } from './facades.ts';
-import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef } from './model.ts';
+import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import type { Snapshot } from './snapshot.ts';
 import {
-  EMPTY_TAGS, emptyTables, growInt32, INCLUSION, kindCode, KINDS, memberCode, memberNode, NO_RECORD, Pool, roleCode, ROLES, SOURCE, type Tables, TARGET,
+  EMPTY_TAGS, emptyTables, growInt32, INCLUSION, kindCode, KINDS, memberCode, memberNode, NO_RECORD, Pool, roleCode, ROLES, SOURCE, STRUCTURE, type Tables,
+  TARGET,
 } from './tables.ts';
 
 /** The direct groups of one plan (spec 10), by node row. */
@@ -28,6 +29,13 @@ export interface Indices {
   phantomsOf: Map<Id, Id[]>;
   /** Per group node identifier: the identifiers of the phantoms sitting in it (spec 8.5). */
   phantomsIn: Map<Id, Id[]>;
+  /** The connection rows of kind structure (spec 15): those a plan's type can make wrong. */
+  structures: Set<number>;
+  /**
+   * Per tag key: the identifiers of the nodes and connections whose tags use it, those a change of that key can make
+   * wrong (identifiers are unique across kinds).
+   */
+  tagged: Map<string, Set<Id>>;
 }
 
 /**
@@ -62,7 +70,10 @@ export const placementKey = (plan: Id, node: Id): string => `${plan}|${node}`;
 export const layoutKey = (plan: Id, connection: Id): string => `${plan}|${connection}`;
 
 function emptyIndex(): Indices {
-  return { memberOf: new Pool(1), placedIn: new Pool(1), groupOf: [], groupMembers: [], phantomsOf: new Map(), phantomsIn: new Map() };
+  return {
+    memberOf: new Pool(1), placedIn: new Pool(1), groupOf: [], groupMembers: [], phantomsOf: new Map(), phantomsIn: new Map(), structures: new Set(),
+    tagged: new Map(),
+  };
 }
 
 function stateOf(tables: Tables, index: Indices): StateData {
@@ -118,6 +129,8 @@ export function directGroup(s: State, plan: number, node: number): number {
 export const phantomsOf = (s: State, connection: Id): readonly Id[] => dataOf(s).index.phantomsOf.get(connection) ?? [];
 /** Core only: the phantoms sitting in group `group` (any plan). */
 export const phantomsIn = (s: State, group: Id): readonly Id[] => dataOf(s).index.phantomsIn.get(group) ?? [];
+/** Core only: whether `rec` is its connection's current record, in the sense of canonical (read from the columns). */
+export const isCurrentConnection = (s: State, rec: ConnectionRec): boolean => connectionIs(dataOf(s).tables, rec.id, rec);
 
 export class OpConflictError extends Error {}
 
@@ -214,7 +227,7 @@ function write(d: StateData, op: Op, checked: boolean, back: boolean): void {
       const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
       if (!rec) throw new Error('empty node operation');
       if (checked) check(d.nodes.get(rec.id) ?? null, before, `Le nœud « ${rec.title} »`);
-      return writeNode(d, rec.id, after);
+      return writeNode(d, rec.id, after, true);
     }
     case 'connection': {
       const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
@@ -280,7 +293,7 @@ export function loadRecords(s: State, x: Snapshot): void {
   T.nodes.rows.presize(x.nodes.length);
   C.presize(x.connections.length, x.connections.reduce((n, c) => n + c.members.length, 0));
   for (const p of x.plans) writePlan(d, p.id, p);
-  for (const n of x.nodes) writeNode(d, n.id, n);
+  for (const n of x.nodes) writeNode(d, n.id, n, false);
   for (const t of x.tagKeys) T.tagKeys.set(t.key, t);
   for (const c of x.connections) writeConnection(d, c.id, c, false);
   for (const p of x.placements) writePlacement(d, p.plan, p.node, p, false);
@@ -364,6 +377,29 @@ export function reindex(s: State): void {
     listAdd(I.phantomsOf, ph.connection, ph.id);
     if (ph.group !== undefined) listAdd(I.phantomsIn, ph.group, ph.id);
   }
+  I.structures = new Set();
+  I.tagged = new Map();
+  const structure = STRUCTURE, noTags = EMPTY_TAGS, connIds = C.rows.ids, tags = C.tags;
+  for (let c = 0; c < connEnd; c++) {
+    if (kind[c] === structure) I.structures.add(c);
+    if (kind[c] !== none && tags[c].length > 0) retag(I.tagged, connIds[c], noTags, tags[c]);
+  }
+  for (const rec of T.nodes.recs) if (rec && rec.tags.length > 0) retag(I.tagged, rec.id, noTags, rec.tags);
+}
+
+/** The tag index after the tags of record `id` went from `old` to `fresh`. */
+function retag(tagged: Map<string, Set<Id>>, id: Id, old: readonly TagValue[], fresh: readonly TagValue[]): void {
+  if (old === fresh) return;
+  for (const t of old) {
+    if (fresh.some((x) => x.key === t.key)) continue;
+    const ids = tagged.get(t.key);
+    if (ids?.delete(id) && ids.size === 0) tagged.delete(t.key);
+  }
+  for (const t of fresh) {
+    const ids = tagged.get(t.key);
+    if (ids) ids.add(id);
+    else tagged.set(t.key, new Set([id]));
+  }
 }
 
 // Rows: each reference to an identifier holds its row (Rows.ref), and gives it back (unref*) when it goes.
@@ -391,8 +427,9 @@ function unrefPlan(d: StateData, r: number): void {
   d.index.groupMembers[r] = undefined;
 }
 
-function writeNode(d: StateData, id: Id, after: NodeRec | null): void {
+function writeNode(d: StateData, id: Id, after: NodeRec | null, indexed: boolean): void {
   const N = d.tables.nodes, r = N.rows.get(id), had = r >= 0 && N.recs[r] !== undefined;
+  if (indexed) retag(d.index.tagged, id, had ? N.recs[r]!.tags ?? EMPTY_TAGS : EMPTY_TAGS, after?.tags ?? EMPTY_TAGS);
   if (after) {
     const row = had ? r : refNode(d, id);
     if (!had) N.count++;
@@ -451,6 +488,7 @@ function writeConnection(d: StateData, id: Id, after: ConnectionRec | null, inde
   }
   const old = had ? C.members.view(r).slice() : NO_MEMBERS;
   const oldSource = had && C.kind[r] === INCLUSION ? firstWith(d, r, SOURCE) : -1;
+  const oldKind = had ? C.kind[r] : NO_RECORD, oldTags = had ? C.tags[r] : EMPTY_TAGS;
   if (after) {
     if (!had) { r = C.ref(id); C.count++; }
     C.kind[r] = kind;
@@ -471,6 +509,9 @@ function writeConnection(d: StateData, id: Id, after: ConnectionRec | null, inde
   }
   if (indexed) {
     updateMemberOf(d, r, old, fresh);
+    retag(d.index.tagged, id, oldTags, tags);
+    if (oldKind === STRUCTURE && kind !== STRUCTURE) d.index.structures.delete(r);
+    if (kind === STRUCTURE && oldKind !== STRUCTURE) d.index.structures.add(r);
     // Groups through this connection, in every plan where it has branches, for its old and new member.
     const newSource = after && C.kind[r] === INCLUSION ? firstWith(d, r, SOURCE) : -1;
     if (oldSource >= 0 || newSource >= 0) {

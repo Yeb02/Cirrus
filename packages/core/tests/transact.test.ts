@@ -8,15 +8,16 @@ import { UndoConflictError, UndoStack } from '../src/history.ts';
 import type { Id, PlanType } from '../src/model.ts';
 import type { Op } from '../src/ops.ts';
 import { toSnapshot } from '../src/snapshot.ts';
-import { applyOp, applyOps, canonical, dataOf, emptyState, placementOf, type State } from '../src/state.ts';
+import { applyOp, applyOps, canonical, dataOf, emptyState, OpConflictError, placementOf, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
 const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
 
 /**
- * The content of a state, its indices and the references held to each row, in identifier terms and sorted: equal for
- * two states that hold the same thing, whatever rows and list orders they use.
+ * The content of a state, its indices in identifier terms, and each identifier's row and the references held to it,
+ * sorted: equal when a rollback gave back the same content, the same indices and the same rows (the order of the
+ * lists aside).
  */
 function image(s: State): string {
   const x = toSnapshot(s), T = dataOf(s).tables, I = dataOf(s).index;
@@ -29,7 +30,9 @@ function image(s: State): string {
   I.groupMembers.forEach((gm, p) => { for (const [g, ms] of gm ?? []) index.push(`groupMembers ${pid(p)} ${nid(g)} ${ms.map(nid).sort()}`); });
   for (const [c, ids] of I.phantomsOf) index.push(`phantomsOf ${c} ${[...ids].sort()}`);
   for (const [g, ids] of I.phantomsIn) index.push(`phantomsIn ${g} ${[...ids].sort()}`);
-  const refs = [T.nodes.rows, T.plans.rows, T.conns.rows].map((rows) => [...rows.row].map(([id, r]) => `${id} ${rows.refs[r]}`).sort());
+  index.push(`structures ${[...I.structures].map(cid).sort()}`);
+  for (const [key, ids] of I.tagged) index.push(`tagged ${key} ${[...ids].sort()}`);
+  const refs = [T.nodes.rows, T.plans.rows, T.conns.rows].map((rows) => [...rows.row].map(([id, r]) => `${id} row ${r} refs ${rows.refs[r]}`).sort());
   return canonical({
     nodes: sorted(x.nodes), connections: sorted(x.connections), plans: sorted(x.plans), tagKeys: sorted(x.tagKeys), placements: sorted(x.placements),
     branches: x.branches.map((b) => b.join('|')).sort(), connLayouts: sorted(x.connLayouts), phantoms: sorted(x.phantoms), index: index.sort(), refs,
@@ -80,6 +83,76 @@ test('une commande qui lève une erreur au milieu laisse l’état identique, à
   expect(image(s)).toBe(before);
   // A rule broken by the whole: refused at the end, when the rules are checked.
   expect(() => combine(s, 'Boucle', [(x) => moveNodes(x, P, [{ node: M, x: 3 }]), (x) => include(x, P, H, M)])).toThrow(/descendants/);
+  expect(image(s)).toBe(before);
+});
+
+test('combine dans combine : une étape intérieure qui lève défait tout exactement ; réussi, une seule action, vérifiée une fois au bout', () => {
+  const { s, P, A, B, C, G, H, M } = world();
+  const before = image(s);
+  expect(() => combine(s, 'Dehors', [
+    (x) => moveNodes(x, P, [{ node: A, x: 3 }]),
+    (x) => combine(x, 'Dedans', [(y) => deleteEverywhere(y, G), (y) => include(y, P, B, H), () => { throw new Error('dedans'); }]),
+    (x) => editNode(x, A, { title: 'jamais' }),
+  ])).toThrow('dedans');
+  expect(image(s)).toBe(before);
+  // A rule broken by the inner combine is refused by the outer one, the state intact.
+  expect(() => combine(s, 'Dehors', [(x) => moveNodes(x, P, [{ node: A, x: 3 }]), (x) => combine(x, 'Dedans', [(y) => include(y, P, H, M)])])).toThrow(/descendants/);
+  expect(image(s)).toBe(before);
+  // Without the loop (G left H first, inside the inner combine), the same inclusion passes: the outer check sees it all.
+  expect(() => combine(s, 'Dehors', [(x) => combine(x, 'Dedans', [(y) => exclude(y, P, G)]), (x) => include(x, P, H, M)])).not.toThrow();
+  const a = combine(s, 'Dehors', [
+    (x) => moveNodes(x, P, [{ node: A, x: 3 }]),
+    (x) => combine(x, 'Dedans', [(y) => removeFromPlan(y, P, C), (y) => include(y, P, B, H)]),
+  ]);
+  expect(image(s)).toBe(before);
+  expect(a.ops.map((o) => o.t)).toEqual(expect.arrayContaining(['placement', 'node', 'connection', 'branch']));
+  run(s, a);
+  expect([placementOf(s, P, A)!.x, placementOf(s, P, C), s.nodes.get(C)!.trashedAt !== undefined]).toEqual([3, undefined, true]);
+  for (const op of [...a.ops].reverse()) applyOp(s, { ...op, before: op.after, after: op.before } as Op);
+  expect(image(s)).toBe(before);
+});
+
+test('un aperçu (une commande dans une transaction sans action) est vérifié : jamais d’action rendue sans contrôle', () => {
+  const { s, P, H, M, A } = world();
+  const before = image(s);
+  // H into M closes a loop (M in G in H): refused, even with no combine around it.
+  expect(() => transact(s, () => include(s, P, H, M))).toThrow(/descendants/);
+  expect(image(s)).toBe(before);
+  // Accepted, its operations stay applied for the preview, then the transaction undoes them.
+  const seen = transact(s, () => {
+    const a = moveNodes(s, P, [{ node: A, x: 77 }]);
+    return { ops: a.ops.length, x: placementOf(s, P, A)!.x };
+  });
+  expect(seen).toEqual({ ops: 1, x: 77 });
+  expect(image(s)).toBe(before);
+  // A combine inside a preview checks itself.
+  expect(() => transact(s, () => combine(s, 'Boucle', [(x) => include(x, P, H, M)]))).toThrow(/descendants/);
+  expect(image(s)).toBe(before);
+});
+
+test('dropPhantom et trashConnection refusent un enregistrement qui n’est pas l’actuel', () => {
+  const { s, ab, abc, phantom } = world();
+  const before = image(s);
+  // A copy, then a record changed since, inside the same transaction.
+  expect(() => transact(s, (d) => d.dropPhantom({ ...s.phantoms.get(phantom)! }))).toThrow(OpConflictError);
+  expect(() => transact(s, (d) => {
+    const ph = s.phantoms.get(phantom)!;
+    d.phantom(phantom, { ...ph, x: 5 });
+    d.dropPhantom(ph);
+  })).toThrow(OpConflictError);
+  expect(() => transact(s, (d) => {
+    const c = s.connections.get(abc)!;
+    d.connection(abc, { ...c, title: 'changée' });
+    d.trashConnection(c, c.members);
+  })).toThrow(OpConflictError);
+  expect(() => transact(s, (d) => d.trashConnection({ ...s.connections.get(ab)!, members: [] }, []))).toThrow(OpConflictError);
+  expect(image(s)).toBe(before);
+  // The current records are taken, and a copy of a connection equal to its record too (it is materialised).
+  transact(s, (d) => {
+    d.dropPhantom(s.phantoms.get(phantom)!);
+    d.trashConnection({ ...s.connections.get(abc)! }, []);
+    expect([s.phantoms.has(phantom), s.connections.get(abc)!.trashedAt !== undefined]).toEqual([false, true]);
+  });
   expect(image(s)).toBe(before);
 });
 
