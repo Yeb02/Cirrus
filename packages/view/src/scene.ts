@@ -1,5 +1,6 @@
 import {
-  type ConnectionLayout, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup, hasBranch, type Id, KNOWLEDGE, layoutKey, memberAt,
+  type ConnectionLayout, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup, formerConnRow, formerNodeRow, hasBranch, type Id, KNOWLEDGE,
+  layoutKey, memberAt,
   memberCount, memberOfAt, memberOfCount, NO_RECORD, type NodeRec, nodeAt, nodeId, nodeRow, type PhantomRec, phantomsOf, type Placement, placementsIn, type PlanRec,
   planRow, type Role, ROLES, type State, STRUCTURE, type Vec2,
 } from '@cirrus/core';
@@ -217,7 +218,10 @@ const states = new WeakMap<object, State>();
 const byIds = new WeakMap<object, ReadonlyMap<Id, number>>();
 const facades = new WeakMap<object, readonly SceneConnection[]>();
 
-/** Identifier → slot: phantoms by their map, nodes by their row (an older scene checks the slot still holds the id). */
+/**
+ * Identifier → slot: phantoms by their map, nodes by their row — or by the row it held, for a scene older than the
+ * removal of its node (formerNodeRow) — the slot checked to hold that identifier.
+ */
 class ItemsById implements ReadonlyMap<Id, number> {
   private readonly scene: PlanScene;
   constructor(scene: PlanScene) { this.scene = scene; }
@@ -225,7 +229,8 @@ class ItemsById implements ReadonlyMap<Id, number> {
     const sc = this.scene, ph = sc.itemOfPhantom.get(id);
     if (ph !== undefined) return ph;
     const s = states.get(sc);
-    const r = s ? nodeRow(s, id) : -1;
+    let r = s ? nodeRow(s, id) : -1;
+    if (s && r < 0) r = formerNodeRow(s, id);
     const i = r >= 0 && r < sc.itemOfNode.length ? sc.itemOfNode[r] : -1;
     return i >= 0 && sc.items[i].id === id ? i : undefined;
   }
@@ -349,7 +354,10 @@ export function partsOfRow(scene: PlanScene, row: number): number[] {
   return out;
 }
 
-/** The parts of a connection in this scene: its main part and the far parts of its split arms (none: not drawn here). */
+/**
+ * The parts of a connection in this scene: its main part and the far parts of its split arms (none: not drawn here).
+ * By its row, or the row it held for a scene older than the removal of its connection (formerConnRow).
+ */
 export function partOf(scene: PlanScene, connection: Id): number[] {
   const s = states.get(scene);
   if (!s) {
@@ -357,7 +365,8 @@ export function partOf(scene: PlanScene, connection: Id): number[] {
     for (let i = 0; i < scene.partCount; i++) if (scene.part[i] !== PART_GONE && scene.ids[i] === connection) out.push(i);
     return out;
   }
-  return partsOfRow(scene, connRow(s, connection)).filter((i) => scene.ids[i] === connection);
+  const r = connRow(s, connection);
+  return partsOfRow(scene, r >= 0 ? r : formerConnRow(s, connection)).filter((i) => scene.ids[i] === connection);
 }
 
 // ———— Derivations shared by buildScene and updateScene
@@ -577,7 +586,11 @@ function countSplits(
 /** The parts of connection row `c`, as objects (updateScene compares them with the scene's). */
 export function partsOf(L: SceneLookup, c: number, shown: ArrayLike<number>, phantoms: readonly PhantomRec[]): PartSpec[] {
   const out: PartSpec[] = [];
-  emitParts(L, c, shown, phantoms, (far, center, ends, count, stubs, layout, title) => { out.push({ far, center, ends: Array.from(ends.subarray(0, 3 * count)), stubs, layout, title }); });
+  emitParts(L, c, shown, phantoms, (far, center, ends, count, stubs, layout, title) => {
+    const copy = new Array<number>(3 * count);
+    for (let k = 0; k < 3 * count; k++) copy[k] = ends[k];
+    out.push({ far, center, ends: copy, stubs, layout, title });
+  });
   return out;
 }
 

@@ -1,6 +1,6 @@
 import {
-  type Action, applyOp, applyOps, combine, CommandError, connect, connId, connKind, createNode, createPlan, directGroup, editNode, emptyState, exclude, groupMembers,
-  type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm, type State,
+  type Action, applyOp, applyOps, combine, CommandError, connect, connId, connKind, createNode, createPlan, deleteEverywhere, directGroup, editNode, emptyState,
+  exclude, groupMembers, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm, type State,
 } from '@cirrus/core';
 import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
@@ -124,23 +124,27 @@ test('base de référence : la scène du lobby se construit d’un passage (cibl
 }, 180_000);
 
 /**
- * The best of seven updates after two to warm up, each from the scene the undo left: the action is applied, the scene
- * updated (timed), then the action undone and the scene updated again, so that every pass starts from the same state.
+ * The best of seven updates after two to warm up, for the action and for its undo (Review Focus 1: an inverse action
+ * goes the same way): the action is applied and the scene updated (timed), then the action undone and the scene
+ * updated again (timed), so that every pass starts from the same state.
  */
-function cost(s: State, scene: PlanScene, a: Action): { ms: number; scene: PlanScene } {
+function cost(s: State, scene: PlanScene, a: Action): { ms: number; undoMs: number; scene: PlanScene } {
   const undo = invertAction(a);
-  let sc = scene, best = Infinity;
+  let sc = scene, best = Infinity, bestUndo = Infinity;
   for (let i = 0; i < 9; i++) {
     applyOps(s, a.ops);
-    const t = performance.now();
+    let t = performance.now();
     const r = updateScene(sc, s, a.ops, measure, P);
     const ms = performance.now() - t;
-    if (i >= 2) best = Math.min(best, ms);
-    expect(r.changes.full).toBe(false);
     applyOps(s, undo.ops);
-    sc = updateScene(r.scene, s, undo.ops, measure, P).scene;
+    t = performance.now();
+    const back = updateScene(r.scene, s, undo.ops, measure, P);
+    const undoMs = performance.now() - t;
+    if (i >= 2) { best = Math.min(best, ms); bestUndo = Math.min(bestUndo, undoMs); }
+    expect([r.changes.full, back.changes.full]).toEqual([false, false]);
+    sc = back.scene;
   }
-  return { ms: best, scene: sc };
+  return { ms: best, undoMs: bestUndo, scene: sc };
 }
 
 test('base de référence : updateScene coûte ce que l’action touche, pas la taille de la base', () => {
@@ -159,8 +163,15 @@ test('base de référence : updateScene coûte ce que l’action touche, pas la 
   let big = -1;
   scene.items.forEach((it, i) => { if (isLive(scene, i) && it.kind === 'group' && subtree(i) >= 200 && (big < 0 || subtree(i) < subtree(big))) big = i; });
   const node = nodeId(s, leaf), other = nodeId(s, far), group = nodeId(s, directGroup(s, p, far));
-  const costs: Record<string, number> = {};
-  const time = (name: string, a: Action) => { const c = cost(s, scene, a); costs[name] = c.ms; scene = c.scene; show(name, c.ms); };
+  const costs: Record<string, number> = {}, undos: Record<string, number> = {};
+  const time = (name: string, a: Action) => {
+    const c = cost(s, scene, a);
+    costs[name] = c.ms;
+    undos[name] = c.undoMs;
+    scene = c.scene;
+    show(name, c.ms);
+    show(`  son annulation`, c.undoMs);
+  };
   time('déplacement', moveNodes(s, lobby, [{ node, x: 1, y: 2 }]));
   time('renommage', editNode(s, node, { title: 'Un titre renommé, plus long que le précédent' }));
   time('création', createNode(s, { plan: lobby, title: 'Nouveau', x: 0, y: 0, k: 0 }));
@@ -172,13 +183,23 @@ test('base de référence : updateScene coûte ce que l’action touche, pas la 
   take(big);
   const ids = content.sort((a, b) => scene.items[b].depth - scene.items[a].depth).filter((i) => scene.items[i].kind !== 'phantom').map((i) => scene.items[i].id);
   time(`suppression d’un groupe de ${content.length} éléments`, combine(s, 'Supprimer', ids.map((id) => (x: State) => removeFromPlan(x, lobby, id))));
+  // Other inverse paths that free rows or bring many back: a node deleted everywhere, a paste into another plan.
+  time('suppression partout', deleteEverywhere(s, other));
+  const second = createPlan(s, 'Second', 'plan');
+  applyOps(s, second.ops);
+  const plan2 = (second.ops[0] as { after: { id: Id } }).after.id;
+  const clip = copyClip(s, scene, [scene.byId.get(node)!, scene.byId.get(other)!], 1)!;
+  time('collage dans un autre plan', combine(s, 'Coller', pasteSteps(s, clip, plan2, { x: 0, y: 0 }, 1, null, P).steps));
   expect(content.length).toBeGreaterThanOrEqual(200);
-  expect(costs['déplacement']).toBeLessThanOrEqual(1);
-  expect(costs['renommage']).toBeLessThanOrEqual(1);
-  expect(costs['création']).toBeLessThanOrEqual(2);
-  expect(costs['connexion']).toBeLessThanOrEqual(2);
-  expect(costs['inclusion']).toBeLessThanOrEqual(5);
-  expect(costs[`suppression d’un groupe de ${content.length} éléments`]).toBeLessThanOrEqual(20);
+  // The brief's thresholds, for the action and for its undo alike; a node deleted everywhere (no threshold in the brief:
+  // three times its measure, 2.4–2.7 ms) so that neither falls into a scan of the plan unseen.
+  const limits: Record<string, number> = {
+    déplacement: 1, renommage: 1, création: 2, connexion: 2, inclusion: 5, [`suppression d’un groupe de ${content.length} éléments`]: 20, 'suppression partout': 8,
+  };
+  for (const [name, limit] of Object.entries(limits)) {
+    expect(costs[name], name).toBeLessThanOrEqual(limit);
+    expect(undos[name], `annulation : ${name}`).toBeLessThanOrEqual(limit);
+  }
   ref!.scene = scene;
 }, 180_000);
 

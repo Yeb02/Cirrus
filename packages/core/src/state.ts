@@ -95,6 +95,13 @@ export function emptyState(): State {
 export const nodeRow = (s: State, id: Id): number => dataOf(s).tables.nodes.rows.get(id);
 export const planRow = (s: State, id: Id): number => dataOf(s).tables.plans.rows.get(id);
 export const connRow = (s: State, id: Id): number => dataOf(s).tables.conns.rows.get(id);
+/**
+ * The row a node's or connection's identifier held before the row was freed (its last reference gone), as long as
+ * no other identifier holds that row; −1 otherwise. For a reader that kept rows (a scene) after an action, an undo
+ * among them, removed what held them.
+ */
+export const formerNodeRow = (s: State, id: Id): number => dataOf(s).tables.nodes.rows.formerRow(id);
+export const formerConnRow = (s: State, id: Id): number => dataOf(s).tables.conns.rows.formerRow(id);
 export const nodeId = (s: State, row: number): Id => dataOf(s).tables.nodes.rows.ids[row];
 export const planId = (s: State, row: number): Id => dataOf(s).tables.plans.rows.ids[row];
 export const connId = (s: State, row: number): Id => dataOf(s).tables.conns.rows.ids[row];

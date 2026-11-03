@@ -56,6 +56,12 @@ export class Rows {
   readonly free: number[];
   /** Rows ever allocated: the per-row columns cover [0, end). */
   end: number;
+  /**
+   * The identifiers of the free rows, each with its row, until the row is taken again: what a reader that knew an
+   * identifier finds of where it was (a scene updated after its connection or node went). Empty after a bulk restore.
+   */
+  private readonly released: Map<Id, number>;
+  private readonly releasedId: Map<number, Id>;
 
   constructor() {
     this.index = new Map();
@@ -63,6 +69,8 @@ export class Rows {
     this.refs = new Int32Array(16);
     this.free = [];
     this.end = 0;
+    this.released = new Map();
+    this.releasedId = new Map();
   }
 
   /** Identifier → row of the held rows. */
@@ -98,13 +106,33 @@ export class Rows {
   ref(id: Id): number {
     let r = this.row.get(id);
     if (r === undefined) {
-      r = this.free.length > 0 ? this.free.pop()! : this.end++;
+      if (this.free.length > 0) {
+        r = this.free.pop()!;
+        this.forget(this.releasedId.get(r));
+      } else r = this.end++;
+      this.forget(id);
       this.refs = growInt32(this.refs, r + 1);
       this.row.set(id, r);
       this.ids[r] = id;
     }
     this.refs[r]++;
     return r;
+  }
+
+  /**
+   * The row `id` held before it was freed, while no identifier holds that row again; −1 otherwise (never held, held
+   * now, its row taken by another, or freed before a bulk restore).
+   */
+  formerRow(id: Id): number {
+    return this.released.get(id) ?? -1;
+  }
+
+  private forget(id: Id | undefined): void {
+    if (id === undefined) return;
+    const r = this.released.get(id);
+    if (r === undefined) return;
+    this.released.delete(id);
+    this.releasedId.delete(r);
   }
 
   /** One more reference to a row already held, without looking its identifier up. */
@@ -118,9 +146,12 @@ export class Rows {
   unref(r: number): boolean {
     this.held(r);
     if (--this.refs[r] > 0) return false;
-    this.row.delete(this.ids[r]);
+    const id = this.ids[r];
+    this.row.delete(id);
     this.ids[r] = '';
     this.free.push(r);
+    this.released.set(id, r);
+    this.releasedId.set(r, id);
     return true;
   }
 

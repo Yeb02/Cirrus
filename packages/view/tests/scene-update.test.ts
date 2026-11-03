@@ -8,98 +8,120 @@ import { copyClip, pasteSteps } from '../src/clip.ts';
 import { DEFAULT_PARAMS, type RenderParams } from '../src/params.ts';
 import { buildScene, isLive, partEnds, partOf, type PlanScene } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
-import { canonicalScene, copyOf, created, fixture, measure, P, rng, run, slotProblem } from './helpers.ts';
+import { canonicalScene, copyOf, created, fixture, measure, P, rng, run, sceneBooks, slotProblem } from './helpers.ts';
 
 const base = fixture();
 
-/** Every cached scene follows an action (Review Focus 2), and must show what a scene built anew shows. */
+/**
+ * Every cached scene follows an action (Review Focus 2), and must show what a scene built anew shows; the previous
+ * scene stays exactly as it was, books included, for a gesture that holds it.
+ */
 function follow(s: State, scenes: Map<Id, PlanScene>, ops: Op[], p: RenderParams, what: string): void {
   for (const plan of s.plans.keys()) {
     const prev = scenes.get(plan);
     if (!prev) { scenes.set(plan, buildScene(s, plan, measure, p)); continue; }
-    const before = canonicalScene(prev);
+    const before = canonicalScene(prev), books = sceneBooks(prev);
     const { scene } = updateScene(prev, s, ops, measure, p);
-    // The previous scene stays valid for a gesture that holds it: its columns are copied before being written.
-    expect(canonicalScene(prev), `${what} : la scène précédente de ${s.plans.get(plan)!.name} a changé`).toEqual(before);
-    expect(canonicalScene(scene), `${what}, plan ${s.plans.get(plan)!.name}`).toEqual(canonicalScene(buildScene(s, plan, measure, p)));
-    expect(slotProblem(scene), `${what}, plan ${s.plans.get(plan)!.name}`).toBeNull();
+    const name = s.plans.get(plan)!.name;
+    expect(canonicalScene(prev), `${what} : la scène précédente de ${name} a changé`).toEqual(before);
+    expect(sceneBooks(prev), `${what} : les tables de la scène précédente de ${name} ont changé`).toEqual(books);
+    expect(slotProblem(prev), `${what}, scène précédente de ${name}`).toBeNull();
+    expect(canonicalScene(scene), `${what}, plan ${name}`).toEqual(canonicalScene(buildScene(s, plan, measure, p)));
+    expect(slotProblem(scene), `${what}, plan ${name}`).toBeNull();
     scenes.set(plan, scene);
   }
 }
 
+/** A pick that makes no sense here (an empty plan, a connection without members): no action of that kind this time. */
+class Skip extends Error {}
+const need = <T>(v: T | undefined): T => {
+  if (v === undefined) throw new Skip();
+  return v;
+};
+
+/** The kinds the brief lists, that the 300 actions must each make at least once. */
+const KINDS = [
+  'déplacement', 'renommage', 'création', 'connexion', 'inclusion', 'exclusion', 'retrait d’un plan', 'suppression partout', 'scission de bras',
+  'réunion de bras', 'amorce placée', 'disposition', 'collage',
+];
+
 /**
  * The core's commands and pasteSteps, on nodes, connections and phantoms picked at random among those of the test base
- * (and those the actions make), in every plan: what the interface can do.
+ * (and those the actions make), in every plan: what the interface can do. A refusal of the core (CommandError) is a
+ * menu choice refused; any other error fails the test.
  */
-function randomActions(s: State, r: () => number): () => Action | null {
-  const pick = <T>(xs: readonly T[]): T | undefined => (xs.length === 0 ? undefined : xs[Math.floor(r() * xs.length)]);
+function randomActions(s: State, r: () => number): () => { kind: string; action: Action } | null {
+  const pick = <T>(xs: readonly T[]): T => need(xs.length === 0 ? undefined : xs[Math.floor(r() * xs.length)]);
   const plans = () => [...s.plans.keys()];
   const nodes = () => [...s.nodes.keys()];
   const placed = (plan: Id) => [...s.placements.values()].filter((pl) => pl.plan === plan).map((pl) => pl.node);
   const conns = () => [...s.connections.keys()];
+  const membersOf = (c: Id) => need(s.connections.get(c)).members;
   const phantoms = () => [...s.phantoms.values()];
   const roles: Role[] = ['source', 'target', 'associate'];
   const titles = ['Court', 'Un titre un peu plus long que la boîte', 'Encore un titre vraiment très long qui prend trois lignes au moins, sinon plus'];
   const at = () => ({ x: Math.round(r() * 2000 - 1000), y: Math.round(r() * 1400 - 700) });
-  const commands: (() => Action)[] = [
-    () => { const plan = pick(plans())!; return moveNodes(s, plan, [{ node: pick(placed(plan))!, ...at() }]); },
-    () => { const plan = pick(plans())!, node = pick(placed(plan))!; return moveNodes(s, plan, [{ node, k: Math.floor(r() * 5) - 1 }]); },
-    () => editNode(s, pick(nodes())!, { title: pick(titles)! }),
-    () => createNode(s, { plan: pick(plans())!, title: pick(titles)!, ...at(), k: Math.floor(r() * 3) }),
-    () => { const plan = pick(plans())!, ns = placed(plan); return connect(s, { plan, members: [...new Set([pick(ns)!, pick(ns)!, pick(ns)!])].map((node) => ({ node, role: pick(roles)! })) }); },
-    () => addMember(s, pick(plans())!, pick(conns())!, { node: pick(nodes())!, role: pick(roles)! }),
-    () => removeMember(s, pick(conns())!, pick(nodes())!),
-    () => editConnection(s, pick(conns())!, { title: pick(['', 'relie', 'un titre de connexion'])! }),
-    () => { const c = pick(conns())!; return setRole(s, c, pick(s.connections.get(c)!.members)!.node, pick(roles)!); },
-    () => { const plan = pick(plans())!, ns = placed(plan); return include(s, plan, pick(ns)!, pick(ns)!); },
-    () => { const plan = pick(plans())!; return exclude(s, plan, pick(placed(plan))!); },
-    () => { const plan = pick(plans())!; return removeFromPlan(s, plan, pick(placed(plan))!); },
-    () => placeNode(s, pick(plans())!, pick(nodes())!, at().x, at().y, 0),
-    () => deleteEverywhere(s, pick(nodes())!),
-    () => restoreNode(s, pick(nodes())!, pick(plans())!, at().x, at().y, 0),
-    () => { const c = pick(conns())!; return setBranches(s, c, [{ plan: pick(plans())!, node: pick(s.connections.get(c)!.members)!.node }], r() < 0.5); },
-    () => {
-      const b = pick([...s.branches])!;
+  const commands: [string, () => Action][] = [
+    ['déplacement', () => { const plan = pick(plans()); return moveNodes(s, plan, [{ node: pick(placed(plan)), ...at() }]); }],
+    ['cran', () => { const plan = pick(plans()), node = pick(placed(plan)); return moveNodes(s, plan, [{ node, k: Math.floor(r() * 5) - 1 }]); }],
+    ['renommage', () => editNode(s, pick(nodes()), { title: pick(titles) })],
+    ['création', () => createNode(s, { plan: pick(plans()), title: pick(titles), ...at(), k: Math.floor(r() * 3) })],
+    ['connexion', () => {
+      const plan = pick(plans()), ns = placed(plan);
+      return connect(s, { plan, members: [...new Set([pick(ns), pick(ns), pick(ns)])].map((node) => ({ node, role: pick(roles) })) });
+    }],
+    ['membre ajouté', () => addMember(s, pick(plans()), pick(conns()), { node: pick(nodes()), role: pick(roles) })],
+    ['membre retiré', () => removeMember(s, pick(conns()), pick(nodes()))],
+    ['titre de connexion', () => editConnection(s, pick(conns()), { title: pick(['', 'relie', 'un titre de connexion']) })],
+    ['rôle', () => { const c = pick(conns()); return setRole(s, c, pick(membersOf(c)).node, pick(roles)); }],
+    ['inclusion', () => { const plan = pick(plans()), ns = placed(plan); return include(s, plan, pick(ns), pick(ns)); }],
+    ['exclusion', () => { const plan = pick(plans()); return exclude(s, plan, pick(placed(plan))); }],
+    ['retrait d’un plan', () => { const plan = pick(plans()); return removeFromPlan(s, plan, pick(placed(plan))); }],
+    ['placement', () => placeNode(s, pick(plans()), pick(nodes()), at().x, at().y, 0)],
+    ['suppression partout', () => deleteEverywhere(s, pick(nodes()))],
+    ['restauration', () => restoreNode(s, pick(nodes()), pick(plans()), at().x, at().y, 0)],
+    ['branches', () => { const c = pick(conns()); return setBranches(s, c, [{ plan: pick(plans()), node: pick(membersOf(c)).node }], r() < 0.5); }],
+    ['scission de bras', () => {
+      const b = pick([...s.branches]);
       return splitArm(s, b.plan, b.connection, b.node, { ...at(), k: 0 }, { ...at(), k: Math.floor(r() * 2) });
-    },
-    () => { const ph = pick(phantoms().filter((x) => x.of.kind !== 'absent'))!; return joinArm(s, ph.plan, ph.connection, ph.of.node); },
-    () => { const b = pick([...s.branches].filter((x) => !s.placements.has(`${x.plan}|${x.node}`)))!; return placeAbsent(s, b.plan, b.connection, b.node, at().x, at().y, 0); },
-    () => {
-      const ph = pick(phantoms())!, groups = placed(ph.plan);
-      return movePhantom(s, ph.id, at().x, at().y, r() < 0.3 ? pick(groups) : r() < 0.5 ? null : undefined, r() < 0.3 ? ph.k + 1 : undefined);
-    },
-    () => {
-      const plan = pick(plans())!, c = pick(conns())!, members = s.connections.get(c)!.members;
-      const handles = Object.fromEntries(members.slice(0, 2).map((m) => [m.node, { b1: at(), b2: at() }]));
+    }],
+    ['réunion de bras', () => { const ph = pick(phantoms().filter((x) => x.of.kind !== 'absent')); return joinArm(s, ph.plan, ph.connection, ph.of.node); }],
+    ['amorce placée', () => {
+      const b = pick([...s.branches].filter((x) => !s.placements.has(`${x.plan}|${x.node}`)));
+      return placeAbsent(s, b.plan, b.connection, b.node, at().x, at().y, 0);
+    }],
+    ['fantôme déplacé', () => {
+      const ph = pick(phantoms()), groups = placed(ph.plan);
+      return movePhantom(s, ph.id, at().x, at().y, r() < 0.3 && groups.length > 0 ? pick(groups) : r() < 0.5 ? null : undefined, r() < 0.3 ? ph.k + 1 : undefined);
+    }],
+    ['disposition', () => {
+      const plan = pick(plans()), c = pick(conns());
+      const handles = Object.fromEntries(membersOf(c).slice(0, 2).map((m) => [m.node, { b1: at(), b2: at() }]));
       const reset = r() < 0.3 && s.connLayouts.has(layoutKey(plan, c));
       return setLayout(s, plan, c, reset ? null : { handles, ...(r() < 0.5 ? { marker: at() } : {}), ...(r() < 0.5 ? { angle: r() * 3 } : {}) });
-    },
-    () => deleteConnection(s, pick(conns())!),
-    () => {
+    }],
+    ['connexion supprimée', () => deleteConnection(s, pick(conns()))],
+    ['collage', () => {
       // Copied from one plan, pasted into another (spec 7): a group with its content, the connections that follow.
-      const from = pick(plans())!, to = pick(plans())!, sc = buildScene(s, from, measure, P);
+      const from = pick(plans()), to = pick(plans()), sc = buildScene(s, from, measure, P);
+      if (sc.items.length === 0) throw new Skip();
       const items = Array.from({ length: 1 + Math.floor(r() * 3) }, () => Math.floor(r() * sc.items.length)).filter((i) => isLive(sc, i));
-      const clip = copyClip(s, sc, items, 1);
-      if (!clip) throw new CommandError('rien à copier');
+      const clip = need(copyClip(s, sc, items, 1) ?? undefined);
       return combine(s, 'Coller', pasteSteps(s, clip, to, at(), 1, null, P).steps);
-    },
-    () => {
+    }],
+    ['répercussion', () => {
       // « Partout » (spec 10): one node changes group in two plans at once.
-      const [p1, p2] = [pick(plans())!, pick(plans())!], node = pick(placed(p1))!, group = pick(placed(p1))!;
+      const [p1, p2] = [pick(plans()), pick(plans())], node = pick(placed(p1)), group = pick(placed(p1));
       return combine(s, 'Répercuter', [(x) => include(x, p1, node, group), (x) => include(x, p2, node, group)]);
-    },
-    () => {
-      const a = createPlan(s, 'Nouveau', pick(['plan', 'document'] as const)!);
-      return a;
-    },
+    }],
+    ['plan créé', () => createPlan(s, 'Nouveau', pick(['plan', 'document'] as const))],
   ];
   return () => {
-    const command = pick(commands)!;
+    const [kind, command] = pick(commands);
     try {
-      return command();
+      return { kind, action: command() };
     } catch (e) {
-      // A pick that makes no sense (an absent node, a rule broken): refused like a menu choice would be.
-      if (e instanceof CommandError || e instanceof TypeError) return null;
+      if (e instanceof CommandError || e instanceof Skip) return null;
       throw e;
     }
   };
@@ -115,12 +137,13 @@ describe.each([
     follow(s, scenes, [], p, 'départ');
     const next = randomActions(s, r);
     const done: Action[] = [];
-    let applied = 0;
+    const made = new Map<string, number>();
     for (let i = 0; i < 300; i++) {
-      const a = next();
-      if (!a) continue;
+      const picked = next();
+      if (!picked) continue;
+      const a = picked.action;
+      made.set(picked.kind, (made.get(picked.kind) ?? 0) + 1);
       applyOps(s, a.ops);
-      applied++;
       follow(s, scenes, a.ops, p, `action ${i} (${a.label})`);
       // Undo goes through the same path (Review Focus 1): now and then at once, the rest at the end, last first.
       if (r() < 0.4) {
@@ -134,7 +157,10 @@ describe.each([
       applyOps(s, undo.ops);
       follow(s, scenes, undo.ops, p, `annulation finale de « ${done[i].label} »`);
     }
-    expect(applied).toBeGreaterThan(150);
+    expect([...made.values()].reduce((x, y) => x + y, 0)).toBeGreaterThan(150);
+    // Each kind of the brief made at least once.
+    if (process.env.CIRRUS_COSTS) console.log([...made].sort().map(([k, n]) => `${k} ${n}`).join(', '));
+    expect(KINDS.filter((k) => !made.has(k))).toEqual([]);
     for (const plan of s.plans.keys()) expect(canonicalScene(scenes.get(plan)!)).toEqual(canonicalScene(buildScene(base.s, plan, measure, p)));
   }, 120_000);
 });
@@ -255,4 +281,40 @@ test('une action sur un autre plan (collage, répercussion) laisse exacte la sc�
   const back = invertAction(rep);
   applyOps(s, back.ops);
   follow(s, scenes, back.ops, P, 'annulation dans Thèse');
+});
+
+test('deux scènes tirées de la même scène précédente, par deux actions différentes, sont justes, et la précédente ne change pas', () => {
+  const s = copyOf(base.s), plan = base.ids.plans.lobby, { nodes } = base.ids;
+  const prev = buildScene(s, plan, measure, P);
+  const before = canonicalScene(prev), books = sceneBooks(prev);
+  // Both add a part at the end of the shared columns: the second finds the end taken by the first, and copies.
+  const first = run(s, connect(s, { plan, members: [{ node: nodes.mdl, role: 'source' }, { node: nodes.monde, role: 'target' }] }));
+  const one = updateScene(prev, s, first.ops, measure, P).scene, oneExpected = canonicalScene(buildScene(s, plan, measure, P));
+  // Its books checked while the state is its own: a scene finds identifiers through the state's rows (R of the task).
+  expect(slotProblem(one)).toBeNull();
+  applyOps(s, invertAction(first).ops);
+  const second = run(s, connect(s, { plan, members: [{ node: nodes.occam, role: 'source' }, { node: nodes.biais, role: 'target' }] }));
+  const two = updateScene(prev, s, second.ops, measure, P).scene;
+  expect(canonicalScene(two)).toEqual(canonicalScene(buildScene(s, plan, measure, P)));
+  // The first, untouched by the second (which found the end of the shared columns taken, and copied them).
+  expect(canonicalScene(one)).toEqual(oneExpected);
+  expect([slotProblem(two), slotProblem(prev)]).toEqual([null, null]);
+  expect(canonicalScene(prev)).toEqual(before);
+  expect(sceneBooks(prev)).toEqual(books);
+});
+
+test('un fantôme dont le « of » et la connexion changent (une opération reçue, plan 5) est redessiné en entier', () => {
+  const s = copyOf(base.s), plan = base.ids.plans.lobby;
+  const sc = buildScene(s, plan, measure, P);
+  const ph = s.phantoms.get(base.ids.phantoms.node)!;
+  // It now stands for another member, as absent, in another connection of that member.
+  const other = s.connections.get(base.ids.connections.mdlSolomonoff)!;
+  const after = { ...ph, connection: other.id, of: { kind: 'absent' as const, node: other.members[1].node } };
+  const op: Op = { t: 'phantom', before: ph, after };
+  applyOps(s, [op]);
+  const { scene } = updateScene(sc, s, [op], measure, P);
+  const it = scene.items[scene.byId.get(ph.id)!];
+  expect([it.node, it.phantom, it.connection]).toEqual([after.of.node, 'absent', other.id]);
+  expect(canonicalScene(scene)).toEqual(canonicalScene(buildScene(s, plan, measure, P)));
+  expect(slotProblem(scene)).toBeNull();
 });

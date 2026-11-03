@@ -107,7 +107,12 @@ export function slotProblem(sc: PlanScene): string | null {
   for (const [id, i] of sc.itemOfPhantom) if (!live(i) || sc.items[i].id !== id) return `itemOfPhantom ${id} = ${i}`;
   const goneParts: number[] = [];
   for (let i = 0; i < sc.partCount; i++) {
-    if (sc.part[i] === PART_GONE) { goneParts.push(i); continue; }
+    if (sc.part[i] === PART_GONE) {
+      // A removed part keeps no reference: no ends, no centre, no next part, no layout.
+      if (sc.endCount[i] !== 0 || sc.center[i] !== -1 || sc.partNext[i] !== -1 || sc.layout[i] !== undefined) return `partie retirée ${i} qui référence encore`;
+      goneParts.push(i);
+      continue;
+    }
     for (let k = sc.endStart[i], end = k + sc.endCount[i]; k < end; k++) if (!live(sc.ends.item[k])) return `extrémité libérée de la partie ${i}`;
     if (sc.center[i] >= 0 && !live(sc.center[i])) return `centre libéré de la partie ${i}`;
     if (!partOf(sc, sc.ids[i]).includes(i)) return `partie ${i} absente de partOf`;
@@ -121,6 +126,18 @@ export function slotProblem(sc: PlanScene): string | null {
   for (const k of sc.stubs.keys()) if (sc.part[k] === PART_GONE) return `amorces de la partie libérée ${k}`;
   for (const g of sc.hues.keys()) if (!live(g) || sc.items[g].kind !== 'group' || sc.items[g].parent >= 0) return `teinte de ${g}`;
   return null;
+}
+
+/**
+ * What `byId`, `partOf` and the recycling read besides what canonicalScene describes, copied: a scene that must not
+ * change (a previous one) compares equal to it afterwards.
+ */
+export function sceneBooks(sc: PlanScene): unknown {
+  return {
+    itemOfNode: Array.from(sc.itemOfNode), itemOfPhantom: [...sc.itemOfPhantom].sort(), partHead: Array.from(sc.partHead),
+    partNext: Array.from(sc.partNext.subarray(0, sc.partCount)), freeItems: [...sc.freeItems], freeParts: [...sc.freeParts], partCount: sc.partCount,
+    items: sc.items.length,
+  };
 }
 
 /** A camera on the scene's centre, on a 2560×1600 screen, at the zoom where step k's text is `px` on screen. */

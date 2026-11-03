@@ -10,7 +10,7 @@ export {
 export { BranchSet } from './facades.ts';
 export {
   applyOp, applyOps, branchNodes, canonical, checkRecord, connectionOfRow, connId, connKind, connRow, connRowCount, connTitle, connTrashed, directGroup,
-  emptyState, groupMembers, hasBranch, layoutKey, memberAt, memberCount, memberOf, memberOfAt, memberOfCount, membersOf, nodeAt, nodeId, nodeRow, OpConflictError, phantomsIn, phantomsOf,
+  emptyState, formerConnRow, formerNodeRow, groupMembers, hasBranch, layoutKey, memberAt, memberCount, memberOf, memberOfAt, memberOfCount, membersOf, nodeAt, nodeId, nodeRow, OpConflictError, phantomsIn, phantomsOf,
   placedIn, placementKey, placementOf, placementsIn, planId, planRow, reindex, type State,
 } from './state.ts';
 export * from './invariants.ts';

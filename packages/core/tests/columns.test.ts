@@ -4,8 +4,8 @@ import type { ConnectionKind, ConnectionRec, Id, Member, NodeRec, PlanType, Role
 import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot } from '../src/snapshot.ts';
 import {
-  applyOp, canonical, checkRecord, connRow, dataOf, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf, placedIn,
-  placementOf, planRow, reindex, type State,
+  applyOp, canonical, checkRecord, connRow, dataOf, emptyState, formerConnRow, formerNodeRow, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn,
+  phantomsOf, placedIn, placementOf, planRow, reindex, type State,
 } from '../src/state.ts';
 import * as oracleRules from './oracle/invariants.ts';
 import * as oracle from './oracle/state.ts';
@@ -628,6 +628,31 @@ test('rangées recyclées sans fuite : une rangée libérée resert, un identifi
   const T = dataOf(s).tables;
   for (const rows of [T.nodes.rows, T.plans.rows, T.conns.rows]) expect([rows.row.size, rows.refs.every((n) => n === 0)]).toEqual([0, true]);
   expect(T.nodes.rows.end).toBe(2);
+});
+
+test('rangée d’avant : un identifiant libéré garde la trace de sa rangée tant qu’aucun autre ne la reprend', () => {
+  const s = emptyState();
+  applyOp(s, { t: 'plan', before: null, after: { id: 'p', name: 'P', type: 'plan' } });
+  for (const id of ['a', 'b', 'c']) applyOp(s, nodeOp(id));
+  const make = (id: Id) => { applyOp(s, { t: 'connection', before: null, after: conn(id, ['a', 'b']) }); for (const n of ['a', 'b']) applyOp(s, branchOp('p', id, n, true)); };
+  const drop = (id: Id) => { for (const n of ['a', 'b']) applyOp(s, branchOp('p', id, n, false)); applyOp(s, { t: 'connection', before: s.connections.get(id)!, after: null }); };
+  make('X');
+  make('Y');
+  const x = connRow(s, 'X'), y = connRow(s, 'Y'), c = nodeRow(s, 'c');
+  expect([formerConnRow(s, 'X'), formerConnRow(s, 'never')]).toEqual([-1, -1]);
+  // Freed (the undo of a connection): its row is known until another takes it.
+  drop('X');
+  drop('Y');
+  expect([connRow(s, 'X'), formerConnRow(s, 'X'), formerConnRow(s, 'Y')]).toEqual([-1, x, y]);
+  make('Z'); // last freed first: Y's row
+  expect([connRow(s, 'Z'), formerConnRow(s, 'Y'), formerConnRow(s, 'X'), formerConnRow(s, 'Z')]).toEqual([y, -1, x, -1]);
+  make('X'); // back, on its own row
+  expect([connRow(s, 'X'), formerConnRow(s, 'X')]).toEqual([x, -1]);
+  // A node whose last reference goes (the undo of a creation), then a node that takes its row.
+  applyOp(s, { t: 'node', before: s.nodes.get('c')!, after: null });
+  expect([nodeRow(s, 'c'), formerNodeRow(s, 'c')]).toEqual([-1, c]);
+  applyOp(s, nodeOp('d'));
+  expect([nodeRow(s, 'd'), formerNodeRow(s, 'c')]).toEqual([c, -1]);
 });
 
 test('façades en lecture seule : écrire ailleurs que par applyOp lève une erreur', () => {

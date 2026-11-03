@@ -1,5 +1,6 @@
 import {
-  branchNodes, type ConnectionRec, connId, connKind, connRow, groupMembers, type Id, INCLUSION, memberAt, memberCount, memberOf, nodeAt, nodeId, nodeRow, type NodeRec,
+  branchNodes, type ConnectionRec, connId, connKind, connRow, formerConnRow, formerNodeRow, groupMembers, type Id, INCLUSION, memberAt, memberCount, memberOf, nodeAt,
+  nodeId, nodeRow, type NodeRec,
   type Op, type PhantomRec, phantomsIn, phantomsOf, placementsIn, type PlanRec, planRow, SOURCE, type State,
 } from '@cirrus/core';
 import type { Bounds } from './camera.ts';
@@ -23,6 +24,7 @@ export interface SceneChanges {
 }
 
 const noChange = (): SceneChanges => ({ items: [], parts: [], hierarchy: false, full: false });
+const NO_PHANTOMS: PhantomRec[] = [];
 
 type Column = Int32Array | Uint8Array | unknown[];
 const isTyped = (a: Column): a is Int32Array | Uint8Array => ArrayBuffer.isView(a);
@@ -130,8 +132,10 @@ interface Touched {
   phantoms: Set<Id>;
   /** Connection rows whose parts are derived again. */
   conns: Set<number>;
-  /** Connections without a row any longer: their parts go. */
-  freed: Set<Id>;
+  /** Connections without a row any longer, by the row they held (formerConnRow): their parts there go. */
+  freed: Map<Id, number>;
+  /** Of those, the ones whose row is taken by another already: their parts are searched for by identifier (rare). */
+  lost: Set<Id>;
   /** Nodes whose direct group in this plan may have changed. */
   groups: Set<Id>;
   /** Node rows whose badge is computed again. */
@@ -143,11 +147,18 @@ interface Touched {
 function touchedBy(prev: PlanScene, s: State, ops: readonly Op[]): Touched {
   const planId = prev.plan.id;
   const t: Touched = {
-    nodes: new Set(), before: new Map(), phantoms: new Set(), conns: new Set(), freed: new Set(), groups: new Set(), badges: new Set(), raised: new Set(),
+    nodes: new Set(), before: new Map(), phantoms: new Set(), conns: new Set(), freed: new Map(), lost: new Set(), groups: new Set(), badges: new Set(),
+    raised: new Set(),
   };
   const conn = (id: Id, raised = false) => {
     const r = connRow(s, id);
-    if (r < 0) { t.freed.add(id); return; }
+    if (r < 0) {
+      // Its row was freed (the undo of its creation): the core says which, unless another took it since.
+      const former = formerConnRow(s, id);
+      if (former >= 0) t.freed.set(id, former);
+      else t.lost.add(id);
+      return;
+    }
     t.conns.add(r);
     if (raised) t.raised.add(r);
   };
@@ -508,10 +519,14 @@ class Update {
     else for (let j = c < this.partHead.length ? this.partHead[c] : -1; j >= 0; j = this.partNext.a[j]) {
       if (this.partNext.a[j] === i) { this.partNext.at(j)[j] = this.partNext.a[i]; break; }
     }
+    // Nothing left that points anywhere: ends, centre, next part, layout, stubs.
     this.part.at(i)[i] = PART_GONE;
     if (this.layout.a[i] !== undefined) this.layout.at(i)[i] = undefined;
     if (this.stubsOf(i)) this.stubChanges.set(i, null);
     this.endWaste += this.endCount.a[i];
+    if (this.endCount.a[i] !== 0) this.endCount.at(i)[i] = 0;
+    if (this.center.a[i] !== -1) this.center.at(i)[i] = -1;
+    if (this.partNext.a[i] !== -1) this.partNext.at(i)[i] = -1;
     if (!this.freePartsOwned) { this.freeParts = [...this.freeParts]; this.freePartsOwned = true; }
     this.freeParts.push(i);
     this.changedParts.add(i);
@@ -571,30 +586,37 @@ export function updateScene(prev: PlanScene, s: State, ops: readonly Op[], measu
   const rebuild = () => ({ scene: buildScene(s, planId, measure, p), changes: { items: [], parts: [], hierarchy: true, full: true } });
   if (plan.type !== prev.plan.type) return rebuild();
   const t = touchedBy(prev, s, ops);
-  if (plan === prev.plan && t.nodes.size + t.phantoms.size + t.conns.size + t.freed.size + t.groups.size + t.badges.size === 0) return { scene: prev, changes: noChange() };
+  const touched = t.nodes.size + t.phantoms.size + t.conns.size + t.freed.size + t.lost.size + t.groups.size + t.badges.size;
+  if (plan === prev.plan && touched === 0) return { scene: prev, changes: noChange() };
 
   const u = new Update(prev, s, plan, measure, p), pr = u.pr;
   const appeared: number[] = [], removed: { slot: number; it: SceneItem }[] = [], gone: number[] = [], came: number[] = [];
   /** Items whose box (or a group's own step and title) changed: the groups above them are derived again. */
   const reshaped = new Set<number>();
 
-  // 2. Items: appear, change or go. A node's slot in prev comes from its row; when its row went, from a search.
-  const lost = new Set<Id>(), slotOf = new Map<Id, number>();
+  // 2. Items: appear, change or go. A node's slot in prev comes from the row it holds, or held before its row was
+  // freed (the undo of its creation: formerNodeRow); a row taken by another names its former holder too.
+  const lost = new Set<Id>(), slotOf = new Map<Id, { slot: number; row: number }>();
+  const holder = (r: number) => (r >= 0 && r < prev.itemOfNode.length ? prev.itemOfNode[r] : -1);
   for (const id of t.nodes) {
-    const r = nodeRow(s, id), i = r >= 0 && r < prev.itemOfNode.length ? prev.itemOfNode[r] : -1;
-    if (i >= 0 && prev.items[i].id === id) slotOf.set(id, i);
-    else if (t.before.get(id)) lost.add(id);
+    let r = nodeRow(s, id);
+    if (r < 0) r = formerNodeRow(s, id);
+    const i = holder(r);
+    if (i >= 0 && prev.items[i].id === id) slotOf.set(id, { slot: i, row: r });
+    else if (i >= 0 && !slotOf.has(prev.items[i].id)) slotOf.set(prev.items[i].id, { slot: i, row: r });
   }
-  if (lost.size > 0) prev.items.forEach((it, i) => { if (it.kind !== 'phantom' && lost.has(it.id)) slotOf.set(it.id, i); });
+  for (const id of t.nodes) if (!slotOf.has(id) && t.before.get(id)) lost.add(id);
+  // Its row freed, then taken by a node these operations do not name (rare): searched for.
+  if (lost.size > 0) prev.items.forEach((it, i) => { if (it.kind !== 'phantom' && lost.has(it.id)) slotOf.set(it.id, { slot: i, row: -1 }); });
   const placements = placementsIn(s, pr);
   for (const id of t.nodes) {
-    const r = nodeRow(s, id), slot = slotOf.get(id) ?? -1;
+    const r = nodeRow(s, id), was = slotOf.get(id), slot = was?.slot ?? -1;
     const rec = r >= 0 ? nodeAt(s, r) : undefined, pl = r >= 0 ? placements.get(r) : undefined;
     const shown = rec !== undefined && pl !== undefined && rec.trashedAt === undefined;
     if (slot >= 0 && !shown) {
       removed.push({ slot, it: prev.items[slot] });
-      if (r >= 0 && u.itemOfNode[r] === slot) u.setNodeSlot(r, -1);
-      else { const at = u.itemOfNode.indexOf(slot); if (at >= 0) u.setNodeSlot(at, -1); }
+      const row = was!.row >= 0 ? was!.row : u.itemOfNode.indexOf(slot);
+      if (row >= 0 && u.itemOfNode[row] === slot) u.setNodeSlot(row, -1);
       u.freeItem(slot);
       if (r >= 0) gone.push(r);
     } else if (shown) {
@@ -629,9 +651,11 @@ export function updateScene(prev: PlanScene, s: State, ops: readonly Op[], measu
         u.phantomSlots.set(id, i);
         appeared.push(i);
       } else {
-        if (!sameOwn(u.items[slot], fresh) || u.items[slot].x !== fresh.x || u.items[slot].y !== fresh.y) {
-          const it = u.mut(slot);
-          it.title = fresh.title; it.lines = fresh.lines; it.k = fresh.k; it.halfW = fresh.halfW; it.halfH = fresh.halfH; it.x = fresh.x; it.y = fresh.y;
+        const old = u.items[slot];
+        if (!sameOwn(old, fresh) || old.x !== fresh.x || old.y !== fresh.y) {
+          // Every field of its record anew, what it stands for included (a record received may change it); its place
+          // in the hierarchy kept until step 3.
+          u.put(slot, { ...fresh, parent: old.parent, children: old.children, depth: old.depth, badge: old.badge });
           reshaped.add(slot);
         }
         phantomMoved.push(slot);
@@ -724,15 +748,23 @@ export function updateScene(prev: PlanScene, s: State, ops: readonly Op[], measu
 
   // 6. Parts of the connections touched, and of those of the nodes that came or went; the connections gone.
   for (const r of [...came, ...gone]) for (const c of memberOf(s, r)) t.conns.add(c);
-  if (t.freed.size > 0) {
-    for (let i = 0; i < u.partCount; i++) if (u.part.a[i] !== PART_GONE && t.freed.has(u.ids.a[i])) u.removePart(i);
+  // A freed connection's parts, on the row it held; its identifier checked (a row is recycled after it is freed).
+  for (const [id, row] of t.freed) for (const i of u.partsOfRow(row)) if (u.ids.a[i] === id) u.removePart(i);
+  // Its row already taken by an identifier this plan's operations do not name (rare): searched for by identifier.
+  if (t.lost.size > 0) {
+    for (let i = 0; i < u.partCount; i++) if (u.part.a[i] !== PART_GONE && t.lost.has(u.ids.a[i])) u.removePart(i);
   }
   for (const c of t.conns) {
-    const id = connId(s, c);
-    const phantoms: PhantomRec[] = [];
-    for (const ph of phantomsOf(s, id)) { const x = s.phantoms.get(ph); if (x && x.plan === planId) phantoms.push(x); }
-    phantoms.sort(idOrder);
+    const id = connId(s, c), mine = phantomsOf(s, id);
+    let phantoms = NO_PHANTOMS;
+    if (mine.length > 0) {
+      phantoms = [];
+      for (const ph of mine) { const x = s.phantoms.get(ph); if (x && x.plan === planId) phantoms.push(x); }
+      phantoms.sort(idOrder);
+    }
     const specs = partsOf(u.L, c, branchNodes(s, c, pr), phantoms);
+    // Nothing here before, nothing now (an inclusion, a connection of another kind or not shown here).
+    if (specs.length === 0 && (c >= u.partHead.length || u.partHead[c] < 0)) continue;
     const existing = u.partsOfRow(c).filter((i) => {
       if (u.ids.a[i] === id) return true;
       u.removePart(i); // the row holds another connection now
