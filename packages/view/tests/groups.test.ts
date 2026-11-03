@@ -1,10 +1,11 @@
 import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { dropEffects, dropTarget, intruders } from '../src/edit.ts';
-import { offsetPolygon } from '../src/geometry/hull.ts';
+import { dropEffects, dropTarget, intruders, visibleIntruders } from '../src/edit.ts';
+import { insidePolygon, offsetPolygon } from '../src/geometry/hull.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
-import { fixture, measure, P } from './helpers.ts';
+import { buildIndex, computeVisible, type VisibleSet } from '../src/visibility.ts';
+import { camAtTextPx, fixture, measure, P, randomCameras, rng } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
 beforeAll(() => {
@@ -50,6 +51,38 @@ test('intrus : nœud étranger recouvert par une enveloppe, jamais un membre', (
   expect(found.has(at(ids.nodes.mdl))).toBe(false);
   expect(found.has(at(ids.nodes.groupeInduction))).toBe(false);
   expect(found.has(at(ids.nodes.monde))).toBe(false);
+});
+
+/** Every drawn item against every drawn envelope: each covered item with the deepest such group, the first by slot among equals. */
+function bruteIntruders(scene: PlanScene, v: VisibleSet): Map<number, number> {
+  const out = new Map<number, number>(), items = scene.items;
+  const above = (i: number, g: number) => { for (let a = items[i].parent; a >= 0; a = items[a].parent) if (a === g) return true; return false; };
+  for (const i of [...v.items, ...v.groups]) {
+    for (const g of [...v.groups].sort((a, b) => a - b)) {
+      if (g === i || above(i, g) || above(g, i) || !insidePolygon(offsetPolygon(items[g].hull!, items[g].pad!), items[i].x, items[i].y)) continue;
+      const known = out.get(i);
+      if (known === undefined || items[known].depth < items[g].depth) out.set(i, g);
+    }
+  }
+  return out;
+}
+
+test('intrus du visible : ceux d’intruders parmi ce qui est dessiné, avec le groupe dessiné le plus profond qui les recouvre', () => {
+  const all = intruders(sc), index = buildIndex(sc, P);
+  let found = 0;
+  for (const cam of [camAtTextPx(sc, 0, 16), camAtTextPx(sc, 0, 5.5), ...randomCameras(sc, 60, rng(5), 0.05, 4)]) {
+    const v = computeVisible(sc, index, cam, P), got = visibleIntruders(sc, v);
+    expect(got).toEqual(bruteIntruders(sc, v));
+    for (const [i, g] of got) {
+      expect(all.has(i)).toBe(true);
+      // The deepest group of all, when it is drawn, is the one named.
+      if (v.groups.includes(all.get(i)!)) expect(g).toBe(all.get(i));
+    }
+    found += got.size;
+  }
+  expect(visibleIntruders(sc, computeVisible(sc, index, camAtTextPx(sc, 0, 16), P)).has(sc.items.findIndex((i) => i.title === 'Théorème d’invariance'))).toBe(true);
+  expect(found).toBeGreaterThan(10);
+  expect(visibleIntruders(sc, { items: [], groups: [], connections: [], signature: '' }).size).toBe(0);
 });
 
 test('effets d’un dépôt (spec 10) : un nœud libre entre, un membre ne descend que dans un sous-groupe, Alt fait sortir', () => {

@@ -1,14 +1,13 @@
 import {
-  type Action, addMember, applyOps, combine, CommandError, connect, createNode, createPlan, deleteConnection, deleteEverywhere, editConnection, editNode, exclude,
-  type Id, include, invertAction, joinArm, layoutKey, moveNodes, movePhantom, type Op, placeAbsent, placeNode, removeFromPlan, removeMember, restoreNode, type Role,
-  setBranches, setLayout, setRole, splitArm, type State,
+  type Action, applyOps, combine, connect, createNode, createPlan, deleteConnection, type Id, include, invertAction, moveNodes, type Op, placeNode, removeFromPlan,
+  type State,
 } from '@cirrus/core';
 import { describe, expect, test } from 'vitest';
 import { copyClip, pasteSteps } from '../src/clip.ts';
 import { DEFAULT_PARAMS, type RenderParams } from '../src/params.ts';
 import { buildScene, isLive, partEnds, partOf, type PlanScene } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
-import { canonicalScene, copyOf, created, fixture, measure, P, rng, run, sceneBooks, slotProblem } from './helpers.ts';
+import { canonicalScene, copyOf, created, fixture, KINDS, measure, P, randomActions, rng, run, sceneBooks, slotProblem } from './helpers.ts';
 
 const base = fixture();
 
@@ -30,101 +29,6 @@ function follow(s: State, scenes: Map<Id, PlanScene>, ops: Op[], p: RenderParams
     expect(slotProblem(scene), `${what}, plan ${name}`).toBeNull();
     scenes.set(plan, scene);
   }
-}
-
-/** A pick that makes no sense here (an empty plan, a connection without members): no action of that kind this time. */
-class Skip extends Error {}
-const need = <T>(v: T | undefined): T => {
-  if (v === undefined) throw new Skip();
-  return v;
-};
-
-/** The kinds the brief lists, that the 300 actions must each make at least once. */
-const KINDS = [
-  'déplacement', 'renommage', 'création', 'connexion', 'inclusion', 'exclusion', 'retrait d’un plan', 'suppression partout', 'scission de bras',
-  'réunion de bras', 'amorce placée', 'disposition', 'collage',
-];
-
-/**
- * The core's commands and pasteSteps, on nodes, connections and phantoms picked at random among those of the test base
- * (and those the actions make), in every plan: what the interface can do. A refusal of the core (CommandError) is a
- * menu choice refused; any other error fails the test.
- */
-function randomActions(s: State, r: () => number): () => { kind: string; action: Action } | null {
-  const pick = <T>(xs: readonly T[]): T => need(xs.length === 0 ? undefined : xs[Math.floor(r() * xs.length)]);
-  const plans = () => [...s.plans.keys()];
-  const nodes = () => [...s.nodes.keys()];
-  const placed = (plan: Id) => [...s.placements.values()].filter((pl) => pl.plan === plan).map((pl) => pl.node);
-  const conns = () => [...s.connections.keys()];
-  const membersOf = (c: Id) => need(s.connections.get(c)).members;
-  const phantoms = () => [...s.phantoms.values()];
-  const roles: Role[] = ['source', 'target', 'associate'];
-  const titles = ['Court', 'Un titre un peu plus long que la boîte', 'Encore un titre vraiment très long qui prend trois lignes au moins, sinon plus'];
-  const at = () => ({ x: Math.round(r() * 2000 - 1000), y: Math.round(r() * 1400 - 700) });
-  const commands: [string, () => Action][] = [
-    ['déplacement', () => { const plan = pick(plans()); return moveNodes(s, plan, [{ node: pick(placed(plan)), ...at() }]); }],
-    ['cran', () => { const plan = pick(plans()), node = pick(placed(plan)); return moveNodes(s, plan, [{ node, k: Math.floor(r() * 5) - 1 }]); }],
-    ['renommage', () => editNode(s, pick(nodes()), { title: pick(titles) })],
-    ['création', () => createNode(s, { plan: pick(plans()), title: pick(titles), ...at(), k: Math.floor(r() * 3) })],
-    ['connexion', () => {
-      const plan = pick(plans()), ns = placed(plan);
-      return connect(s, { plan, members: [...new Set([pick(ns), pick(ns), pick(ns)])].map((node) => ({ node, role: pick(roles) })) });
-    }],
-    ['membre ajouté', () => addMember(s, pick(plans()), pick(conns()), { node: pick(nodes()), role: pick(roles) })],
-    ['membre retiré', () => removeMember(s, pick(conns()), pick(nodes()))],
-    ['titre de connexion', () => editConnection(s, pick(conns()), { title: pick(['', 'relie', 'un titre de connexion']) })],
-    ['rôle', () => { const c = pick(conns()); return setRole(s, c, pick(membersOf(c)).node, pick(roles)); }],
-    ['inclusion', () => { const plan = pick(plans()), ns = placed(plan); return include(s, plan, pick(ns), pick(ns)); }],
-    ['exclusion', () => { const plan = pick(plans()); return exclude(s, plan, pick(placed(plan))); }],
-    ['retrait d’un plan', () => { const plan = pick(plans()); return removeFromPlan(s, plan, pick(placed(plan))); }],
-    ['placement', () => placeNode(s, pick(plans()), pick(nodes()), at().x, at().y, 0)],
-    ['suppression partout', () => deleteEverywhere(s, pick(nodes()))],
-    ['restauration', () => restoreNode(s, pick(nodes()), pick(plans()), at().x, at().y, 0)],
-    ['branches', () => { const c = pick(conns()); return setBranches(s, c, [{ plan: pick(plans()), node: pick(membersOf(c)).node }], r() < 0.5); }],
-    ['scission de bras', () => {
-      const b = pick([...s.branches]);
-      return splitArm(s, b.plan, b.connection, b.node, { ...at(), k: 0 }, { ...at(), k: Math.floor(r() * 2) });
-    }],
-    ['réunion de bras', () => { const ph = pick(phantoms().filter((x) => x.of.kind !== 'absent')); return joinArm(s, ph.plan, ph.connection, ph.of.node); }],
-    ['amorce placée', () => {
-      const b = pick([...s.branches].filter((x) => !s.placements.has(`${x.plan}|${x.node}`)));
-      return placeAbsent(s, b.plan, b.connection, b.node, at().x, at().y, 0);
-    }],
-    ['fantôme déplacé', () => {
-      const ph = pick(phantoms()), groups = placed(ph.plan);
-      return movePhantom(s, ph.id, at().x, at().y, r() < 0.3 && groups.length > 0 ? pick(groups) : r() < 0.5 ? null : undefined, r() < 0.3 ? ph.k + 1 : undefined);
-    }],
-    ['disposition', () => {
-      const plan = pick(plans()), c = pick(conns());
-      const handles = Object.fromEntries(membersOf(c).slice(0, 2).map((m) => [m.node, { b1: at(), b2: at() }]));
-      const reset = r() < 0.3 && s.connLayouts.has(layoutKey(plan, c));
-      return setLayout(s, plan, c, reset ? null : { handles, ...(r() < 0.5 ? { marker: at() } : {}), ...(r() < 0.5 ? { angle: r() * 3 } : {}) });
-    }],
-    ['connexion supprimée', () => deleteConnection(s, pick(conns()))],
-    ['collage', () => {
-      // Copied from one plan, pasted into another (spec 7): a group with its content, the connections that follow.
-      const from = pick(plans()), to = pick(plans()), sc = buildScene(s, from, measure, P);
-      if (sc.items.length === 0) throw new Skip();
-      const items = Array.from({ length: 1 + Math.floor(r() * 3) }, () => Math.floor(r() * sc.items.length)).filter((i) => isLive(sc, i));
-      const clip = need(copyClip(s, sc, items, 1) ?? undefined);
-      return combine(s, 'Coller', pasteSteps(s, clip, to, at(), 1, null, P).steps);
-    }],
-    ['répercussion', () => {
-      // « Partout » (spec 10): one node changes group in two plans at once.
-      const [p1, p2] = [pick(plans()), pick(plans())], node = pick(placed(p1)), group = pick(placed(p1));
-      return combine(s, 'Répercuter', [(x) => include(x, p1, node, group), (x) => include(x, p2, node, group)]);
-    }],
-    ['plan créé', () => createPlan(s, 'Nouveau', pick(['plan', 'document'] as const))],
-  ];
-  return () => {
-    const [kind, command] = pick(commands);
-    try {
-      return { kind, action: command() };
-    } catch (e) {
-      if (e instanceof CommandError || e instanceof Skip) return null;
-      throw e;
-    }
-  };
 }
 
 describe.each([

@@ -1,5 +1,5 @@
 import { createPlan, type Id } from '@cirrus/core';
-import { type Camera, fitBounds, type Input, isLive, type PlanScene, type RenderParams } from '@cirrus/view';
+import { benchPath, type Camera, cameraAt, type Input, isLive, type PlanScene, type RenderParams } from '@cirrus/view';
 import type { Application, WebGLRenderer } from 'pixi.js';
 import { type Build, connectBuild, createBuild, renameBuild } from './actions.ts';
 import type { PlanRenderer } from './render/PlanRenderer.ts';
@@ -89,8 +89,6 @@ export interface BenchView {
   drawn(until: () => boolean): Promise<{ ms: number; end: number; preview: boolean }>;
 }
 
-type Key = { t: number; cam: Omit<Camera, 'widthPx' | 'heightPx'> };
-
 /** Drag of the edit pass: 300 px in 60 frames. */
 const DRAG_PX = 300;
 const DRAG_FRAMES = 60;
@@ -102,38 +100,6 @@ export function summarize(samples: number[]): Stats {
   const s = [...samples].sort((a, b) => a - b);
   const rank = (q: number) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))];
   return { p50: rank(0.5), p95: rank(0.95), p99: rank(0.99), max: s[s.length - 1], n: s.length };
-}
-
-/** The camera path, and its deepest camera (null for a plan without nodes: the overview only, five seconds). */
-function path(scene: PlanScene, w: number, h: number, p: RenderParams): { keys: Key[]; deep: Key['cam'] | null } {
-  const over = fitBounds(scene.bounds, w, h, p);
-  const overview = { x: over.x, y: over.y, zoom: over.zoom };
-  // The first of the deepest leaves (as the plan 1 bench): the descent crosses every level above it.
-  let target = -1;
-  scene.items.forEach((it, i) => { if (isLive(scene, i) && it.kind !== 'group' && (target < 0 || it.depth > scene.items[target].depth)) target = i; });
-  if (target < 0) return { keys: [{ t: 0, cam: overview }, { t: 5, cam: overview }], deep: null };
-  const chain: number[] = [];
-  for (let a = scene.items[target].parent; a >= 0; a = scene.items[a].parent) chain.unshift(a);
-  const zoomFor = (memberK: number) => 8 / (p.baseFontPx * p.textScale * p.factor ** memberK);
-  const keys: Key[] = [{ t: 0, cam: overview }, { t: 4, cam: overview }];
-  const descent = [...chain.map((g) => ({ i: g, zoom: zoomFor(scene.items[g].maxChildK!) })), { i: target, zoom: 1.2 }];
-  descent.forEach((d, j) => {
-    const it = scene.items[d.i];
-    keys.push({ t: 4 + (16 * (j + 1)) / descent.length, cam: { x: it.x, y: it.y, zoom: Math.max(d.zoom, overview.zoom) } });
-  });
-  const deep = keys[keys.length - 1].cam;
-  keys.push({ t: 28, cam: { ...deep, x: deep.x + (3 * w) / deep.zoom } }, { t: 32, cam: deep }, { t: 40, cam: overview });
-  return { keys, deep };
-}
-
-function cameraAt(keys: Key[], t: number): Key['cam'] {
-  if (t <= keys[0].t) return keys[0].cam;
-  for (let i = 1; i < keys.length; i++) {
-    if (t > keys[i].t) continue;
-    const a = keys[i - 1], b = keys[i], u = (t - a.t) / (b.t - a.t);
-    return { x: a.cam.x + (b.cam.x - a.cam.x) * u, y: a.cam.y + (b.cam.y - a.cam.y) * u, zoom: a.cam.zoom ** (1 - u) * b.cam.zoom ** u };
-  }
-  return keys[keys.length - 1].cam;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -220,7 +186,7 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
   const info = gl.getExtension('WEBGL_debug_renderer_info');
   const gpuName = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'inconnue';
   const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
-  const { keys, deep } = path(v.scene(), app.screen.width, app.screen.height, v.params());
+  const { keys, deep } = benchPath(v.scene(), app.screen.width, app.screen.height, v.params());
   const end = keys[keys.length - 1].t;
   const gpu: number[] = [], gpuSteady: number[] = [], cpu: number[] = [], intervals: number[] = [];
   const pending: { q: WebGLQuery; t: number; steady: boolean }[] = [];

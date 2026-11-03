@@ -1,8 +1,8 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import {
   buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, emptySelection, FloatList, foldSignature, foldT, type FrameGeometry,
-  gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type Rgb, type SceneIndex, smooth,
-  type Selection, starLayerAlpha, starLayers, starsInRect, stepScale, textPx, type TitleSide, vertexNormals, type VisibleSet,
+  gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type Rgb, type SceneChanges, type SceneIndex, smooth,
+  type Selection, starLayerAlpha, starLayers, starsInRect, stepScale, textPx, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
 } from '@cirrus/view';
 import { type Application, type BitmapText, Container, RenderTexture, type Shader, Sprite } from 'pixi.js';
 import { type AttributeSpec, MeshSlot } from './meshes.ts';
@@ -45,7 +45,9 @@ interface LiveText { t: BitmapText; alpha: (zoom: number) => number }
  * Draws a plan scene (spec 8). Rebuilds the visible geometry when the view leaves the prepared rectangle, a group level
  * changes state or the zoom outgrows the curve sampling; between rebuilds only uniforms change. The visible set is
  * decided here; the meshes are built in a worker while the previous frame stays on screen (the first frame of a plan
- * is built at once). Envelopes are drawn in the main pass, or into a reduced texture if envelopeResolution < 1.
+ * is built at once), or here for a scene the worker does not hold (one updated by an action, or kept with its index
+ * from an earlier tab: plan 3c task 6; task 8 removes the worker). Envelopes are drawn in the main pass, or into a
+ * reduced texture if envelopeResolution < 1.
  */
 export class PlanRenderer {
   /** Called when a frame built in the worker has arrived: the view must be drawn again. */
@@ -69,8 +71,15 @@ export class PlanRenderer {
   private readonly envSprite = new Sprite();
   private readonly texts: TextPool;
   private live: LiveText[] = [];
+  /** What is drawn: the state's scene, or a preview over it. */
   private scene: PlanScene | null = null;
   private index: SceneIndex | null = null;
+  /** The state's scene and its index, kept through a preview: an action updates them, a preview given up comes back to them. */
+  private real: { scene: PlanScene; index: SceneIndex } | null = null;
+  /** The scene the worker holds: frames are built there for it only. */
+  private workerScene: PlanScene | null = null;
+  /** The intruders among what is drawn (visibleIntruders), with their group: the ring and the tooltip (spec 10). */
+  private intruderMap = new Map<number, number>();
   private visibleSet: VisibleSet | null = null;
   private frame: FrameGeometry | null = null;
   private hits: HitIndex | null = null;
@@ -160,19 +169,65 @@ export class PlanRenderer {
 
   /**
    * `transient`: a preview (a drag in progress) drawn at once on the main thread, without sending the scene to the
-   * worker nor forgetting where the connection titles sit; the real scene follows once the action is written.
+   * worker nor forgetting where the connection titles sit; the real scene follows once the action is written, and the
+   * state's scene given again (a preview given up) comes back with its index, neither built again nor sent. `index`:
+   * the scene's index kept from before (a tab shown again): neither built again nor the scene sent to the worker.
    */
-  setScene(scene: PlanScene, transient = false): void {
+  setScene(scene: PlanScene, transient = false, index?: SceneIndex): void {
+    if (transient) {
+      this.scene = scene;
+      this.index = buildIndex(scene, this.p);
+    } else if (this.real && scene === this.real.scene) {
+      this.scene = scene;
+      this.index = this.real.index;
+      this.titleSides.clear();
+    } else {
+      this.real = { scene, index: index ?? buildIndex(scene, this.p) };
+      this.scene = scene;
+      this.index = this.real.index;
+      this.titleSides.clear();
+      if (!index && this.worker) {
+        this.worker.postMessage({ t: 'scene', scene, params: this.p } satisfies FrameRequest);
+        this.workerScene = scene;
+      }
+    }
+    this.restart(!transient);
+  }
+
+  /**
+   * The state's scene after an action (plan 3c, task 6): `scene` follows the scene last given (setScene or updateScene)
+   * by `changes`; its index follows them too (updateIndex) instead of being built again, and its first frame is built
+   * here at once. A preview in progress is dropped. The worker keeps the scene from before: frames are built here
+   * until a scene is sent to it.
+   */
+  updateScene(scene: PlanScene, changes: SceneChanges): void {
+    if (!this.real) { this.setScene(scene); return; }
+    this.real = { scene, index: updateIndex(this.real.index, scene, changes, this.p) };
     this.scene = scene;
-    this.index = buildIndex(scene, this.p);
+    this.index = this.real.index;
+    // The titles are placed anew, as for any scene of the state given before (a preview only keeps them).
+    this.titleSides.clear();
+    this.restart(true);
+  }
+
+  /** The state's scene and its index, as kept here: a tab left takes its index along (GraphView's cache). */
+  get held(): { scene: PlanScene; index: SceneIndex } | null {
+    return this.real;
+  }
+
+  /**
+   * A new scene drawn: its first frame built at once, nothing kept of the previous visible set (its slots may be
+   * another's) — but the intruders, through a preview (`state` false): the ring keeps the state's, as it always did.
+   */
+  private restart(state: boolean): void {
     this.stale = true;
     this.hasFrame = false;
     this.pending = null;
     this.hits = null;
     this.hitInputs = null;
-    if (transient) return;
-    this.titleSides.clear();
-    this.worker?.postMessage({ t: 'scene', scene, params: this.p } satisfies FrameRequest);
+    if (!state) return;
+    this.intruderMap = new Map();
+    this.intruderItems = [];
   }
 
   setCamera(c: Camera): void {
@@ -217,10 +272,12 @@ export class PlanRenderer {
     this.updateMarkers({ markers: this.markers });
   }
 
-  /** Items an envelope covers without being its members (spec 10), with an orange ring. */
-  setIntruders(items: number[]): void {
-    this.intruderItems = items;
-    this.slots.intruder.update(...this.outlineArrays(items));
+  /**
+   * The items drawn that an envelope drawn covers without being its members (spec 10), with that group: an orange ring
+   * each, and the tooltip. Found at each new visible set (visibleIntruders), for what is drawn only.
+   */
+  get intruders(): ReadonlyMap<number, number> {
+    return this.intruderMap;
   }
 
   private updateOutline(): void {
@@ -325,7 +382,7 @@ export class PlanRenderer {
     const reason = this.scene && !this.pending ? this.rebuildReason() : null;
     if (reason) {
       this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
-      if (this.worker && this.hasFrame) this.request();
+      if (this.worker && this.hasFrame && this.workerScene === this.scene) this.request();
       else {
         this.rebuildNow();
         rebuilt = true;
@@ -440,6 +497,10 @@ export class PlanRenderer {
     // Built on the first hover query: navigation does not wait for it.
     this.hits = null;
     this.hitInputs = { visible, frame: { centerlines: f.centerlines, stubs: f.stubs, markers: f.markers }, origin };
+    if (this.scene === this.real?.scene) {
+      this.intruderMap = visibleIntruders(this.scene, visible);
+      this.intruderItems = [...this.intruderMap.keys()];
+    }
     this.slots.ribbon.update(f.ribbons, f.ribbonIndex);
     this.slots.glyph.update(f.glyphs, f.glyphIndex);
     this.slots.envelope.update(f.envelopes, f.envelopeIndex);

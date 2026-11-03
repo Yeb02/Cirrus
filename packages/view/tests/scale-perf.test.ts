@@ -1,17 +1,20 @@
 import {
   type Action, applyOp, applyOps, combine, CommandError, connect, connId, connKind, createNode, createPlan, deleteEverywhere, directGroup, editNode, emptyState,
-  exclude, groupMembers, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm, type State,
+  exclude, fromSnapshot, groupMembers, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm,
+  type State, toSnapshot,
 } from '@cirrus/core';
 import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
+import { benchPath, cameraAt } from '../src/benchPath.ts';
+import type { Camera } from '../src/camera.ts';
 import { copyClip, pasteSteps } from '../src/clip.ts';
-import { intruders } from '../src/edit.ts';
+import { intruders, visibleIntruders } from '../src/edit.ts';
 import { buildFrame } from '../src/frame.ts';
 import { buildHitIndex } from '../src/hit.ts';
 import { buildScene, isLive, type PlanScene } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
-import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { canonicalScene, measure, P, rng } from './helpers.ts';
+import { buildIndex, computeVisible, updateIndex } from '../src/visibility.ts';
+import { bruteVisible, canonicalScene, indexContent, measure, P, rng, visibleDifference } from './helpers.ts';
 
 // Costs at the scale the spec aims for (spec 21), on the bench's synthetic base: what runs at every edit must not
 // grow with the square of the plan (C1 of the plan 3b review: intruders took 15 s at 50 000 nodes). The view's timed
@@ -47,13 +50,13 @@ function large(): State {
 
 /**
  * The best of five runs after two to warm up (T3 of the registry): the machine is shared, and whatever else it does only
- * adds to a run; a cost that grew with the base would show in every run.
+ * adds to a run; a cost that grew with the base would show in every run. More of each for a cost made of allocations.
  */
-function best<T>(fn: () => T): { ms: number; out: T } {
+function best<T>(fn: () => T, warm = 2, runs = 5): { ms: number; out: T } {
   let out = fn();
-  out = fn();
+  for (let i = 1; i < warm; i++) out = fn();
   let ms = Infinity;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < runs; i++) {
     const t = performance.now();
     out = fn();
     ms = Math.min(ms, performance.now() - t);
@@ -110,6 +113,44 @@ function reference(): { s: State; lobby: Id; scene: PlanScene } {
   return ref;
 }
 
+// ———— Visibility (plan 3c, task 6)
+
+/** The screen of the view's tests (camAtTextPx). */
+const W = 2560, H = 1600;
+/**
+ * The plan aims at 5 ms for the flat plan seen whole and 150 ms for buildIndex on the reference lobby: 5.1 and 110 ms at
+ * best (machine quiet for a while), 6.8–7.9 and 137 ms in this file while the user's programs held 9 logical
+ * processors of 16. The gates are three times the best measures (R12, R15, R20, R24 of the registry); the targets stay
+ * the plan's.
+ */
+const FLAT_CEILING_MS = 15, INDEX_CEILING_MS = 330;
+
+/**
+ * A flat plan of 20 000 placed nodes: the generator's base of 20 000 nodes and 20 000 connections (buildLargeState), its
+ * inclusions left out — every node, phantom and connection at the top level. Measured on its own, before the reference
+ * base is built (the registry also gives its cost with that base in memory).
+ */
+function flatScene(): PlanScene {
+  const { state, lobby } = buildLargeState({ seed: 1, nodes: 20_000, connections: 20_000 });
+  const snap = toSnapshot(state), inclusions = new Set(snap.connections.filter((c) => c.kind === 'inclusion').map((c) => c.id));
+  const flat = fromSnapshot({ ...snap, connections: snap.connections.filter((c) => !inclusions.has(c.id)), branches: snap.branches.filter(([, c]) => !inclusions.has(c)) });
+  return buildScene(flat, lobby, measure, P);
+}
+
+test('plan plat de 20 000 nœuds vu en entier : visible sans balayage (cible 5 ms)', () => {
+  const scene = flatScene(), index = buildIndex(scene, P), b = scene.bounds!;
+  const cam = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, zoom: Math.min(W / (b.maxX - b.minX), H / (b.maxY - b.minY)), widthPx: W, heightPx: H };
+  // 20 861 connections seen: the set itself is ≈ 100 000 objects, whose allocation is most of the cost (≈ 3 ms of it
+  // measured alone); the best of fifteen after ten, as the view meets it once its code is optimized.
+  const r = best(() => computeVisible(scene, index, cam, P), 10, 15);
+  show(`computeVisible, plan plat (${r.out.items.length} éléments, ${r.out.connections.length} connexions)`, r.ms);
+  expect(scene.items.filter((it) => it.kind === 'node')).toHaveLength(20_000);
+  expect(r.out.groups).toEqual([]);
+  expect(r.out.items).toHaveLength(scene.items.length);
+  expect(r.out.connections.length).toBeGreaterThan(15_000);
+  expect(r.ms).toBeLessThanOrEqual(FLAT_CEILING_MS);
+}, 120_000);
+
 test('base de référence : la scène du lobby se construit d’un passage (cible 400 ms) et tient en 30 % de la mesure du 2026-11-03', () => {
   const { s, lobby } = reference();
   const built = best(() => buildScene(s, lobby, measure, P));
@@ -122,6 +163,99 @@ test('base de référence : la scène du lobby se construit d’un passage (cibl
   expect(built.ms).toBeLessThan(BUILD_CEILING_MS);
   expect(bytes).toBeLessThan(0.3 * SCENE_STEP0_BYTES);
 }, 180_000);
+
+// ———— Visibility on the reference lobby as built, before the tests below change it
+
+/** The cameras of the bench's path (benchPath, as the app's bench drives it), every `dt` seconds of it. */
+function pathCameras(scene: PlanScene, dt: number): Camera[] {
+  const { keys } = benchPath(scene, W, H, P), end = keys[keys.length - 1].t, out: Camera[] = [];
+  for (let k = 0; k * dt <= end + 1e-9; k++) out.push({ ...cameraAt(keys, k * dt), widthPx: W, heightPx: H });
+  return out;
+}
+
+/** Cameras drawn at random on the lobby's items (its bounds are mostly empty), zooms log-uniform from its overview to 2. */
+function itemCameras(scene: PlanScene, count: number, r: () => number): Camera[] {
+  const live = scene.items.flatMap((_it, i) => (isLive(scene, i) ? [i] : []));
+  return Array.from({ length: count }, () => {
+    const it = scene.items[live[Math.floor(r() * live.length)]], zoom = P.zoomMin * (2 / P.zoomMin) ** r();
+    return { x: it.x + (r() - 0.5) * W / zoom, y: it.y + (r() - 0.5) * H / zoom, zoom, widthPx: W, heightPx: H };
+  });
+}
+
+test('base de référence : computeVisible égale la force brute de sa règle, sur 50 caméras tirées au hasard et sur le parcours du banc', () => {
+  const { scene } = reference(), index = buildIndex(scene, P);
+  const cams = [...itemCameras(scene, 50, rng(71)), ...pathCameras(scene, 0.5)];
+  let parts = 0;
+  for (const cam of cams) {
+    const v = computeVisible(scene, index, cam, P);
+    expect(visibleDifference(v, bruteVisible(scene, cam)), `caméra ${JSON.stringify(cam)}`).toBeNull();
+    parts += v.connections.length;
+  }
+  expect(cams.length).toBeGreaterThan(120);
+  expect(parts).toBeGreaterThan(1000);
+}, 600_000);
+
+test('base de référence : buildIndex d’un passage sur les éléments et les parties (cible 150 ms)', () => {
+  const { scene } = reference();
+  const built = best(() => buildIndex(scene, P));
+  show('buildIndex', built.ms);
+  expect(built.ms).toBeLessThanOrEqual(INDEX_CEILING_MS);
+}, 120_000);
+
+test('base de référence : visible et intrus du visible en 1 ms au plus à chaque caméra du parcours du banc', () => {
+  const { scene } = reference(), index = buildIndex(scene, P), cams = pathCameras(scene, 1 / 60);
+  let worst = 0, worstIntruders = 0, at = 0;
+  for (const [k, cam] of cams.entries()) {
+    let ms = Infinity, intrudersMs = Infinity, v = computeVisible(scene, index, cam, P);
+    for (let i = 0; i < 3; i++) {
+      let t = performance.now();
+      v = computeVisible(scene, index, cam, P);
+      ms = Math.min(ms, performance.now() - t);
+      t = performance.now();
+      visibleIntruders(scene, v);
+      intrudersMs = Math.min(intrudersMs, performance.now() - t);
+    }
+    if (ms > worst) { worst = ms; at = k; }
+    worstIntruders = Math.max(worstIntruders, intrudersMs);
+  }
+  show(`computeVisible, pire des ${cams.length} caméras (n° ${at})`, worst);
+  show('visibleIntruders, pire caméra', worstIntruders);
+  expect(cams.length).toBeGreaterThan(2000);
+  expect(worst).toBeLessThanOrEqual(1);
+  expect(worstIntruders).toBeLessThanOrEqual(1);
+}, 120_000);
+
+test('base de référence : updateIndex d’un déplacement en 1 ms au plus, et l’index suivi égale l’index construit', () => {
+  const { s, lobby } = reference();
+  let { scene } = reference(), index = buildIndex(scene, P);
+  const p = planRow(s, lobby);
+  // A leaf five levels down: the move reshapes every group above it, up to a root.
+  let leaf = -1;
+  scene.items.forEach((it, i) => { if (leaf < 0 && isLive(scene, i) && it.kind === 'node' && it.depth >= 4) leaf = i; });
+  const node = scene.items[leaf].id;
+  expect(directGroup(s, p, nodeRow(s, node))).toBeGreaterThanOrEqual(0);
+  const a = moveNodes(s, lobby, [{ node, x: scene.items[leaf].x + 500, y: scene.items[leaf].y - 300 }]), undo = invertAction(a);
+  let bestMs = Infinity, bestUndo = Infinity;
+  for (let i = 0; i < 9; i++) {
+    applyOps(s, a.ops);
+    const r = updateScene(scene, s, a.ops, measure, P);
+    let t = performance.now();
+    index = updateIndex(index, r.scene, r.changes, P);
+    const ms = performance.now() - t;
+    applyOps(s, undo.ops);
+    const back = updateScene(r.scene, s, undo.ops, measure, P);
+    t = performance.now();
+    index = updateIndex(index, back.scene, back.changes, P);
+    const undoMs = performance.now() - t;
+    if (i >= 2) { bestMs = Math.min(bestMs, ms); bestUndo = Math.min(bestUndo, undoMs); }
+    if (i === 0) expect(indexContent(index, back.scene)).toEqual(indexContent(buildIndex(back.scene, P), back.scene));
+    scene = back.scene;
+  }
+  show('updateIndex, déplacement', bestMs);
+  show('  son annulation', bestUndo);
+  expect(bestMs).toBeLessThanOrEqual(1);
+  expect(bestUndo).toBeLessThanOrEqual(1);
+}, 120_000);
 
 /**
  * The best of seven updates after two to warm up, for the action and for its undo (Review Focus 1: an inverse action

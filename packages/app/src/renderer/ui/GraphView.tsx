@@ -2,10 +2,10 @@ import { type Action, type Id, phantomsOf, type State, type Vec2 } from '@cirrus
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, intruders, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
+  dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
   type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
-  PART_MAIN, partEnds, type Measure,
+  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex,
 } from '@cirrus/view';
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
@@ -101,7 +101,6 @@ export function GraphView(props: {
   const [rect, setRect] = useState<Bounds | null>(null);
   /** A drag in progress: the moved items (top-most), the scene it started from, the world offset so far. */
   const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean } | null>(null);
-  const intrudersRef = useRef(new Map<number, number>());
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
@@ -129,6 +128,24 @@ export function GraphView(props: {
   /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
   const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[]; expected: Id } | null>(null);
 
+  /**
+   * Gives the renderer the scene to show (plan 3c, task 6): when it follows the renderer's own by the changes gathered
+   * since (sceneChanges), those changes, so that its index is updated rather than built; else the scene with the index
+   * its tab kept, if any — the index of the scene the renderer leaves going back to its tab's entry.
+   */
+  const showScene = (r: PlanRenderer, scene: PlanScene) => {
+    const gathered = sceneChanges.current;
+    sceneChanges.current = null;
+    if (gathered && r.held && gathered.prev === r.held.scene) r.updateScene(gathered.scene, gathered.changes);
+    const held = r.held;
+    if (held?.scene === scene) return;
+    const byPlan = scenes.current.byPlan;
+    const own = held ? byPlan.get(held.scene.plan.id) : undefined;
+    if (held && own?.scene === held.scene) own.index = held.index;
+    const entry = byPlan.get(scene.plan.id), kept = entry?.scene === scene ? entry.index : null;
+    r.setScene(scene, false, kept ?? undefined);
+    if (entry && entry.scene === scene) entry.index = null;
+  };
   /**
    * Back to the scene of the state, after a preview given up or refused: the current plan's, never one kept from
    * before a change of tab (I7 of the plan 3b review).
@@ -167,9 +184,18 @@ export function GraphView(props: {
   /**
    * The scenes of the last tabs shown (cachedPlans, the current one last), all at revision `rev` of the state: each
    * action updates them by its operations (plan 3c, task 5), so that going back to one of these tabs is immediate.
-   * `key`: the parameters they were made with (sceneParamsKey), and their measure of titles.
+   * `key`: the parameters they were made with (sceneParamsKey), and their measure of titles. Each keeps its visibility
+   * index too (plan 3c, task 6), kept up to date with it — except the scene the renderer holds, whose index is the
+   * renderer's (null here) until another tab is shown.
    */
-  const scenes = useRef<{ rev: number; key: string; measure: Measure | null; byPlan: Map<Id, PlanScene> }>({ rev: 0, key: '', measure: null, byPlan: new Map() });
+  const scenes = useRef<{ rev: number; key: string; measure: Measure | null; byPlan: Map<Id, { scene: PlanScene; index: SceneIndex | null }> }>({
+    rev: 0, key: '', measure: null, byPlan: new Map(),
+  });
+  /**
+   * The renderer's scene once updated by the actions since it was given (`prev`, `scene`) and their changes, merged: the
+   * effect that shows the scene gives them to the renderer, which updates its index instead of building it again.
+   */
+  const sceneChanges = useRef<{ prev: PlanScene; scene: PlanScene; changes: SceneChanges } | null>(null);
   const [tip, setTip] = useState<Tip>(null);
   const [chain, setChain] = useState<Chain>([]);
   paramsRef.current = props.params;
@@ -198,8 +224,10 @@ export function GraphView(props: {
     e.renderer.setHover(h.kind === 'connection' || h.kind === 'stub' ? h.conn : null);
     redraw();
     let text: string | null = null;
+    // The intruders found among what is drawn, with the same visible set as the hit index (spec 10, plan 3c task 6).
+    const intruder = h.kind === 'item' ? e.renderer.intruders.get(h.item) : undefined;
     if (h.kind === 'stub') text = `absent : ${h.title}`;
-    else if (h.kind === 'item' && intrudersRef.current.has(h.item)) text = `intrus dans le groupe « ${sc.items[intrudersRef.current.get(h.item)!].title} »`;
+    else if (intruder !== undefined) text = `intrus dans le groupe « ${sc.items[intruder].title} »`;
     else if (h.kind === 'item' && sc.items[h.item].kind === 'phantom') {
       const it = sc.items[h.item];
       text = `${it.phantom === 'node' ? 'fantôme' : it.phantom === 'center' ? 'centre' : 'absent'} : ${it.title}`;
@@ -670,24 +698,34 @@ export function GraphView(props: {
   useEffect(() => {
     if (!ready) return;
     const p = paramsRef.current, cache = scenes.current, s = props.state;
-    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureTitle(p); }
+    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureTitle(p); sceneChanges.current = null; }
     const measure = cache.measure!;
     if (props.rev !== cache.rev) {
       // One action since the scenes were made: its operations update every one (Review Focus 2). React may have
       // gathered several actions into this render, of which only the last is known: the scenes are made anew then.
       const ops = props.rev === cache.rev + 1 ? props.action?.ops : undefined;
-      for (const [plan, sc] of [...cache.byPlan]) {
-        if (!ops || !s.plans.has(plan)) cache.byPlan.delete(plan);
-        else cache.byPlan.set(plan, updateScene(sc, s, ops, measure, p).scene);
+      // The renderer's scene, or the one it will be given with the changes gathered so far.
+      const held = sceneChanges.current?.scene ?? sceneRef.current;
+      for (const [plan, entry] of [...cache.byPlan]) {
+        if (!ops || !s.plans.has(plan)) { cache.byPlan.delete(plan); continue; }
+        const { scene: next, changes } = updateScene(entry.scene, s, ops, measure, p);
+        if (next === entry.scene) continue;
+        if (entry.scene === held) {
+          // Its index is the renderer's: the changes go to it with the scene ([scene] effect), merged if renders gather.
+          const g = sceneChanges.current;
+          sceneChanges.current = g && g.scene === entry.scene ? { prev: g.prev, scene: next, changes: mergeChanges(g.changes, changes) } : { prev: entry.scene, scene: next, changes };
+        } else if (entry.index) entry.index = updateIndex(entry.index, next, changes, p);
+        entry.scene = next;
       }
+      if (!ops) sceneChanges.current = null;
       cache.rev = props.rev;
     }
-    const sc = cache.byPlan.get(props.plan) ?? buildScene(s, props.plan, measure, p);
+    const entry = cache.byPlan.get(props.plan) ?? { scene: buildScene(s, props.plan, measure, p), index: null };
     // The tab shown last goes last; beyond cachedPlans, the one shown longest ago is forgotten.
     cache.byPlan.delete(props.plan);
-    cache.byPlan.set(props.plan, sc);
+    cache.byPlan.set(props.plan, entry);
     for (const plan of cache.byPlan.keys()) { if (cache.byPlan.size <= p.cachedPlans) break; cache.byPlan.delete(plan); }
-    setScene(sc);
+    setScene(entry.scene);
     mark('sceneReady');
   }, [ready, props.state, props.rev, props.plan, sceneKey]);
 
@@ -719,10 +757,7 @@ export function GraphView(props: {
       setPopup(null);
     }
     sceneRef.current = scene;
-    e.renderer.setScene(scene);
-    // Items covered by an envelope they do not belong to: an orange ring and a tooltip (spec 10).
-    intrudersRef.current = intruders(scene);
-    e.renderer.setIntruders([...intrudersRef.current.keys()]);
+    showScene(e.renderer, scene);
     clearHover();
     const { width, height } = e.app.screen;
     const known = cameras.current.get(scene.plan.id);

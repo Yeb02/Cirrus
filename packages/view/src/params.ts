@@ -104,6 +104,8 @@ export interface RenderParams {
   cachedPlans: number;
   /** Share of free slots beyond which an updated scene is built anew. */
   sceneCompactShare: number;
+  /** Roots changed since the visibility index's tree was built beyond which it is built again (plan 3c, task 6). */
+  indexDirtyMax: number;
   // Snapshot of the base (plan 3c, decision 4): the interface sends its state to be kept as the base's snapshot
   /** after this many actions, */
   snapshotAfterActions: number;
@@ -222,6 +224,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   backgroundPause: 'unfocused',
   cachedPlans: 4,
   sceneCompactShare: 0.25,
+  indexDirtyMax: 256,
   snapshotAfterActions: 200,
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
@@ -361,6 +364,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   },
   num('cachedPlans', 'Plans dont la scène reste prête (derniers onglets affichés)', A, 'Vue', 1, 32, 1),
   num('sceneCompactShare', 'Part d’emplacements libres au-delà de laquelle une scène est reconstruite', A, 'Vue', 0.05, 1, 0.05),
+  num('indexDirtyMax', 'Éléments de premier niveau changés au-delà desquels l’index de la vue refait son arbre', A, 'Vue', 1, 100000, 1),
   num('snapshotAfterActions', 'Actions après lesquelles l’instantané de la base est refait', A, 'Base', 10, 10000, 10),
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),

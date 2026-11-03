@@ -4,6 +4,7 @@ import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
 import { isLive, type PlanScene } from './scene.ts';
+import type { VisibleSet } from './visibility.ts';
 
 /** Placement changes for moveNodes and movePhantom, gathered by `combine` into one action. */
 export interface Moves {
@@ -94,6 +95,39 @@ export function intruders(scene: PlanScene): Map<number, number> {
       if (known === undefined || items[known].depth < g.depth) out.set(i, gi);
     }
   });
+  return out;
+}
+
+/**
+ * The intruders among what is drawn (spec 10, plan 3c task 6): each item drawn — box, phantom or envelope — whose centre
+ * a drawn envelope covers without it being one of its members, with the deepest such group (the first by slot among
+ * equals, as `intruders`). What the ring and the tooltip show, at the cost of the visible set: the drawn centres
+ * indexed once, each drawn envelope searched by its box; its polygon is only made for a centre that is not its own.
+ */
+export function visibleIntruders(scene: PlanScene, visible: VisibleSet): Map<number, number> {
+  const out = new Map<number, number>();
+  if (visible.groups.length === 0) return out;
+  const items = scene.items, drawn = visible.items.length === 0 ? visible.groups : [...visible.items, ...visible.groups];
+  const centres = new Flatbush(drawn.length);
+  for (const i of drawn) centres.add(items[i].x, items[i].y, items[i].x, items[i].y);
+  centres.finish();
+  const below = (i: number, g: number) => { for (let a = items[i].parent; a >= 0; a = items[a].parent) if (a === g) return true; return false; };
+  for (const gi of visible.groups) {
+    const g = items[gi], hull = g.hull!, pad = g.pad!;
+    // The envelope's box: its hull's, widened by the padding (a hull of fewer than three points is made a polygon first).
+    let poly = hull.length < 3 ? offsetPolygon(hull, pad) : null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of poly ?? hull) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+    const d = poly ? 0 : pad;
+    for (const j of centres.search(x0 - d, y0 - d, x1 + d, y1 + d)) {
+      const i = drawn[j];
+      if (i === gi || below(i, gi) || below(gi, i)) continue;
+      poly ??= offsetPolygon(hull, pad);
+      if (!insidePolygon(poly, items[i].x, items[i].y)) continue;
+      const known = out.get(i);
+      if (known === undefined || items[known].depth < g.depth || (items[known].depth === g.depth && gi < known)) out.set(i, gi);
+    }
+  }
   return out;
 }
 
