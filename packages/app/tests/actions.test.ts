@@ -1,7 +1,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, branchKey, groupOf, layoutKey, placementKey, setLayout, type State } from '@cirrus/core';
+import { applyOp, groupOf, layoutKey, placementKey, setLayout, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
@@ -48,7 +48,7 @@ test('cacher, renommer, échelle : une action chacun, rien quand il n’y a rien
   expect(scaleBuild(sc, [], 1, P)).toBeNull();
 });
 
-const shown = (plan: string, conn: string, node: string) => s.branches.has(branchKey({ plan, connection: conn, node }));
+const shown = (plan: string, conn: string, node: string) => s.branches.has({ plan, connection: conn, node });
 const newConnection = (a: import('@cirrus/core').Action) => (a.ops.find((o) => o.t === 'connection' && o.before === null) as { after: { id: string } }).after.id;
 
 test('tracer vers un nœud crée la connexion, montrée « partout » où ses deux nœuds sont ; vers un cœur, le nœud s’y ajoute en source', () => {

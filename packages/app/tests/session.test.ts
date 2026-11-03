@@ -1,4 +1,4 @@
-import { type Action, applyOp, createNode, createPlan, editNode, emptyState, type Id, type State } from '@cirrus/core';
+import { type Action, applyOp, cloneState, createNode, createPlan, editNode, emptyState, type Id } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { EditSession, plansOf } from '../src/renderer/session.ts';
 
@@ -84,7 +84,9 @@ test('deux actions lancées sans attendre s’exécutent dans l’ordre', async 
 test('plans touchés : ceux des placements, branches, dispositions et fantômes', () => {
   const { s, plan } = world();
   expect(plansOf(createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }))).toEqual([plan]);
-  expect(plansOf(editNode({ ...s, nodes: new Map([['n', { id: 'n', title: 'x', summary: '', tags: [], files: [] }]]) } as State, 'n', { title: 'y' }))).toEqual([]);
+  const st = cloneState(s);
+  applyOp(st, { t: 'node', before: null, after: { id: 'n', title: 'x', summary: '', tags: [], files: [] } });
+  expect(plansOf(editNode(st, 'n', { title: 'y' }))).toEqual([]);
 });
 
 test('une action complétée plus tard (répercussion plan par plan) se défait d’un seul Ctrl+Z (spec 10)', async () => {

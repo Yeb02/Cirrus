@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { type Action, canonical, type Op, parseBranchKey, type State, toSnapshot } from '@cirrus/core';
+import { type Action, canonical, type Op, type State, toSnapshot } from '@cirrus/core';
 import { LocalStore, writeBenchBase } from '@cirrus/store';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildLargeState } from '../src/large.ts';
@@ -46,7 +46,7 @@ test('base du banc : les mêmes lignes que le magasin écrit action par action',
     ...[...state.nodes.values()].map((after): Op => ({ t: 'node', before: null, after })),
     ...[...state.placements.values()].map((after): Op => ({ t: 'placement', before: null, after })),
     ...[...state.connections.values()].map((after): Op => ({ t: 'connection', before: null, after })),
-    ...[...state.branches].map((key): Op => ({ t: 'branch', key: parseBranchKey(key), before: false, after: true })),
+    ...[...state.branches].map((key): Op => ({ t: 'branch', key, before: false, after: true })),
     ...[...state.phantoms.values()].map((after): Op => ({ t: 'phantom', before: null, after })),
   ];
   const store = LocalStore.open(byCommit, { pc: 'banc' });

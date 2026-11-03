@@ -1,0 +1,369 @@
+import { expect, test } from 'vitest';
+import { groupOf } from '../src/invariants.ts';
+import type { ConnectionKind, ConnectionRec, Id, Member, PlanType, Role, TagValue } from '../src/model.ts';
+import { invertOp, type Op } from '../src/ops.ts';
+import { fromSnapshot } from '../src/snapshot.ts';
+import {
+  applyOp, canonical, cloneState, connRow, emptyState, groupMembers, memberOf, nodeRow, OpConflictError, phantomsOf, placedIn, placementOf,
+  planRow, reindex, type State,
+} from '../src/state.ts';
+import * as oracle from './oracle/state.ts';
+import { toSnapshot as oracleSnapshot } from './oracle/snapshot.ts';
+
+/** mulberry32: a small seeded generator, so that a failure replays. */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const PLANS = ['p0', 'p1', 'p2'];
+const NODES = Array.from({ length: 12 }, (_, i) => `n${i}`);
+const CONNS = Array.from({ length: 14 }, (_, i) => `c${i}`);
+const PHANTOMS = Array.from({ length: 6 }, (_, i) => `f${i}`);
+const KEYS = ['k0', 'k1'];
+const ROLES: Role[] = ['source', 'target', 'associate'];
+const KINDS: ConnectionKind[] = ['knowledge', 'inclusion', 'structure'];
+const TYPES: PlanType[] = ['lobby', 'plan', 'document'];
+
+/**
+ * Random operations on a small universe, each valid against the oracle (its "before" is the oracle's current record),
+ * except the undos of earlier operations and the stale ones, which may conflict. Inclusions dominate, with their two
+ * members, so that groups form, change and break in every plan; connections grow and shrink, records come and go.
+ */
+function generator(seed: number, o: oracle.State) {
+  const r = rng(seed);
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
+  const history: Op[] = [];
+  const tags = (): TagValue[] => (r() < 0.6 ? [] : [{ key: pick(KEYS) }, ...(r() < 0.5 ? [{ key: 'k1', value: Math.floor(r() * 3) }] : [])]);
+  const members = (kind: ConnectionKind): Member[] => {
+    if (kind === 'inclusion' && r() < 0.85) return [{ node: pick(NODES), role: 'source' }, { node: pick(NODES), role: 'target' }];
+    return Array.from({ length: Math.floor(r() * 6) }, () => ({ node: pick(NODES), role: pick(ROLES) }));
+  };
+  const connection = (id: Id): ConnectionRec => {
+    const kind = r() < 0.45 ? 'inclusion' : pick(KINDS);
+    const c: ConnectionRec = { id, kind, title: r() < 0.5 ? '' : `t${Math.floor(r() * 5)}`, relation: r() < 0.7 ? '' : 'R', tags: tags(), members: members(kind) };
+    if (r() < 0.15) c.trashedAt = 1000 + Math.floor(r() * 100);
+    return c;
+  };
+  const fresh = (): Op => {
+    const t = r();
+    if (t < 0.1) {
+      const id = pick(NODES), before = o.nodes.get(id) ?? null;
+      const after = before && r() < 0.3 ? null : { id, title: `T${Math.floor(r() * 9)}`, summary: '', tags: tags(), files: [], ...(r() < 0.2 ? { trashedAt: 5 } : {}) };
+      return { t: 'node', before, after };
+    }
+    if (t < 0.14) {
+      const id = pick(PLANS), before = o.plans.get(id) ?? null;
+      return { t: 'plan', before, after: before && r() < 0.25 ? null : { id, name: `P${Math.floor(r() * 9)}`, type: pick(TYPES) } };
+    }
+    if (t < 0.32) {
+      const id = pick(CONNS), before = o.connections.get(id) ?? null;
+      return { t: 'connection', before, after: before && r() < 0.25 ? null : connection(id) };
+    }
+    if (t < 0.44) {
+      const plan = pick(PLANS), node = pick(NODES), before = o.placements.get(oracle.placementKey(plan, node)) ?? null;
+      return { t: 'placement', before, after: before && r() < 0.4 ? null : { plan, node, x: Math.floor(r() * 100), y: Math.floor(r() * 100), k: Math.floor(r() * 3) } };
+    }
+    if (t < 0.74) {
+      const c = pick(CONNS), plan = pick(PLANS), ms = o.connections.get(c)?.members ?? [];
+      // Mostly a member, often one not shown here yet: both branches of an inclusion make a group.
+      const missing = ms.filter((m) => !o.branches.has(oracle.branchKey({ plan, connection: c, node: m.node })));
+      const node = missing.length > 0 && r() < 0.5 ? pick(missing).node : ms.length > 0 && r() < 0.85 ? pick(ms).node : pick(NODES);
+      const key = { plan, connection: c, node }, before = o.branches.has(oracle.branchKey(key));
+      return { t: 'branch', key, before, after: !before };
+    }
+    if (t < 0.82) {
+      const id = pick(PHANTOMS), before = o.phantoms.get(id) ?? null;
+      const of = { kind: pick(['node', 'center', 'absent'] as const), node: pick(NODES) };
+      const after = before && r() < 0.3 ? null : {
+        id, plan: before && r() < 0.7 ? before.plan : pick(PLANS), connection: before && r() < 0.7 ? before.connection : pick(CONNS),
+        of, x: 1, y: 2, k: 0, ...(r() < 0.3 ? { group: pick(NODES) } : {}),
+      };
+      return { t: 'phantom', before, after };
+    }
+    if (t < 0.88) {
+      const plan = pick(PLANS), connection = pick(CONNS), before = o.connLayouts.get(oracle.layoutKey(plan, connection)) ?? null;
+      return { t: 'connLayout', before, after: before && r() < 0.4 ? null : { plan, connection, marker: { x: Math.floor(r() * 9), y: 0 }, handles: {} } };
+    }
+    const key = pick(KEYS), before = o.tagKeys.get(key) ?? null;
+    return { t: 'tagKey', before, after: before && r() < 0.4 ? null : { key, type: 'word', scope: pick(['node', 'connection', 'both'] as const), multi: r() < 0.5, required: false } };
+  };
+  return (): Op => {
+    const t = r();
+    // An undo of an earlier operation: it conflicts when its record changed since.
+    if (t < 0.08 && history.length > 0) return invertOp(pick(history));
+    // A stale operation: an earlier "before" replayed.
+    if (t < 0.1 && history.length > 0) return pick(history);
+    const op = fresh();
+    history.push(op);
+    return op;
+  };
+}
+
+/** Applies `op` to both models: both accept it, or both refuse it (a conflict) and stay as they were. */
+function both(s: State, o: oracle.State, op: Op): void {
+  let oracleErr: unknown = null, err: unknown = null;
+  try { oracle.applyOp(o, op); } catch (e) { oracleErr = e; }
+  try { applyOp(s, op); } catch (e) { err = e; }
+  if (oracleErr) expect(oracleErr).toBeInstanceOf(oracle.OpConflictError);
+  expect(err === null).toBe(oracleErr === null);
+  if (err) expect(err).toBeInstanceOf(OpConflictError);
+}
+
+// Sorted: the two models do not iterate in the same order, the content must be the same.
+const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
+const bkey = (b: { plan: Id; connection: Id; node: Id }) => `${b.plan}|${b.connection}|${b.node}`;
+const view = (s: State | oracle.State) => ({
+  nodes: sorted(s.nodes), connections: sorted(s.connections), plans: sorted(s.plans), tagKeys: sorted(s.tagKeys), placements: sorted(s.placements),
+  branches: [...s.branches].map((b) => (typeof b === 'string' ? b : bkey(b))).sort(), connLayouts: sorted(s.connLayouts), phantoms: sorted(s.phantoms),
+  sizes: [s.nodes.size, s.connections.size, s.plans.size, s.tagKeys.size, s.placements.size, s.branches.size, s.connLayouts.size, s.phantoms.size],
+});
+
+/** Every lookup of the façades and direct accessors, on every identifier of the universe, against the oracle. */
+function lookups(s: State, o: oracle.State): void {
+  const same = (a: unknown, b: unknown) => expect(canonical(a ?? null)).toBe(canonical(b ?? null));
+  for (const id of NODES) { expect(s.nodes.has(id)).toBe(o.nodes.has(id)); same(s.nodes.get(id), o.nodes.get(id)); }
+  for (const id of PLANS) { expect(s.plans.has(id)).toBe(o.plans.has(id)); same(s.plans.get(id), o.plans.get(id)); }
+  for (const id of PHANTOMS) { expect(s.phantoms.has(id)).toBe(o.phantoms.has(id)); same(s.phantoms.get(id), o.phantoms.get(id)); }
+  for (const id of CONNS) { expect(s.connections.has(id)).toBe(o.connections.has(id)); same(s.connections.get(id), o.connections.get(id)); }
+  for (const plan of PLANS) {
+    for (const node of NODES) {
+      const key = oracle.placementKey(plan, node);
+      expect(s.placements.has(key)).toBe(o.placements.has(key));
+      same(s.placements.get(key), o.placements.get(key));
+      same(placementOf(s, plan, node), o.placements.get(key));
+    }
+    // forEachInPlan: the nodes shown in this plan, per connection.
+    const seen = new Map<Id, Id[]>();
+    s.branches.forEachInPlan(plan, (c, nodes) => seen.set(s.tables.conns.rows.ids[c], Array.from(nodes, (n) => s.tables.nodes.rows.ids[n]).sort()));
+    const expected = new Map<Id, Id[]>();
+    for (const k of o.branches) {
+      const b = oracle.parseBranchKey(k);
+      if (b.plan === plan) expected.set(b.connection, [...(expected.get(b.connection) ?? []), b.node].sort());
+    }
+    expect(new Map([...seen].sort())).toEqual(new Map([...expected].sort()));
+    for (const c of CONNS) {
+      expect(s.branches.nodesIn(c, plan).sort()).toEqual(expected.get(c) ?? []);
+      for (const node of NODES) expect(s.branches.has({ plan, connection: c, node })).toBe(o.branches.has(oracle.branchKey({ plan, connection: c, node })));
+    }
+  }
+  for (const c of CONNS) {
+    const plans = new Set([...o.branches].map(oracle.parseBranchKey).filter((b) => b.connection === c).map((b) => b.plan));
+    expect(s.branches.plansOf(c).sort()).toEqual([...plans].sort());
+  }
+}
+
+/** The groups of spec 10 read straight from the oracle: inclusions not in the trash, first source in first target, both branches shown. */
+function oracleGroups(o: oracle.State, plan: Id, node: Id): Id[] {
+  const out: Id[] = [];
+  for (const c of o.connections.values()) {
+    if (c.kind !== 'inclusion' || c.trashedAt !== undefined) continue;
+    const m = c.members.find((x) => x.role === 'source'), g = c.members.find((x) => x.role === 'target');
+    if (!m || !g || m.node !== node) continue;
+    const shown = (n: Id) => o.branches.has(oracle.branchKey({ plan, connection: c.id, node: n }));
+    if (shown(node) && shown(g.node)) out.push(g.node);
+  }
+  return out;
+}
+
+/** The indices kept by applyOp against what they mean, computed from the oracle. */
+function indicesMatchOracle(s: State, o: oracle.State): void {
+  const T = s.tables;
+  for (const n of NODES) {
+    const r = nodeRow(s, n);
+    const conns = r < 0 ? [] : Array.from(memberOf(s, r), (c) => T.conns.rows.ids[c]).sort();
+    expect(conns).toEqual([...o.connections.values()].filter((c) => c.members.some((m) => m.node === n)).map((c) => c.id).sort());
+    const plans = r < 0 ? [] : Array.from(placedIn(s, r), (p) => T.plans.rows.ids[p]).sort();
+    expect(plans).toEqual([...o.placements.values()].filter((p) => p.node === n).map((p) => p.plan).sort());
+  }
+  for (const c of CONNS) {
+    expect([...phantomsOf(s, c)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.connection === c).map((p) => p.id).sort());
+  }
+  for (const plan of PLANS) {
+    const members = new Map<Id, Id[]>();
+    for (const n of NODES) {
+      const expected = oracleGroups(o, plan, n), g = groupOf(s, plan, n);
+      if (expected.length === 0) expect(g).toBeUndefined();
+      else expect(expected).toContain(g);
+      const pr = planRow(s, plan), nr = nodeRow(s, n);
+      const multi = pr < 0 || nr < 0 ? undefined : s.index.groupOf[pr]?.multi.get(nr);
+      if (expected.length > 1) expect(multi?.map((x) => T.nodes.rows.ids[x]).sort()).toEqual(expected.sort());
+      else expect(multi).toBeUndefined();
+      if (g !== undefined) members.set(g, [...(members.get(g) ?? []), n].sort());
+    }
+    for (const g of NODES) {
+      const pr = planRow(s, plan), gr = nodeRow(s, g);
+      const got = pr < 0 || gr < 0 ? [] : groupMembers(s, pr, gr).map((x) => T.nodes.rows.ids[x]).sort();
+      expect(got).toEqual(members.get(g) ?? []);
+    }
+  }
+}
+
+/** Every index in identifier terms (rows differ from one state to another), lists sorted where their order is free. */
+function indexDump(s: State) {
+  const T = s.tables, I = s.index, nid = (r: number) => T.nodes.rows.ids[r], pid = (r: number) => T.plans.rows.ids[r];
+  const out: string[] = [];
+  for (let n = 0; n < T.nodes.rows.end; n++) {
+    if (T.nodes.rows.ids[n] === '') {
+      expect(I.memberOf.len[n] ?? 0).toBe(0); // a free row holds nothing
+      continue;
+    }
+    out.push(`memberOf ${nid(n)} ${Array.from(memberOf(s, n), (c) => T.conns.rows.ids[c]).sort()}`);
+    out.push(`placedIn ${nid(n)} ${Array.from(placedIn(s, n), pid).sort()}`);
+  }
+  I.groupOf.forEach((pg, p) => {
+    if (!pg) return;
+    pg.group.forEach((g, n) => { if (g >= 0) out.push(`groupOf ${pid(p)} ${nid(n)} ${nid(g)} ${pg.multi.get(n)?.map(nid) ?? ''}`); });
+  });
+  I.groupMembers.forEach((gm, p) => { for (const [g, ms] of gm ?? []) out.push(`groupMembers ${pid(p)} ${nid(g)} ${ms.map(nid).sort()}`); });
+  for (const [c, ids] of I.phantomsOf) out.push(`phantomsOf ${c} ${[...ids].sort()}`);
+  return out.sort();
+}
+
+/** The state rebuilt from the oracle's own snapshot: loaded in bulk, then indexed by reindex. */
+function rebuilt(o: oracle.State): State {
+  const x = oracleSnapshot(o);
+  return fromSnapshot({ ...x, branches: x.branches.map((k) => { const b = oracle.parseBranchKey(k); return [b.plan, b.connection, b.node]; }) });
+}
+
+test('oracle : 2 000 opérations au hasard, les façades égalent le modèle objet après chaque centaine', () => {
+  const s = emptyState(), o = oracle.emptyState();
+  const next = generator(1, o);
+  for (let i = 1; i <= 2000; i++) {
+    both(s, o, next());
+    if (i % 100 === 0) {
+      expect(view(s)).toEqual(view(o));
+      lookups(s, o);
+    }
+  }
+  // Everything removed: no row is left held, no list left in the pools.
+  for (const op of removeAll(o)) both(s, o, op);
+  expect(view(s)).toEqual(view(o));
+  const T = s.tables;
+  for (const rows of [T.nodes.rows, T.plans.rows, T.conns.rows]) {
+    expect(rows.row.size).toBe(0);
+    expect(rows.free.length).toBe(rows.end);
+    expect(rows.refs.every((n) => n === 0)).toBe(true);
+  }
+  for (const pool of [T.conns.members, T.conns.branches, s.index.memberOf, s.index.placedIn]) expect(pool.top).toBe(pool.waste);
+  expect(s.index.phantomsOf.size).toBe(0);
+  expect(s.index.groupMembers.every((m) => !m || m.size === 0)).toBe(true);
+});
+
+test('index : tenus par applyOp, égaux à leur définition et à ceux de reindex sur un état reconstruit, après chaque centaine', () => {
+  const s = emptyState(), o = oracle.emptyState();
+  const next = generator(2, o);
+  for (let i = 1; i <= 2000; i++) {
+    both(s, o, next());
+    if (i % 100 === 0) {
+      indicesMatchOracle(s, o);
+      const dump = indexDump(s);
+      expect(indexDump(rebuilt(o))).toEqual(dump);
+      const again = cloneState(s);
+      reindex(again);
+      expect(indexDump(again)).toEqual(dump);
+    }
+  }
+});
+
+/** Operations that empty the oracle, in an order that leaves references dangling for a while (nodes before their connections). */
+function removeAll(o: oracle.State): Op[] {
+  return [
+    ...[...o.nodes.values()].map((before): Op => ({ t: 'node', before, after: null })),
+    ...[...o.plans.values()].map((before): Op => ({ t: 'plan', before, after: null })),
+    ...[...o.placements.values()].map((before): Op => ({ t: 'placement', before, after: null })),
+    ...[...o.connections.values()].map((before): Op => ({ t: 'connection', before, after: null })),
+    ...[...o.branches].map((k): Op => ({ t: 'branch', key: oracle.parseBranchKey(k), before: true, after: false })),
+    ...[...o.phantoms.values()].map((before): Op => ({ t: 'phantom', before, after: null })),
+    ...[...o.connLayouts.values()].map((before): Op => ({ t: 'connLayout', before, after: null })),
+    ...[...o.tagKeys.values()].map((before): Op => ({ t: 'tagKey', before, after: null })),
+  ];
+}
+
+const nodeOp = (id: Id): Op => ({ t: 'node', before: null, after: { id, title: id, summary: '', tags: [], files: [] } });
+const conn = (id: Id, nodes: Id[], kind: ConnectionKind = 'knowledge'): ConnectionRec =>
+  ({ id, kind, title: '', relation: '', tags: [], members: nodes.map((node, i) => ({ node, role: i === 0 ? 'source' : 'target' })) });
+
+test('pools : une connexion qui grandit est relogée en fin de pool, et grandit sur place quand elle y est déjà', () => {
+  const s = emptyState();
+  for (const id of ['a', 'b', 'c', 'd', 'e', 'f']) applyOp(s, nodeOp(id));
+  applyOp(s, { t: 'connection', before: null, after: conn('X', ['a', 'b']) });
+  applyOp(s, { t: 'connection', before: null, after: conn('Y', ['c', 'd']) });
+  const pool = s.tables.conns.members, x = connRow(s, 'X'), y = connRow(s, 'Y');
+  const capX = pool.cap[x];
+  applyOp(s, { t: 'connection', before: s.connections.get('X')!, after: conn('X', ['a', 'b', 'c', 'd', 'e']) });
+  expect(pool.start[x]).toBeGreaterThan(pool.start[y]);
+  expect(pool.waste).toBe(capX);
+  expect(s.connections.get('X')!.members.map((m) => m.node)).toEqual(['a', 'b', 'c', 'd', 'e']);
+  expect(s.connections.get('Y')!.members.map((m) => m.node)).toEqual(['c', 'd']);
+  expect(Array.from(memberOf(s, nodeRow(s, 'c')), (r) => s.tables.conns.rows.ids[r]).sort()).toEqual(['X', 'Y']);
+  // Now last in the pool: it grows where it is.
+  const start = pool.start[x];
+  applyOp(s, { t: 'connection', before: s.connections.get('X')!, after: conn('X', ['a', 'b', 'c', 'd', 'e', 'f']) });
+  expect(pool.start[x]).toBe(start);
+  expect(pool.waste).toBe(capX);
+  expect(s.connections.get('X')!.members).toHaveLength(6);
+});
+
+test('pools : au-delà de 50 % de perte, le pool se compacte sans rien perdre', () => {
+  const s = emptyState();
+  for (let i = 0; i < 10; i++) applyOp(s, nodeOp(`n${i}`));
+  for (let i = 0; i < 200; i++) applyOp(s, { t: 'connection', before: null, after: conn(`c${i}`, [`n${i % 10}`, `n${(i + 3) % 10}`]) });
+  const pool = s.tables.conns.members, peak = pool.top;
+  let compacted = false;
+  for (let i = 0; i < 150; i++) {
+    applyOp(s, { t: 'connection', before: s.connections.get(`c${i}`)!, after: null });
+    expect(pool.waste * 2).toBeLessThanOrEqual(pool.top);
+    if (pool.top < peak) compacted = true;
+  }
+  expect(compacted).toBe(true);
+  expect(pool.top - pool.waste).toBe(100);
+  for (let i = 150; i < 200; i++) expect(s.connections.get(`c${i}`)!.members.map((m) => m.node)).toEqual([`n${i % 10}`, `n${(i + 3) % 10}`]);
+});
+
+test('rangées recyclées sans fuite : une rangée libérée resert, un identifiant encore référencé garde la sienne', () => {
+  const s = emptyState();
+  applyOp(s, { t: 'plan', before: null, after: { id: 'p', name: 'P', type: 'plan' } });
+  for (const id of ['a', 'b']) applyOp(s, nodeOp(id));
+  applyOp(s, { t: 'connection', before: null, after: conn('X', ['a', 'b']) });
+  for (const node of ['a', 'b']) applyOp(s, { t: 'branch', key: { plan: 'p', connection: 'X', node }, before: false, after: true });
+  const x = connRow(s, 'X'), a = nodeRow(s, 'a');
+  // The record of a goes, its references stay: same row, same identifier in the connection.
+  applyOp(s, { t: 'node', before: s.nodes.get('a')!, after: null });
+  expect(s.nodes.has('a')).toBe(false);
+  expect(nodeRow(s, 'a')).toBe(a);
+  expect(s.connections.get('X')!.members[0].node).toBe('a');
+  // The connection's record goes, its branches keep its row; then they go too.
+  applyOp(s, { t: 'connection', before: s.connections.get('X')!, after: null });
+  expect(s.connections.has('X')).toBe(false);
+  expect(connRow(s, 'X')).toBe(x);
+  expect(nodeRow(s, 'a')).toBe(a); // still a branch of X
+  for (const node of ['a', 'b']) applyOp(s, { t: 'branch', key: { plan: 'p', connection: 'X', node }, before: true, after: false });
+  expect(connRow(s, 'X')).toBe(-1);
+  expect(nodeRow(s, 'a')).toBe(-1);
+  // The freed rows serve again, last freed first.
+  applyOp(s, { t: 'connection', before: null, after: conn('Y', ['b', 'b']) });
+  expect(connRow(s, 'Y')).toBe(x);
+  applyOp(s, nodeOp('z'));
+  expect(nodeRow(s, 'z')).toBe(a);
+  // Emptied, nothing is held.
+  applyOp(s, { t: 'connection', before: s.connections.get('Y')!, after: null });
+  for (const id of ['b', 'z']) applyOp(s, { t: 'node', before: s.nodes.get(id)!, after: null });
+  applyOp(s, { t: 'plan', before: s.plans.get('p')!, after: null });
+  const T = s.tables;
+  for (const rows of [T.nodes.rows, T.plans.rows, T.conns.rows]) expect([rows.row.size, rows.refs.every((n) => n === 0)]).toEqual([0, true]);
+  expect(T.nodes.rows.end).toBe(2);
+});
+
+test('façades en lecture seule : écrire ailleurs que par applyOp lève une erreur', () => {
+  const s = emptyState();
+  const write = (m: unknown) => (m as { set: (k: unknown, v: unknown) => void }).set('x', {});
+  for (const m of [s.nodes, s.connections, s.plans, s.placements, s.phantoms, s.connLayouts, s.tagKeys]) expect(() => write(m)).toThrow(/applyOp/);
+  expect(() => (s.branches as unknown as { add: (b: unknown) => void }).add({ plan: 'p', connection: 'c', node: 'n' })).toThrow(/applyOp/);
+});

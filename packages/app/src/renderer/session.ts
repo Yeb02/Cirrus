@@ -1,4 +1,4 @@
-import { type Action, applyOp, CommandError, type Id, type State, UndoConflictError, UndoStack } from '@cirrus/core';
+import { type Action, applyOp, cloneState, CommandError, type Id, type State, UndoConflictError, UndoStack } from '@cirrus/core';
 
 export type Result = { ok: true; action: Action; plans: Id[] } | { ok: false; message: string };
 
@@ -122,17 +122,9 @@ export class EditSession {
     return { ok: true, action: a, plans: plansOf(a) };
   }
 
-  /** Records are immutable and replaced by operations: a new state object tells React it changed. */
+  /** Applied to a copy (until edits apply in place, plan 3c task 3): a new state object tells React it changed. */
   private apply(a: Action): void {
-    const next: State = { ...this.s };
-    next.nodes = new Map(this.s.nodes);
-    next.connections = new Map(this.s.connections);
-    next.plans = new Map(this.s.plans);
-    next.tagKeys = new Map(this.s.tagKeys);
-    next.placements = new Map(this.s.placements);
-    next.branches = new Set(this.s.branches);
-    next.connLayouts = new Map(this.s.connLayouts);
-    next.phantoms = new Map(this.s.phantoms);
+    const next = cloneState(this.s);
     for (const op of a.ops) applyOp(next, op);
     this.s = next;
     this.onChange(next, a);

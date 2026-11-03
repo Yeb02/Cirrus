@@ -1,9 +1,9 @@
-import { canonical, checkState, groupIndex, ancestors, type State } from '@cirrus/core';
+import { ancestors, canonical, checkState, type State } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { benchId, buildLargeState } from '../src/large.ts';
 
 const parts = (s: State) => ({
-  nodes: [...s.nodes], connections: [...s.connections], placements: [...s.placements], branches: [...s.branches].sort(), phantoms: [...s.phantoms],
+  nodes: [...s.nodes], connections: [...s.connections], placements: [...s.placements], branches: [...s.branches].map((b) => canonical(b)).sort(), phantoms: [...s.phantoms],
 });
 const UUIDV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -12,8 +12,7 @@ test('grande base synthétique : cohérente, peu profonde, avec des bras scindé
   expect(state.plans.get(lobby)!.type).toBe('lobby');
   expect(state.nodes.size).toBe(2000);
   expect(checkState(state)).toEqual([]);
-  const index = groupIndex(state);
-  const depth = Math.max(...[...state.nodes.keys()].map((n) => ancestors(state, lobby, n, index).length));
+  const depth = Math.max(...[...state.nodes.keys()].map((n) => ancestors(state, lobby, n).length));
   expect(depth).toBeGreaterThan(0);
   expect(depth).toBeLessThanOrEqual(5);
   const kinds = new Set([...state.phantoms.values()].map((p) => p.of.kind));

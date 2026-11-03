@@ -6,7 +6,7 @@ import {
 import { ancestors, groupOf } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
 import { invertAction } from '../src/history.ts';
-import { applyOp, branchKey, canonical, emptyState, layoutKey, placementKey, type State } from '../src/state.ts';
+import { applyOp, canonical, emptyState, layoutKey, placementKey, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
 const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => {
@@ -46,7 +46,7 @@ test("retirer un nœud d'un plan garde ses branches : elles deviennent des amorc
   const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
   run(s, removeFromPlan(s, p1, a));
   expect(s.nodes.get(a)!.trashedAt).toBeUndefined(); // still placed in p2
-  expect(s.branches.has(branchKey({ plan: p1, connection: c, node: a }))).toBe(true);
+  expect(s.branches.has({ plan: p1, connection: c, node: a })).toBe(true);
 });
 
 test('supprimer partout : connexion réduite à un membre jetée (Review Focus 5)', () => {
@@ -56,7 +56,7 @@ test('supprimer partout : connexion réduite à un membre jetée (Review Focus 5
   run(s, deleteEverywhere(s, a));
   expect(s.nodes.get(a)!.trashedAt).toBeDefined();
   expect(s.connections.get(c)!.trashedAt).toBeDefined();
-  expect([...s.branches].some((k) => k.includes(c))).toBe(false);
+  expect([...s.branches].some((b) => b.connection === c)).toBe(false);
 });
 
 test("retirer un groupe d'un plan garde la hiérarchie de ses membres (spec 7)", () => {
@@ -86,8 +86,8 @@ test('connecter crée les branches dans le plan seulement', () => {
   run(s, placeNode(s, p2, a, 0, 0, 0));
   run(s, placeNode(s, p2, b, 0, 0, 0));
   const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
-  expect(s.branches.has(branchKey({ plan: p1, connection: c, node: a }))).toBe(true);
-  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: a }))).toBe(false);
+  expect(s.branches.has({ plan: p1, connection: c, node: a })).toBe(true);
+  expect(s.branches.has({ plan: p2, connection: c, node: a })).toBe(false);
 });
 
 test('inclure remplace le groupe direct dans ce plan seulement', () => {
@@ -114,12 +114,12 @@ test('scinder un bras crée deux fantômes et retire la branche ; réunir rétab
   const a = mk('A'), b = mk('B');
   const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
   run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
-  expect(s.branches.has(branchKey({ plan: p1, connection: c, node: b }))).toBe(false);
+  expect(s.branches.has({ plan: p1, connection: c, node: b })).toBe(false);
   const kinds = [...s.phantoms.values()].map((p) => p.of.kind).sort();
   expect(kinds).toEqual(['center', 'node']);
   run(s, joinArm(s, p1, c, b));
   expect(s.phantoms.size).toBe(0);
-  expect(s.branches.has(branchKey({ plan: p1, connection: c, node: b }))).toBe(true);
+  expect(s.branches.has({ plan: p1, connection: c, node: b })).toBe(true);
 });
 
 test('éditer une connexion change son titre et sa relation, rien d’autre', () => {
@@ -137,12 +137,12 @@ test('montrer une connexion dans d’autres plans ajoute ses branches ; les ôte
   for (const n of [a, b]) run(s, placeNode(s, p2, n, 0, 0, 0));
   const c = created(run(s, connect(s, { plan: p1, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] })), 'connection');
   run(s, setBranches(s, c, [{ plan: p2, node: a }, { plan: p2, node: b }], true));
-  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
+  expect(s.branches.has({ plan: p2, connection: c, node: b })).toBe(true);
   expect(() => setBranches(s, c, [{ plan: p2, node: x }], true)).toThrow(/membre/);
   run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
   run(s, setBranches(s, c, [{ plan: p1, node: b }], false));
   expect([...s.phantoms.values()].filter((ph) => ph.plan === p1)).toHaveLength(0);
-  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
+  expect(s.branches.has({ plan: p2, connection: c, node: b })).toBe(true);
   expect(s.connections.get(c)!.members).toHaveLength(2); // still a member, elsewhere
 });
 
@@ -170,11 +170,11 @@ test('supprimer une connexion la met à la corbeille avec ses branches et ses fa
   run(s, splitArm(s, p1, c, b, { x: 10, y: 0, k: 0 }, { x: 900, y: 0, k: 0 }));
   const action = run(s, deleteConnection(s, c));
   expect(s.connections.get(c)!.trashedAt).toBeDefined();
-  expect([...s.branches].some((k) => k.includes(c))).toBe(false);
+  expect([...s.branches].some((b) => b.connection === c)).toBe(false);
   expect(s.phantoms.size).toBe(0);
   for (const op of invertAction(action).ops) applyOp(s, op);
   expect(s.connections.get(c)!.trashedAt).toBeUndefined();
-  expect(s.branches.has(branchKey({ plan: p2, connection: c, node: b }))).toBe(true);
+  expect(s.branches.has({ plan: p2, connection: c, node: b })).toBe(true);
 });
 
 test('retirer un membre supprime les fantômes de son bras scindé', () => {

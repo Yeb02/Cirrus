@@ -2,8 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, applyOp, branchKey, cloneState, type ConnectionLayout, type ConnectionRec, emptyState, type Flow, flowOf, type Id,
-  layoutKey, type NodeRec, type Op, type PhantomRec, type Placement, placementKey, type PlanRec, type State, subjectOf, type TagKeyDef,
+  type Action, applyOp, cloneState, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
+  type PhantomRec, type Placement, type PlanRec, type State, subjectOf, type TagKeyDef,
 } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
@@ -27,20 +27,17 @@ const toRow = (r: ChangeDbRow): ChangeRow => ({
   op: JSON.parse(r.op) as Op,
 });
 
+/** The state tables, loaded in bulk and indexed once (fromSnapshot). */
 function loadState(db: DatabaseSync): State {
-  const s = emptyState();
   const json = <T>(sql: string) => (db.prepare(sql).all() as { json: string }[]).map((r) => JSON.parse(r.json) as T);
-  for (const n of json<NodeRec>('SELECT json FROM nodes')) s.nodes.set(n.id, n);
-  for (const c of json<ConnectionRec>('SELECT json FROM connections')) s.connections.set(c.id, c);
-  for (const p of json<PlanRec>('SELECT json FROM plans')) s.plans.set(p.id, p);
-  for (const t of json<TagKeyDef>('SELECT json FROM tag_keys')) s.tagKeys.set(t.key, t);
-  for (const p of json<Placement>('SELECT json FROM placements')) s.placements.set(placementKey(p.plan, p.node), p);
-  for (const l of json<ConnectionLayout>('SELECT json FROM conn_layouts')) s.connLayouts.set(layoutKey(l.plan, l.connection), l);
-  for (const p of json<PhantomRec>('SELECT json FROM phantoms')) s.phantoms.set(p.id, p);
-  for (const b of db.prepare('SELECT plan, connection, node FROM branches').all() as { plan: string; connection: string; node: string }[]) {
-    s.branches.add(branchKey(b));
-  }
-  return s;
+  return fromSnapshot({
+    nodes: json<NodeRec>('SELECT json FROM nodes'), connections: json<ConnectionRec>('SELECT json FROM connections'),
+    plans: json<PlanRec>('SELECT json FROM plans'), tagKeys: json<TagKeyDef>('SELECT json FROM tag_keys'),
+    placements: json<Placement>('SELECT json FROM placements'), connLayouts: json<ConnectionLayout>('SELECT json FROM conn_layouts'),
+    phantoms: json<PhantomRec>('SELECT json FROM phantoms'),
+    branches: (db.prepare('SELECT plan, connection, node FROM branches').all() as { plan: string; connection: string; node: string }[])
+      .map((b) => [b.plan, b.connection, b.node]),
+  });
 }
 
 /** Writes one operation's "after" into the state tables (null deletes). */

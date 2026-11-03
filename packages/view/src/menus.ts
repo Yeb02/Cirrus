@@ -1,4 +1,4 @@
-import { branchKey, type Id, placementKey, type State } from '@cirrus/core';
+import { type Id, placementKey, type State } from '@cirrus/core';
 import type { Hit } from './hit.ts';
 import type { PlanScene } from './scene.ts';
 import type { Selection } from './selection.ts';
@@ -59,7 +59,7 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
     // Not yet in the lobby: it can be added there, placing itself (spec 7).
     const lobby = [...s.plans.values()].find((p) => p.type === 'lobby');
     const members = s.connections.get(sc.id)?.members ?? [];
-    if (lobby && scene.plan.id !== lobby.id && !members.some((m) => s.branches.has(branchKey({ plan: lobby.id, connection: sc.id, node: m.node })))) actions.push('addToLobby');
+    if (lobby && scene.plan.id !== lobby.id && !members.some((m) => s.branches.has({ plan: lobby.id, connection: sc.id, node: m.node }))) actions.push('addToLobby');
     return make(actions);
   }
   const at = scene.byId.get(hit.id);

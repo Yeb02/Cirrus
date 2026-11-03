@@ -1,0 +1,47 @@
+# Registre du plan 3c : mesures, décisions, écarts
+
+Plan : `docs/superpowers/plans/2026-11-03-cirrus-performances.md`. Base de référence : `buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 })` (50 000 nœuds, 549 189 connexions, 1 177 133 branches, 50 000 placements, 44 618 fantômes). Mesures sous Node 26 (vitest, sans compression des pointeurs), mémoire après `forceGc()`.
+
+## Mesures
+
+### Tâche 2, Step 0 : tas de l'état objet (avant les colonnes)
+
+Trois façons de construire le même état, tas JS (`heapUsed`) ; aucun `ArrayBuffer` (0,0 Mo) :
+
+| État objet | Total | Branches | Connexions | Fantômes | Placements | Nœuds |
+|---|---|---|---|---|---|---|
+| tel que `buildLargeState` le construisait | 939,5 Mo | 192,6 | 664,4 | 21,5 | 31,8 | 1,8 |
+| après un aller-retour JSON (comme l'interface le reçoit) | 573,6 Mo | 192,6 | 328,7 | 20,8 | 17,0 | 14,3 |
+| identifiants plats et partagés par toutes les références | **492,0 Mo** | 192,6 | 259,7 | 15,0 | 11,4 | 14,3 |
+
+La première ligne est gonflée par le générateur : chaque référence à un nœud recalculait `benchId`, une chaîne en arbre de morceaux (≈ 500 o). Le Step 0 retenu pour l'objectif de 45 % est la dernière ligne, la plus petite (492,0 Mo, plafond 221,4 Mo).
+
+Autres mesures de l'état objet (tâche 1 livrée), sur la même base : `buildLargeState` 6,3 s ; `groupIndex` 675–780 ms ; `cloneState` 314–329 ms ; parcours de toutes les connexions 33 ms ; `buildScene` du lobby 5,9–6,7 s ; `moveNodes` 359–403 ms ; `include` 1,24–1,37 s ; `checkState` complet 1,7 s ; `toSnapshot` 9 ms ; `fromSnapshot` (objets de `buildLargeState`) 587 ms.
+
+### Tâche 2, fin : colonnes, façades, index dérivés
+
+- **Tas de l'état : 158,8 Mo** (tas JS 117,6 + tampons des tableaux typés 41,1), soit **32,3 % du Step 0** (plafond du test : 45 %). Le test compte `heapUsed + arrayBuffers`.
+- **`reindex` : 60–94 ms** (premier appel compris ; plafond 300 ms).
+- Sur la même base : `buildLargeState` 3,3–3,5 s ; `cloneState` 189–436 ms ; matérialiser toutes les connexions par la façade 98–237 ms ; itérer toutes les branches en `BranchRec` 96–143 ms ; `buildScene` du lobby 3,7–4,2 s ; `moveNodes` 228–404 ms et `include` 357–474 ms (tous deux dominés par `cloneState`, retiré à la tâche 3) ; `checkState` complet 643–670 ms ; `toSnapshot` 336–377 ms.
+- **Chargement par JSON (écart provisoire, jusqu'à la tâche 4)**, sous Node sans vitest, depuis le JSON de la base de référence : `fromSnapshot` 2,5 s au mieux, contre 1,3–1,8 s pour le modèle objet ; `toSnapshot` 0,34–0,7 s contre 9 ms. Cause : chaque identifiant de membre et de branche lu du JSON est une chaîne distincte à hacher pour trouver sa rangée, et l'instantané matérialise les connexions. Le principal fait `loadState` (`fromSnapshot`) puis `toSnapshot`, l'interface `fromSnapshot` : environ +2 s au chargement de la base de référence, jusqu'à l'instantané binaire de la tâche 4 qui supprime ces deux conversions.
+- Captures de référence : 11 sur 11 à 0,000 % de pixels différents.
+
+## Décisions
+
+- Task 2: Ruling: les rangées sont comptées par les références qui les tiennent (enregistrement, membres, branches, placements) et libérées à zéro ; un identifiant référencé sans enregistrement garde sa rangée — les membres et les branches stockent des rangées, une rangée recyclée à la suppression de l'enregistrement les ferait pointer ailleurs, et l'ordre des opérations (synchro, annulations) reste libre — coût si faux : un `Int32Array` par table et un incrément par référence ; une libération oubliée fuit une rangée (testé).
+- Task 2: Ruling: liste libre dernier entré, premier sorti — appliquer puis annuler (le `transact` de la tâche 3) rend à chaque enregistrement sa rangée, donc les scènes qui tiennent des rangées restent valides après un retour arrière — coût si faux : nul.
+- Task 2: Ruling: une rangée de connexion sans enregistrement (tenue par ses seules branches) a le genre `NO_RECORD` (255), sans colonne de plus ; les façades la sautent, `forEachInPlan` la donne (comme l'ancien ensemble de branches) et la scène filtre sur le genre — coût si faux : nul.
+- Task 2: Ruling: `phantomsOf` est indexé par identifiant de connexion et liste des identifiants de fantômes (`Map<Id, Id[]>`) : les fantômes ne tiennent pas de rangée de connexion, et leurs enregistrements changent à chaque déplacement — coût si faux : une recherche par identifiant au lieu d'un indice de tableau à la tâche 5.
+- Task 2: Ruling: avec plusieurs groupes directs (violation `twoGroups`), le groupe retenu est celui de l'inclusion d'identifiant le plus petit (la plus ancienne, en UUIDv7), quelles que soient les rangées ; `multi` les donne tous, celui-là en tête ; `groupMembers` ne range un nœud que sous ce groupe — coût si faux : le groupe où se dessine un nœud dans un état déjà fautif.
+- Task 2: Ruling: `memberOf` et `placedIn` sont des pools (un `Int32Array` par index, même relogement et même compaction que les membres) plutôt qu'un `number[]` par nœud : 4 o par entrée au lieu de 8 plus un en-tête par nœud ; le tableau `groupOf` d'un plan est alloué au premier groupe, doublé quand il grandit, rempli de −1 — coût si faux : nul, tout passe par les accesseurs.
+- Task 2: Ruling: une liste qui grandit est relogée avec `max(besoin, 2 × capacité)`, grandit sur place quand elle est la dernière du pool ; la compaction (perte > 50 % de `top`, sans plancher) garde la capacité de chaque liste, dans l'ordre des propriétaires ; au chargement et dans `reindex`, chaque liste a exactement sa taille (`Pool.sized`) et les colonnes sont dimensionnées au nombre d'enregistrements — coût si faux : nul.
+- Task 2: Ruling: l'ordre des façades est celui des rangées (nœuds, plans, connexions) ; les placements vont plan par plan, puis dans l'ordre d'insertion du plan (comme l'ancien `Map` à l'intérieur d'un plan) ; un enregistrement recréé reprend son ancienne rangée au lieu de passer en fin — coût si faux : l'ordre de dessin ; captures à 0 %.
+- Task 2: Ruling: `BranchSet.add` et `delete` lèvent, comme le `set` des façades ; `forEachInPlan` va dans l'ordre des rangées et prête un même `Int32Array` par longueur pendant un appel (aucune allocation par connexion : le copier pour le garder) — coût si faux : nul.
+- Task 2: Ruling: `Snapshot.branches` devient une liste de triplets `[plan, connexion, nœud]` (JSON de l'IPC jusqu'à la tâche 4) : ni clé à construire ni à analyser, la même taille à peu près — coût si faux : nul, le format ne vit qu'entre deux processus de la même version.
+- Task 2: Ruling: `loadRecords` puis `reindex` forment le chargeur en bloc de `fromSnapshot`, de `LocalStore.loadState` et de `buildLargeState`, sans contrôle ni index par opération ; les branches consécutives d'une même connexion et d'un même plan ne sont pas recherchées à nouveau (−0,5 s sur la base de référence lue du JSON) — coût si faux : nul.
+- Task 2: Ruling: dans les boucles chaudes du cœur et de la scène, les constantes importées sont copiées en locales et le codage des membres est écrit en clair (`m >> 2`, `m & 3`) : sous vitest, chaque liaison importée est un accesseur, quatre fois plus lent ici (construction de `memberOf` : 160 → 40 ms) ; le code empaqueté de l'app n'est pas touché. À retenir pour les tests chronométrés des tâches suivantes — coût si faux : des boucles un peu moins lisibles.
+- Task 2: Ruling: le Step 0 de l'objectif de 45 % est la plus petite des trois mesures de l'état objet (identifiants plats et partagés, 492,0 Mo) ; `buildLargeState` construit désormais des identifiants plats (`join`) partagés par toutes les références, comme l'interface les aura après le décodage de la tâche 4 — coût si faux : nul, les trois mesures sont au registre.
+- Task 2: Ruling: les commandes qui parcouraient toutes les connexions passent par `memberOf` (`deleteEverywhere`, `leaveGroup`, `include`, `hasMembers`), et `branchesOf` par `plansOf` et `nodesIn` ; dans la vue, `buildScene` lit les colonnes (badges, connexions, titres des centres) et `copyClip` passe par `memberOf` : sinon chaque parcours matérialiserait 549 189 connexions (≈ 100–240 ms). Les parcours des fantômes restent pour la tâche 3 — coût si faux : nul.
+- Task 2: Ruling: `s.tagKeys` est aussi une façade en lecture seule (`normalizeTag` et ses voisins prennent un `ReadonlyMap`) — coût si faux : nul.
+- Task 2: Ruling: `@cirrus/core` déclare `@cirrus/fixtures` en dépendance de développement (un cycle d'espace de travail, sans effet) pour ses tests sur la base de référence, que la tâche 3 étend — coût si faux : nul.
+- Task 2: écart : `cloneState` reste O(base) (copie profonde des tables, des pools et des index, règle R2) pour les brouillons, `combine`, l'essai à blanc de l'annulation, `LocalStore.commit` et `EditSession.apply` ; la tâche 3 le retire.

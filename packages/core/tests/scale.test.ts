@@ -1,7 +1,8 @@
+import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
 import { combine, CommandError, deleteEverywhere, include, moveNodes } from '../src/commands.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
-import { applyOp, branchKey, emptyState, placementKey, type State } from '../src/state.ts';
+import { applyOp, emptyState, placementOf, reindex, type State } from '../src/state.ts';
 
 /** One plan, 10 000 nodes in 100 groups, 50 000 knowledge connections: the scale the spec aims at. */
 function large(): State {
@@ -43,20 +44,19 @@ test('une commande reste rapide sur une grande base', () => {
 }, 120_000);
 
 // Kept in this file: timed tests run one after the other, not against each other.
-/** 20 000 placed nodes and 20 000 connections, written straight into the maps (commands would take minutes). */
+/** 20 000 placed nodes and 20 000 connections, written by raw operations (commands would take minutes). */
 function flat(): State {
   const s = emptyState();
-  s.plans.set('p', { id: 'p', name: 'P', type: 'plan' });
+  applyOp(s, { t: 'plan', before: null, after: { id: 'p', name: 'P', type: 'plan' } });
   for (let i = 0; i < 20_000; i++) {
     const id = `n${i}`;
-    s.nodes.set(id, { id, title: id, summary: '', tags: [], files: [] });
-    s.placements.set(placementKey('p', id), { plan: 'p', node: id, x: i, y: 0, k: 0 });
+    applyOp(s, { t: 'node', before: null, after: { id, title: id, summary: '', tags: [], files: [] } });
+    applyOp(s, { t: 'placement', before: null, after: { plan: 'p', node: id, x: i, y: 0, k: 0 } });
   }
   for (let i = 0; i < 20_000; i++) {
     const id = `c${i}`, a = `n${i}`, b = `n${(i + 1) % 20_000}`;
-    s.connections.set(id, { id, kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] });
-    s.branches.add(branchKey({ plan: 'p', connection: id, node: a }));
-    s.branches.add(branchKey({ plan: 'p', connection: id, node: b }));
+    applyOp(s, { t: 'connection', before: null, after: { id, kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] } });
+    for (const node of [a, b]) applyOp(s, { t: 'branch', key: { plan: 'p', connection: id, node }, before: false, after: true });
   }
   return s;
 }
@@ -67,9 +67,9 @@ test('une action composée de 300 étapes sur 20 000 nœuds ne copie pas l’ét
   const a = combine(s, 'Coller', Array.from({ length: 300 }, (_, i) => (x: State) => moveNodes(x, 'p', [{ node: `n${i}`, x: -i }])));
   expect(performance.now() - t0).toBeLessThan(600);
   expect(a.ops).toHaveLength(300);
-  expect(s.placements.get(placementKey('p', 'n5'))!.x).toBe(5); // the state received is untouched
+  expect(placementOf(s, 'p', 'n5')!.x).toBe(5); // the state received is untouched
   for (const op of a.ops) applyOp(s, op);
-  expect(s.placements.get(placementKey('p', 'n5'))!.x).toBe(-5);
+  expect(placementOf(s, 'p', 'n5')!.x).toBe(-5);
 });
 
 test('une règle violée par l’ensemble des étapes est refusée, avec le message du socle', () => {
@@ -78,3 +78,21 @@ test('une règle violée par l’ensemble des étapes est refusée, avec le mess
   expect(() => combine(s, 'Boucle', [(x) => include(x, 'p', 'n1', 'n2'), (x) => include(x, 'p', 'n2', 'n1')])).toThrow(CommandError);
   expect(groupOf(s, 'p', 'n1')).toBeUndefined();
 });
+
+/**
+ * Step 0 of plan 3c (registry): the object model's state for the reference base, its identifiers flat and shared by
+ * every reference — the smallest of the three measures (939.5 MB as built then, 573.6 MB after a JSON round trip).
+ */
+const STEP0_BYTES = 492.0e6;
+/** The JS heap and the typed arrays' buffers, after two full collections. */
+const memory = () => { forceGc(); const m = process.memoryUsage(); return m.heapUsed + m.arrayBuffers; };
+
+test('base de référence : l’état en colonnes tient en 45 % du Step 0, et reindex en 300 ms au plus', () => {
+  const before = memory();
+  const { state } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
+  expect(memory() - before).toBeLessThan(0.45 * STEP0_BYTES);
+  const t = performance.now();
+  reindex(state);
+  expect(performance.now() - t).toBeLessThan(300);
+  expect(state.connections.size).toBe(549_189);
+}, 120_000);

@@ -1,4 +1,4 @@
-import { setLayout, type State } from '@cirrus/core';
+import { cloneState, setLayout, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
@@ -52,7 +52,7 @@ test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
 });
 
 test('une connexion disposée à la main peut retrouver sa disposition automatique (spec 8.5)', () => {
-  const st = structuredClone(s) as State;
+  const st = cloneState(s);
   const conn = ids.connections.twoToTwo;
   run(st, setLayout(st, ids.plans.lobby, conn, { angle: 1, handles: {} }));
   const scene = buildScene(st, ids.plans.lobby, measure, P);

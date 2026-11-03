@@ -2,6 +2,8 @@ export * from './ids.ts';
 export * from './model.ts';
 export * from './registry.ts';
 export * from './ops.ts';
+export * from './tables.ts';
+export * from './facades.ts';
 export * from './state.ts';
 export * from './invariants.ts';
 export * from './commands.ts';

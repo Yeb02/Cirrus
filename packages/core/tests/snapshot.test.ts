@@ -9,7 +9,7 @@ const created = (a: Action, t: 'node' | 'plan' | 'connection'): Id =>
   (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 const parts = (s: State) => ({
   nodes: [...s.nodes], connections: [...s.connections], plans: [...s.plans], tagKeys: [...s.tagKeys],
-  placements: [...s.placements], branches: [...s.branches].sort(), connLayouts: [...s.connLayouts], phantoms: [...s.phantoms],
+  placements: [...s.placements], branches: [...s.branches].map((b) => canonical(b)).sort(), connLayouts: [...s.connLayouts], phantoms: [...s.phantoms],
 });
 
 test('instantané aller-retour, sans Map ni Set', () => {

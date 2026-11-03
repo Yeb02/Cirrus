@@ -1,5 +1,5 @@
-import type { ConnectionLayout, ConnectionRec, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef } from './model.ts';
-import { emptyState, layoutKey, placementKey, type State } from './state.ts';
+import type { ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef } from './model.ts';
+import { emptyState, loadRecords, reindex, type State } from './state.ts';
 
 /** The state as plain JSON arrays (no Map or Set): for IPC between processes and, later, the first sync of a PC. */
 export interface Snapshot {
@@ -8,28 +8,27 @@ export interface Snapshot {
   plans: PlanRec[];
   tagKeys: TagKeyDef[];
   placements: Placement[];
-  /** Branch keys `${plan}|${connection}|${node}`. */
-  branches: string[];
+  branches: [plan: Id, connection: Id, node: Id][];
   connLayouts: ConnectionLayout[];
   phantoms: PhantomRec[];
 }
 
 export function toSnapshot(s: State): Snapshot {
+  const T = s.tables, C = T.conns, pool = C.branches, plans = T.plans.rows.ids, nodes = T.nodes.rows.ids;
+  const branches: Snapshot['branches'] = [];
+  for (let c = 0; c < C.rows.end; c++) {
+    for (let i = pool.start[c], end = i + pool.len[c]; i < end; i += 2) branches.push([plans[pool.data[i]], C.rows.ids[c], nodes[pool.data[i + 1]]]);
+  }
   return {
     nodes: [...s.nodes.values()], connections: [...s.connections.values()], plans: [...s.plans.values()], tagKeys: [...s.tagKeys.values()],
-    placements: [...s.placements.values()], branches: [...s.branches], connLayouts: [...s.connLayouts.values()], phantoms: [...s.phantoms.values()],
+    placements: [...s.placements.values()], branches, connLayouts: [...s.connLayouts.values()], phantoms: [...s.phantoms.values()],
   };
 }
 
+/** Loaded in bulk, then indexed once. */
 export function fromSnapshot(x: Snapshot): State {
   const s = emptyState();
-  for (const n of x.nodes) s.nodes.set(n.id, n);
-  for (const c of x.connections) s.connections.set(c.id, c);
-  for (const p of x.plans) s.plans.set(p.id, p);
-  for (const t of x.tagKeys) s.tagKeys.set(t.key, t);
-  for (const p of x.placements) s.placements.set(placementKey(p.plan, p.node), p);
-  for (const b of x.branches) s.branches.add(b);
-  for (const l of x.connLayouts) s.connLayouts.set(layoutKey(l.plan, l.connection), l);
-  for (const p of x.phantoms) s.phantoms.set(p.id, p);
+  loadRecords(s, x);
+  reindex(s);
   return s;
 }

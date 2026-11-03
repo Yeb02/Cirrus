@@ -1,4 +1,4 @@
-import { branchKey, type Id, type State, type Vec2 } from '@cirrus/core';
+import { type Id, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
@@ -256,7 +256,7 @@ export function GraphView(props: {
   const removeMember = (connection: Id, node: Id) => {
     const s = stateRef.current, plan = sceneRef.current?.plan.id, c = s.connections.get(connection);
     if (!c || !plan) return;
-    const shownIn = [...s.plans.keys()].filter((p) => s.branches.has(branchKey({ plan: p, connection, node })));
+    const shownIn = [...s.plans.keys()].filter((p) => s.branches.has({ plan: p, connection, node }));
     const last = c.members.length <= 2;
     const choices = [
       ...(shownIn.includes(plan) ? [{ value: 'here', label: 'Ici seulement' }] : []),
@@ -326,7 +326,7 @@ export function GraphView(props: {
   const askDeleteConnection = (plan: Id, connection: Id) => {
     const s = stateRef.current, c = s.connections.get(connection);
     if (!c) return;
-    const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has(branchKey({ plan: pl, connection, node: m.node })))
+    const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has({ plan: pl, connection, node: m.node }))
       || [...s.phantoms.values()].some((ph) => ph.plan === pl && ph.connection === connection));
     const n = shownIn.length;
     const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: n <= 1 ? 'Supprimer' : 'Partout' };

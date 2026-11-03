@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ancestors, canonical, checkState, groupOf, parseBranchKey, placementKey, type State } from '@cirrus/core';
+import { ancestors, canonical, checkState, groupOf, placementKey, type State } from '@cirrus/core';
 import { filePath, LocalStore } from '@cirrus/store';
 import { buildFixture } from '../src/build.ts';
 
@@ -65,8 +65,7 @@ test('chaque fonctionnalité est présente', () => {
   expect(placedIn(ids.nodes.theseOnly)).toEqual([ids.plans.these]);
 
   // A stub: a branch shown in "Thèse" whose node is not placed there.
-  const stubs = [...s.branches].map(parseBranchKey)
-    .filter((b) => b.plan === ids.plans.these && !s.placements.has(placementKey(b.plan, b.node)));
+  const stubs = [...s.branches].filter((b) => b.plan === ids.plans.these && !s.placements.has(placementKey(b.plan, b.node)));
   expect(stubs.length).toBeGreaterThan(0);
 
   // Split arm: two phantoms, one of them in a group.

@@ -1,5 +1,5 @@
 import {
-  type Action, addMember, branchKey, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
+  type Action, addMember, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
   exclude, groupOf, type Id, include, joinArm, moveNodes, movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches, setLayout,
   setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
@@ -136,7 +136,7 @@ export function deleteConnectionBuild(plan: Id, connection: Id, everywhere: bool
   if (everywhere) return (st) => deleteConnection(st, connection);
   return (st) => {
     const c = st.connections.get(connection);
-    const shown = (node: Id) => st.branches.has(branchKey({ plan, connection, node }))
+    const shown = (node: Id) => st.branches.has({ plan, connection, node })
       || [...st.phantoms.values()].some((ph) => ph.plan === plan && ph.connection === connection && ph.of.node === node);
     const nodes = (c?.members ?? []).map((m) => m.node).filter(shown);
     return combine(st, 'Ôter la connexion de ce plan', [(x) => setBranches(x, connection, nodes.map((node) => ({ plan, node })), false)]);

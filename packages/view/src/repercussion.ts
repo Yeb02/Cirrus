@@ -1,4 +1,4 @@
-import { ancestors, groupIndex, groupOf, type Id, placementKey, type State, type Vec2 } from '@cirrus/core';
+import { ancestors, groupOf, type Id, placementKey, type State, type Vec2 } from '@cirrus/core';
 import { convexHull, insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import type { RenderParams } from './params.ts';
 import { buildScene, type Measure, type PlanScene, type SceneItem } from './scene.ts';
@@ -31,19 +31,18 @@ const envelopeOf = (sc: PlanScene, kids: number[], pad: number): Vec2[] => {
  * would sit outside the group it joins, or still inside the envelope of the group it leaves.
  */
 export function repercussion(s: State, plan: Id, node: Id, from: Id | null, to: Id | null, measure: Measure, p: RenderParams): Repercussion {
-  const index = groupIndex(s);
-  const chain = to === null ? [] : [to, ...ancestors(s, plan, to, index)];
+  const chain = to === null ? [] : [to, ...ancestors(s, plan, to)];
   const out: Repercussion = { changed: [], third: [], loops: [] };
   for (const q of s.plans.values()) {
     if (q.id === plan || q.type === 'document' || !s.placements.has(placementKey(q.id, node))) continue;
-    const current = groupOf(s, q.id, node, index) ?? null;
+    const current = groupOf(s, q.id, node) ?? null;
     if (current !== null && current !== from) {
       if (current !== to) out.third.push(q.id);
       continue;
     }
     const target = chain.find((g) => s.placements.has(placementKey(q.id, g))) ?? null;
     if (target === current) continue;
-    const above = target === null ? [] : ancestors(s, q.id, target, index);
+    const above = target === null ? [] : ancestors(s, q.id, target);
     if (target === node || above.includes(node)) { out.loops.push(q.id); continue; }
     out.changed.push({ plan: q.id, to: target, manual: misplaced(buildScene(s, q.id, measure, p), node, target, current, above) });
   }

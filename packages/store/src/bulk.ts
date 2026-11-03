@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { parseBranchKey, type State } from '@cirrus/core';
+import type { State } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
 /**
@@ -32,10 +32,7 @@ export function writeBenchBase(dir: string, s: State): void {
       const placement = db.prepare('INSERT INTO placements (plan, node, json) VALUES (?, ?, ?)');
       for (const p of s.placements.values()) placement.run(p.plan, p.node, j(p));
       const branch = db.prepare('INSERT INTO branches (plan, connection, node) VALUES (?, ?, ?)');
-      for (const key of s.branches) {
-        const b = parseBranchKey(key);
-        branch.run(b.plan, b.connection, b.node);
-      }
+      for (const b of s.branches) branch.run(b.plan, b.connection, b.node);
       const layout = db.prepare('INSERT INTO conn_layouts (plan, connection, json) VALUES (?, ?, ?)');
       for (const l of s.connLayouts.values()) layout.run(l.plan, l.connection, j(l));
       const phantom = db.prepare('INSERT INTO phantoms (id, plan, json) VALUES (?, ?, ?)');

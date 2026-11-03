@@ -1,9 +1,10 @@
 import { uuidv7 } from './ids.ts';
+import { connectionAt } from './facades.ts';
 import { checkState, groupOf, touchedBy } from './invariants.ts';
 import type { BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
-import { applyOp, branchKey, cloneState, layoutKey, parseBranchKey, placementKey, type State } from './state.ts';
+import { applyOp, cloneState, layoutKey, memberOf, nodeRow, placedIn, placementOf, type State } from './state.ts';
 
 /** One user action: one undo step, one group of journal lines (spec 6.4). */
 export interface Action { id: Id; label: string; ops: Op[] }
@@ -43,11 +44,11 @@ class Draft {
     this.push({ t: 'connection', before: this.s.connections.get(id) ?? null, after });
   }
   placement(plan: Id, node: Id, after: Placement | null): void {
-    this.push({ t: 'placement', before: this.s.placements.get(placementKey(plan, node)) ?? null, after });
+    this.push({ t: 'placement', before: placementOf(this.s, plan, node) ?? null, after });
   }
   branch(plan: Id, connection: Id, node: Id, present: boolean): void {
     const key = { plan, connection, node };
-    const before = this.s.branches.has(branchKey(key));
+    const before = this.s.branches.has(key);
     if (before !== present) this.push({ t: 'branch', key, before, after: present });
   }
   phantom(id: Id, after: PhantomRec | null): void {
@@ -58,7 +59,7 @@ class Draft {
     for (const p of [...this.s.phantoms.values()]) if (p.connection === connection && (node === undefined || p.of.node === node)) this.phantom(p.id, null);
   }
   /** A connection goes to the trash with what only shows it: its branches and phantoms in every plan. */
-  trashConnection(c: ConnectionRec, members: Member[], shown = branchesOf(this.s, (_p, conn) => conn === c.id)): void {
+  trashConnection(c: ConnectionRec, members: Member[], shown = branchesOf(this.s, c.id)): void {
     for (const b of shown) this.branch(b.plan, c.id, b.node, false);
     this.dropPhantoms(c.id);
     this.connection(c.id, { ...c, members, trashedAt: Date.now() });
@@ -91,11 +92,20 @@ const liveNodeOf = (s: State, id: Id) => {
   if (n.trashedAt !== undefined) throw new CommandError('Ce nœud est à la corbeille.');
   return n;
 };
-const placedIn = (s: State, plan: Id, node: Id, message: string) => need(s.placements.get(placementKey(plan, node)), message);
+const placementIn = (s: State, plan: Id, node: Id, message: string) => need(placementOf(s, plan, node), message);
 const connectionOf = (s: State, id: Id) => need(s.connections.get(id), 'Connexion introuvable.');
-const branchesOf = (s: State, pred: (plan: Id, connection: Id, node: Id) => boolean) =>
-  [...s.branches].map(parseBranchKey).filter((b) => pred(b.plan, b.connection, b.node));
-const placementsOf = (s: State, node: Id) => [...s.placements.values()].filter((p) => p.node === node);
+/** Every branch of a connection, in every plan. */
+const branchesOf = (s: State, connection: Id): BranchRec[] =>
+  s.branches.plansOf(connection).flatMap((plan) => s.branches.nodesIn(connection, plan).map((node) => ({ plan, connection, node })));
+/** The connections a node is a member of (any kind, trash included), from the index. */
+const connectionsOf = (s: State, node: Id): ConnectionRec[] => {
+  const n = nodeRow(s, node);
+  return n < 0 ? [] : Array.from(memberOf(s, n), (c) => connectionAt(s.tables, c));
+};
+const placementsOf = (s: State, node: Id): Placement[] => {
+  const n = nodeRow(s, node);
+  return n < 0 ? [] : Array.from(placedIn(s, n), (p) => s.tables.plans.placements[p]!.get(n)!);
+};
 /** Enumeration values stored by name; an unknown value is a user error like any other refused command. */
 const normalizeTags = (s: State, tags: TagValue[]): TagValue[] => {
   try {
@@ -135,7 +145,7 @@ export function editNode(s: State, id: Id, patch: Partial<Pick<NodeRec, 'title' 
 export function moveNodes(s: State, plan: Id, moves: { node: Id; x?: number; y?: number; k?: number }[]): Action {
   const d = new Draft(s);
   for (const m of moves) {
-    const p = placedIn(s, plan, m.node, 'Ce nœud n’est pas dans ce plan.');
+    const p = placementIn(s, plan, m.node, 'Ce nœud n’est pas dans ce plan.');
     d.placement(plan, m.node, { ...p, x: m.x ?? p.x, y: m.y ?? p.y, k: m.k ?? p.k });
   }
   return d.finish(moves.length === 1 ? 'Déplacer un nœud' : `Déplacer ${moves.length} nœuds`);
@@ -145,7 +155,7 @@ export function moveNodes(s: State, plan: Id, moves: { node: Id; x?: number; y?:
 export function placeNode(s: State, plan: Id, node: Id, x: number, y: number, k: number): Action {
   planOf(s, plan);
   const n = liveNodeOf(s, node);
-  if (s.placements.has(placementKey(plan, node))) throw new CommandError('Ce nœud est déjà dans ce plan.');
+  if (placementOf(s, plan, node)) throw new CommandError('Ce nœud est déjà dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, { plan, node, x, y, k });
   for (const ph of [...d.s.phantoms.values()]) if (ph.plan === plan && ph.of.kind === 'absent' && ph.of.node === node) d.phantom(ph.id, null);
@@ -154,8 +164,8 @@ export function placeNode(s: State, plan: Id, node: Id, x: number, y: number, k:
 
 /** Nodes or phantoms placed in this group, in this plan. */
 const hasMembers = (s: State, plan: Id, group: Id): boolean =>
-  [...s.connections.values()].some((c) => c.kind === 'inclusion' && c.members.some((m) => m.role === 'target' && m.node === group)
-    && c.members.every((m) => s.branches.has(branchKey({ plan, connection: c.id, node: m.node }))))
+  connectionsOf(s, group).some((c) => c.kind === 'inclusion' && c.members.some((m) => m.role === 'target' && m.node === group)
+    && c.members.every((m) => s.branches.has({ plan, connection: c.id, node: m.node })))
   || [...s.phantoms.values()].some((p) => p.plan === plan && p.group === group);
 
 /**
@@ -165,10 +175,10 @@ const hasMembers = (s: State, plan: Id, group: Id): boolean =>
  */
 export function removeFromPlan(s: State, plan: Id, node: Id): Action {
   const n = nodeOf(s, node);
-  placedIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
+  placementIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
   const d = new Draft(s);
   d.placement(plan, node, null);
-  for (let x: Id | undefined = node; x !== undefined && !d.s.placements.has(placementKey(plan, x)) && !hasMembers(d.s, plan, x);) {
+  for (let x: Id | undefined = node; x !== undefined && !placementOf(d.s, plan, x) && !hasMembers(d.s, plan, x);) {
     const parent = groupOf(d.s, plan, x);
     leaveGroup(d, plan, x);
     x = parent;
@@ -182,10 +192,8 @@ export function deleteEverywhere(s: State, node: Id): Action {
   const n = nodeOf(s, node);
   const d = new Draft(s);
   for (const p of placementsOf(d.s, node)) d.placement(p.plan, node, null);
-  const conns = [...d.s.connections.values()].filter((c) => c.trashedAt === undefined && c.members.some((m) => m.node === node));
-  // One pass over the branches for all of them (a hub node can have hundreds of connections).
-  const shown = new Map<Id, BranchRec[]>(conns.map((c) => [c.id, []]));
-  for (const b of branchesOf(d.s, (_p, conn) => shown.has(conn))) shown.get(b.connection)!.push(b);
+  const conns = connectionsOf(d.s, node).filter((c) => c.trashedAt === undefined);
+  const shown = new Map<Id, BranchRec[]>(conns.map((c) => [c.id, branchesOf(d.s, c.id)]));
   for (const c of conns) {
     const members = c.members.filter((m) => m.node !== node);
     for (const b of shown.get(c.id)!) if (b.node === node) d.branch(b.plan, c.id, node, false);
@@ -236,7 +244,7 @@ export function removeMember(s: State, connection: Id, node: Id): Action {
   const c = connectionOf(s, connection);
   const d = new Draft(s);
   const members = c.members.filter((m) => m.node !== node);
-  for (const b of branchesOf(d.s, (_p, conn, nd) => conn === connection && nd === node)) d.branch(b.plan, connection, node, false);
+  for (const b of branchesOf(d.s, connection)) if (b.node === node) d.branch(b.plan, connection, node, false);
   d.dropPhantoms(connection, node);
   if (members.length < 2) d.trashConnection(c, members);
   else d.connection(connection, { ...c, members });
@@ -269,8 +277,8 @@ export function setBranches(s: State, connection: Id, branches: { plan: Id; node
 /** A stub moved by hand (spec 8.5, 11.3): the absent member gets a phantom where it was put down. */
 export function placeAbsent(s: State, plan: Id, connection: Id, node: Id, x: number, y: number, k: number): Action {
   connectionOf(s, connection);
-  if (!s.branches.has(branchKey({ plan, connection, node }))) throw new CommandError('Cette branche n’est pas affichée dans ce plan.');
-  if (s.placements.has(placementKey(plan, node))) throw new CommandError('Ce nœud est déjà dans ce plan.');
+  if (!s.branches.has({ plan, connection, node })) throw new CommandError('Cette branche n’est pas affichée dans ce plan.');
+  if (placementOf(s, plan, node)) throw new CommandError('Ce nœud est déjà dans ce plan.');
   if ([...s.phantoms.values()].some((p) => p.plan === plan && p.connection === connection && p.of.kind === 'absent' && p.of.node === node)) {
     throw new CommandError('Cette amorce a déjà sa place.');
   }
@@ -299,7 +307,7 @@ export function setRole(s: State, connection: Id, node: Id, role: Role): Action 
 
 /** Removes the node's own group links in this plan. */
 function leaveGroup(d: Draft, plan: Id, node: Id): void {
-  for (const c of [...d.s.connections.values()]) {
+  for (const c of connectionsOf(d.s, node)) {
     if (c.kind !== 'inclusion' || c.members.find((m) => m.role === 'source')?.node !== node) continue;
     for (const m of c.members) d.branch(plan, c.id, m.node, false);
   }
@@ -311,11 +319,11 @@ export function include(s: State, plan: Id, node: Id, group: Id): Action {
   const g = nodeOf(s, group);
   if (node === group) throw new CommandError('Un groupe ne peut pas être inclus dans lui-même ni dans un de ses descendants.');
   // Placed implies not in the trash (rule trashedPlaced).
-  placedIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
-  placedIn(s, plan, group, 'Ce groupe n’est pas dans ce plan.');
+  placementIn(s, plan, node, 'Ce nœud n’est pas dans ce plan.');
+  placementIn(s, plan, group, 'Ce groupe n’est pas dans ce plan.');
   const d = new Draft(s);
   leaveGroup(d, plan, node);
-  let link = [...d.s.connections.values()].find((c) =>
+  let link = connectionsOf(d.s, node).find((c) =>
     c.kind === 'inclusion' && c.members.some((m) => m.role === 'source' && m.node === node) && c.members.some((m) => m.role === 'target' && m.node === group));
   if (!link) {
     const id = uuidv7();
@@ -340,7 +348,7 @@ export function exclude(s: State, plan: Id, node: Id): Action {
 /** Split arm (spec 8.5): the branch leaves the plan, replaced by a phantom of the far node near the bundle and a phantom of the centre near that node. */
 export function splitArm(s: State, plan: Id, connection: Id, node: Id, near: { x: number; y: number; k: number }, far: { x: number; y: number; k: number }): Action {
   connectionOf(s, connection);
-  if (!s.branches.has(branchKey({ plan, connection, node }))) throw new CommandError('Cette branche n’est pas affichée dans ce plan.');
+  if (!s.branches.has({ plan, connection, node })) throw new CommandError('Cette branche n’est pas affichée dans ce plan.');
   const d = new Draft(s);
   d.branch(plan, connection, node, false);
   const a = uuidv7(), b = uuidv7();
@@ -361,7 +369,7 @@ export function joinArm(s: State, plan: Id, connection: Id, node: Id): Action {
 /** A phantom moves like a node, changes its step like one, and may sit in a group (spec 8.5). */
 export function movePhantom(s: State, phantom: Id, x: number, y: number, group?: Id | null, k?: number): Action {
   const p = need(s.phantoms.get(phantom), 'Fantôme introuvable.');
-  if (group) placedIn(s, p.plan, group, 'Ce groupe n’est pas dans ce plan.');
+  if (group) placementIn(s, p.plan, group, 'Ce groupe n’est pas dans ce plan.');
   const d = new Draft(s);
   const next: PhantomRec = { ...p, x, y, k: k ?? p.k };
   if (group === null) delete next.group;

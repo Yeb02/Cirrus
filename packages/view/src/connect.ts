@@ -1,4 +1,4 @@
-import { branchKey, type Id, placementKey, type State } from '@cirrus/core';
+import { type Id, placementKey, type State } from '@cirrus/core';
 import type { Hit } from './hit.ts';
 import type { PlanScene } from './scene.ts';
 
@@ -33,7 +33,7 @@ export function otherPlans(s: State, plan: Id, nodes: Id[], connection?: Id): Id
   const shownIn = new Set<Id>();
   if (connection !== undefined) {
     const members = s.connections.get(connection)?.members ?? [];
-    for (const p of s.plans.keys()) if (members.some((m) => s.branches.has(branchKey({ plan: p, connection, node: m.node })))) shownIn.add(p);
+    for (const p of s.plans.keys()) if (members.some((m) => s.branches.has({ plan: p, connection, node: m.node }))) shownIn.add(p);
   }
   return [...s.plans.values()]
     .filter((p) => p.id !== plan && p.type !== 'document' && nodes.every((n) => s.placements.has(placementKey(p.id, n))))

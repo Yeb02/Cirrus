@@ -1,4 +1,4 @@
-import { branchKey, type Id, placementKey, type Role, type State } from '@cirrus/core';
+import { type Id, placementKey, type Role, type State } from '@cirrus/core';
 import { nodeSuggestions } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { type Build, connectionTextBuild, roleBuild } from '../actions.ts';
@@ -58,7 +58,7 @@ export function ConnectionPopup(props: {
         <h4>Membres</h4>
         <ul>
           {c.members.map((m) => {
-            const shown = s.branches.has(branchKey({ plan: props.plan, connection: c.id, node: m.node }));
+            const shown = s.branches.has({ plan: props.plan, connection: c.id, node: m.node });
             const placed = s.placements.has(placementKey(props.plan, m.node));
             return (
               <li key={m.node} className={shown ? '' : 'dim'} title={shown ? undefined : 'Pas affiché dans ce plan'}>

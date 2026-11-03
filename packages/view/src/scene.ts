@@ -1,6 +1,6 @@
 import {
-  ancestors, type ConnectionLayout, type ConnectionRec, groupIndex, type Id, parseBranchKey, type PhantomRec,
-  type PlanRec, type Role, type State, type Vec2,
+  ancestors, type ConnectionLayout, connRow, type Id, KNOWLEDGE, membersOf, NO_RECORD, type PhantomRec, type PlanRec, type Role, ROLES, type State,
+  STRUCTURE, type Vec2,
 } from '@cirrus/core';
 import type { Bounds } from './camera.ts';
 import { convexHull, offsetPolygon } from './geometry/hull.ts';
@@ -102,11 +102,12 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     add({ id: n.id, kind: 'node', node: n.id, title: n.title, lines: l, x: pl.x, y: pl.y, k: pl.k, ...boxHalves(l, pl.k, p), parent: -1, children: [], depth: 0, badge: false });
   }
   const phantoms: PhantomRec[] = [];
+  const C = s.tables.conns;
   for (const ph of s.phantoms.values()) {
     if (ph.plan !== planId) continue;
-    const c = s.connections.get(ph.connection);
+    const c = connRow(s, ph.connection);
     const represented = s.nodes.get(ph.of.node);
-    const title = ph.of.kind === 'center' ? (c?.title || 'Connexion') : (represented?.title ?? '');
+    const title = ph.of.kind === 'center' ? ((c >= 0 && C.kind[c] !== NO_RECORD && C.title[c]) || 'Connexion') : (represented?.title ?? '');
     const l = linesOf(title);
     const halves = ph.of.kind === 'node'
       ? boxHalves(l, ph.k, p)
@@ -119,16 +120,15 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
   }
 
   // Drawn hierarchy: the nearest placed ancestor (a group removed from the plan keeps its links, spec 7).
-  const gIndex = groupIndex(s);
   const nearestPlaced = (chain: Id[]) => {
     for (const g of chain) if (byId.has(g) && items[byId.get(g)!].kind !== 'phantom') return byId.get(g)!;
     return -1;
   };
   for (const item of items) {
-    if (item.kind === 'node') item.parent = nearestPlaced(ancestors(s, planId, item.id, gIndex));
+    if (item.kind === 'node') item.parent = nearestPlaced(ancestors(s, planId, item.id));
     else {
       const g = (s.phantoms.get(item.id) as PhantomRec).group;
-      item.parent = g === undefined ? -1 : nearestPlaced([g, ...ancestors(s, planId, g, gIndex)]);
+      item.parent = g === undefined ? -1 : nearestPlaced([g, ...ancestors(s, planId, g)]);
     }
   }
   items.forEach((item, i) => { if (item.parent >= 0) items[item.parent].children.push(i); });
@@ -146,16 +146,10 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
   }
   for (let o = order.length - 1; o >= 0; o--) if (items[order[o]].kind === 'group') deriveGroup(items, order[o], p);
 
-  // The plan's branches grouped by connection, once: connections and badges read it without building keys.
+  // The plan's branches grouped by connection, once: connections and badges read it.
   const shown = new Map<Id, Id[]>();
-  const prefix = `${planId}|`;
-  for (const key of s.branches) {
-    if (!key.startsWith(prefix)) continue;
-    const b = parseBranchKey(key);
-    const list = shown.get(b.connection);
-    if (list) list.push(b.node);
-    else shown.set(b.connection, [b.node]);
-  }
+  const nodeIds = s.tables.nodes.rows.ids;
+  s.branches.forEachInPlan(planId, (c, nodes) => { shown.set(C.rows.ids[c], Array.from(nodes, (n) => nodeIds[n])); });
   const connections = sceneConnections(s, plan, items, byId, phantoms, shown);
   markBadges(s, items, byId, phantoms, shown, new Set(connections.map((c) => c.id)));
   return { plan, items, byId, roots, connections, bounds: boundsOf(items) };
@@ -234,7 +228,7 @@ export function withMoves(
 function sceneConnections(
   s: State, plan: PlanRec, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>,
 ): SceneConnection[] {
-  const kind = plan.type === 'document' ? 'structure' : 'knowledge';
+  const kind = plan.type === 'document' ? STRUCTURE : KNOWLEDGE;
   const phantomsOf = new Map<Id, PhantomRec[]>();
   for (const ph of phantoms) {
     const list = phantomsOf.get(ph.connection);
@@ -247,13 +241,19 @@ function sceneConnections(
   const placed = (node: Id) => { const i = byId.get(node); return i !== undefined && items[i].kind !== 'phantom'; };
 
   const out: SceneConnection[] = [];
-  const roleIn = (c: ConnectionRec, node: Id) => c.members.find((m) => m.node === node)?.role;
+  // Read from the columns, without building every connection's record (the lobby shows them all).
+  const C = s.tables.conns, nodeRows = s.tables.nodes.rows;
+  const roleIn = (c: number, node: Id): Role | undefined => {
+    const n = nodeRows.get(node), members = membersOf(s, c);
+    for (let i = 0; i < members.length; i++) if (members[i] >> 2 === n) return ROLES[members[i] & 3];
+    return undefined;
+  };
   for (const id of new Set([...shown.keys(), ...phantomsOf.keys()])) {
-    const c = s.connections.get(id);
-    if (!c || c.trashedAt !== undefined || c.kind !== kind) continue;
+    const c = connRow(s, id);
+    if (c < 0 || C.kind[c] !== kind || !Number.isNaN(C.trashedAt[c])) continue;
     const layout = layouts.get(id);
     const ph = phantomsOf.get(id) ?? [];
-    const main: SceneConnection = { index: 0, id, part: 'main', title: c.title, ends: [], stubs: [], ...(layout ? { layout } : {}) };
+    const main: SceneConnection = { index: 0, id, part: 'main', title: C.title[c], ends: [], stubs: [], ...(layout ? { layout } : {}) };
     for (const node of shown.get(id) ?? []) {
       const role = roleIn(c, node);
       if (!role) continue;
@@ -270,7 +270,7 @@ function sceneConnections(
     for (const x of ph) {
       const role = roleIn(c, x.of.node);
       if (x.of.kind !== 'center' || !role || !byId.has(x.of.node)) continue;
-      out.push({ index: 0, id, part: 'far', title: c.title, ends: [{ item: byId.get(x.of.node)!, role, key: x.of.node, dashed: false }], stubs: [], center: byId.get(x.id)! });
+      out.push({ index: 0, id, part: 'far', title: C.title[c], ends: [{ item: byId.get(x.of.node)!, role, key: x.of.node, dashed: false }], stubs: [], center: byId.get(x.id)! });
     }
   }
   out.forEach((c, i) => { c.index = i; });
@@ -281,14 +281,16 @@ function sceneConnections(
 function markBadges(s: State, items: SceneItem[], byId: Map<Id, number>, phantoms: PhantomRec[], shown: Map<Id, Id[]>, drawn: Set<Id>): void {
   const split = new Map<Id, Id[]>();
   for (const ph of phantoms) if (ph.of.kind === 'center') split.set(ph.connection, [...(split.get(ph.connection) ?? []), ph.of.node]);
-  for (const c of s.connections.values()) {
-    if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
-    const here = shown.get(c.id), splitHere = split.get(c.id);
-    for (const m of c.members) {
-      const i = byId.get(m.node);
+  // Every knowledge connection, read from the columns.
+  const C = s.tables.conns, nodeIds = s.tables.nodes.rows.ids, knowledge = KNOWLEDGE;
+  for (let c = 0; c < C.rows.end; c++) {
+    if (C.kind[c] !== knowledge || !Number.isNaN(C.trashedAt[c])) continue;
+    const id = C.rows.ids[c], here = shown.get(id), splitHere = split.get(id), members = membersOf(s, c);
+    for (let k = 0; k < members.length; k++) {
+      const node = nodeIds[members[k] >> 2], i = byId.get(node);
       if (i === undefined || items[i].kind === 'phantom' || items[i].badge) continue;
       // No branch here, or a connection masked here (fewer than two nodes shown): it exists but is not seen.
-      if ((!here?.includes(m.node) || !drawn.has(c.id)) && !splitHere?.includes(m.node)) items[i].badge = true;
+      if ((!here?.includes(node) || !drawn.has(id)) && !splitHere?.includes(node)) items[i].badge = true;
     }
   }
 }

@@ -1,5 +1,5 @@
 import {
-  type Action, ancestors, branchKey, groupIndex, type Id, include, placeNode, placementKey, setBranches, type State, type Vec2,
+  type Action, ancestors, connectionAt, type Id, include, memberOf, nodeRow, placeNode, placementKey, setBranches, type State, type Vec2,
 } from '@cirrus/core';
 import type { RenderParams } from './params.ts';
 import type { PlanScene } from './scene.ts';
@@ -35,11 +35,10 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
   if (ids.size === 0) return null;
   const top = items.filter((i) => scene.items[i].kind !== 'phantom');
   const center = { x: top.reduce((a, i) => a + scene.items[i].x, 0) / top.length, y: top.reduce((a, i) => a + scene.items[i].y, 0) / top.length };
-  const index = groupIndex(s);
   // Where each node is drawn: a group's centre is its members' (its own position may be stale).
   const nodes = [...ids].map((id) => {
     const it = scene.items[scene.byId.get(id)!];
-    return { id, x: it.x, y: it.y, k: it.k, parents: ancestors(s, plan, id, index) };
+    return { id, x: it.x, y: it.y, k: it.k, parents: ancestors(s, plan, id) };
   });
   const groups: Clip['groups'] = {};
   for (const n of nodes) for (const g of n.parents) { const i = scene.byId.get(g); if (i !== undefined) groups[g] = { x: scene.items[i].x, y: scene.items[i].y }; }
@@ -51,11 +50,14 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
     if (set) set.add(ph.of.node);
     else split.set(ph.connection, new Set([ph.of.node]));
   }
+  // Only the connections of copied nodes (memberOf), in row order.
+  const rows = new Set<number>();
+  for (const id of ids) { const n = nodeRow(s, id); if (n >= 0) for (const c of memberOf(s, n)) rows.add(c); }
   const connections: Clip['connections'] = [];
-  for (const c of s.connections.values()) {
-    // Only the connections of copied nodes are looked at closely.
-    if (c.kind !== 'knowledge' || c.trashedAt !== undefined || !c.members.some((m) => ids.has(m.node))) continue;
-    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has(branchKey({ plan, connection: c.id, node: n })) || split.get(c.id)?.has(n));
+  for (const r of [...rows].sort((a, b) => a - b)) {
+    const c = connectionAt(s.tables, r);
+    if (c.kind !== 'knowledge' || c.trashedAt !== undefined) continue;
+    const shown = c.members.map((m) => m.node).filter((n) => s.branches.has({ plan, connection: c.id, node: n }) || split.get(c.id)?.has(n));
     if (shown.filter((n) => ids.has(n)).length >= 2) connections.push({ id: c.id, nodes: shown });
   }
   return { plan, zoom, center, nodes, groups, connections };

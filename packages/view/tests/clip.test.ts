@@ -1,4 +1,4 @@
-import { branchKey, combine, groupOf, placementKey, removeFromPlan, type State } from '@cirrus/core';
+import { combine, groupOf, placementKey, removeFromPlan, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeEach, expect, test } from 'vitest';
 import { copyClip, deleteSummary, pasteSteps } from '../src/clip.ts';
@@ -51,7 +51,7 @@ test('coller dans un plan qui contient déjà un nœud : il garde sa place et so
   expect(groupOf(s, these, ids.nodes.solomonoff)).toBe(ids.nodes.groupeInduction);
   expect(groupOf(s, these, ids.nodes.groupeInduction)).toBeUndefined();
   // A connection follows when two of its nodes were copied; its other branches become stubs (Occam is not here).
-  const shown = (c: string, n: string) => s.branches.has(branchKey({ plan: these, connection: c, node: n }));
+  const shown = (c: string, n: string) => s.branches.has({ plan: these, connection: c, node: n });
   expect(shown(ids.connections.mdlSolomonoff, ids.nodes.solomonoff)).toBe(true);
   const deduction = clip.connections.find((c) => c.nodes.includes(ids.nodes.occam))!;
   expect(shown(deduction.id, ids.nodes.occam)).toBe(true);
