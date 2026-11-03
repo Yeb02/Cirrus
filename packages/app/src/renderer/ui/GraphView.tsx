@@ -9,7 +9,7 @@ import {
 import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
 import { Application, Assets } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
-import { runBench } from '../bench.ts';
+import { type BenchView, mark, runBench } from '../bench.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
@@ -24,6 +24,11 @@ import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 
 const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
+/**
+ * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
+ * may depend on it. They lift the pause of the drawing and the gesture abandoned on a lost focus; the normal mode keeps both.
+ */
+const measuring = () => window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** The camera a plan opens with: the launch option "x,y,zoom" for visual checks, else the plan framed. */
@@ -78,6 +83,8 @@ export function GraphView(props: {
   /** Asks for a frame: the loop only runs while there is something to draw. */
   const redraw = () => { dirty.current = true; wake.current(); };
   const firstPending = useRef(true);
+  /** The bench waits for frames of the drawing loop: each is called after a drawn frame until `until()` holds. */
+  const frameWaiters = useRef<{ until(): boolean; done(f: { ms: number; end: number; preview: boolean }): void }[]>([]);
   const gestures = useRef(new GestureMachine(props.params));
   const [selection, setSelection] = useState<Selection>(emptySelection);
   const selectionRef = useRef(selection);
@@ -506,6 +513,7 @@ export function GraphView(props: {
       for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
       renderer.onUpdate = () => { redraw(); };
       engine.current = { app, renderer };
+      mark('engineReady');
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
       // Visual checks: CIRRUS_POINTER="down 700 370 ctrl; move 900 500; up 900 500" replays pointer events; phases
@@ -542,10 +550,12 @@ export function GraphView(props: {
         }
       };
       // Frames are drawn on demand: the loop waits for the screen only while something is to be drawn, and not at all
-      // while the window is hidden or, by default, without the focus (battery). The first frame (captures, bench) is
-      // drawn regardless. One exception must not stop the drawing for good (C1 of the plan 3 review): it is reported.
+      // while the window is hidden or, by default, without the focus (battery). The first frame is drawn regardless,
+      // and every frame in bench and capture modes (measuring()). One exception must not stop the drawing for good (C1
+      // of the plan 3 review): it is reported.
+      const unpaused = measuring();
       let stopped = false, scheduled = false;
-      const paused = () => !firstPending.current && renderPaused({ hidden: document.hidden, focused: document.hasFocus() }, paramsRef.current);
+      const paused = () => !unpaused && !firstPending.current && renderPaused({ hidden: document.hidden, focused: document.hasFocus() }, paramsRef.current);
       const schedule = () => {
         if (scheduled || stopped || paused()) return;
         scheduled = true;
@@ -554,12 +564,20 @@ export function GraphView(props: {
       const loop = () => {
         scheduled = false;
         if (stopped || paused()) return;
-        try { step(); } catch (err) { console.error('Erreur de rendu :', err); }
+        const t0 = performance.now();
+        let drawn: { preview: boolean } | null = null;
+        try { drawn = step(); } catch (err) { console.error('Erreur de rendu :', err); }
+        if (drawn && frameWaiters.current.length > 0) {
+          const end = performance.now(), f = { ms: end - t0, end, preview: drawn.preview };
+          frameWaiters.current = frameWaiters.current.filter((w) => { if (!w.until()) return true; w.done(f); return false; });
+        }
         if (dirty.current || dragging.current?.dirty) schedule();
       };
       wake.current = schedule;
-      const step = () => {
+      /** One turn of the loop; returns whether it drew a frame, and whether that frame was a drag preview. */
+      const step = (): { preview: boolean } | null => {
         const e = engine.current;
+        let drawn: { preview: boolean } | null = null;
         if (e && sceneRef.current) {
           const cam = e.renderer.camera;
           if (cam.widthPx !== e.app.screen.width || cam.heightPx !== e.app.screen.height) {
@@ -567,6 +585,7 @@ export function GraphView(props: {
           }
           // A drag in progress: its preview is drawn at most once per frame.
           const d = dragging.current;
+          const preview = d !== null && d.dirty;
           if (d && d.dirty) {
             d.dirty = false;
             e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: d.dx, y: d.dy }])), paramsRef.current), true);
@@ -579,10 +598,12 @@ export function GraphView(props: {
           if (dirty.current) {
             dirty.current = false;
             const rebuilt = e.renderer.renderFrame();
+            drawn = { preview };
             drawHandles();
             // What is under a resting pointer changes with the drawn set (I1 of the review): look again.
             if (rebuilt && lastPointer.current && !gestures.current.busy) hover(lastPointer.current.x, lastPointer.current.y);
             if (firstPending.current) {
+              mark('firstFrame');
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
               else if (settle > 0) { settle--; dirty.current = true; }
@@ -592,16 +613,24 @@ export function GraphView(props: {
                 props.onFirstFrame();
                 const label = window.cirrus.launch.bench;
                 if (label) {
-                  // The bench drives the camera itself; the regular loop stops.
-                  const loadMs = performance.now();
+                  // The bench drives the camera along its path itself, the regular loop waiting; the edit pass then
+                  // hands the drawing back to the loop, whose frames it awaits.
                   stopped = true;
-                  void runBench(e.app, e.renderer, sceneRef.current, paramsRef.current, label, loadMs).then((run) => window.cirrus.benchDone(run));
-                  return;
+                  const view: BenchView = {
+                    app: e.app, renderer: e.renderer, params: () => paramsRef.current, scene: () => sceneRef.current!, moveCamera,
+                    feed: (input) => { feed(input); redraw(); },
+                    edit: (build) => edit(build),
+                    undo: () => sessionRef.current!.undo(),
+                    resume: () => { stopped = false; redraw(); },
+                    drawn: (until) => new Promise((done) => { frameWaiters.current.push({ until, done }); }),
+                  };
+                  void runBench(view, label).then((run) => window.cirrus.benchDone(run));
                 }
               }
             }
           }
         }
+        return drawn;
       };
       schedule();
     })();
@@ -622,6 +651,7 @@ export function GraphView(props: {
   useEffect(() => {
     if (!ready) return;
     setScene(buildScene(props.state, props.plan, measureTitle(paramsRef.current), paramsRef.current));
+    mark('sceneReady');
   }, [ready, props.state, props.plan, sceneKey]);
 
   useEffect(() => {
@@ -1081,8 +1111,12 @@ export function GraphView(props: {
   useEffect(() => wake.current());
   // A lost focus abandons the gesture in progress (Review Focus 2 of plan 3b).
   useEffect(() => {
-    // A plan of a repercussion waits instead: Alt+Tab must not skip it (I8 of the review).
-    const onBlur = () => { dropHandle(false); if (placing.current?.kind !== 'repercussion') feed({ t: 'cancel' }); };
+    // A plan of a repercussion waits instead: Alt+Tab must not skip it (I8 of the review). Not in bench and capture modes.
+    const onBlur = () => {
+      if (measuring()) return;
+      dropHandle(false);
+      if (placing.current?.kind !== 'repercussion') feed({ t: 'cancel' });
+    };
     window.addEventListener('blur', onBlur);
     return () => window.removeEventListener('blur', onBlur);
   }, []);

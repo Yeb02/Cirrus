@@ -1,35 +1,45 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type Action, OpConflictError, type State, toSnapshot } from '@cirrus/core';
-import { buildLargeState } from '@cirrus/fixtures';
+import { type Action, OpConflictError, toSnapshot } from '@cirrus/core';
+import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import { dataDir, openBase } from './base.ts';
-import { recordRun } from './bench.ts';
+import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun } from './bench.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
  * interface over IPC. CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
- * CIRRUS_BENCH=<nodes>,<connections> serves a synthetic base instead and runs the rendering bench (scripts/bench.mjs).
+ * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
+ * CIRRUS_BENCH_BUILD=<dir> builds beforehand.
  */
 let store: LocalStore | null = null;
-let benchState: State | null = null;
 let dir = '';
 const capture = process.env.CIRRUS_CAPTURE;
 const bench = process.env.CIRRUS_BENCH;
+const benchBuild = process.env.CIRRUS_BENCH_BUILD;
 const launch = {
   plan: process.env.CIRRUS_PLAN,
   view: process.env.CIRRUS_VIEW,
   hover: process.env.CIRRUS_HOVER,
   panel: process.env.CIRRUS_PANEL === '1',
   bench: bench ? (process.env.CIRRUS_BENCH_LABEL ?? 'vsync') : undefined,
+  capture: capture !== undefined,
   hide: process.env.CIRRUS_BENCH_HIDE,
   keys: process.env.CIRRUS_KEYS,
   pointer: process.env.CIRRUS_POINTER,
   click: process.env.CIRRUS_CLICK,
 };
-if (bench) app.commandLine.appendSwitch('force_high_performance_gpu');
+/** The main process's load marks, in absolute time like the interface's. */
+const benchMarks: Partial<Record<Phase, number>> = {};
+const markNow = (name: Phase) => { if (benchMarks[name] === undefined) benchMarks[name] = performance.timeOrigin + performance.now(); };
+if (bench) {
+  app.commandLine.appendSwitch('force_high_performance_gpu');
+  // Memory after collections: gc() in the interface, and exact heap figures (Chromium rounds and caches them otherwise).
+  app.commandLine.appendSwitch('js-flags', '--expose-gc');
+  app.commandLine.appendSwitch('enable-precise-memory-info');
+}
 
 function createWindow(): void {
   const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
@@ -43,7 +53,8 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      backgroundThrottling: !bench,
+      // Bench and captures never depend on the window being in front (an occluded window is otherwise throttled).
+      backgroundThrottling: !bench && !capture,
       additionalArguments: [`--cirrus-launch=${JSON.stringify(launch)}`],
     },
   });
@@ -80,34 +91,45 @@ function createWindow(): void {
 
 // As JSON text: a string crosses IPC and the context bridge in one copy; a large object graph took minutes
 // (403 s for 50 000 nodes and 500 000 connections, against 1.3 s for a tenth of that).
-ipcMain.handle('cirrus:snapshot', () => JSON.stringify(toSnapshot(benchState ?? store!.state)));
+ipcMain.handle('cirrus:snapshot', () => {
+  const json = JSON.stringify(toSnapshot(store!.state));
+  markNow('dataSent');
+  return json;
+});
 // The bench runs on the defaults, or on CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting.
 ipcMain.handle('cirrus:settings:get', () => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir)));
 ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => { if (!bench) writeSettings(dir, overrides); });
 // An edit computed by the interface (spec 4: only this process writes). A conflicting record refuses it.
 ipcMain.handle('cirrus:commit', (_e, action: Action) => {
-  if (!store) throw new Error('Pas de base ouverte (mode banc).');
   try {
-    store.commit(action);
+    store!.commit(action);
   } catch (e) {
     if (e instanceof OpConflictError) throw new Error('La base a changé : action refusée.');
     throw e;
   }
 });
-ipcMain.handle('cirrus:bench:done', (_e, run) => {
-  const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), run, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
+// The pass is over: its load phases since this process started and every process's memory, collections forced here too.
+ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'processMb'>) => {
+  forceGc();
+  const record: PassRecord = { ...run, phases: loadPhases({ ...benchMarks, ...run.marks }, performance.timeOrigin), processMb: processMemoryMb(app.getAppMetrics()) };
+  const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), record, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
   if (report) console.log(`Rapport écrit : ${report}`);
   app.exit(0);
 });
 
 void app.whenReady().then(() => {
-  if (bench) {
-    const [nodes, connections] = bench.split(',').map(Number);
-    benchState = buildLargeState({ seed: 1, nodes, connections }).state;
-  } else {
-    dir = dataDir(app.getPath('userData'));
-    store = openBase(dir);
+  if (benchBuild) {
+    // The bench's base (scripts/bench.mjs): built once per generator version and scale, then copied for each pass.
+    const [nodes, connections] = (bench ?? '50000,500000').split(',').map(Number);
+    const t0 = performance.now();
+    const built = ensureBenchBase(benchBuild, { seed: 1, nodes, connections });
+    console.log(built ? `Base du banc écrite en ${((performance.now() - t0) / 1000).toFixed(1)} s : ${benchBuild}` : `Base du banc à jour : ${benchBuild}`);
+    app.exit(0);
+    return;
   }
+  dir = dataDir(app.getPath('userData'));
+  store = openBase(dir);
+  markNow('baseOpened');
   createWindow();
 });
 app.on('window-all-closed', () => {

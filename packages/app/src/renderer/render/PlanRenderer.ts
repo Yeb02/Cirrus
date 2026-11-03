@@ -359,18 +359,20 @@ export class PlanRenderer {
       }
       this.textZoom = cam.zoom;
     }
-    // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text).
-    const h = this.hidden;
-    this.skyLayer.visible = !h.has('sky');
-    if (h.has('stars')) this.bgWorld.visible = false;
+    // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text,outline;
+    // "all" for the floor pass, an empty frame).
+    const off = (layer: string) => this.hidden.has('all') || this.hidden.has(layer);
+    this.skyLayer.visible = !off('sky');
+    if (off('stars')) this.bgWorld.visible = false;
     const direct = this.p.envelopeResolution >= 1;
-    this.envSprite.visible = !direct && !h.has('env');
-    if (direct) this.slots.envelope.mesh.visible &&= !h.has('env');
-    this.slots.ribbon.mesh.visible &&= !h.has('ribbon');
-    this.slots.glyph.mesh.visible &&= !h.has('glyph');
-    this.slots.box.mesh.visible &&= !h.has('box');
-    this.slots.marker.mesh.visible &&= !h.has('marker');
-    this.textLayer.visible = !h.has('text');
+    this.envSprite.visible = !direct && !off('env');
+    if (direct) this.slots.envelope.mesh.visible &&= !off('env');
+    this.slots.ribbon.mesh.visible &&= !off('ribbon');
+    this.slots.glyph.mesh.visible &&= !off('glyph');
+    this.slots.box.mesh.visible &&= !off('box');
+    this.slots.marker.mesh.visible &&= !off('marker');
+    for (const ring of [this.slots.outline, this.slots.drop, this.slots.intruder]) ring.mesh.visible &&= !off('outline');
+    this.textLayer.visible = !off('text');
     if (this.envSprite.visible) this.renderEnvelopes();
     this.app.renderer.render(this.app.stage);
     return rebuilt;

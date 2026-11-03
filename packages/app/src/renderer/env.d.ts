@@ -8,12 +8,18 @@ export interface CirrusBridge {
   setSettings(overrides: Record<string, unknown>): Promise<void>;
   /** Writes an edit to the local base; rejects with the reason. */
   commit(action: unknown): Promise<void>;
-  /** The bench (CIRRUS_BENCH) is over: the main process records the run and quits. */
+  /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */
   benchDone(run: unknown): Promise<void>;
   /** The first frame is drawn (captures wait for it). */
   ready(): void;
-  /** Launch options for visual checks: plan name, view "x,y,zoom", simulated hover "x,y", settings panel open. */
-  launch: { plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; hide?: string; keys?: string; pointer?: string; click?: string };
+  /**
+   * Launch options for visual checks: plan name, view "x,y,zoom", simulated hover "x,y", settings panel open; `bench`:
+   * the bench pass's label; `capture`: a capture is taken (CIRRUS_CAPTURE).
+   */
+  launch: {
+    plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; capture?: boolean; hide?: string; keys?: string; pointer?: string;
+    click?: string;
+  };
 }
 
 declare global {

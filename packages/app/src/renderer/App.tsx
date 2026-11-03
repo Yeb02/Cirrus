@@ -1,6 +1,7 @@
 import { fromSnapshot, type Id, type Snapshot, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
+import { mark } from './bench.ts';
 import { GraphView } from './ui/GraphView.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
@@ -71,6 +72,7 @@ export function App() {
     void (async () => {
       try {
         const [snap, settings] = await Promise.all([window.cirrus.snapshot(), window.cirrus.getSettings()]);
+        mark('dataReceived');
         const s = fromSnapshot(JSON.parse(snap) as Snapshot);
         const plans = [...s.plans.values()];
         const lobby = plans.find((p) => p.type === 'lobby')!;
@@ -84,6 +86,7 @@ export function App() {
         const p = withOverrides(settings);
         loadedParams.current = p;
         session.current = new EditSession(s, (a) => window.cirrus.commit(a), (next) => setState(next));
+        mark('stateReady');
         setParams(p);
         setTabs(open);
         setActive(current);
