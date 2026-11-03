@@ -1,25 +1,33 @@
 import type { Id } from '@cirrus/core';
 import {
-  buildFrame, buildIndex, type Camera, computeVisible, type FrameGeometry, type PlanScene, type RenderParams, reviveScene, type SceneIndex, type TitleSide,
+  buildFrame, buildIndex, type Camera, computeVisible, type FontData, type FrameGeometry, type PlanScene, type RenderParams, reviveScene, type SceneIndex,
+  type TitleSide,
 } from '@cirrus/view';
 import { packFrame, transferables } from './frameData.ts';
 
 /**
  * Builds frames off the main thread (bench lesson: building them froze the view): what is visible from the camera,
- * then the meshes. The scene is sent once, with its index built here; it arrives as its data only (a structured
- * clone: typed arrays and plain objects), its façades given back here (reviveScene).
+ * then the meshes and the titles' glyphs. The font comes first, once; the scene is sent once, with its index built
+ * here; it arrives as its data only (a structured clone: typed arrays and plain objects), its façades given back here
+ * (reviveScene).
  */
 export type FrameRequest =
+  | { t: 'font'; font: FontData }
   | { t: 'scene'; scene: PlanScene; params: RenderParams }
   | { t: 'frame'; seq: number; cam: Camera; origin: { x: number; y: number }; params: RenderParams; sides: [Id, TitleSide][] };
 
 const scope = self as unknown as { onmessage: ((e: MessageEvent<FrameRequest>) => void) | null; postMessage(m: unknown, transfer: Transferable[]): void };
+let font: FontData | undefined;
 let scene: PlanScene | null = null;
 let index: SceneIndex | null = null;
 let reuse: FrameGeometry | undefined;
 
 scope.onmessage = (e) => {
   const m = e.data;
+  if (m.t === 'font') {
+    font = m.font;
+    return;
+  }
   if (m.t === 'scene') {
     scene = reviveScene(m.scene);
     index = buildIndex(scene, m.params);
@@ -28,7 +36,7 @@ scope.onmessage = (e) => {
   }
   if (!scene || !index) return;
   const visible = computeVisible(scene, index, m.cam, m.params);
-  const frame = buildFrame(scene, visible, m.cam, m.origin, m.params, new Map(m.sides), reuse);
+  const frame = buildFrame(scene, visible, m.cam, m.origin, m.params, new Map(m.sides), reuse, font);
   reuse = frame;
   const packed = packFrame(frame, true);
   scope.postMessage({ seq: m.seq, visible, frame: packed }, transferables(packed));

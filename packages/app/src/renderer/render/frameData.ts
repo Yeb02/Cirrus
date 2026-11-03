@@ -10,6 +10,8 @@ export interface PackedFrame {
   glyphIndex: Uint32Array;
   envelopes: Record<string, Float32Array>;
   envelopeIndex: Uint32Array;
+  /** The titles' glyph instances, interleaved (GLYPH_FLOATS each). */
+  glyphInstances: Float32Array;
   centerlines: FrameGeometry['centerlines'];
   markers: FrameGeometry['markers'];
   titles: FrameGeometry['titles'];
@@ -38,11 +40,13 @@ export function packFrame(f: FrameGeometry, copy: boolean): PackedFrame {
       aFoldK: v(e.foldK.view()), aParentK: v(e.parentK.view()),
     },
     envelopeIndex: v(e.index.view()),
+    glyphInstances: v(f.glyphInstances.view()),
     centerlines: f.centerlines, markers: f.markers, titles: f.titles, stubs: f.stubs,
   };
 }
 
 export function transferables(p: PackedFrame): ArrayBuffer[] {
-  return [...Object.values(p.ribbons), p.ribbonIndex, ...Object.values(p.glyphs), p.glyphIndex, ...Object.values(p.envelopes), p.envelopeIndex]
-    .map((a) => a.buffer as ArrayBuffer);
+  return [
+    ...Object.values(p.ribbons), p.ribbonIndex, ...Object.values(p.glyphs), p.glyphIndex, ...Object.values(p.envelopes), p.envelopeIndex, p.glyphInstances,
+  ].map((a) => a.buffer as ArrayBuffer);
 }

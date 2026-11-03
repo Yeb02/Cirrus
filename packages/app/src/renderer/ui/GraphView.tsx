@@ -5,14 +5,12 @@ import {
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
   type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
-  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex,
+  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, parseBmFont, measureLines,
 } from '@cirrus/view';
-import 'pixi.js/unsafe-eval'; // eval-free shader and uniform code paths: the page's CSP forbids eval
-import { Application, Assets } from 'pixi.js';
 import { useEffect, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
+import { createGl, type Gl } from '../gl/context.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
-import { FONT_URL, measureTitle } from '../render/texts.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
@@ -24,7 +22,9 @@ import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 
-const hexNumber = (c: [number, number, number]) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
+/** The MSDF font built by scripts/build-font.mjs from Inter (Latin, Greek, the symbols titles use): descriptor and atlas. */
+const FONT_URL = 'font/inter-msdf.fnt';
+const ATLAS_URL = 'font/inter-msdf.png';
 /**
  * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
  * may depend on it, nor on where the user's mouse lies. They lift the pause of the drawing and the gesture abandoned on
@@ -64,7 +64,7 @@ const MODE: Record<Placing['kind'], Mode> = {
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 /**
- * Hosts the PixiJS canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
+ * Hosts the WebGL canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
  * drag on the background, + − and arrows when the graph has the focus. Hover lights a connection, names stubs and
  * phantoms, and shows the groups under the cursor.
  */
@@ -82,7 +82,7 @@ export function GraphView(props: {
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
-  const engine = useRef<{ app: Application; renderer: PlanRenderer } | null>(null);
+  const engine = useRef<{ gl: Gl; renderer: PlanRenderer; font: FontData } | null>(null);
   const cameras = useRef(new Map<Id, Camera>());
   const sceneRef = useRef<PlanScene | null>(null);
   const paramsRef = useRef(props.params);
@@ -471,7 +471,10 @@ export function GraphView(props: {
     const build = dropBuild(base, items, dx, dy, at, alt, zoom, p);
     if (!build) { restore(); return; }
     const plan = base.plan.id;
-    const reps = dropMemberships(s, base, items, at, alt, zoom, p).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, measureTitle(p), p) }));
+    // The other plans' scenes are measured as the cached ones, with their measure's titles already laid out.
+    const cache = scenes.current;
+    const measure = cache.measure && cache.key === sceneParamsKey(p) ? cache.measure : measureLines(engine.current!.font, p);
+    const reps = dropMemberships(s, base, items, at, alt, zoom, p).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, measure, p) }));
     const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
     if (changed.length === 0) { void edit(build, restore); return; }
     const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
@@ -534,31 +537,33 @@ export function GraphView(props: {
     setPopup({ connections, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
   };
 
-  // One PixiJS application for the window's lifetime.
+  // One WebGL context for the window's lifetime; the font is read before the first scene (its boxes are measured with it).
   useEffect(() => {
     let cancelled = false, raf = 0;
     let resizeObserver: ResizeObserver | null = null;
-    const app = new Application();
+    const canvas = document.createElement('canvas');
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    host.current!.appendChild(canvas);
+    let g: Gl | null = null;
     void (async () => {
-      await app.init({
-        resizeTo: host.current!, antialias: false, background: hexNumber(props.params.skyColor), resolution: window.devicePixelRatio || 1,
-        autoDensity: true, preference: 'webgl', autoStart: false,
-      });
-      if (cancelled) { app.destroy(true); return; }
-      app.ticker.stop();
-      // A resized canvas is cleared: draw again even if the CSS size (the camera's) did not change.
-      app.renderer.on('resize', () => { redraw(); });
-      // The host also resizes without the window (the settings panel opening): Pixi only listens to the window (C2).
-      resizeObserver = new ResizeObserver(() => { app.resize(); redraw(); });
+      g = createGl(canvas);
+      const [xml, atlas] = await Promise.all([
+        fetch(FONT_URL).then((r) => r.text()),
+        fetch(ATLAS_URL).then((r) => r.blob()).then((b) => createImageBitmap(b, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })),
+      ]);
+      if (cancelled) { atlas.close(); return; }
+      const font = parseBmFont(xml);
+      g.resize();
+      // The host resizes with the window and without it (the settings panel opening): a resized canvas is cleared,
+      // so it is drawn again even if its CSS size (the camera's) did not change (C2).
+      resizeObserver = new ResizeObserver(() => { g?.resize(); redraw(); });
       resizeObserver.observe(host.current!);
-      host.current!.appendChild(app.canvas);
-      Assets.setPreferences({ preferWorkers: false }); // no blob workers: the page's CSP forbids them
-      await Assets.load(FONT_URL);
-      const renderer = new PlanRenderer(app, props.params);
+      const renderer = new PlanRenderer(g, props.params, font, atlas);
       console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
       for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
       renderer.onUpdate = () => { redraw(); };
-      engine.current = { app, renderer };
+      engine.current = { gl: g, renderer, font };
       mark('engineReady');
       setReady(true);
       let launchHover = window.cirrus.launch.hover?.split(',').map(Number);
@@ -626,8 +631,8 @@ export function GraphView(props: {
         let drawn: { preview: boolean } | null = null;
         if (e && sceneRef.current) {
           const cam = e.renderer.camera;
-          if (cam.widthPx !== e.app.screen.width || cam.heightPx !== e.app.screen.height) {
-            moveCamera(navigate(cam, { t: 'resize', widthPx: e.app.screen.width, heightPx: e.app.screen.height }, paramsRef.current));
+          if (cam.widthPx !== e.gl.width || cam.heightPx !== e.gl.height) {
+            moveCamera(navigate(cam, { t: 'resize', widthPx: e.gl.width, heightPx: e.gl.height }, paramsRef.current));
           }
           // A drag in progress: its preview is drawn at most once per frame.
           const d = dragging.current;
@@ -663,7 +668,7 @@ export function GraphView(props: {
                   // hands the drawing back to the loop, whose frames it awaits.
                   stopped = true;
                   const view: BenchView = {
-                    app: e.app, renderer: e.renderer, params: () => paramsRef.current, scene: () => sceneRef.current!, moveCamera,
+                    gl: e.gl, renderer: e.renderer, params: () => paramsRef.current, scene: () => sceneRef.current!, moveCamera,
                     feed: (input) => { feed(input); redraw(); },
                     edit: (build) => edit(build),
                     undo: () => sessionRef.current!.undo(),
@@ -687,8 +692,9 @@ export function GraphView(props: {
       resizeObserver?.disconnect();
       cancelAnimationFrame(raf);
       engine.current?.renderer.destroy();
-      engine.current?.app.destroy(true);
       engine.current = null;
+      g?.destroy();
+      canvas.remove();
     };
   }, []);
 
@@ -698,7 +704,7 @@ export function GraphView(props: {
   useEffect(() => {
     if (!ready) return;
     const p = paramsRef.current, cache = scenes.current, s = props.state;
-    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureTitle(p); sceneChanges.current = null; }
+    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureLines(engine.current!.font, p); sceneChanges.current = null; }
     const measure = cache.measure!;
     if (props.rev !== cache.rev) {
       // One action since the scenes were made: its operations update every one (Review Focus 2). React may have
@@ -759,7 +765,7 @@ export function GraphView(props: {
     sceneRef.current = scene;
     showScene(e.renderer, scene);
     clearHover();
-    const { width, height } = e.app.screen;
+    const { width, height } = e.gl;
     const known = cameras.current.get(scene.plan.id);
     moveCamera(known ? { ...known, widthPx: width, heightPx: height } : initialCamera(scene, width, height, props.params, window.cirrus.launch.view));
     startPending();

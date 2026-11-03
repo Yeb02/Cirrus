@@ -19,7 +19,10 @@ const NO_PHANTOMS: PhantomRec[] = [];
 export const idOrder = (a: { id: Id }, b: { id: Id }): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const NO_ROWS: number[] = [];
 
-/** Lines of a title at base size: font baseFontPx, wrap width boxWidth − 2·boxPadX (the layout is scale-invariant). */
+/**
+ * The lines a node's box is sized for: its title at base size, font baseFontPx, wrap width boxWidth − 2·boxPadX (the
+ * layout is scale-invariant). The app's is measureLines (text.ts), from the layout the titles are drawn with.
+ */
 export type Measure = (title: string) => number;
 export type ItemKind = 'node' | 'group' | 'phantom';
 

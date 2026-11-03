@@ -2,13 +2,15 @@ import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { groupPalette } from './color.ts';
+import { FloatList } from './geometry/arrays.ts';
 import { type BundleEnd, type BundleGeometry, bundleGeometry } from './geometry/bundle.ts';
 import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes, NO_PARENT } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
 import { appendBundle, clearConnectionMeshes, type ConnectionMeshes, newConnectionMeshes } from './geometry/ribbon.ts';
-import { foldT, stepScale } from './lod.ts';
+import { foldT, stepScale, textPx } from './lod.ts';
 import type { RenderParams, Rgb } from './params.ts';
 import type { PlanScene, SceneItem } from './scene.ts';
+import { appendTitle, type FontData, TITLE_CONNECTION, TITLE_GROUP_CLOSED, TITLE_GROUP_OPEN, TITLE_NODE } from './text.ts';
 import { placeTitle, type Rect, type TitleSide } from './titles.ts';
 import type { VisibleConnection, VisibleSet } from './visibility.ts';
 
@@ -22,6 +24,8 @@ export interface FrameGeometry {
   markers: { conn: number; pos: Vec2; kMax: number; multi: boolean }[];
   titles: { conn: number; id: Id; text: string; box: Rect; kMax: number; side: TitleSide }[];
   stubs: { conn: number; stub: number; pos: Vec2; title: string }[];
+  /** One instance per glyph of the titles drawn, GLYPH_FLOATS each (text.ts), in drawing order; empty without a font. */
+  glyphInstances: FloatList;
 }
 
 /**
@@ -37,17 +41,20 @@ export function groupColors(scene: PlanScene, g: number, p: RenderParams): { ope
 
 /**
  * Builds the meshes of a visible set (spec 8.4, 8.5). `prevSides` keeps connection titles on the side they had;
- * `reuse` refills the typed arrays of a previous frame instead of allocating new ones.
+ * `reuse` refills the typed arrays of a previous frame instead of allocating new ones; `font`: the titles' glyphs
+ * are built with it (none without).
  */
 export function buildFrame(
   scene: PlanScene, visible: VisibleSet, cam: Camera, origin: Vec2, p: RenderParams,
-  prevSides?: Map<Id, TitleSide>, reuse?: FrameGeometry,
+  prevSides?: Map<Id, TitleSide>, reuse?: FrameGeometry, font?: FontData,
 ): FrameGeometry {
   const connections = reuse?.connections ?? newConnectionMeshes();
   const envelopes = reuse?.envelopes ?? newEnvelopeMeshes();
+  const glyphInstances = reuse?.glyphInstances ?? new FloatList();
   clearConnectionMeshes(connections);
   clearEnvelopeMeshes(envelopes);
-  const frame: FrameGeometry = { origin, connections, envelopes, centerlines: [], markers: [], titles: [], stubs: [] };
+  glyphInstances.clear();
+  const frame: FrameGeometry = { origin, connections, envelopes, centerlines: [], markers: [], titles: [], stubs: [], glyphInstances };
   const rel = (q: Vec2): Vec2 => ({ x: q.x - origin.x, y: q.y - origin.y });
   const items = scene.items;
 
@@ -89,7 +96,43 @@ export function buildFrame(
   });
 
   placeTitles(scene, visible, frame, cam, p, prevSides, rel);
+  if (font) appendTitles(scene, visible, frame, cam, p, font, paddedOf);
   return frame;
+}
+
+/**
+ * The glyphs of the titles drawn (spec 8.2 to 8.5), in the order they are drawn: boxes, then each group's two titles
+ * (open, at the top of its envelope; closed, at its centre), then connections. A title still unreadable at the deepest
+ * zoom this frame serves is not built; the others fade in the shader, by the formulas BitmapText's alphas followed.
+ */
+function appendTitles(
+  scene: PlanScene, visible: VisibleSet, frame: FrameGeometry, cam: Camera, p: RenderParams, font: FontData, paddedOf: (i: number) => Vec2[],
+): void {
+  const items = scene.items, out = frame.glyphInstances, o = frame.origin;
+  const maxZoom = cam.zoom * p.curveZoomHeadroom;
+  const readable = (k: number, scale: number) => textPx(k, maxZoom, p) * scale >= p.textFade[0];
+  const parentK = (it: SceneItem) => (it.parent >= 0 ? items[it.parent].maxChildK! : NO_PARENT);
+  visible.items.forEach((i, j) => {
+    const it = items[i];
+    if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) return;
+    const s = stepScale(it.k, p), size = p.baseFontPx * s;
+    appendTitle(out, font, it.title, size, (p.boxWidth - 2 * p.boxPadX) * s, size * p.lineHeight, it.x - o.x, it.y - o.y,
+      TITLE_NODE, j, it.kind === 'phantom' ? p.phantomTitleDim : 1, NO_PARENT, parentK(it));
+  });
+  visible.groups.forEach((g, j) => {
+    const it = items[g];
+    if (!readable(it.k, Math.max(p.groupTitleOpenScale, p.groupTitleClosedScale))) return;
+    const s = stepScale(it.k, p);
+    const top = Math.min(...paddedOf(g).map((q) => q.y));
+    const open = p.baseFontPx * s * p.groupTitleOpenScale, closed = p.baseFontPx * s * p.groupTitleClosedScale;
+    appendTitle(out, font, it.title, open, 0, open * p.lineHeight, it.x - o.x, top - o.y - open * p.groupTitleOffset, TITLE_GROUP_OPEN, j, 1, it.maxChildK!, parentK(it));
+    appendTitle(out, font, it.title, closed, p.boxWidth * s, closed * p.lineHeight, it.x - o.x, it.y - o.y, TITLE_GROUP_CLOSED, j, 1, it.maxChildK!, parentK(it));
+  });
+  for (const t of frame.titles) {
+    const size = p.titleFontPx * stepScale(t.kMax, p), vc = visible.connections[t.conn];
+    appendTitle(out, font, t.text, size, 0, size * p.lineHeight, t.box.x + t.box.w / 2, t.box.y + t.box.h / 2,
+      TITLE_CONNECTION, t.conn, 1, vc.fade === 'out' ? vc.foldK : NO_PARENT, NO_PARENT);
+  }
 }
 
 /**

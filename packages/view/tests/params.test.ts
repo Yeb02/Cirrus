@@ -36,6 +36,8 @@ test('les réglages corrompus sont ignorés clé par clé', () => {
   expect(p.textFade).toEqual(DEFAULT_PARAMS.textFade);
   expect(p.skyColor).toEqual(DEFAULT_PARAMS.skyColor);
   expect(p.trunkLength).toBe(DEFAULT_PARAMS.trunkLength);
+  // A setting removed since it was written (envelopeResolution, plan 3c task 7) is ignored like an unknown one.
+  expect(withOverrides({ envelopeResolution: 0.5 })).toEqual(DEFAULT_PARAMS);
   expect(withOverrides(null)).toEqual(DEFAULT_PARAMS);
   expect(withOverrides('pas un objet')).toEqual(DEFAULT_PARAMS);
 });

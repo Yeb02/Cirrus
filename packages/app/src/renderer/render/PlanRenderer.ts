@@ -1,15 +1,15 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import {
-  buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, emptySelection, FloatList, foldSignature, foldT, type FrameGeometry,
-  gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type Rgb, type SceneChanges, type SceneIndex, smooth,
-  type Selection, starLayerAlpha, starLayers, starsInRect, stepScale, textPx, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
+  buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, emptySelection, FloatList, type FontData, foldSignature, type FrameGeometry,
+  GLYPH_FLOATS, gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type SceneChanges, type SceneIndex,
+  type Selection, starLayerAlpha, starLayers, starsInRect, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
 } from '@cirrus/view';
-import { type Application, type BitmapText, Container, RenderTexture, type Shader, Sprite } from 'pixi.js';
-import { type AttributeSpec, MeshSlot } from './meshes.ts';
-import { boxShader, envelopeShader, glyphShader, markerShader, NO_GROUP, outlineShader, ribbonShader, setZoom, skyShader, starShader } from './shaders.ts';
+import type { Gl } from '../gl/context.ts';
+import { Texture2D } from '../gl/texture.ts';
+import { type AttributeSpec, InstanceMesh, Mesh } from './meshes.ts';
+import { createPrograms, NO_GROUP, type Programs, setOutlineColor, setParamUniforms, setView } from './shaders.ts';
 import { type PackedFrame, packFrame } from './frameData.ts';
 import type { FrameRequest } from './frameWorker.ts';
-import { TextPool, type TextSpec } from './texts.ts';
 
 interface Rect { minX: number; maxX: number; minY: number; maxY: number }
 
@@ -18,7 +18,7 @@ const RIBBON: AttributeSpec[] = [
   { name: 'aScale', size: 1 }, { name: 'aSide', size: 1 }, { name: 'aDist', size: 1 }, { name: 'aEnd0', size: 3 }, { name: 'aEnd1', size: 3 },
   { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 },
 ];
-const GLYPH: AttributeSpec[] = [
+const ARROW: AttributeSpec[] = [
   { name: 'aPosition', size: 2 }, { name: 'aPosition2', size: 2 }, { name: 'aOffset', size: 2 }, { name: 'aOffset2', size: 2 },
   { name: 'aScale', size: 1 }, { name: 'aFill', size: 1 }, { name: 'aEnd0', size: 3 }, { name: 'aEnd1', size: 3 }, { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 },
 ];
@@ -33,21 +33,24 @@ const MARKER: AttributeSpec[] = [{ name: 'aCenter', size: 2 }, { name: 'aCorner'
 const OUTLINE: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aOuter', size: 1 }];
 const STAR: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aCorner', size: 2 }];
 const SKY: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aWorld', size: 2 }, { name: 'aV', size: 1 }];
+/** A glyph instance (GLYPH_FLOATS, view/text.ts). */
+const TEXT: AttributeSpec[] = [{ name: 'aAnchor', size: 2 }, { name: 'aGlyph', size: 4 }, { name: 'aAtlas', size: 2 }, { name: 'aTitle', size: 4 }, { name: 'aFold', size: 2 }];
 const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
-const QUAD_INDEX = [0, 1, 2, 0, 2, 3];
-const hex = (c: Rgb) => (Math.round(c[0] * 255) << 16) | (Math.round(c[1] * 255) << 8) | Math.round(c[2] * 255);
+const QUAD_INDEX = new Uint32Array([0, 1, 2, 0, 2, 3]);
 
-interface Shaders { ribbon: Shader; glyph: Shader; envelope: Shader; box: Shader; marker: Shader; outline: Shader; drop: Shader; intruder: Shader; stars: Shader[]; sky: Shader }
-interface Slots { ribbon: MeshSlot; glyph: MeshSlot; envelope: MeshSlot; box: MeshSlot; marker: MeshSlot; outline: MeshSlot; drop: MeshSlot; intruder: MeshSlot; stars: MeshSlot[]; sky: MeshSlot }
-interface LiveText { t: BitmapText; alpha: (zoom: number) => number }
+interface Meshes {
+  ribbon: Mesh; arrow: Mesh; envelope: Mesh; box: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; stars: Mesh[]; sky: Mesh; text: InstanceMesh;
+}
 
 /**
- * Draws a plan scene (spec 8). Rebuilds the visible geometry when the view leaves the prepared rectangle, a group level
- * changes state or the zoom outgrows the curve sampling; between rebuilds only uniforms change. The visible set is
- * decided here; the meshes are built in a worker while the previous frame stays on screen (the first frame of a plan
- * is built at once), or here for a scene the worker does not hold (one updated by an action, or kept with its index
- * from an earlier tab: plan 3c task 6; task 8 removes the worker). Envelopes are drawn in the main pass, or into a
- * reduced texture if envelopeResolution < 1.
+ * Draws a plan scene (spec 8) with our own WebGL 2 engine (plan 3c task 7, gl/). Rebuilds the visible geometry when the
+ * view leaves the prepared rectangle, a group level changes state or the zoom outgrows the curve sampling; between
+ * rebuilds only uniforms change. The visible set is decided here; the meshes are built in a worker while the previous
+ * frame stays on screen (the first frame of a plan is built at once), or here for a scene the worker does not hold
+ * (one updated by an action, or kept with its index from an earlier tab: plan 3c task 6; task 8 removes the worker).
+ * Titles are glyphs of the MSDF atlas, one instance each, faded in the shader. Draw order: sky, stars, envelopes,
+ * ribbons, arrows, boxes, rings, markers, titles. A lost context draws nothing; once restored, everything is made and
+ * built again.
  */
 export class PlanRenderer {
   /** Called when a frame built in the worker has arrived: the view must be drawn again. */
@@ -59,18 +62,15 @@ export class PlanRenderer {
   private hasFrame = false;
   private originMoved = false;
   private p: RenderParams;
-  private shaders!: Shaders;
-  private slots!: Slots;
-  private readonly bgWorld = new Container();
-  private readonly envWorld = new Container();
-  private readonly world = new Container();
-  private readonly meshLayer = new Container();
-  private readonly textLayer = new Container();
-  private readonly skyLayer = new Container();
-  private envTexture: RenderTexture | null = null;
-  private readonly envSprite = new Sprite();
-  private readonly texts: TextPool;
-  private live: LiveText[] = [];
+  private readonly g: Gl;
+  private readonly font: FontData;
+  /** The atlas as decoded, kept to make its texture again after a context loss. */
+  private readonly atlasImage: ImageBitmap;
+  private atlas!: Texture2D;
+  private programs!: Programs;
+  private meshes!: Meshes;
+  private starsShown = false;
+  private starAlpha = [0, 0, 0];
   /** What is drawn: the state's scene, or a preview over it. */
   private scene: PlanScene | null = null;
   private index: SceneIndex | null = null;
@@ -98,18 +98,21 @@ export class PlanRenderer {
   private intruderItems: number[] = [];
   private markers: PackedFrame['markers'] = [];
   private allCores = false;
-  private textZoom = -1;
   private stale = true;
 
-  private readonly app: Application;
-
-  constructor(app: Application, p: RenderParams) {
-    this.app = app;
+  /** `font`: the titles' (parsed before the first scene: the boxes are measured with it); `atlas`: its MSDF image. */
+  constructor(g: Gl, p: RenderParams, font: FontData, atlas: ImageBitmap) {
+    this.g = g;
     this.p = p;
-    this.texts = new TextPool(this.textLayer);
+    this.font = font;
+    this.atlasImage = atlas;
     this.createGpu();
-    app.stage.addChild(this.skyLayer, this.bgWorld, this.envSprite, this.world);
-    this.world.addChild(this.meshLayer, this.textLayer);
+    // The context is back: programs, buffers and textures are new and empty; everything is built again at once.
+    g.onRestored = () => {
+      this.createGpu();
+      this.forgetFrame();
+      this.onUpdate();
+    };
     try {
       this.worker = new Worker(new URL('./frameWorker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = (e: MessageEvent<{ seq: number; visible: VisibleSet; frame: PackedFrame }>) => this.receive(e.data.seq, e.data.visible, e.data.frame);
@@ -121,50 +124,46 @@ export class PlanRenderer {
         this.stale = true;
         this.onUpdate();
       };
+      this.worker.postMessage({ t: 'font', font } satisfies FrameRequest);
     } catch (e) {
       console.warn(`Travailleur de rendu indisponible (${String(e)}) : construction sur le fil principal.`);
     }
   }
 
   private createGpu(): void {
-    const p = this.p;
-    this.shaders = {
-      ribbon: ribbonShader(p), glyph: glyphShader(p), envelope: envelopeShader(p), box: boxShader(p), marker: markerShader(p), outline: outlineShader(p),
-      drop: outlineShader(p, p.dropColor), intruder: outlineShader(p, p.intruderColor),
-      stars: [starShader(p), starShader(p), starShader(p)], sky: skyShader(p),
+    const gl = this.g.gl;
+    const pr = (this.programs = createPrograms(gl));
+    setParamUniforms(pr, this.p, this.font);
+    this.meshes = {
+      ribbon: new Mesh(gl, pr.ribbon, RIBBON, 4096), arrow: new Mesh(gl, pr.arrow, ARROW, 2048), envelope: new Mesh(gl, pr.envelope, ENVELOPE, 1024),
+      box: new Mesh(gl, pr.box, BOX, 1024), marker: new Mesh(gl, pr.marker, MARKER, 256), outline: new Mesh(gl, pr.outline, OUTLINE, 64),
+      drop: new Mesh(gl, pr.outline, OUTLINE, 64), intruder: new Mesh(gl, pr.outline, OUTLINE, 64),
+      stars: [0, 1, 2].map(() => new Mesh(gl, pr.star, STAR, 4096)), sky: new Mesh(gl, pr.sky, SKY, 4), text: new InstanceMesh(gl, pr.text, TEXT, 4096),
     };
-    const s = this.shaders;
-    this.slots = {
-      ribbon: new MeshSlot(RIBBON, s.ribbon, 4096), glyph: new MeshSlot(GLYPH, s.glyph, 2048), envelope: new MeshSlot(ENVELOPE, s.envelope, 1024),
-      box: new MeshSlot(BOX, s.box, 1024), marker: new MeshSlot(MARKER, s.marker, 256), outline: new MeshSlot(OUTLINE, s.outline, 64),
-      drop: new MeshSlot(OUTLINE, s.drop, 64), intruder: new MeshSlot(OUTLINE, s.intruder, 64),
-      stars: s.stars.map((sh) => new MeshSlot(STAR, sh, 4096)), sky: new MeshSlot(SKY, s.sky, 4),
-    };
-    // envelopeResolution 1: envelopes drawn in the main pass (no extra render target); below 1, into a reduced texture.
-    if (p.envelopeResolution >= 1) this.meshLayer.addChild(this.slots.envelope.mesh);
-    else this.envWorld.addChild(this.slots.envelope.mesh);
-    this.meshLayer.addChild(this.slots.ribbon.mesh, this.slots.glyph.mesh, this.slots.box.mesh, this.slots.intruder.mesh, this.slots.drop.mesh, this.slots.outline.mesh, this.slots.marker.mesh);
-    for (const st of this.slots.stars) this.bgWorld.addChild(st.mesh);
-    this.skyLayer.addChild(this.slots.sky.mesh);
-    this.slots.sky.update({ aPosition: new Float32Array(8), aWorld: new Float32Array(8), aV: new Float32Array([0, 0, 1, 1]) }, new Uint32Array(QUAD_INDEX));
+    this.atlas = new Texture2D(gl, 'linear');
+    this.atlas.setImage(this.atlasImage);
   }
 
   private destroyGpu(): void {
-    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.outline, this.slots.drop, this.slots.intruder, this.slots.sky, ...this.slots.stars]) slot.dispose();
-    for (const sh of [this.shaders.ribbon, this.shaders.glyph, this.shaders.envelope, this.shaders.box, this.shaders.marker, this.shaders.outline, this.shaders.drop, this.shaders.intruder, this.shaders.sky, ...this.shaders.stars]) sh.destroy();
+    const m = this.meshes;
+    for (const mesh of [m.ribbon, m.arrow, m.envelope, m.box, m.marker, m.outline, m.drop, m.intruder, m.sky, m.text, ...m.stars]) mesh.dispose();
+    for (const pr of Object.values(this.programs)) pr.dispose();
+    this.atlas.dispose();
   }
 
-  setParams(p: RenderParams): void {
-    this.p = p;
-    this.destroyGpu();
-    this.createGpu();
-    this.envTexture?.destroy(true);
-    this.envTexture = null;
+  /** Nothing drawn is kept: the next frame is built at once, the stars too. */
+  private forgetFrame(): void {
     this.starKey = '';
     this.stale = true;
-    // The new meshes are empty: build the next frame at once rather than show nothing while the worker works.
     this.hasFrame = false;
     this.pending = null;
+  }
+
+  /** The settings are uniforms (set again here) and the frame's geometry: built again at once, not left to the worker. */
+  setParams(p: RenderParams): void {
+    this.p = p;
+    setParamUniforms(this.programs, p, this.font);
+    this.forgetFrame();
   }
 
   /**
@@ -241,14 +240,12 @@ export class PlanRenderer {
   /** Visible connection index under the pointer, or null. */
   setHover(conn: number | null): void {
     this.hot = conn ?? -1;
-    this.textZoom = -1;
   }
 
   /** Selected items get an outline; a selected connection is lit like a hovered one (spec 8.5, 9.2). */
   setSelection(sel: Selection): void {
     this.selection = sel;
     this.updateOutline();
-    this.textZoom = -1;
   }
 
   /** The visible connection lit: the hovered one, else the first selected one shown. */
@@ -262,7 +259,7 @@ export class PlanRenderer {
   setDropTarget(item: number | null): void {
     if (item === this.dropTarget) return;
     this.dropTarget = item;
-    this.slots.drop.update(...this.outlineArrays(item === null ? [] : [item]));
+    this.meshes.drop.update(...this.outlineArrays(item === null ? [] : [item]));
   }
 
   /** While a connection is drawn, 1-to-1 connections show their centre too: a target (spec 11.1). */
@@ -283,9 +280,9 @@ export class PlanRenderer {
   private updateOutline(): void {
     const scene = this.scene;
     const items = scene ? [...this.selection.items].flatMap((id) => { const i = scene.byId.get(id); return i === undefined ? [] : [i]; }) : [];
-    this.slots.outline.update(...this.outlineArrays(items));
-    this.slots.drop.update(...this.outlineArrays(this.dropTarget === null ? [] : [this.dropTarget]));
-    this.slots.intruder.update(...this.outlineArrays(this.intruderItems));
+    this.meshes.outline.update(...this.outlineArrays(items));
+    this.meshes.drop.update(...this.outlineArrays(this.dropTarget === null ? [] : [this.dropTarget]));
+    this.meshes.intruder.update(...this.outlineArrays(this.intruderItems));
   }
 
   /** Rings around items (boxes, discs or padded envelopes), relative to the current origin. */
@@ -336,17 +333,18 @@ export class PlanRenderer {
     const t0 = performance.now();
     const cam = this.cam;
     this.cam = { x: 0, y: 0, zoom: 1, widthPx: 64, heightPx: 64 };
-    const one = (specs: AttributeSpec[]) => Object.fromEntries(specs.map((s) => [s.name, new Float32Array(3 * s.size)]));
-    for (const [slot, specs] of [[this.slots.ribbon, RIBBON], [this.slots.glyph, GLYPH], [this.slots.envelope, ENVELOPE], [this.slots.box, BOX], [this.slots.marker, MARKER], [this.slots.outline, OUTLINE], [this.slots.stars[0], STAR]] as const) {
-      slot.update(one(specs), new Uint32Array([0, 1, 2]));
-    }
-    const t = this.texts.acquire({ text: 'Nœud θ∑ ≤', size: 16, wrap: 0, lineHeight: 20, x: 0, y: 0, color: 0xffffff });
-    this.renderEnvelopes();
-    this.app.renderer.render(this.app.stage);
-    this.texts.release(t);
-    for (const slot of [this.slots.ribbon, this.slots.glyph, this.slots.envelope, this.slots.box, this.slots.marker, this.slots.outline, this.slots.stars[0]]) {
-      slot.update(Object.fromEntries([...RIBBON, ...GLYPH, ...ENVELOPE, ...BOX, ...MARKER, ...OUTLINE, ...STAR].map((s) => [s.name, new Float32Array(0)])), new Uint32Array(0));
-    }
+    const m = this.meshes;
+    const meshes = [[m.ribbon, RIBBON], [m.arrow, ARROW], [m.envelope, ENVELOPE], [m.box, BOX], [m.marker, MARKER], [m.outline, OUTLINE], [m.stars[0], STAR], [m.sky, SKY]] as const;
+    const fill = (specs: AttributeSpec[], n: number) => Object.fromEntries(specs.map((s) => [s.name, new Float32Array(n * s.size)]));
+    for (const [mesh, specs] of meshes) mesh.update(fill(specs, 3), new Uint32Array([0, 1, 2]));
+    // One glyph, readable, so that the title program draws.
+    const glyph = new Float32Array(GLYPH_FLOATS);
+    glyph.set([0, 0, 0, 0, 8, 8, 0, 0, this.p.baseFontPx, 0, -2, 1, NO_GROUP, NO_GROUP]);
+    m.text.update(glyph);
+    this.starsShown = true;
+    this.draw();
+    for (const [mesh, specs] of meshes) mesh.update(fill(specs, 0), new Uint32Array(0));
+    m.text.update(new Float32Array(0));
     this.cam = cam;
     this.stale = true;
     return performance.now() - t0;
@@ -373,9 +371,9 @@ export class PlanRenderer {
     return v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY ? 'rect' : null;
   }
 
-  /** Draws one frame if anything changed; returns whether the visible geometry was rebuilt. */
+  /** Draws one frame (nothing while the context is lost); returns whether the visible geometry was rebuilt. */
   renderFrame(): boolean {
-    const { cam, p } = this;
+    if (this.g.lost) return false;
     let rebuilt = false;
     // One request at a time: while the worker builds, the camera may move on; the next request leaves when this one
     // is back, from wherever the camera is then (no queue of frames built for places already left).
@@ -393,63 +391,63 @@ export class PlanRenderer {
       this.originMoved = false;
     }
     this.updateBackground(rebuilt);
-    for (const c of [this.world, this.bgWorld, this.envWorld]) {
-      c.scale.set(cam.zoom);
-      c.position.set((this.origin.x - cam.x) * cam.zoom + cam.widthPx / 2, (this.origin.y - cam.y) * cam.zoom + cam.heightPx / 2);
-    }
-    const s = this.shaders;
-    setZoom([s.ribbon, s.glyph, s.envelope, s.box, s.marker, s.outline, s.drop, s.intruder, ...s.stars], cam.zoom);
-    const hw = cam.widthPx / 2 / cam.zoom, hh = cam.heightPx / 2 / cam.zoom;
-    const lx = cam.x - this.origin.x, ly = cam.y - this.origin.y;
-    for (const sh of [s.ribbon, s.glyph]) {
-      const u = sh.resources.conn.uniforms;
-      u.uScreen = [lx - hw, ly - hh, lx + hw, ly + hh];
-      u.uFadeWorld = p.connectionFadePx / cam.zoom;
-      u.uHot = this.lit();
-    }
-    s.marker.resources.marker.uniforms.uHot = this.lit();
-    if (cam.zoom !== this.textZoom || rebuilt) {
-      for (const l of this.live) {
-        const a = l.alpha(cam.zoom);
-        l.t.alpha = a;
-        l.t.visible = a > 0.01;
-      }
-      this.textZoom = cam.zoom;
-    }
-    // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text,outline;
-    // "all" for the floor pass, an empty frame).
-    const off = (layer: string) => this.hidden.has('all') || this.hidden.has(layer);
-    this.skyLayer.visible = !off('sky');
-    if (off('stars')) this.bgWorld.visible = false;
-    const direct = this.p.envelopeResolution >= 1;
-    this.envSprite.visible = !direct && !off('env');
-    if (direct) this.slots.envelope.mesh.visible &&= !off('env');
-    this.slots.ribbon.mesh.visible &&= !off('ribbon');
-    this.slots.glyph.mesh.visible &&= !off('glyph');
-    this.slots.box.mesh.visible &&= !off('box');
-    this.slots.marker.mesh.visible &&= !off('marker');
-    for (const ring of [this.slots.outline, this.slots.drop, this.slots.intruder]) ring.mesh.visible &&= !off('outline');
-    this.textLayer.visible = !off('text');
-    if (this.envSprite.visible) this.renderEnvelopes();
-    this.app.renderer.render(this.app.stage);
+    this.draw();
     return rebuilt;
   }
 
-  private renderEnvelopes(): void {
-    const { cam, p } = this;
-    const res = (window.devicePixelRatio || 1) * p.envelopeResolution;
-    const w = Math.max(1, Math.ceil(cam.widthPx)), h = Math.max(1, Math.ceil(cam.heightPx));
-    if (!this.envTexture || this.envTexture.width !== w || this.envTexture.height !== h || this.envTexture.source.resolution !== res) {
-      this.envTexture?.destroy(true);
-      this.envTexture = RenderTexture.create({ width: w, height: h, resolution: res });
-      this.envSprite.texture = this.envTexture;
+  /** The camera's uniforms, then every layer in order, cleared to the sky first (one draw call per mesh). */
+  private draw(): void {
+    const { cam, p, g } = this, gl = g.gl, pr = this.programs, m = this.meshes;
+    const hw = cam.widthPx / 2 / cam.zoom, hh = cam.heightPx / 2 / cam.zoom;
+    const lx = cam.x - this.origin.x, ly = cam.y - this.origin.y;
+    setView([pr.ribbon, pr.arrow, pr.envelope, pr.box, pr.marker, pr.outline, pr.star, pr.text], cam.zoom, lx, ly, cam.widthPx, cam.heightPx);
+    const lit = this.lit();
+    for (const x of [pr.ribbon, pr.arrow]) {
+      x.set('uScreen', [lx - hw, ly - hh, lx + hw, ly + hh]);
+      x.set('uFadeWorld', p.connectionFadePx / cam.zoom);
+      x.set('uHot', lit);
     }
-    this.envSprite.width = w;
-    this.envSprite.height = h;
-    this.app.renderer.render({ container: this.envWorld, target: this.envTexture, clear: true, clearColor: [0, 0, 0, 0] });
+    pr.marker.set('uHot', lit);
+    // A title is lit by the hover only, as BitmapText's alpha was (a selected connection lights its line, not its title).
+    pr.text.set('uHot', this.hot);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, g.canvas.width, g.canvas.height);
+    gl.clearColor(p.skyColor[0], p.skyColor[1], p.skyColor[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text,outline;
+    // "all" for the floor pass, an empty frame).
+    const off = (layer: string) => this.hidden.has('all') || this.hidden.has(layer);
+    if (!off('sky')) m.sky.draw();
+    if (this.starsShown && !off('stars')) {
+      m.stars.forEach((mesh, i) => {
+        if (mesh.empty) return;
+        pr.star.set('uLayerAlpha', this.starAlpha[i]);
+        mesh.draw();
+      });
+    }
+    if (!off('env')) m.envelope.draw();
+    if (!off('ribbon')) m.ribbon.draw();
+    if (!off('glyph')) m.arrow.draw();
+    if (!off('box')) m.box.draw();
+    if (!off('outline')) {
+      for (const [ring, c] of [[m.intruder, p.intruderColor], [m.drop, p.dropColor], [m.outline, p.selectionColor]] as const) {
+        if (ring.empty) continue;
+        setOutlineColor(pr, c);
+        ring.draw();
+      }
+    }
+    if (!off('marker')) m.marker.draw();
+    if (!off('text') && m.text.length > 0) {
+      this.atlas.bind(0);
+      m.text.draw();
+    }
   }
 
-  /** Decides what is visible now and marks it prepared, so the request is not repeated while the worker builds it. */
+  /** Glyph instances drawn (bench: the densest view's count). */
+  get glyphCount(): number {
+    return this.meshes.text.length;
+  }
+
   /** Marks the camera's surroundings prepared, so the rebuild is not asked for again while it is being built. */
   private prepare(): Vec2 {
     const cam = this.cam;
@@ -465,7 +463,7 @@ export class PlanRenderer {
     const visible = computeVisible(this.scene!, this.index!, this.cam, this.p);
     this.pending = null;
     this.seq++;
-    this.frame = buildFrame(this.scene!, visible, this.cam, origin, this.p, this.titleSides, this.frame ?? undefined);
+    this.frame = buildFrame(this.scene!, visible, this.cam, origin, this.p, this.titleSides, this.frame ?? undefined, this.font);
     this.apply(packFrame(this.frame, false), visible, origin);
   }
 
@@ -501,14 +499,13 @@ export class PlanRenderer {
       this.intruderMap = visibleIntruders(this.scene, visible);
       this.intruderItems = [...this.intruderMap.keys()];
     }
-    this.slots.ribbon.update(f.ribbons, f.ribbonIndex);
-    this.slots.glyph.update(f.glyphs, f.glyphIndex);
-    this.slots.envelope.update(f.envelopes, f.envelopeIndex);
+    this.meshes.ribbon.update(f.ribbons, f.ribbonIndex);
+    this.meshes.arrow.update(f.glyphs, f.glyphIndex);
+    this.meshes.envelope.update(f.envelopes, f.envelopeIndex);
     this.updateBoxes(visible);
     this.updateMarkers(f);
     this.updateOutline();
-    this.updateTexts(visible, f);
-    this.textZoom = -1;
+    this.meshes.text.update(f.glyphInstances);
   }
 
   private updateBoxes(visible: VisibleSet): void {
@@ -532,7 +529,7 @@ export class PlanRenderer {
       const v = j * 4;
       index.push(v, v + 1, v + 2, v, v + 2, v + 3);
     });
-    this.slots.box.update({ aCenter: center.view(), aHalf: half.view(), aCorner: corner.view(), aParentK: parentK.view(), aStyle: style.view(), aBadge: badge.view() }, index.view());
+    this.meshes.box.update({ aCenter: center.view(), aHalf: half.view(), aCorner: corner.view(), aParentK: parentK.view(), aStyle: style.view(), aBadge: badge.view() }, index.view());
   }
 
   private updateMarkers(f: Pick<PackedFrame, 'markers'>): void {
@@ -549,54 +546,7 @@ export class PlanRenderer {
       const v = j * 4;
       index.push(v, v + 1, v + 2, v, v + 2, v + 3);
     });
-    this.slots.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
-  }
-
-  private updateTexts(visible: VisibleSet, f: Pick<PackedFrame, 'titles'>): void {
-    const scene = this.scene!, p = this.p, o = this.origin;
-    for (const l of this.live) this.texts.release(l.t);
-    this.live = [];
-    const ink = hex(p.inkColor), titleInk = hex(p.titleColor);
-    const add = (spec: TextSpec, alpha: (zoom: number) => number) => this.live.push({ t: this.texts.acquire(spec), alpha });
-    const parentFold = (i: number) => {
-      const parent = scene.items[i].parent;
-      return (zoom: number) => (parent >= 0 ? 1 - foldT(scene.items[parent].maxChildK!, zoom, p) : 1);
-    };
-    // A text still unreadable at the deepest zoom this geometry serves is not created (most of them, zoomed out).
-    const maxZoom = this.builtZoom * p.curveZoomHeadroom;
-    const readable = (k: number, scale: number) => textPx(k, maxZoom, p) * scale >= p.textFade[0];
-    for (const i of visible.items) {
-      const it = scene.items[i];
-      if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) continue;
-      const s = stepScale(it.k, p), size = p.baseFontPx * s;
-      const inParent = parentFold(i);
-      const dim = it.kind === 'phantom' ? p.phantomTitleDim : 1;
-      add({ text: it.title, size, wrap: (p.boxWidth - 2 * p.boxPadX) * s, lineHeight: size * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
-        (zoom) => dim * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p)) * inParent(zoom));
-    }
-    for (const g of visible.groups) {
-      const it = scene.items[g];
-      if (!readable(it.k, Math.max(p.groupTitleOpenScale, p.groupTitleClosedScale))) continue;
-      const s = stepScale(it.k, p);
-      const top = Math.min(...offsetPolygon(it.hull!, it.pad!).map((q) => q.y));
-      const inParent = parentFold(g);
-      const openSize = p.baseFontPx * s * p.groupTitleOpenScale, closedSize = p.baseFontPx * s * p.groupTitleClosedScale;
-      const [s0, s1] = p.groupTitleSwap;
-      add({ text: it.title, size: openSize, wrap: 0, lineHeight: openSize * p.lineHeight, x: it.x - o.x, y: top - o.y - openSize * p.groupTitleOffset, color: ink },
-        (zoom) => (1 - smooth(s0, s1, foldT(it.maxChildK!, zoom, p))) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleOpenScale) * inParent(zoom));
-      add({ text: it.title, size: closedSize, wrap: p.boxWidth * s, lineHeight: closedSize * p.lineHeight, x: it.x - o.x, y: it.y - o.y, color: ink },
-        (zoom) => smooth(s0, s1, foldT(it.maxChildK!, zoom, p)) * smooth(p.textFade[0], p.textFade[1], textPx(it.k, zoom, p) * p.groupTitleClosedScale) * inParent(zoom));
-    }
-    for (const t of f.titles) {
-      const size = p.titleFontPx * stepScale(t.kMax, p);
-      const vc = visible.connections[t.conn];
-      add({ text: t.text, size, wrap: 0, lineHeight: size * p.lineHeight, x: t.box.x + t.box.w / 2, y: t.box.y + t.box.h / 2, color: titleInk },
-        (zoom) => {
-          if (t.conn === this.hot) return 1;
-          const readable = smooth(p.titleFade[0], p.titleFade[1], size * zoom);
-          return vc.fade === 'out' ? readable * (1 - foldT(vc.foldK, zoom, p)) : readable;
-        });
-    }
+    this.meshes.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
   }
 
   private updateBackground(rebuilt: boolean): void {
@@ -606,25 +556,26 @@ export class PlanRenderer {
     const w = cam.widthPx, h = cam.heightPx;
     const tl = { x: cam.x - w / 2 / cam.zoom - this.origin.x, y: cam.y - h / 2 / cam.zoom - this.origin.y };
     const br = { x: tl.x + w / cam.zoom, y: tl.y + h / cam.zoom };
-    this.slots.sky.update({
+    this.meshes.sky.update({
       aPosition: new Float32Array([0, 0, w, 0, w, h, 0, h]),
       aWorld: new Float32Array([tl.x, tl.y, br.x, tl.y, br.x, br.y, tl.x, br.y]),
       aV: new Float32Array([0, 0, 1, 1]),
-    }, new Uint32Array(QUAD_INDEX));
-    const su = this.shaders.sky.resources.sky.uniforms;
-    su.uZoom = cam.zoom;
+    }, QUAD_INDEX);
+    const sky = this.programs.sky;
+    sky.set('uZoom', cam.zoom);
+    sky.set('uSize', [w, h]);
     const levels = stars ? [] : gridLevels(cam.zoom, p).slice(-3);
     const spacing = [0, 0, 0], alpha = [0, 0, 0];
     levels.forEach((l, i) => {
       spacing[i] = l.spacingWorld;
       alpha[i] = l.alpha * p.backgroundOpacity;
       const mod = (v: number) => ((v % l.spacingWorld) + l.spacingWorld) % l.spacingWorld;
-      su[`uOffset${i}`] = [mod(this.origin.x), mod(this.origin.y)];
+      sky.set(`uOffset${i}`, [mod(this.origin.x), mod(this.origin.y)]);
     });
-    su.uSpacing = spacing;
-    su.uGridAlpha = alpha;
+    sky.set('uSpacing', spacing);
+    sky.set('uGridAlpha', alpha);
 
-    this.bgWorld.visible = stars;
+    this.starsShown = stars;
     if (!stars) return;
     const ks = starLayers(cam.zoom, p);
     const key = ks.join(',');
@@ -634,9 +585,9 @@ export class PlanRenderer {
       this.starKey = key;
       this.starKs = ks;
       this.starRect = this.viewRect(Math.max(cam.widthPx, cam.heightPx) / 2);
-      this.slots.stars.forEach((slot, i) => {
+      this.meshes.stars.forEach((mesh, i) => {
         const k = ks[i];
-        if (k === undefined) { slot.update({ aPosition: new Float32Array(0), aCorner: new Float32Array(0) }, new Uint32Array(0)); return; }
+        if (k === undefined) { mesh.update({ aPosition: new Float32Array(0), aCorner: new Float32Array(0) }, new Uint32Array(0)); return; }
         const rr = this.starRect!;
         const list = starsInRect({ x: rr.minX, y: rr.minY, w: rr.maxX - rr.minX, h: rr.maxY - rr.minY }, k, p.starSeed, p);
         const pos = new Float32Array(list.length * 8), corner = new Float32Array(list.length * 8), index = new Uint32Array(list.length * 6);
@@ -647,20 +598,18 @@ export class PlanRenderer {
           const o = j * 4;
           index.set([o, o + 1, o + 2, o, o + 2, o + 3], j * 6);
         });
-        slot.update({ aPosition: pos, aCorner: corner }, index);
+        mesh.update({ aPosition: pos, aCorner: corner }, index);
       });
     }
-    this.slots.stars.forEach((_slot, i) => {
+    this.starAlpha = [0, 1, 2].map((i) => {
       const k = this.starKs[i];
-      this.shaders.stars[i].resources.star.uniforms.uLayerAlpha = k === undefined ? 0 : starLayerAlpha(k, cam.zoom, p) * p.backgroundOpacity;
+      return k === undefined ? 0 : starLayerAlpha(k, cam.zoom, p) * p.backgroundOpacity;
     });
   }
 
   destroy(): void {
     this.worker?.terminate();
-    for (const l of this.live) this.texts.release(l.t);
-    this.texts.destroy();
+    this.g.onRestored = () => {};
     this.destroyGpu();
-    this.envTexture?.destroy(true);
   }
 }

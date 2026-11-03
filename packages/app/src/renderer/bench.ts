@@ -1,7 +1,8 @@
 import { createPlan, type Id } from '@cirrus/core';
 import { benchPath, type Camera, cameraAt, type Input, isLive, type PlanScene, type RenderParams } from '@cirrus/view';
-import type { Application, WebGLRenderer } from 'pixi.js';
 import { type Build, connectBuild, createBuild, renameBuild } from './actions.ts';
+import type { Gl } from './gl/context.ts';
+import { GpuTimer } from './gl/timer.ts';
 import type { PlanRenderer } from './render/PlanRenderer.ts';
 import type { Result } from './session.ts';
 
@@ -63,6 +64,8 @@ export interface BenchRun {
   edits: EditMeasures | null;
   /** The memory after the load and the camera path, read before the edit pass (null without one): the heap and the processes (Mo). */
   beforeEdits: { heapMb: number; processMb: ProcessMb } | null;
+  /** The most title glyphs drawn in one frame of the path, and when (plan 3c task 7: absent from earlier runs). */
+  glyphs?: { max: number; t: number };
 }
 
 /** Private memory (Mo) of the main process (Browser), the interface (Tab) and the GPU process, from app.getAppMetrics(). */
@@ -70,7 +73,7 @@ export interface ProcessMb { browser: number; tab: number; gpu: number }
 
 /** What the bench drives in the view (GraphView): its camera, the gesture machine, the session and the drawing loop. */
 export interface BenchView {
-  app: Application;
+  gl: Gl;
   renderer: PlanRenderer;
   params(): RenderParams;
   /** The scene of the state on screen (not a preview). */
@@ -181,29 +184,21 @@ function heapAfterGc(): { heapMb: number; gc: boolean } {
 }
 
 export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
-  const { app, renderer } = v;
-  const gl = (app.renderer as WebGLRenderer).gl as WebGL2RenderingContext;
+  const { gl: g, renderer } = v, gl = g.gl;
   const info = gl.getExtension('WEBGL_debug_renderer_info');
   const gpuName = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : 'inconnue';
-  const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2') as { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null;
-  const { keys, deep } = benchPath(v.scene(), app.screen.width, app.screen.height, v.params());
+  // Without the timer extension, the GPU time is reported unavailable (timer: false, no samples).
+  const timer = GpuTimer.create<{ t: number; steady: boolean }>(g);
+  const { keys, deep } = benchPath(v.scene(), g.width, g.height, v.params());
   const end = keys[keys.length - 1].t;
   const gpu: number[] = [], gpuSteady: number[] = [], cpu: number[] = [], intervals: number[] = [];
-  const pending: { q: WebGLQuery; t: number; steady: boolean }[] = [];
-  let previousRebuilt = false, disjoint = 0;
-  let rebuilds = 0, worst = { t: 0, cpuMs: 0, rebuilt: false };
-  const collect = () => {
-    while (timer && pending.length > 0 && gl.getQueryParameter(pending[0].q, gl.QUERY_RESULT_AVAILABLE)) {
-      const { q, t, steady } = pending.shift()!;
-      if (gl.getParameter(timer.GPU_DISJOINT_EXT)) disjoint++;
-      else if (t >= 1) {
-        const ms = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
-        gpu.push(ms);
-        if (steady) gpuSteady.push(ms);
-      }
-      gl.deleteQuery(q);
-    }
-  };
+  let previousRebuilt = false;
+  let rebuilds = 0, worst = { t: 0, cpuMs: 0, rebuilt: false }, glyphs = { max: 0, t: 0 };
+  const collect = () => timer?.poll((ms, { t, steady }) => {
+    if (t < 1) return;
+    gpu.push(ms);
+    if (steady) gpuSteady.push(ms);
+  });
   await new Promise<void>((done) => {
     let start = -1, last = -1;
     const frame = (now: number) => {
@@ -211,33 +206,34 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
       const t = (now - start) / 1000;
       if (last >= 0 && (last - start) / 1000 >= 1) intervals.push(now - last);
       last = now;
-      renderer.setCamera({ ...cameraAt(keys, t), widthPx: app.screen.width, heightPx: app.screen.height });
-      const q = timer ? gl.createQuery() : null;
-      if (timer && q) gl.beginQuery(timer.TIME_ELAPSED_EXT, q);
+      renderer.setCamera({ ...cameraAt(keys, t), widthPx: g.width, heightPx: g.height });
+      timer?.begin();
       const t0 = performance.now();
       const rebuilt = renderer.renderFrame();
       const ms = performance.now() - t0;
-      if (timer && q) { gl.endQuery(timer.TIME_ELAPSED_EXT); pending.push({ q, t, steady: !rebuilt && !previousRebuilt }); }
+      timer?.end({ t, steady: !rebuilt && !previousRebuilt });
       previousRebuilt = rebuilt;
       collect();
       if (t >= 1) {
         cpu.push(ms);
         if (ms > worst.cpuMs) worst = { t, cpuMs: ms, rebuilt };
       }
+      if (renderer.glyphCount > glyphs.max) glyphs = { max: renderer.glyphCount, t };
       if (rebuilt) rebuilds++;
       if (t < end) requestAnimationFrame(frame); else done();
     };
     requestAnimationFrame(frame);
   });
-  for (let i = 0; i < 30 && pending.length > 0; i++) { await new Promise((r) => requestAnimationFrame(r)); collect(); }
+  for (let i = 0; i < 30 && timer && timer.waiting > 0; i++) { await new Promise((r) => requestAnimationFrame(r)); collect(); }
   const reasons = { ...renderer.reasons };
 
   // The memory is read before the edit pass too: what the load keeps, apart from what the edits add.
-  const editFrom = label === 'vsync' && deep ? { ...deep, widthPx: app.screen.width, heightPx: app.screen.height } : null;
+  const editFrom = label === 'vsync' && deep ? { ...deep, widthPx: g.width, heightPx: g.height } : null;
   const beforeEdits = editFrom ? { heapMb: heapAfterGc().heapMb, processMb: await window.cirrus.benchMemory() } : null;
   const edits = editFrom ? await editPass(v, editFrom) : null;
   return {
-    label, gpuName, timer: timer !== null, disjoint, canvasPx: [app.canvas.width, app.canvas.height], gpuMs: summarize(gpu), gpuSteadyMs: summarize(gpuSteady),
-    cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, worstFrame: worst, reasons, marks: { ...marks }, ...heapAfterGc(), edits, beforeEdits,
+    label, gpuName, timer: timer !== null, disjoint: timer?.disjoint ?? 0, canvasPx: [g.canvas.width, g.canvas.height], gpuMs: summarize(gpu),
+    gpuSteadyMs: summarize(gpuSteady), cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, worstFrame: worst, reasons, marks: { ...marks },
+    ...heapAfterGc(), edits, beforeEdits, glyphs,
   };
 }

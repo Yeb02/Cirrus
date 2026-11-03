@@ -39,6 +39,19 @@ export class FloatList {
     this.data[this.n++] = c;
   }
 
+  /** Lengthens the list by `count` floats and returns where they start, to be written in `storage` (hot loops). */
+  extend(count: number): number {
+    this.reserve(count);
+    const at = this.n;
+    this.n += count;
+    return at;
+  }
+
+  /** The whole storage, valid until the list grows again. */
+  get storage(): Float32Array {
+    return this.data;
+  }
+
   get length(): number {
     return this.n;
   }
