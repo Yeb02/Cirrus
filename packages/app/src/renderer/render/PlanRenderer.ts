@@ -1,8 +1,8 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import {
-  buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, emptySelection, FloatList, type FontData, foldSignature, type FrameGeometry,
-  GLYPH_FLOATS, gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type SceneChanges, type SceneIndex,
-  type Selection, starLayerAlpha, starLayers, starsInRect, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
+  appendTitle, buildFrame, buildHitIndex, buildIndex, type Camera, computeVisible, emptySelection, FloatList, type FontData, foldSignature, type FrameGeometry,
+  GLYPH_FIELDS, gridLevels, type HitIndex, IndexList, offsetPolygon, type PlanScene, type RenderParams, type SceneChanges, type SceneIndex,
+  type Selection, starLayerAlpha, starLayers, starsInRect, TITLE_NODE, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
 } from '@cirrus/view';
 import type { Gl } from '../gl/context.ts';
 import { Texture2D } from '../gl/texture.ts';
@@ -33,8 +33,8 @@ const MARKER: AttributeSpec[] = [{ name: 'aCenter', size: 2 }, { name: 'aCorner'
 const OUTLINE: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aOuter', size: 1 }];
 const STAR: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aCorner', size: 2 }];
 const SKY: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aWorld', size: 2 }, { name: 'aV', size: 1 }];
-/** A glyph instance (GLYPH_FLOATS, view/text.ts). */
-const TEXT: AttributeSpec[] = [{ name: 'aAnchor', size: 2 }, { name: 'aGlyph', size: 4 }, { name: 'aAtlas', size: 2 }, { name: 'aTitle', size: 4 }, { name: 'aFold', size: 2 }];
+/** A glyph instance's attributes: its fields as the view defines them (GLYPH_FIELDS), each `a` + its name in the shader. */
+const TEXT: AttributeSpec[] = GLYPH_FIELDS.map(([field, size]) => ({ name: `a${field[0].toUpperCase()}${field.slice(1)}`, size }));
 const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
 const QUAD_INDEX = new Uint32Array([0, 1, 2, 0, 2, 3]);
 
@@ -337,10 +337,11 @@ export class PlanRenderer {
     const meshes = [[m.ribbon, RIBBON], [m.arrow, ARROW], [m.envelope, ENVELOPE], [m.box, BOX], [m.marker, MARKER], [m.outline, OUTLINE], [m.stars[0], STAR], [m.sky, SKY]] as const;
     const fill = (specs: AttributeSpec[], n: number) => Object.fromEntries(specs.map((s) => [s.name, new Float32Array(n * s.size)]));
     for (const [mesh, specs] of meshes) mesh.update(fill(specs, 3), new Uint32Array([0, 1, 2]));
-    // One glyph, readable, so that the title program draws.
-    const glyph = new Float32Array(GLYPH_FLOATS);
-    glyph.set([0, 0, 0, 0, 8, 8, 0, 0, this.p.baseFontPx, 0, -2, 1, NO_GROUP, NO_GROUP]);
-    m.text.update(glyph);
+    // A readable title, so that the title program draws.
+    const glyphs = new FloatList(256);
+    const size = this.p.baseFontPx;
+    appendTitle(glyphs, this.font, 'Nœud θ∑ ≤', size, 0, size * this.p.lineHeight, 0, 0, TITLE_NODE, -2, 1, NO_GROUP, NO_GROUP);
+    m.text.update(glyphs.view());
     this.starsShown = true;
     this.draw();
     for (const [mesh, specs] of meshes) mesh.update(fill(specs, 0), new Uint32Array(0));
@@ -443,7 +444,7 @@ export class PlanRenderer {
     }
   }
 
-  /** Glyph instances drawn (bench: the densest view's count). */
+  /** Glyph instances built and sent for the frame shown, those faded below 1 % included (bench: the densest view's count). */
   get glyphCount(): number {
     return this.meshes.text.length;
   }
@@ -611,5 +612,6 @@ export class PlanRenderer {
     this.worker?.terminate();
     this.g.onRestored = () => {};
     this.destroyGpu();
+    this.atlasImage.close();
   }
 }

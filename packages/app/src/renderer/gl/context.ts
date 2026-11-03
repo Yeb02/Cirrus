@@ -30,7 +30,7 @@ export function createGl(canvas: HTMLCanvasElement): Gl {
   const context = canvas.getContext('webgl2', {
     alpha: false, antialias: false, premultipliedAlpha: true, depth: false, stencil: false, preserveDrawingBuffer: false,
   });
-  if (!context) throw new Error('WebGL 2 indisponible : la vue ne peut pas être dessinée.');
+  if (!context) throw new Error('WebGL 2 indisponible (pilote graphique, ou accélération matérielle désactivée).');
   const gl = context;
   const timerOf = () => gl.getExtension('EXT_disjoint_timer_query_webgl2') as TimerExt | null;
   const g = {

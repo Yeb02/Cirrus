@@ -64,7 +64,7 @@ export interface BenchRun {
   edits: EditMeasures | null;
   /** The memory after the load and the camera path, read before the edit pass (null without one): the heap and the processes (Mo). */
   beforeEdits: { heapMb: number; processMb: ProcessMb } | null;
-  /** The most title glyphs drawn in one frame of the path, and when (plan 3c task 7: absent from earlier runs). */
+  /** The most title glyph instances built for one frame of the path (faded ones included), and when (plan 3c task 7: absent from earlier runs). */
   glyphs?: { max: number; t: number };
 }
 

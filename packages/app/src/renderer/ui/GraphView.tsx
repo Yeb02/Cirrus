@@ -5,11 +5,12 @@ import {
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
   type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
-  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, parseBmFont, measureLines,
+  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines,
 } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
 import { createGl, type Gl } from '../gl/context.ts';
+import { loadFont } from '../render/font.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
@@ -22,9 +23,6 @@ import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 
-/** The MSDF font built by scripts/build-font.mjs from Inter (Latin, Greek, the symbols titles use): descriptor and atlas. */
-const FONT_URL = 'font/inter-msdf.fnt';
-const ATLAS_URL = 'font/inter-msdf.png';
 /**
  * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
  * may depend on it, nor on where the user's mouse lies. They lift the pause of the drawing and the gesture abandoned on
@@ -180,6 +178,8 @@ export function GraphView(props: {
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
   const [ready, setReady] = useState(false);
+  /** Why the engine could not start (no WebGL 2, a font file absent or unreadable…): shown in place of the graph. */
+  const [failure, setFailure] = useState<string | null>(null);
   const [scene, setScene] = useState<PlanScene | null>(null);
   /**
    * The scenes of the last tabs shown (cachedPlans, the current one last), all at revision `rev` of the state: each
@@ -547,20 +547,34 @@ export function GraphView(props: {
     host.current!.appendChild(canvas);
     let g: Gl | null = null;
     void (async () => {
-      g = createGl(canvas);
-      const [xml, atlas] = await Promise.all([
-        fetch(FONT_URL).then((r) => r.text()),
-        fetch(ATLAS_URL).then((r) => r.blob()).then((b) => createImageBitmap(b, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })),
-      ]);
-      if (cancelled) { atlas.close(); return; }
-      const font = parseBmFont(xml);
-      g.resize();
+      // The engine's start: no WebGL 2, a font file absent or unreadable, a shader that does not compile. A failure is
+      // shown in place of the graph, and the start goes on (the first frame is announced: captures, snapshots).
+      let renderer: PlanRenderer | undefined, font: FontData, atlas: ImageBitmap | undefined;
+      try {
+        g = createGl(canvas);
+        const loaded = await loadFont((url) => fetch(url), (b) => createImageBitmap(b, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }));
+        ({ font, atlas } = loaded);
+        if (cancelled) { atlas.close(); return; }
+        g.resize();
+        renderer = new PlanRenderer(g, props.params, font, atlas);
+        console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
+      } catch (e) {
+        // What was made is let go: the renderer (its worker, its atlas), else the atlas alone.
+        if (renderer) renderer.destroy(); else atlas?.close();
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`Moteur de rendu indisponible : ${message}`);
+        g?.destroy();
+        g = null;
+        canvas.remove();
+        setFailure(message);
+        props.onFirstFrame();
+        return;
+      }
       // The host resizes with the window and without it (the settings panel opening): a resized canvas is cleared,
       // so it is drawn again even if its CSS size (the camera's) did not change (C2).
       resizeObserver = new ResizeObserver(() => { g?.resize(); redraw(); });
       resizeObserver.observe(host.current!);
-      const renderer = new PlanRenderer(g, props.params, font, atlas);
-      console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
       for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
       renderer.onUpdate = () => { redraw(); };
       engine.current = { gl: g, renderer, font };
@@ -1284,6 +1298,7 @@ export function GraphView(props: {
       }}
     >
       <div className="canvas-host" ref={host} />
+      {failure && <div className="placeholder">Le graphe ne peut pas être dessiné : {failure}</div>}
       <svg className="handles" ref={handlesSvg} />
       {rectStyle && <div className="select-rect" style={rectStyle} />}
       <HierarchyCorner

@@ -19,9 +19,16 @@ vec4 project(vec2 p) {
   vec2 c = (p - uCamera) * uView;
   return vec4(c.x, -c.y, 0.0, 1.0);
 }
+// lod.ts's smooth (smooth is a GLSL keyword): 0 below a, 1 above b; a degenerate range is a step, where GLSL's
+// smoothstep is undefined (a range at its bound may come out as [max, max]: params.ts, bounded).
+float smoothRange(float a, float b, float v) {
+  if (!(b > a)) return v >= a ? 1.0 : 0.0;
+  float t = clamp((v - a) / (b - a), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
 float textPx(float k) { return uBaseFont * uTextScale * pow(uFactor, k) * uZoom; }
 // 1 when a group is closed, 0 when open (spec 8.2); k above 1e8 means "no group": never folded.
-float foldT(float k) { return k > 1e8 ? 0.0 : 1.0 - smoothstep(uFold0, uFold1, textPx(k)); }
+float foldT(float k) { return k > 1e8 ? 0.0 : 1.0 - smoothRange(uFold0, uFold1, textPx(k)); }
 `;
 
 /** No group: the sentinel step for foldT. */
@@ -209,7 +216,7 @@ const MARKER = {
   ${COMMON}
   void main() {
     vLocal = aCorner * (uRadiusPx + 1.5);
-    vAlpha = aConn == uHot ? 1.0 : smoothstep(uTitle0, uTitle1, textPx(aK));
+    vAlpha = aConn == uHot ? 1.0 : smoothRange(uTitle0, uTitle1, textPx(aK));
     gl_Position = project(aCenter + vLocal / uZoom);
   }`,
   fragment: /* glsl */ `#version 300 es
@@ -309,11 +316,11 @@ const TEXT = {
     float size = aTitle.x, kind = aTitle.y, px = size * uZoom;
     float a;
     if (kind == 3.0) {
-      a = aTitle.z == uHot ? 1.0 : smoothstep(uTitleFade.x, uTitleFade.y, px) * (1.0 - foldT(aFold.x));
+      a = aTitle.z == uHot ? 1.0 : smoothRange(uTitleFade.x, uTitleFade.y, px) * (1.0 - foldT(aFold.x));
     } else {
-      a = aTitle.w * smoothstep(uTextFade.x, uTextFade.y, px) * (1.0 - foldT(aFold.y));
-      if (kind == 1.0) a *= 1.0 - smoothstep(uSwap.x, uSwap.y, foldT(aFold.x));
-      else if (kind == 2.0) a *= smoothstep(uSwap.x, uSwap.y, foldT(aFold.x));
+      a = aTitle.w * smoothRange(uTextFade.x, uTextFade.y, px) * (1.0 - foldT(aFold.y));
+      if (kind == 1.0) a *= 1.0 - smoothRange(uSwap.x, uSwap.y, foldT(aFold.x));
+      else if (kind == 2.0) a *= smoothRange(uSwap.x, uSwap.y, foldT(aFold.x));
     }
     vAlpha = a;
     vColor = kind == 3.0 ? uTitleInk : uInk;

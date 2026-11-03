@@ -217,7 +217,10 @@ export interface TextLayout {
 
 /**
  * A title laid out at world font size `size`: wrapped at world width `wrap` (0: not wrapped), `lineHeight` between
- * lines. Cached by text and width (in font units, so one layout serves every scale step).
+ * lines. Cached by text, wrap width and line height in font units, computed as Pixi did, `wrap × (font.size / size)`
+ * at each call: the steps whose product comes out the same share a layout, one that differs by an ulp has its own
+ * entry, and could in principle wrap differently from the boxes' measure (measureLines) at an exact boundary, as
+ * BitmapText could.
  */
 export function layoutText(font: FontData, text: string, size: number, wrap: number, lineHeight: number): TextLayout {
   const fi = indexOf(font), s = size / font.size;
@@ -253,14 +256,25 @@ export function measureLines(font: FontData, p: RenderParams): Measure {
 export const TITLE_NODE = 0, TITLE_GROUP_OPEN = 1, TITLE_GROUP_CLOSED = 2, TITLE_CONNECTION = 3;
 
 /**
- * Floats per glyph instance (`FrameGeometry.glyphInstances`), interleaved:
+ * A glyph instance (`FrameGeometry.glyphInstances`): its fields in order, interleaved, with their sizes in floats. The
+ * one definition: appendTitle writes at GLYPH_AT, the renderer's attributes are `a` + each field's name.
  * - anchor (2): the title's centre, world, relative to the frame's origin;
  * - glyph (4): x0, y0, w, h of its rectangle from the anchor, in font units;
  * - atlas (2): its top-left in the atlas, in texels;
  * - title (4): world font size, kind (TITLE_*), visible index (the connection's, for the hover), attenuation;
  * - fold (2): the group's or the fading connection's maxChildK, the parent group's (NO_PARENT: none).
  */
-export const GLYPH_FLOATS = 14;
+export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2]] as const;
+export type GlyphField = (typeof GLYPH_FIELDS)[number][0];
+
+const starts = {} as Record<GlyphField, number>;
+let floats = 0;
+for (const [f, size] of GLYPH_FIELDS) { starts[f] = floats; floats += size; }
+/** Where each field of a glyph instance starts. */
+export const GLYPH_AT: Readonly<Record<GlyphField, number>> = starts;
+/** Floats per glyph instance. */
+export const GLYPH_FLOATS = floats;
+const { anchor: AT_ANCHOR, glyph: AT_GLYPH, atlas: AT_ATLAS, title: AT_TITLE, fold: AT_FOLD } = GLYPH_AT;
 
 /** Appends one instance per visible glyph of a title (world font size `size`, wrap and line height in world units). */
 export function appendTitle(
@@ -273,11 +287,11 @@ export function appendTitle(
   let o = out.extend(l.count * GLYPH_FLOATS);
   const d = out.storage, g = l.glyphs;
   for (let j = 0; j < l.count; j++, o += GLYPH_FLOATS) {
-    const u = j * UNIT;
-    d[o] = x; d[o + 1] = y;
-    d[o + 2] = g[u]; d[o + 3] = g[u + 1]; d[o + 4] = g[u + 2]; d[o + 5] = g[u + 3];
-    d[o + 6] = g[u + 4]; d[o + 7] = g[u + 5];
-    d[o + 8] = size; d[o + 9] = kind; d[o + 10] = index; d[o + 11] = dim;
-    d[o + 12] = foldK; d[o + 13] = parentK;
+    const u = j * UNIT, a = o + AT_ANCHOR, r = o + AT_GLYPH, t = o + AT_ATLAS, m = o + AT_TITLE, f = o + AT_FOLD;
+    d[a] = x; d[a + 1] = y;
+    d[r] = g[u]; d[r + 1] = g[u + 1]; d[r + 2] = g[u + 2]; d[r + 3] = g[u + 3];
+    d[t] = g[u + 4]; d[t + 1] = g[u + 5];
+    d[m] = size; d[m + 1] = kind; d[m + 2] = index; d[m + 3] = dim;
+    d[f] = foldK; d[f + 1] = parentK;
   }
 }
