@@ -140,7 +140,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 - Ruling (abandonne la liste d'Outlook, I3) : **liste courte des exécutables : celle du plan, plus `sh`**, à la demande de l'utilisateur.
   - `isRunnable` garde son nom et son sens : vrai veut dire « montré dans l'explorateur, jamais ouvert ». Sa liste redevient celle du plan (`exe com bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp msc scr pif cpl hta lnk url reg jar py pyw pyz appref-ms`), plus `sh`.
   - Pourquoi `sh` : sur ce PC, `.sh` (`sh_auto_file`, Git for Windows) s'ouvre dans `git-bash.exe` et s'exécute (relecture 1 de la correction).
-  - Pourquoi pas plus : l'utilisateur a jugé excessives la liste d'Outlook et la liste blanche que la relecture proposait ensuite. Celle-ci a été écrite puis retirée avant tout commit.
+  - Pourquoi pas plus : l'utilisateur a jugé excessives la liste d'Outlook et la liste blanche que le contrôleur avait décidée ensuite, après la relecture 1 de la correction (R8 des décisions du contrôleur, en fin de registre). Celle-ci a été écrite puis retirée avant tout commit. La relecture 1 demandait seulement d'ajouter `sh` et quelques types de second rang (corrigé à la tâche 7 : cette ligne attribuait la liste blanche à la relecture).
   - Ce qui limite l'exposition : à partir de la tâche 4, « ouvrir avec l'application du système » n'est proposé que pour les images, les PDF et les formats que Cirrus ne sait pas afficher. Le texte, le code et les tableaux ne s'affichent jamais qu'à l'intérieur de Cirrus. Toute copie ouverte porte en outre la marque du web (I2).
   - Options :
     - la liste d'Outlook (correction 1) ;
@@ -581,9 +581,9 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Un tableau coupé par `tableMaxRows` dit aussi « Seules les N premières lignes sont affichées. ». Sans ce bandeau, la coupure d'un CSV de 150 000 petites lignes resterait muette.
   - Un tableau lu jusqu'au plafond d'octets perd sa dernière ligne, probablement coupée, sauf si le plafond de lignes est venu avant.
   - Coût si faux : une phrase.
-- Ruling: **une image ajustée n'est pas agrandie** (remplacé à la correction 1, ci-dessous : elle l'est jusqu'à 4 fois).
+- Ruling: **une image ajustée n'est pas agrandie** (remplacé à la correction 1, ci-dessous : elle l'est jusqu'à 4 fois ; puis à la correction 2 pour les bornes du zoom).
   - L'ajustement fait tenir l'image entière dans la vue, sans la grandir au-delà de sa taille : c'est l'usage des navigateurs et des visionneuses. Une image plus petite que la vue s'affiche donc à sa taille, et le double-clic n'y change rien.
-  - Le zoom reste entre l'ajustement et `imageMaxZoom`. Le glissement garde l'image dans la vue : un axe que la vue contient en entier reste centré.
+  - Le zoom reste entre l'ajustement et `imageMaxZoom` (remplacé à la correction 2 : du plus petit de l'ajustement et du 1:1 au plus grand de l'ajustement et d'`imageMaxZoom`). Le glissement garde l'image dans la vue : un axe que la vue contient en entier reste centré.
   - L'image est dessinée à sa taille zoomée, et non agrandie par une transformation, pour qu'un SVG reste net.
   - Options : agrandir toujours, ce qui rendrait floue une figure de 640 × 480 en plein écran ; jamais (choix par défaut) ; un réglage (`imageFitMaxZoom`, 1 par défaut).
   - Coût si faux : une valeur de réglage. La capture `plein-ecran-image` montre l'image de 32 pixels de la base de test à sa taille.
@@ -878,3 +878,198 @@ Relecture : `task-5-rereview-1.md`. Les six points de la correction 1 sont régl
 - Limites connues :
   - fermé pendant sa lecture d'avance, un PDF à plat laisse dans la console du travailleur des rejets non traités de pdf.js (`AbortException: Worker was terminated`), sans effet ;
   - un PDF protégé par un mot de passe n'a pas été essayé, faute d'un chiffrement fait à la main ; son message est celui de `PasswordException`.
+
+### Après la relecture de la tâche 6
+
+Relecture : `task-6-review.md`, 0 Critique, 1 Important, 8 Mineurs. L'Important est réglé par une décision du contrôleur, sans changer le code. Les Mineurs sont reportés (« Mineurs reportés », plus bas).
+
+- Ruling (I1, décision du contrôleur, en partie imposé par le plan): **un PDF échappe au plafond de lecture des vues.**
+  - Un PDF se lit par plages, à la demande de pdf.js.
+  - Un arbre de pages à plat (LibreOffice, Ghostscript, beaucoup de scanners) ou un fichier abîmé est lu en entier à l'ouverture. pdf.js lit en effet chaque enfant de la racine avant la page voulue (`checkLastPage`, puis `getPageDict`). Mesuré : 78,5 Mo, 1 257 requêtes, 1,3 s. La vignette d'un tel PDF s'arrête au budget de `thumbMaxMb` et montre l'icône.
+  - Pourquoi :
+    - le plafond a été écrit pour le texte et les tableaux. Un lecteur de PDF qui cesse de lire ne peut pas montrer les pages vers lesquelles on défile ;
+    - l'utilisateur a jugé le 2026-11-04, à la clôture du plan 3c, que les performances sont correctes pour l'instant, et qu'on y reviendra si sa vraie base grandit ;
+    - ses PDF sont des articles écrits par TeX, aux arbres de pages équilibrés.
+  - Options :
+    - un `rangeChunkSize` plus petit (4 à 8 Ko au lieu de 64). Il réduirait les lectures d'un arbre à plat à peu près du rapport des grains, au prix de plus de requêtes pour les lectures éparses. Non mesuré : c'est le levier, s'il le faut un jour ;
+    - un plafond des vues de PDF (`pdfViewMaxMb`), avec un refus dit en français ;
+    - accepter la lecture entière d'un arbre à plat (choix).
+  - La contrainte du plan se lit désormais : « une vue de texte ou de tableau ne lit jamais plus que son plafond ; un PDF se lit par plages, à la demande de pdf.js ».
+  - Coût si faux : un grand PDF à plat met environ une seconde à s'ouvrir.
+
+## Tâche 7 : registre, spec, vérification finale
+
+### Mesures
+
+- Suite complète (`npx vitest run --maxWorkers=1`, à b29a29e) : 75 fichiers, 560 tests sur 560, en 116 s.
+- `tsc --noEmit` : `core`, `store`, `view`, `fixtures` et `app` sans erreur.
+- Captures, une suite neuve de 19 images dans un dossier temporaire :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel ;
+  - contre `plan4a` : 8 sur 8 à 0 pixel.
+
+  Aucune référence n'est refaite.
+
+### Décisions
+
+- Ruling: **la spec reçoit le plan 4a dans ses sections 4 et 12**, sans toucher au texte de l'utilisateur.
+  - Section 4 : pdf.js, CodeMirror 6 et le protocole `cirrus-file:` dans la pile, puis les décisions D1 à D7, une ligne chacune, et les contraintes de cloisonnement du plan.
+  - Section 12 : un bloc « Fixé par le plan 4a », après le texte de l'utilisateur. Selon la convention de lecture du document, [C] y marque les décisions du contrôleur. Les décisions de l'utilisateur y sont dites comme telles.
+  - Les deux contraintes du plan que des décisions ont changées y sont écrites dans leur nouvelle forme (R21 et R25, plus bas). Le plan lui-même reste tel qu'il a été approuvé.
+  - Coût si faux : un paragraphe à reprendre.
+- Ruling: **deux lignes du registre sont corrigées**, comme le demandaient deux mineurs reportés : l'attribution de la liste blanche (tâche 1, correction 2) et les bornes du zoom d'une image (tâche 5). Coût si faux : nul.
+- Ruling: **trois relevés des relectures, hors de leur périmètre et absents du suivi, rejoignent les mineurs reportés**, marqués comme tels. Ils se perdraient sinon avec l'espace de travail. Coût si faux : trois lignes à retirer.
+
+## Mesures du plan 4a (résumé)
+
+Les mesures que les tâches ont consignées, regroupées ici. Leur méthode et leurs variantes sont sous chaque tâche.
+
+- **Import** (tâche 1) : `importFile` copie 200 Mo en 629 à 685 ms (trois passes, Node 26, cache disque chaud). Le principal est bloqué pendant ce temps. Avant la correction 1, le chemin `\\serveur\partage\a.txt` prenait 2,7 s : une tentative SMB.
+- **`parseDelimited`** (tâche 2) : 100 000 lignes de 8 colonnes, 5,3 millions de caractères, en 45,5 à 48,7 ms. Le plafond du test vaut 150 ms. Le seul balayage des caractères prend 14 ms : l'allocation des chaînes domine.
+- **Lecture sur le fil de l'interface** (tâche 5), une fois à l'ouverture d'une vue, aux plafonds par défaut :
+  - un CSV de 16 Mo en Windows-1252 : décodé en 31 à 36 ms, analysé sur 100 000 lignes en 43 à 107 ms, largeurs des colonnes en 3 à 4 ms. Environ 150 ms en tout ;
+  - un texte de 32 Mo en UTF-8 : décodé en 7 ms, puis `EditorState.create` en 41 à 47 ms pour 383 826 lignes. Environ 50 ms en tout ;
+  - un script de 3 Mo sous un plafond de 1 Mo : une seule requête `Range: bytes=0-1048575`, et moins de 300 lignes dans le DOM.
+- **PDF par plages** (tâche 6), sur deux PDF de 2 000 pages et 78,5 Mo :
+  - avant le transport par plages, `getDocument({ url })` lisait les 82 334 081 octets dès la vignette ;
+  - arbre de pages équilibré, comme l'écrit pdfTeX : la vignette en 4 requêtes, 248 Ko ; l'ouverture à froid à la page 1000 en 7 requêtes, 440 Ko ; une séance entière (page 1, page 1000, 40 crans de molette, retour) en 13 requêtes, 0,8 Mo. Aucune tâche longue pendant les 40 crans ;
+  - arbre à plat : la vue lit tout, en 1 257 requêtes et 78,5 Mo. La vignette s'arrête au budget, après 64 requêtes et 3,96 Mo, et montre l'icône.
+- **Temps d'ouverture** (tâche 6) :
+  - un PDF en plein écran, déjà ouvert par sa vignette : la première page 104 ms après le double-clic ;
+  - à froid, à la page 1000 : le premier canevas en 146 à 158 ms ;
+  - un PDF à plat : la première page en 1,3 s ;
+  - sept vignettes, dont les deux PDF de 2 000 pages : 1,1 à 1,6 s depuis le clic sur le nœud.
+- **Poids dans l'app construite** (tâches 5 et 6) :
+  - CodeMirror a son morceau, 732 098 octets, lu au premier texte. Les langages forment 118 morceaux, 1 684 238 octets en tout, lus à la demande ;
+  - pdf.js a son morceau, 802 969 octets, et son travailleur, 1 271 915 octets. Ses données (cartes de caractères, polices, décodeurs, profils) pèsent 2 891 755 octets ;
+  - le paquet de départ ne contient ni l'un ni l'autre. Il passe de 1 199 805 octets avant la tâche 5 à 1 258 388 après la tâche 6 ;
+  - `out/renderer` gagne 4,77 Mo à la tâche 6.
+- **Tests et captures :** la suite passe de 463 tests au départ du plan à 560. `reference-3c` est restée à 0 pixel après chaque tâche. `plan4a` reçoit 8 captures nouvelles, qui se répètent au pixel.
+
+## Mineurs reportés
+
+Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec ses fichiers et ses lignes. Les numéros de ligne sont ceux du code d'alors ; ceux qui manquent au suivi sont repris de la relecture. « Traité » renvoie à ce qui l'a levé depuis ; les autres restent ouverts.
+
+### Tâche 1
+
+- L'import est synchrone dans le principal : environ 0,65 s pour 200 Mo, pendant lesquelles les IPC attendent ; l'interface continue de dessiner (index.ts:161, files.ts:116). Plus tard : un `worker_threads` ou une copie asynchrone en flux, sans changer le pont.
+- Le plafond vaut par fichier, donc le total d'un dépôt n'a pas de borne. Dix fichiers de 150 Mo figent le principal environ 5 s, au-delà du « Ne répond pas » de Windows. À régler avec le point précédent.
+- Trous des tests :
+  - la branche « illisible » n'est pas couverte (files.ts:121) ;
+  - le test de `cleanCopies` ne peut pas voir un `chmod` manquant sous le Node de vitest, et la branche « encore ouvert » n'est pas couverte (files.test.ts:179-188) ;
+  - le constructeur `row()` force son type par `as unknown as ChangeRow` (files.test.ts:194).
+- (Imposé par le plan) `historyOf` analyse le JSON de chaque opération pour trois agrégats (index.ts:182, localStore.ts:235). Un `MIN`, `MAX` et `COUNT(DISTINCT …)` en SQL suffirait, sur l'index `changes_subject` existant (schema.ts:25).
+- Un fichier déposé plus tôt dans la même page peut être réimporté par un script de la page.
+- Un lecteur réseau monté (`Z:\`) ne se distingue pas d'un disque local.
+- Dans un dossier temporaire hors NTFS, les copies n'ont pas de marque du web et se refont à chaque ouverture.
+- Une copie encore ouverte qui doit être refaite reste modifiable si son effacement échoue (files.ts:194-198).
+- La vérification des chemins du principal bloque des formes connues, au lieu de n'accepter que les chemins à lettre de lecteur (files.ts:118).
+- Une référence malformée donne un nom vide dans la phrase d'`openFile` (index.ts:171). « ce fichier » se lirait mieux.
+- Le registre disait que la relecture 1 avait proposé la liste blanche (registre:143), alors qu'elle venait du contrôleur. Traité à la tâche 7 : la ligne est corrigée.
+
+### Tâche 2
+
+- Des jumeaux tenus à la main, sans test qui les lie : `checkFileName` (merge.ts:62-72) répète `plainName` (main/files.ts:153-157), et l'`extensionOf` de kind.ts (:27-31) répète celui de main/files.ts (:28-32). Ils s'accordent aujourd'hui.
+- Un second « a.txt » d'un même dépôt devient « a (2).txt », et peut remplacer un « a (2).txt » sans rapport déjà dans le nœud (merge.ts:34-40, :59). Accepté au registre (tâche 2, « numéro d'un doublon du dépôt »).
+- Un dépôt qui ne fait que remplacer deux fichiers ou plus garde le libellé « Ajouter des fichiers à « titre » » (actions.ts:310).
+- Un BOM UTF-32LE (`FF FE 00 00`) est lu comme de l'UTF-16LE, sans le test des binaires (decode.ts:18, :20).
+- `checkFileName` ne refuse pas un nom de plus de 255 unités UTF-16 (merge.ts:62-72), pas plus que `plainName`.
+- Deux endroits fragiles des tests : le « é » décomposé écrit en octets invisibles (fileLogic.test.ts:75) ; la base fermée à la fin du test, et non dans un `finally` (build.test.ts:118).
+- `ViewStates.get` rend son objet interne (viewState.ts:36-38), alors que `set` copie (:42).
+
+### Tâche 3
+
+- L'Échap dépend du focus dans le graphe (GraphView.tsx:1335-1339, Panels.tsx:101). Un mode du graphe lancé depuis le menu contextuel (« Nouveau nœud », « Sortir du groupe ») laisse le focus sur `body`, et l'Échap suivant ferme le pop-up non épinglé au lieu du mode. La tâche 4 a réglé l'Échap du menu lui-même, écouté en capture. À b29a29e, le choix d'une entrée du menu ne rend toujours pas le focus au graphe (`pick`, GraphView.tsx:1134 ; lu dans le code, non essayé).
+- CSS dupliqué : `.panel h4` (styles.css:183) et `.popup h4` (:130), `.panel textarea` (:187) et `.node-popup .pick` (:201). `HEADER_PX` est écrit trois fois (geometry.ts:8, styles.css:159, :180).
+- La casse des clés libres (tags.ts:19) : « Pertinence:central » crée une clé libre « Pertinence », à côté de la clé `pertinence` du registre.
+- Sans test : la règle de saut de `useHistory` (NodePopup.tsx:27-30), et la logique des écouteurs d'Échap et du clic hors des panneaux. Elles s'extrairaient en fonctions pures.
+- Un titre ou un résumé refusé peut écraser un texte retapé entre-temps dans le même champ (NodePopup.tsx:147).
+
+### Tâche 4
+
+- L'extraction d'un dépôt est écrite deux fois (GraphView.tsx:1329-1330, NodePopup.tsx:285-286). Le panneau générique importe le module des fichiers du nœud pour le seul `carriesFiles` (FloatingPanel.tsx:2). `files` est refait à chaque rendu d'`App` (App.tsx:223-235).
+- `CIRRUS_IMPORT` est lu deux fois, avec des règles différentes (preload/index.ts:12, App.tsx:170).
+- `addImported` décrit le dépôt en refaisant la fusion après `build(st)` (nodeFiles.ts:74-78).
+- Aucun test du dépôt côté page (Review Focus 2) ni de son routage : la garde de la fenêtre (App.tsx:103-112), `carriesFiles` (nodeFiles.ts:23), `takesFiles` et `dropFilesAt` (GraphView.tsx:876-884), le compte des entrées et des sorties de `FloatingPanel` (FloatingPanel.tsx:37-49), la borne du menu (ContextMenu.tsx:12-16).
+- `takesFiles` n'exclut que `.popup, .ask` (GraphView.tsx:884) : un fichier lâché sur le menu contextuel du graphe ou sur l'éditeur de titre va au nœud dessous.
+- La borne de `ContextMenu` ne déplace le menu que vers le haut et la gauche (ContextMenu.tsx:12-16) : un menu plus haut que la fenêtre aurait un `top` négatif.
+- (Reporté à la tâche 5) Un clic gauche qui ferme le menu d'un fichier ouvre aussi un fichier de genre autre (ContextMenu.tsx:19, NodePopup.tsx:169). Traité à la tâche 5 : le clic qui ferme un menu est avalé dans toute l'app (R20).
+
+### Tâche 5
+
+- Aucune capture ne montre de vignette d'image, et les captures n'attendent pas les vignettes (read.ts:54-66). R2 comptait sur les captures de la tâche 5 pour la vignette d'une image : ce n'est pas tenu.
+- `viewsSettled` n'attend pas une vue pas encore montée (Viewer.tsx:13, read.ts:65). Les captures ne se répètent que grâce à la pause de 300 ms après chaque clic (App.tsx:203).
+- DRY et séparation des rôles : TextViewer.tsx:55-100 et TableViewer.tsx:36-62 répètent la même lecture ; `read.ts` mêle la lecture et l'instrumentation des captures.
+- Le décodage et l'analyse se font sur le fil de l'interface : environ 150 ms pour un tableau de 16 Mo aux plafonds par défaut. Les réglages vont jusqu'à 512 Mo, qui figeraient la fenêtre. Un double-clic lit et analyse le fichier deux fois, pour l'aperçu puis pour le plein écran.
+- Le comportement des composants sur lequel reposent les décisions n'a pas de test dans le dépôt ; le pilote par CDP est hors dépôt. Par exemple : la sauvegarde et la reprise des vues (common.tsx:39-53), l'ordre des Échap entre la recherche de CodeMirror, le plein écran et `Panels`.
+- Le registre disait encore que le zoom reste entre l'ajustement et `imageMaxZoom` (registre:586), et son marqueur « remplacé » renvoyait à la correction 1 au lieu de la 2. Traité à la tâche 7 : la ligne est corrigée.
+- Un retour à la ligne étrange dans le commentaire d'`ImageViewer` (ImageViewer.tsx:14-15).
+- Pour une image que l'ajustement agrandit, la molette ne s'arrête plus à l'ajustement : seul le double-clic rend l'état ajusté (ImageViewer.tsx:70-71).
+
+### Tâche 6
+
+- Le cache des vignettes ne rétrécit jamais, et garde les échecs pour la séance, même un `ReadError` passager (pdf.ts:242-261). Changer `thumbPx` pas à pas, pop-up ouvert, met en file un dessin par valeur et par PDF (NodePopup.tsx:174).
+- Les vignettes des PDF se dessinent tout de suite, et non quand elles entrent en vue comme les images (NodePopup.tsx:159-175, :244).
+- Pas de test dans le dépôt pour la logique de ressources et de sûreté de `pdf.ts` : les règles du cache, le budget de `StoreRanges` et son échec unique, la course de `failure`, `destination()` (pdf.ts:222-239), le filtre des schémas de `linksOf` (PdfViewer.tsx:413).
+- Commentaires périmés : « Fitted to the width of the widest page » (PdfViewer.tsx:11) ; « cheap at any size, under any thumbMaxMb », dans le test des vignettes de `viewers.test.ts`. Avec `thumbMaxMb` à 0, `thumbFor` rend encore `'pdf'` (nodeFiles.ts:138-141) : le morceau de pdf.js se charge pour échouer aussitôt.
+- Le message de `BudgetError` est construit deux fois (pdf.ts:85, :178), et un échec de plage s'écrit deux fois à la console (pdf.ts:190-191, :204).
+- Le travailleur partagé n'a pas de contrôle de vie (pdf.ts:32-35), et la file des vignettes pas de délai (:244-258). Un travailleur mort laisserait tout document à « Lecture… ».
+- Le travailleur de pdf.js tourne sans CSP : le fil qui lit des PDF non sûrs a un `fetch` sans restriction. « Rien n'est chargé du réseau » tient par ce que fait pdf.js, non par une règle.
+- Le focus se perd quand la page du lien qui l'a cesse d'être dessinée (PdfViewer.tsx:386-404).
+
+### Relevés hors du périmètre des relectures, absents du suivi
+
+Non tranchés par le contrôleur ; ajoutés à la tâche 7 pour ne pas se perdre.
+
+- Tâche 1, relecture 2 : un échec côté interface (une IPC qui rejette, un argument qu'on ne peut pas cloner) peut encore montrer un texte anglais, avant que `openFailure` n'intervienne.
+- Tâche 3, relecture 1 : un clic sur les surcouches du graphe (coin de hiérarchie, Overlays.tsx:8 ; pop-up de connexion, ConnectionPopup.tsx:90 ; menu, ContextMenu.tsx:17 ; question, Dialogs.tsx:25) laisse ouvert un pop-up non épinglé, car elles arrêtent la propagation de l'appui (Panels.tsx:143). C'est moins que « tout clic hors de tout panneau » (R14).
+- Tâche 3, relecture 1 : une promesse de modification rejetée n'est pas traitée (NodePopup.tsx:61, :147).
+
+## Décisions du contrôleur (plan 4a)
+
+Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui disparaîtra avec l'espace de travail, dans son ordre : décision — raison — coût si faux. Quand une décision est détaillée plus haut, sous sa tâche, la ligne le dit. Une décision remplacée le dit aussi, avec ce qui l'a remplacée.
+
+### Avant la tâche 1 (examen des tâches)
+
+- R1 : le test de la base de test de la tâche 2 lit « le nœud MDL garde ses deux fichiers (`Enoncé_détaillé.tex`, `calcul_mdl_séquence_aléatoire.py`) et reçoit les deux nouveaux (le CSV et le `.md`), quatre en tout » — le plan comptait mal les fichiers d'avant ; son intention, garder les anciens et ajouter les nouveaux, ne change pas — coût si faux : une assertion de test (détail : tâche 2, « base de test »).
+- R2 : la capture `popup-vignettes` (tâche 6) montre le pop-up de la publication, avec la vignette de la première page de ses PDF ; la vignette d'une image devait venir des captures de la tâche 5 sur le nœud de la compression — aucun nœud de la base de test ne porte à la fois le PDF et l'image, et déplacer des fichiers changerait des captures existantes pour rien — coût si faux : une capture de plus. Non tenu : aucune capture ne montre de vignette d'image (mineurs reportés, tâche 5).
+
+### Tâche 1
+
+- R3 : la liste des exécutables (`isRunnable`) devient la liste des pièces jointes bloquées par Outlook (« Level 1 »), plus les entrées du plan qui n'y sont pas (`psm1`, `appref-ms`, `msix`, `appx`, `msixbundle`, `appxbundle`) — la règle de l'utilisateur sur la sécurité, « ne transige pas avec ça, mais pas overkill » : la liste du plan oubliait des types qui exécutent du code (`chm`, `application`, `inf`, `scf`, `ps1xml`, `settingcontent-ms`, `xll`…), et une liste tenue par Microsoft est la référence habituelle ; une liste blanche de documents a été pesée et écartée, car elle bloque tout format légitime non listé et demande un entretien — coût si faux : un type de document inhabituel montré dans l'explorateur au lieu d'être ouvert. **Remplacée** par R8, puis par R10 (détail : tâche 1, correction 1, I3).
+- R4 (I1) : le preload garde l'ensemble des chemins que `pathForFile` a rendus dans la page, et `importFiles` ne transmet que ceux-là ; le principal refuse les chemins réseau et de périphérique (`\\serveur`, `//`, `\\?\`, `\\.\`) et tout ce qui n'est pas un fichier ordinaire (Mineur 1 repris) — D6 garde l'interface qui calcule les actions, et la porte ferme la lecture arbitraire du disque sans nouvelle IPC — coût si faux : un fichier légitime d'un partage réseau doit d'abord être copié en local (détail : tâche 1, correction 1).
+- R5 (I2) : chaque copie ouvrable reçoit un flux `Zone.Identifier` avec `ZoneId=3`, avant de passer en lecture seule — Cirrus ne doit pas blanchir la marque du web d'un fichier téléchargé ; garder la zone d'origine de chaque fichier demanderait un champ de `FileRef` synchronisé entre PC, qui n'en vaut pas la peine — coût si faux : les documents Office de l'utilisateur ouverts depuis Cirrus passent par le mode protégé, et leurs macros ne s'activent pas (détail : tâche 1, correction 1).
+- R6 (I3, imposé par le plan) : réglé par R3, appliqué à la correction 1. **Remplacée** avec R3, par R8 puis R10.
+- R7 : les Mineurs 2 (le texte anglais d'`openFile`, à remplacer par un message français), 3 (une copie réemployée sur sa seule taille : seulement si elle est encore en lecture seule et de même taille, sinon refaite) et 4 (la décision d'ouvrir ou de montrer, à extraire et tester) entrent dans la correction 1 — bon marché, locaux, sur le chemin du Review Focus 3 — coût si faux : rien au-delà du tour (détail : tâche 1, correction 1).
+- R8 (remplace R3) : « ouvrir avec l'application du système » devient une liste blanche : seuls les types connus de documents, de médias, de données et d'archives vont à `shell.openPath`, tout autre est montré dans l'explorateur — une liste noire a toujours une association de retard (le `.sh` de git-bash l'a montré sur ce PC même), et une liste blanche échoue fermée ; le coût pesé à R3 (un format légitime non listé montré dans l'explorateur, à un double-clic, avec `ZoneId=3` sur la copie) est accepté ; l'intention de D5, ne jamais lancer un exécutable ou un script, est gardée, et sa « liste fixe » devient celle de ce qui peut s'ouvrir — coût si faux : un type de document inhabituel demande un double-clic de plus. **Remplacée** par R10 avant tout commit : l'utilisateur l'a jugée excessive.
+- R9 : le Mineur 2 reste dans la boucle, puisqu'il a été repris à la correction 1 : chaque échec d'`openFile` atteint l'utilisateur en français et nomme le fichier ; les causes connues (`ENOENT`, `EBUSY`, `EACCES`, `EPERM`, `ENOSPC`) et l'échec « aucune application » de `shell.openPath` ont chacune leur phrase, toute autre une phrase générale — c'est désormais une exigence — coût si faux : nul (détail : tâche 1, correction 2).
+- R10 (remplace R3, R6 et R8 ; décision de l'utilisateur du 2026-11-04 : « Ça m'a l'air overkill, je n'ouvrirai rien d'autre que des images, des pdfs, des .md et des fichiers textes type un script python, mais rarement. ») : `isRunnable` revient à la liste courte du plan, plus `sh` ; « ouvrir avec l'application du système » n'est offert, au menu de la tâche 4, que pour les images, les PDF et les genres que Cirrus ne sait pas afficher ; le texte, le code, le `.tex` et les tableaux ne s'affichent que dans Cirrus, si bien qu'un script n'est jamais remis à Windows, par construction et non par une liste ; la porte du preload et la marque du web, déjà écrites et invisibles dans l'usage de l'utilisateur, restent — les fichiers de l'utilisateur sont des images, des PDF, des `.md` et des scripts, tous affichés dans l'app — coût si faux : un exécutable d'un type absent de la liste, joint à un nœud et ouvert depuis le menu, serait lancé ; l'utilisateur ne joint pas de tels fichiers (détail : tâche 1, correction 2 ; tâche 4, « Ouvrir avec l'application du système »).
+
+### Tâche 2
+
+- R11 : `filesBuild(s, node, incoming)` est accepté — le type `Build` du plan fait de null une valeur de construction, donc un dépôt où tout est inchangé ne se voit qu'avec l'état en main ; la tâche 4 l'appelle avec `session.state` — coût si faux : une signature à la tâche 4 (détail : tâche 2, « `filesBuild` reçoit l'état »).
+
+### Tâche 3
+
+- R12 : un clic gauche sur le fantôme d'un nœud lointain ouvre le pop-up de ce nœud — la spec 8.5 l'emporte : « un clic gauche ouvre le contenu de ce que représente le fantôme, comme sur l'original : le pop-up du nœud lointain » ; le « pas un fantôme » du plan était une erreur du plan ; un fantôme absent garde son geste d'import, un fantôme de centre le pop-up de sa connexion — coût si faux : une ligne (détail : tâche 3, correction 1, I4).
+- R13 : `docs/captures/plan4a/` ne garde que les captures nouvelles du plan 4a ; la référence refaite de `selection` remplace la sienne dans `reference-3c`, où se fait sa comparaison — le plan veut les nouvelles captures dans `plan4a`, et y dupliquer les dix inchangées coûterait 1,4 Mo et deux références à tenir ensemble — coût si faux : nul. `selection` n'a finalement pas changé : la correction 1 la ramène à `reference-3c` au pixel (détail : tâche 3, correction 1).
+- R14 (I3) : la règle du plan tient : tout clic hors de tout panneau ferme les non épinglés, Ctrl+clic et clics sur les connexions, les amorces et les fantômes compris ; un clic sur une connexion ouvre ensuite son propre pop-up — le brief le dit en clair, et la référence de `selection` suit la correction — coût si faux : nul (détail : tâche 3, correction 1, I3 ; elle remplace la règle de la livraison).
+- R15 (I4) : réglé par R12.
+- R16 : les Mineurs 2 (`openNode` ignore `panelMinPx`), 3 (un `historyOf` en échec montre « … » sans fin : « — »), 4 (une modification refusée n'est pas montrée comme refusée), 5 (le rectangle lu à chaque mouvement du pointeur : une fois par appui) et 9 (un titre long ne laisse que la poignée pour déplacer) entrent dans la correction 1 — bon marché, locaux, dans les fichiers que touche le tour — coût si faux : nul (détail : tâche 3, correction 1).
+
+### Tâche 4
+
+- R17 : le crochet de capture `CIRRUS_IMPORT` atteint la porte du preload par les options de lancement : le preload ajoute les chemins de `launch.import` à ses chemins accordés, car ils viennent du principal par `additionalArguments`, aussi sûrs qu'un dépôt — la capture suit ainsi le vrai chemin d'`importFiles` au lieu de contourner la porte — coût si faux : un ajout au preload, pour les captures seulement (détail : tâche 4, « la capture `import-noeud` »).
+
+### Tâche 5
+
+- R18 : un fichier binaire d'une extension de texte affiche « Fichier binaire : Cirrus ne peut pas l'afficher. », sans le bouton « ouvre-le avec l'application du système » du plan — R10 tient les genres de texte loin du système, et un binaire mal nommé peut être un script ; renommé à sa vraie extension, il devient un fichier de genre autre, que le système peut ouvrir — coût si faux : un renommage pour un binaire mal nommé (détail : tâche 5, « un binaire n'offre pas le système »).
+- R19 (I1) : un panneau de fichier trouve son fichier par son nom (`sameName`), jamais par son contenu ; un fichier retiré ferme son plein écran, et son aperçu dit qu'il n'existe plus, même quand le nœud garde un jumeau — le Review Focus 5 porte sur le fichier que l'utilisateur a ouvert, et suivre le contenu montrerait un autre fichier sous ses yeux — coût si faux : un fichier renommé ailleurs ferme ses vues ouvertes (détail : tâche 5, correction 1).
+- R20 (I2) : un clic gauche qui ferme un menu contextuel est avalé dans toute l'app, quels que soient le pop-up ou le panneau où il tombe — le constat reporté de la tâche 4 porte sur le geste, pas sur un pop-up — coût si faux : nul (détail : tâche 5, correction 1).
+- R21 (I3, imposé par le plan) : une vignette ne lit l'image que si sa taille est au plus un nouveau réglage, `thumbMaxMb` (4 Mo, entre 0 et 64, « Taille maximale d'une image pour sa vignette (Mo) ») ; une image plus grande montre l'icône de son genre ; la contrainte du plan se lit désormais « ouvrir un pop-up ne lit aucun fichier au-delà de `thumbMaxMb` » — une vignette faite par le principal (`nativeImage`) décoderait quand même tout le fichier et ajouterait un cache ; les images de l'utilisateur sont des schémas et des figures, petites — coût si faux : une grande photo montre une icône dans le pop-up (détail : tâche 5, correction 1 ; la tâche 6 étend ce budget aux PDF).
+- R22 : les Mineurs 1, 4 et 5 entrent dans la correction 1 : (1) « ajustée à la vue » comprend l'agrandissement, et `imageFitMaxZoom` vaut 4 ; (4) une frontière d'erreur entoure `Viewer`, pour qu'un import paresseux en échec ne démonte pas la fenêtre, un langage qui ne se charge pas laisse le texte montré, et une image absente dit « introuvable dans la base » ; (5) le plein écran garde le focus (Tab piégé, `aria-modal`), et les raccourcis de l'app (Ctrl+Z, Ctrl+Y, Suppr…) n'agissent pas sous lui — ils cassaient « rien ne plante », ou agissaient sur un graphe caché — coût si faux : nul (détail : tâche 5, correction 1).
+- R23 : le garde avale les clics, pas les appuis : un appui qui ferme un menu mène toujours les gestes du graphe et ferme les panneaux non épinglés — un appui hors de tout panneau qui ferme les non épinglés est la règle de la tâche 3 ; seule l'action du clic sur un fichier était fautive — coût si faux : nul.
+
+### Tâche 6
+
+- R24 : le `PDFDataRangeTransport` est accepté, au lieu du `getDocument({ url })` du plan — l'appel du plan lit tout le fichier sur un schéma propre à l'app, alors que le transport garde le « chargé par plages » de D1 : 440 Ko mesurés pour la page 1000 d'un PDF de 78,5 Mo — coût si faux : une classe de transport à tenir au pas de pdf.js (détail : tâche 6, « les plages par un transport à nous »).
+- R25 (I1) : un PDF échappe au plafond de lecture des vues : il se lit par plages, à la demande de pdf.js, et un arbre de pages à plat se lit en entier à l'ouverture (1,3 s pour 78,5 Mo, mesuré) ; la contrainte du plan se lit désormais « une vue de texte ou de tableau ne lit jamais plus que son plafond ; un PDF se lit par plages, à la demande de pdf.js » — le plafond a été écrit pour le texte et les tableaux, un lecteur de PDF qui cesse de lire ne peut pas montrer les pages vers lesquelles on défile, et l'utilisateur a jugé le 2026-11-04 que les performances sont correctes pour l'instant, à revoir si sa vraie base grandit ; ses PDF sont des articles écrits par TeX, aux arbres équilibrés ; un `rangeChunkSize` plus petit est un levier, s'il le faut un jour — coût si faux : un grand PDF à plat met environ une seconde à s'ouvrir (détail : tâche 6, « après la relecture de la tâche 6 »).
