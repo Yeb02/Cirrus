@@ -9,7 +9,7 @@ import { expect, test } from 'vitest';
 import { benchPath, cameraAt } from '../src/benchPath.ts';
 import type { Camera } from '../src/camera.ts';
 import { copyClip, pasteSteps } from '../src/clip.ts';
-import { intruders, visibleIntruders } from '../src/edit.ts';
+import { dropEffects, dropTarget, intruders, visibleIntruders } from '../src/edit.ts';
 import { buildHitIndex } from '../src/hit.ts';
 import { type EnvelopeMeshes, newEnvelopeMeshes } from '../src/geometry/envelope.ts';
 import { buildInstances, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
@@ -17,7 +17,7 @@ import { patchEdit, patchPreview, previewEnvelopes, previewSlots, previewSplit, 
 import { buildScene, isLive, type PlanScene, withOffsets } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
 import { GLYPH_FLOATS, parseBmFont } from '../src/text.ts';
-import { buildIndex, computeVisible, updateIndex } from '../src/visibility.ts';
+import { buildIndex, computeVisible, type SceneIndex, updateIndex } from '../src/visibility.ts';
 import { bruteVisible, canonicalScene, indexContent, measure, P, rng, visibleDifference } from './helpers.ts';
 
 // Costs at the scale the spec aims for (spec 21), on the bench's synthetic base: what runs at every edit must not
@@ -292,46 +292,55 @@ test('base de référence : la texture des éléments du lobby se remplit en 3 m
 // ———— Previews and edits through the item texture (plan 3c, task 9)
 
 /**
- * One frame of a drag's preview as the renderer prepares it: the preview's scene (the previous one's storage taken
- * again), its texels, its instances patched in place, its groups' envelopes apart; the split is made once per drag.
+ * One frame of a drag as GraphView and the renderer prepare it: the preview's scene (the previous one's storage taken
+ * again), the group that would receive the drop under the pointer (by the state's index, fix 1 of task 9) and its
+ * effects, the texels, the instances patched in place, the groups' envelopes apart; the split is made once per drag.
  */
-function previewFrame(shown: Shown, split: PreviewSplit, moving: number[], d: { x: number; y: number }, previous: PlanScene | undefined, texels: Float32Array, side: EnvelopeMeshes) {
+function previewFrame(
+  shown: Shown, index: SceneIndex, split: PreviewSplit, moving: number[], d: { x: number; y: number }, previous: PlanScene | undefined, texels: Float32Array,
+  side: EnvelopeMeshes,
+) {
   const base = shown.state, preview = withOffsets(base, new Map(moving.map((i) => [i, d])), P, previous);
+  // The pointer holds the first item dragged where it was pressed: its centre, moved.
+  const grabbed = base.items[moving[0]], t = dropTarget(base, { x: grabbed.x + d.x, y: grabbed.y + d.y }, moving, shown.cam.zoom, P, index);
+  if (t !== null) dropEffects(base, moving, t, false);
   itemTexels(preview, shown.inst.origin, texels, previewSlots(base, preview, split));
   const patched = patchPreview(shown, preview, split, P);
   if (patched) previewEnvelopes(shown, preview, split, P, side);
-  return { preview, patched };
+  return { preview, patched, target: t };
 }
 
 /**
  * Sixty frames of a drag (3 px then 2 px a frame on screen), three times: each frame's best of three, then their
  * median and worst; and how many were done in place.
  */
-function dragFrames(shown: Shown, moving: number[]): { median: number; worst: number; inPlace: number; split: PreviewSplit } {
+function dragFrames(shown: Shown, index: SceneIndex, moving: number[]): { median: number; worst: number; inPlace: number; targets: number; split: PreviewSplit } {
   const split = previewSplit(shown.state, shown.visible, moving), texels = new Float32Array(shown.state.items.length * SLOT_FLOATS), side = newEnvelopeMeshes();
   const z = shown.cam.zoom, frames = 60, bestOf = new Array<number>(frames).fill(Infinity);
-  let previous: PlanScene | undefined, inPlace = 0;
+  let previous: PlanScene | undefined, inPlace = 0, targets = 0;
   for (let pass = 0; pass < 4; pass++) {
     for (let f = 0; f < frames; f++) {
       const t = performance.now();
-      const r = previewFrame(shown, split, moving, { x: (3 * (f + 1)) / z, y: (2 * (f + 1)) / z }, previous, texels, side);
+      const r = previewFrame(shown, index, split, moving, { x: (3 * (f + 1)) / z, y: (2 * (f + 1)) / z }, previous, texels, side);
       const ms = performance.now() - t;
       previous = r.preview;
       if (pass > 0) bestOf[f] = Math.min(bestOf[f], ms);
       if (pass === 0 && r.patched) inPlace++;
+      if (pass === 0 && r.target !== null) targets++;
     }
   }
   // Given up: back to the frame before, to the bit (Review Focus 5).
   expect(patchPreview(shown, shown.state, split, P)).not.toBeNull();
   const sorted = [...bestOf].sort((a, b) => a - b);
-  return { median: sorted[frames >> 1], worst: sorted[frames - 1], inPlace, split };
+  return { median: sorted[frames >> 1], worst: sorted[frames - 1], inPlace, targets, split };
 }
 
 /**
  * The plan aims at 0.5 ms for a frame of a leaf's drag and 3 ms for a group of 200 elements, at the bench's deepest
  * camera (121 ms before at the bench, the index built and the texture written whole at each frame): 0.44–0.57 and
- * 0.39 ms (medians) while the user's programs held about half the processors. The gates are about three times the
- * measures (R12, R15 of the registry); the targets stay the plan's.
+ * 0.39 ms (medians) while the user's programs held about half the processors; with the drop target found by the index
+ * in each frame (fix 1: 0.005–0.009 ms, 11 ms by a scan of the plan), 0.59–0.61 and 0.56–0.59 ms with 69–81 % of them
+ * held. The gates are about three times the measures (R12, R15 of the registry); the targets stay the plan's.
  */
 const LEAF_PREVIEW_CEILING_MS = 1.5, GROUP_PREVIEW_CEILING_MS = 1.2;
 
@@ -346,11 +355,18 @@ test('base de référence : une image d’aperçu de glissement se prépare en 0
   for (const vc of atDeep.visible.connections) for (const e of vc.ends) degree.set(e.item, (degree.get(e.item) ?? 0) + 1);
   const leaves = atDeep.visible.items.filter((i) => scene.items[i].kind === 'node' && scene.items[i].parent >= 0);
   const leaf = leaves.reduce((a, b) => (Math.abs((degree.get(b) ?? 0) - 20) < Math.abs((degree.get(a) ?? 0) - 20) ? b : a));
+  // The drop target under the pointer alone: the plan scanned (before fix 1) and by the index, the same answer.
+  const pointer = { x: scene.items[leaf].x, y: scene.items[leaf].y };
+  const scan = best(() => dropTarget(scene, pointer, [leaf], deep.zoom, P)), near = best(() => dropTarget(scene, pointer, [leaf], deep.zoom, P, index), 10, 50);
+  show('dropTarget, tout le plan balayé', scan.ms);
+  show('dropTarget par l’index', near.ms);
+  expect(near.out).toBe(scan.out);
+  expect(near.out).not.toBeNull();
   const before = structuredClone([...atDeep.inst.curves.view(), ...atDeep.inst.texts.view()]);
-  const l = dragFrames(atDeep, [leaf]);
+  const l = dragFrames(atDeep, index, [leaf]);
   expect(structuredClone([...atDeep.inst.curves.view(), ...atDeep.inst.texts.view()])).toEqual(before);
   const sizes = (x: PreviewSplit) => `${x.items.length} éléments, ${x.groups.length} groupes, ${x.complex.length} faisceaux complexes et ${x.simple.length} simples réécrits`;
-  show(`image d’aperçu, feuille de ${degree.get(leaf)} connexions visibles (${sizes(l.split)} ; médiane, ${l.inPlace} sur 60 en place)`, l.median);
+  show(`image d’aperçu, feuille de ${degree.get(leaf)} connexions visibles (${sizes(l.split)} ; médiane, ${l.inPlace} sur 60 en place, ${l.targets} sur une cible)`, l.median);
   show('  la pire', l.worst);
   // The smallest group of at least 200 elements, the camera at the deep zoom on its deepest leaf: what it holds there is
   // drawn (on its own centre, the deep zoom shows none of it).
@@ -360,14 +376,14 @@ test('base de référence : une image d’aperçu de glissement se prépare en 0
   let deepest = big;
   const descend = (i: number) => { if (scene.items[i].depth > scene.items[deepest].depth) deepest = i; for (const c of scene.items[i].children) descend(c); };
   descend(big);
-  const atGroup = shownAt(scene.items[deepest].x, scene.items[deepest].y), g = dragFrames(atGroup, [big]);
+  const atGroup = shownAt(scene.items[deepest].x, scene.items[deepest].y), g = dragFrames(atGroup, index, [big]);
   const drawn = new Set([...atGroup.visible.items, ...atGroup.visible.groups]), held = g.split.items.filter((i) => drawn.has(i)).length;
-  show(`image d’aperçu, groupe de ${subtree(big)} éléments (${sizes(g.split)}, ${held} dessinés ; médiane, ${g.inPlace} sur 60 en place)`, g.median);
+  show(`image d’aperçu, groupe de ${subtree(big)} éléments (${sizes(g.split)}, ${held} dessinés ; médiane, ${g.inPlace} sur 60 en place, ${g.targets} sur une cible)`, g.median);
   show('  la pire', g.worst);
   expect(degree.get(leaf)).toBeGreaterThan(10);
   expect(l.inPlace).toBe(60);
   expect(held).toBeGreaterThan(10);
-  expect(g.inPlace).toBeGreaterThan(0);
+  expect(g.inPlace).toBe(60);
   expect(l.median).toBeLessThanOrEqual(LEAF_PREVIEW_CEILING_MS);
   expect(g.median).toBeLessThanOrEqual(GROUP_PREVIEW_CEILING_MS);
 }, 300_000);

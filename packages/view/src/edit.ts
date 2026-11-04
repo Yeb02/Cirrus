@@ -3,8 +3,8 @@ import Flatbush from 'flatbush';
 import { insidePolygon, offsetPolygon } from './geometry/hull.ts';
 import { foldT } from './lod.ts';
 import type { RenderParams } from './params.ts';
-import { isLive, type PlanScene } from './scene.ts';
-import type { VisibleSet } from './visibility.ts';
+import { GONE_ITEM, isLive, type PlanScene, type SceneItem } from './scene.ts';
+import type { SceneIndex, VisibleSet } from './visibility.ts';
 
 /** Placement changes for moveNodes and movePhantom, gathered by `combine` into one action. */
 export interface Moves {
@@ -50,22 +50,51 @@ const reachable = (scene: PlanScene, i: number, zoom: number, p: RenderParams) =
 
 /**
  * Where dropped items would enter (spec 10): the deepest group under the point (its padded envelope), or a simple
- * node whose box is under it (it becomes a group). Never a dragged item nor one of its descendants.
+ * node whose box is under it (it becomes a group); between a box and a group as deep, the box; between two alike, the
+ * first slot. Never a dragged item nor one of its descendants. `index`: the scene's visibility index (plan 3c task 9:
+ * every frame of a drag asks), by which only the items whose box holds the point are read — the roots there, then
+ * the children there of each group reached that is not more than half folded — instead of every slot; the same answer.
  */
-export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: number, p: RenderParams): number | null {
+export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: number, p: RenderParams, index?: SceneIndex): number | null {
   const excluded = new Set<number>();
   const mark = (i: number) => { excluded.add(i); for (const c of scene.items[i].children) mark(c); };
   for (const i of dragged) mark(i);
   let best = -1, bestDepth = -1, bestIsBox = false;
-  scene.items.forEach((it, i) => {
-    if (excluded.has(i) || !isLive(scene, i) || it.kind === 'phantom' || !reachable(scene, i, zoom, p)) return;
+  /** Item i, reachable and neither dragged nor a phantom, taken if it is under the point and beats the best so far. */
+  const consider = (i: number, it: SceneItem) => {
     const isBox = it.kind === 'node';
     const under = isBox
       ? Math.abs(at.x - it.x) <= it.halfW && Math.abs(at.y - it.y) <= it.halfH
       : insidePolygon(offsetPolygon(it.hull!, it.pad!), at.x, at.y);
     if (!under) return;
-    if (it.depth > bestDepth || (it.depth === bestDepth && isBox && !bestIsBox)) { best = i; bestDepth = it.depth; bestIsBox = isBox; }
-  });
+    if (it.depth > bestDepth || (it.depth === bestDepth && ((isBox && !bestIsBox) || (isBox === bestIsBox && i < best)))) {
+      best = i; bestDepth = it.depth; bestIsBox = isBox;
+    }
+  };
+  if (!index) {
+    // The under test first: reachable walks the ancestors.
+    scene.items.forEach((it, i) => {
+      if (excluded.has(i) || !isLive(scene, i) || it.kind === 'phantom') return;
+      const isBox = it.kind === 'node';
+      if (isBox ? Math.abs(at.x - it.x) > it.halfW || Math.abs(at.y - it.y) > it.halfH : false) return;
+      if (reachable(scene, i, zoom, p)) consider(i, it);
+    });
+    return best >= 0 ? best : null;
+  }
+  // A group's padded envelope holds its members' boxes and envelopes, so what is under the point is found from the
+  // roots down; the boxes are widened by a hair so that rounding at an edge loses nothing (the under test decides).
+  const { minX, minY, maxX, maxY } = index, x = at.x, y = at.y, tol = 1e-9 * (1 + Math.abs(x) + Math.abs(y));
+  const holds = (i: number) => minX[i] - tol <= x && x <= maxX[i] + tol && minY[i] - tol <= y && y <= maxY[i] + tol;
+  const stack: number[] = [];
+  if (index.rootTree) for (const j of index.rootTree.search(x - tol, y - tol, x + tol, y + tol)) { const r = index.treeRoots[j]; if (index.stale[r] === 0) stack.push(r); }
+  for (const r of index.dirtyRoots) if (index.rootRank[r] >= 0 && holds(r)) stack.push(r);
+  while (stack.length > 0) {
+    const i = stack.pop()!, it = scene.items[i];
+    if (excluded.has(i) || it === GONE_ITEM) continue;
+    if (it.kind !== 'phantom') consider(i, it);
+    // Below a group more than half folded, nothing is reachable.
+    if (it.kind === 'group' && foldT(it.maxChildK!, zoom, p) < p.foldClickable) for (const c of it.children) if (holds(c)) stack.push(c);
+  }
   return best >= 0 ? best : null;
 }
 

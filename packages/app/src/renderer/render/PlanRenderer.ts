@@ -242,9 +242,8 @@ export class PlanRenderer {
     else this.tex.update(prev, scene, texelSlots(prev, scene, changes));
     // The titles are placed anew, as for any scene of the state given before (a preview only keeps them).
     this.titleSides.clear();
-    const front = this.frames.front;
-    const patched = front && !this.frames.building && !this.stale && this.hasFrame && !front.layouts && front.base === prev && this.tex.scene === scene
-      ? patchEdit(front, prev, scene, changes, this.p, this.font, this.titleSides, split) : null;
+    const front = this.patchable(scene);
+    const patched = front && !front.layouts && front.base === prev ? patchEdit(front, prev, scene, changes, this.p, this.font, this.titleSides, split) : null;
     if (!front || !patched) { this.restart(true); return; }
     Object.assign(front, { scene, base: scene, state: scene });
     this.send(patched);
@@ -281,9 +280,9 @@ export class PlanRenderer {
     this.scene = scene;
     this.transient = true;
     this.hits = null;
-    const front = this.frames.front;
-    const patched = front && !this.frames.building && !this.stale && this.hasFrame && front.state === real.scene && this.tex.scene === real.scene
-      && (!front.layouts || sameParts(front.layouts, layouts)) ? patchPreview(front, scene, split, this.p, layouts) : null;
+    const front = this.patchable(real.scene);
+    const patched = front && front.state === real.scene && (!front.layouts || sameParts(front.layouts, layouts))
+      ? patchPreview(front, scene, split, this.p, layouts) : null;
     if (!front || !patched) { this.buildWhole(); return; }
     front.scene = scene;
     this.send(patched);
@@ -307,9 +306,8 @@ export class PlanRenderer {
     this.scene = real.scene;
     this.transient = false;
     this.hits = null;
-    const front = this.frames.front;
-    const patched = front && !this.frames.building && !this.stale && this.hasFrame && front.base === real.scene && !front.layouts && this.tex.scene === real.scene
-      ? patchPreview(front, real.scene, split, this.p) : null;
+    const front = this.patchable(real.scene);
+    const patched = front && front.base === real.scene && !front.layouts ? patchPreview(front, real.scene, split, this.p) : null;
     if (!front || !patched) {
       this.frames.cancel();
       this.titleSides = this.sidesBefore ?? new Map();
@@ -320,6 +318,15 @@ export class PlanRenderer {
     this.send(patched);
     this.updateMarkers();
     this.updateOutline();
+  }
+
+  /**
+   * What is drawn, if it can be patched in place: complete and on screen (no rebuild pending or asked for), the item
+   * texture holding `held` (the scene the patch leaves under it); null otherwise.
+   */
+  private patchable(held: PlanScene): Shown | null {
+    const front = this.frames.front;
+    return front && !this.frames.building && !this.stale && this.hasFrame && this.tex.scene === held ? front : null;
   }
 
   /** An in-place preview dropped: its texels written back from the state's scene, its envelopes no longer drawn. */
@@ -658,9 +665,10 @@ export class PlanRenderer {
   private rebuild(budget: { deadline: number } | undefined): void {
     this.prepare();
     const scene = this.scene!, layouts = this.overlay?.layouts;
+    // The state's index holds the preview's items for this computeVisible only: it is also a tab's cache.
+    let visible: VisibleSet;
     this.indexHolds(true);
-    const visible = computeVisible(scene, this.index!, this.cam, this.p);
-    this.indexHolds(false);
+    try { visible = computeVisible(scene, this.index!, this.cam, this.p); } finally { this.indexHolds(false); }
     const inst = buildInstances(scene, visible, this.cam, this.origin, this.p, budget, this.font, this.titleSides, this.frames.storage(), layouts);
     const state = this.overlay ? this.real!.scene : scene;
     if (this.frames.start({ scene, base: scene, state, visible, inst, cam: this.cam, layouts })) this.show();

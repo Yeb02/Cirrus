@@ -678,9 +678,10 @@ export function GraphView(props: {
           if (d && d.dirty) {
             d.dirty = false;
             previewDrag(e.renderer, d, d.dx, d.dy);
-            // The group that would receive the drop lights up (spec 10), only if the drop would enter it.
-            const at = screenToWorld(e.renderer.camera, d.sx, d.sy);
-            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current);
+            // The group that would receive the drop lights up (spec 10), only if the drop would enter it; found by the
+            // state's index when it is the drag's scene's (what is under the point only, not the plan: plan 3c task 9).
+            const at = screenToWorld(e.renderer.camera, d.sx, d.sy), held = e.renderer.held;
+            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current, held?.scene === d.base ? held.index : undefined);
             e.renderer.setDropTarget(t !== null && dropEffects(d.base, d.items, t, d.alt).some((f) => f.enter === t) ? t : null);
             dirty.current = true;
           }
@@ -689,8 +690,9 @@ export function GraphView(props: {
             const rebuilt = e.renderer.renderFrame();
             drawn = { preview };
             drawHandles();
-            // What is under a resting pointer changes with the drawn set (I1 of the review): look again.
-            if (rebuilt && lastPointer.current && !gestures.current.busy) hover(lastPointer.current.x, lastPointer.current.y);
+            // What is under a resting pointer changes with the drawn set (I1 of the review): look again — not while a
+            // handle is dragged (each of its frames is patched in place; the hover comes back once it is released).
+            if (rebuilt && lastPointer.current && !gestures.current.busy && !handleDrag.current) hover(lastPointer.current.x, lastPointer.current.y);
             if (firstPending.current) {
               mark('firstFrame');
               // Visual checks: a simulated hover is drawn before the capture is taken.

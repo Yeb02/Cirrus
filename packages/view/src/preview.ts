@@ -1,6 +1,6 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import type { Bounds, Camera } from './camera.ts';
-import { openTitleY, titleSize } from './frame.ts';
+import { openTitleY, type PlacedTitle, titleSize } from './frame.ts';
 import type { EnvelopeMeshes } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
 import { simpleMarker } from './geometry/simple.ts';
@@ -131,21 +131,24 @@ function rewriteGroupTitles(inst: Instances, scene: PlanScene, visible: VisibleS
   return out;
 }
 
-/** The placed titles of a split's connections, found at its first patch. */
-const titlesOfSplit = new WeakMap<PreviewSplit, WeakMap<Instances, number[]>>();
+/**
+ * The placed titles of a split's connections, found at its first patch, per list of titles placed (a rebuild or an
+ * edit places them in a new list: the entry then is simply not found).
+ */
+const titlesOfSplit = new WeakMap<PreviewSplit, WeakMap<PlacedTitle[], number[]>>();
 
 /**
  * The titles of the connections a preview moves follow their core, on the side they had (Ruling of plan 3c task 9):
  * placed by the same arithmetic as placeTitle, so that the base's core gives back the base's rectangle to the bit.
  */
 function followTitles(inst: Instances, scene: PlanScene, split: PreviewSplit, p: RenderParams): Ranges {
-  let byInst = titlesOfSplit.get(split);
-  if (!byInst) titlesOfSplit.set(split, (byInst = new WeakMap()));
-  let list = byInst.get(inst);
+  let byTitles = titlesOfSplit.get(split);
+  if (!byTitles) titlesOfSplit.set(split, (byTitles = new WeakMap()));
+  let list = byTitles.get(inst.titles);
   if (!list) {
     const conns = new Set([...split.complex, ...split.simple]);
     list = inst.titles.flatMap((t, k) => (conns.has(t.conn) ? [k] : []));
-    byInst.set(inst, list);
+    byTitles.set(inst.titles, list);
   }
   const out: Ranges = [], t = inst.texts.storage, spans = inst.titleGlyphs.storage, o = inst.origin, items = scene.items, a0 = GLYPH_AT.anchor;
   for (const k of list) {
@@ -211,8 +214,8 @@ export function previewEnvelopes(shown: Shown, scene: PlanScene, split: PreviewS
  * The instances shown, patched in place after an action that leads from `prev` (the scene they were built for) to
  * `scene` by `changes` (plan 3c task 9), equal to what a rebuild for the same visible set would give: the complex
  * bundles that touch what changed, the open titles of the groups changed, the envelopes and the connection titles
- * anew (placed again, as after any action: `sides` cleared). `also`: a preview patched in before (a drop), whose
- * split is rewritten too. Null when the visible set could have changed — the hierarchy, slots come or gone, parts
+ * anew (placed again, as after any action: `sides` cleared). `also`: a preview patched in before (a drop, or an action
+ * that lands during a gesture), whose split is rewritten too, its complex bundles from the scene's own layouts. Null when the visible set could have changed — the hierarchy, slots come or gone, parts
  * derived again, a step, a title or a fold changed, an item come into view — and then nothing was changed.
  */
 export function patchEdit(
@@ -232,7 +235,8 @@ export function patchEdit(
   for (const i of visible.items) if (touched.has(i)) drawn.add(i);
   const rect = preparedRect(cam, p);
   for (const i of changes.items) if (!drawn.has(i) && (b[i].parent < 0 || drawn.has(b[i].parent)) && wouldShow(scene, i, cam, rect, p)) return null;
-  const complex: number[] = [], of = inst.bundleOf.storage;
+  // The bundles it touches, and those the preview rewrote (a layout handle's: its override is dropped with it).
+  const complex: number[] = also?.visible === visible ? [...also.complex] : [], of = inst.bundleOf.storage;
   visible.connections.forEach((vc, ci) => { if (of[ci] >= 0 && touches(vc, touched)) complex.push(ci); });
   const rewritten = rewriteBundles(inst, scene, visible, cam, p, complex);
   if (!rewritten) return null;

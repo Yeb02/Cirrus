@@ -190,6 +190,21 @@ test('dépôt d’un aperçu : patchEdit réécrit aussi ce que l’aperçu avai
   expect(contentOf(shown.inst)).toEqual(contentOf(shownFor(u.scene, cam, shown.visible).inst));
 });
 
+test('une action pendant une poignée de disposition faite en place : le faisceau tiré revient à sa disposition, comme une reconstruction', () => {
+  const st = copyOf(s), lobby = ids.plans.lobby, scene0 = buildScene(st, lobby, measure, P), cam = camAtTextPx(scene0, 0, 16), shown = shownFor(scene0, cam);
+  const ci = shown.visible.connections.findIndex((vc) => vc.conns.length === 1 && vc.fade === 'none' && !isSimple(scene0, vc) && vc.ends.length > 2);
+  const part = shown.visible.connections[ci].conns[0], split = layoutSplit(shown.visible, part);
+  expect(patchPreview(shown, scene0, split, P, new Map([[part, { handles: {}, marker: { x: 0, y: 0 }, angle: 1 }]]))).not.toBeNull();
+  // A move of a drawn node that touches nothing of that bundle (Ctrl+Z of a move, a sync), done in place.
+  const ends = new Set(shown.visible.connections[ci].ends.map((e) => e.item));
+  const other = shown.visible.items.find((i) => scene0.items[i].kind === 'node' && !ends.has(i))!, it = scene0.items[other];
+  const a = moveNodes(st, lobby, [{ node: it.id, x: it.x + 5, y: it.y - 3 }]);
+  applyOps(st, a.ops);
+  const u = updateScene(scene0, st, a.ops, measure, P);
+  expect(patchEdit(shown, scene0, u.scene, u.changes, P, font, new Map(), split)).not.toBeNull();
+  expect(contentOf(shown.inst)).toEqual(contentOf(shownFor(u.scene, cam, shown.visible).inst));
+});
+
 test('patchEdit refuse ce qui peut changer l’ensemble visible : renommage, pas, hiérarchie, élément amené dans la vue', () => {
   const st = copyOf(s), lobby = ids.plans.lobby;
   const scene0 = buildScene(st, lobby, measure, P), mdl = scene0.byId.get(ids.nodes.mdl)!, it = scene0.items[mdl];
