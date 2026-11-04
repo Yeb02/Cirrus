@@ -313,6 +313,8 @@ const fileAt = (files: FileRef[], name: string): number => {
   return i;
 };
 const changes = (m: Merge) => m.added.length + m.replaced.length > 0;
+/** What a drop of files already there, unchanged, is told: when filesBuild gives null (importInto), or at run time. */
+export const UP_TO_DATE = 'Déjà à jour.';
 
 /**
  * Files dropped on a node, already copied into the store (spec 5.2; plan 4a, D6), merged by mergeFiles as one action:
@@ -324,7 +326,7 @@ export function filesBuild(s: State, node: Id, incoming: FileRef[]): Build {
   if (n && !changes(mergeFiles(n.files, incoming))) return null;
   return (st) => {
     const now = nodeRec(st, node), m = mergeFiles(now.files, incoming);
-    if (!changes(m)) throw new CommandError('Déjà à jour.');
+    if (!changes(m)) throw new CommandError(UP_TO_DATE);
     const label = m.added.length === 0 && m.replaced.length === 1 ? `Remplacer « ${m.replaced[0]} »` : `Ajouter des fichiers à « ${now.title} »`;
     return combine(st, label, [(x) => editNode(x, node, { files: m.files })]);
   };

@@ -421,3 +421,98 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - **en-tête** : une zone de prise de 40 pixels au moins (`.drag`) sépare le titre des boutons ; un titre long s'arrête avant elle.
 
   Coût si faux : nul.
+
+## Tâche 4 : fichiers du nœud — dépôt, réimport, renommage, retrait, ouverture par le système
+
+### Mesures
+
+- Suite complète : 532 tests sur 532 (521 + 11 : 2 dans `navigation.test.ts`, 6 dans `nodeFiles.test.ts`, 2 dans `session.test.ts`, 1 dans `actions.test.ts`). `tsc` : `app` sans erreur.
+  - Avant le code : `navigation.test.ts`, `nodeFiles.test.ts` et `session.test.ts` échouaient, faute de `main/navigation.ts` et de `files/nodeFiles.ts`.
+  - Le test d'`actions.test.ts` (un dépôt, un renommage, un retrait, chacun défait seul par `invertAction`) passait d'emblée : il porte sur les trois `Build` de la tâche 2.
+- Captures, trois suites refaites de zéro :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel ;
+  - contre `plan4a` avant sa mise à jour : `popup-noeud` à 132 pixels (0,009 %), refaite (ci-dessous) ;
+  - `import-noeud` est nouvelle. D'une suite à l'autre, les 13 images sont identiques au pixel, `import-noeud` comprise ;
+  - `plan4a` reçoit `popup-noeud` refaite et `import-noeud` : deux suites y sont à 0 pixel.
+- Essai de l'app construite, hors dépôt : une base de test, un profil et un TEMP temporaires, un port de débogage. Le pilote envoie de vrais glissements de fichiers du système par CDP (`Input.dispatchDragEvent` avec des chemins du disque : `webUtils.getPathForFile`, la porte du preload et l'import du principal servent comme pour un dépôt de l'explorateur), et des souris et des touches réelles. 31 vérifications passent toutes aux quatre dernières passes, dont les deux dernières sur le code final ; les 30 autres passaient déjà aux trois passes d'avant le menu remonté :
+  - dépôt sur MDL, notifié ; le même redéposé, « Déjà à jour. » ; une nouvelle version dans une autre casse remplace l'ancienne à sa place ;
+  - sur le fond, la notice ; un dossier et un fichier au-delà de `maxImportMb` (1 Mo pour l'essai) refusés en une notification, l'autre fichier importé (Review Focus 2) ;
+  - trois fichiers déposés ensemble, retirés tous trois par un seul Ctrl+Z, remis par Ctrl+Y ;
+  - dépôt sur le pop-up, sur le résumé : ajouté, sans rien écrire dans le résumé, le panneau éclairé pendant le survol ;
+  - lâché sur les onglets ou sur les réglages : rien n'est importé et la fenêtre reste sur l'app. Le principal ne voit passer aucune navigation : la garde de la page l'a arrêtée avant (Review Focus 2) ;
+  - `location.href` d'un script vers un fichier : refusé par le principal (`will-navigate`) ; `window.open` : refusé ;
+  - menus par genre ; Échap ferme le menu, pas le pop-up ; le menu du dernier fichier, au bas de la fenêtre, y reste entier ;
+  - renommage : le nom sans l'extension choisi, un nom refusé gardé dans le champ avec sa raison, Échap, Entrée, un nom déjà pris refusé au départ du champ, Ctrl+Z ;
+  - retrait, puis Ctrl+Z qui le remet à sa place ; la ligne d'un fichier sans vue (classe, infobulle, curseur) et son menu.
+- Les 41 vérifications de la tâche 3 repassent sur l'app construite.
+- Non essayé dans l'app : l'ouverture par le système (elle lancerait une application ou une fenêtre de l'explorateur sur le PC de l'utilisateur) et « Ajouter des fichiers… » (la boîte de dialogue du système est modale et ne se pilote pas par CDP). Leur message est testé par `openNotice` ; le chemin d'import est celui du dépôt.
+- La toute première passe du pilote a vu la vue changer en cours d'essai : à partir du troisième dépôt, dépôts et clics sur MDL tombaient à côté. Ce n'est pas reproduit en huit passes. Une sonde montre qu'un glissement par CDP n'envoie aucun événement de pointeur à la page. La cause la plus probable est la souris réelle, au-dessus de la fenêtre, qui s'ouvre au premier plan.
+
+### Décisions
+
+- Ruling: **`importInto(node, paths, refused?)`**.
+  - Le troisième paramètre, facultatif, porte les fichiers refusés avant l'import : un fichier déposé qui n'est pas sur le disque (`pathForFile` rend `''`, une image tirée d'un navigateur), avec la raison « pas un fichier du disque ». Ils rejoignent la notification des refus du principal. `onDropFiles` et `dropFilesAt` le portent aussi.
+  - Options :
+    - les ignorer : le dépôt ne ferait rien, sans un mot ;
+    - les passer comme chemins : refusés « non déposé », ce qui est faux ;
+    - le paramètre (choix).
+  - Coût si faux : un paramètre.
+- Ruling: **les notifications d'un dépôt** (`addImported`, `refusalNotice`, `dropNotice`, dans le nouveau module `files/nodeFiles.ts`).
+  - Les refus en une seule : « 1 fichier non importé : x (c’est un dossier) », « 2 fichiers non importés : x (c’est un dossier), y (plus de 200 Mo) ». Les noms, sans guillemets, comme dans le plan.
+  - Ce que le dépôt a fait, dans une seconde :
+    - « « nom » remplacé », ou « 2 fichiers remplacés » ;
+    - et, en plus du plan, les ajouts : « « a.txt » ajouté à « titre » », « 3 fichiers ajoutés à « titre » ». Sans elle, un dépôt sur le graphe n'aurait aucun effet visible : le graphe ne dessine pas les fichiers, et le pop-up peut être fermé ;
+    - ajouts et remplacements ensemble, joints par « ; » ; les fichiers inchangés ne sont pas nommés.
+  - Ce que le dépôt a fait est lu sur l'état où l'action se calcule (la même fusion que `filesBuild`), et non sur celui du dépôt.
+  - « Déjà à jour. », avec son point : le texte du même refus à l'exécution (tâche 2), une constante, `UP_TO_DATE`, dans `actions.ts`. Le plan l'écrit sans point.
+  - L'apostrophe est typographique, comme tous les textes depuis la tâche 1 : « l’y ajouter », « l’explorateur, sans l’ouvrir ». Le plan les écrit droites.
+  - Options pour les ajouts : aucune notification (la lecture littérale) ; seulement pour un dépôt sur le graphe.
+  - Coût si faux : une ligne par texte.
+- Ruling: **le nœud qui reçoit un dépôt sur le graphe** : celui dont un clic au même point ouvrirait le pop-up (`nodeOpenedBy`).
+  - C'est un nœud, un groupe, ou le nœud lointain d'un fantôme de bras scindé (spec 8.5, comme le pop-up).
+  - Sur un fantôme absent ou de centre, une connexion, une amorce ou le fond, la notice dit « Dépose le fichier sur un nœud pour l’y ajouter. ».
+  - Le pop-up d'une connexion et une question, posés sur le graphe, refusent le dépôt (curseur interdit) : il n'irait pas au nœud caché dessous.
+  - Coût si faux : une ligne.
+- Ruling: **le dépôt sur le pop-up** est pris partout sur le panneau (en-tête, résumé, tags, liste), et non sur la seule liste.
+  - Le panneau s'éclaire pendant le survol (`.dropping`). Un dépôt sur le résumé n'y écrit rien.
+  - `FloatingPanel` reçoit `onDropFiles`, facultatif : l'aperçu d'un fichier (tâche 5) ne le passera pas. Le pop-up d'un nœud disparu refuse le dépôt.
+  - Options : la liste seule (la lecture littérale) : un dépôt juste à côté ne ferait rien.
+  - Coût si faux : nul.
+- Ruling: **la garde de la fenêtre** (Review Focus 2).
+  - `App` ne prévient le défaut que d'un glissement de fichiers (`types` contient `Files`) que rien n'a pris, et met `dropEffect` à `none` : le curseur dit interdit, et rien n'est lâché. Un glissement de texte reste aux champs : déplacer un mot dans le résumé marche toujours.
+  - Le principal refuse toute navigation hors de l'adresse de l'app (`navigationAllowed`), et répond `deny` à toute fenêtre.
+  - `navigationAllowed` compare les deux adresses lues par `URL`, sans fragment. Une requête, une autre page du même serveur ou une adresse illisible sont refusées.
+  - Options : prévenir tout `dragover` et tout `drop` (la lecture littérale) : le glisser-déposer de texte dans les champs cesserait.
+  - Coût si faux : nul. Le principal arrête la navigation de toute façon.
+- Ruling: **le menu d'un fichier**.
+  - `ContextMenu` devient générique sur le type d'action : celui du graphe garde ses `MenuItem`, `fileMenu` donne celles d'un fichier.
+  - Il est rendu dans le panneau, en `position: fixed`, aux coordonnées du clic. Le corps du pop-up défile et rogne ce qu'il contient. Hors du panneau, un appui sur le menu fermerait le pop-up (la règle du clic hors des panneaux).
+  - Il reste dans la fenêtre : remonté et décalé à gauche de ce qu'il dépasserait. C'est le cas du dernier fichier d'un pop-up collé au bas de la fenêtre, comme le place `placeAt`. Cela vaut aussi pour le menu du graphe.
+  - Son Échap est écouté en capture, défaut prévenu : il ne ferme que le menu, où que soit le focus. Le minor différé de la tâche 3 (l'Échap du menu du graphe, le focus hors du graphe) est réglé du même coup.
+  - Coût si faux : nul.
+- Ruling (décision du contrôleur): **« Ouvrir avec l’application du système »**.
+  - Le menu ne l'offre que pour les genres image, PDF et autre (`fileMenu`). Le texte, le code, le LaTeX et les tableaux ne sont jamais confiés au système : Cirrus les affiche (tâche 5), et un script n'est donc jamais remis à Windows.
+  - Un clic sur un fichier de genre autre l'ouvre ; un double-clic ne l'ouvre qu'une fois (son second clic, `detail` 2, est ignoré).
+  - Le principal garde sa liste courte et montre un exécutable dans l'explorateur, avec la notification du plan.
+  - Coût si faux : un genre de plus dans `TO_SYSTEM`.
+- Ruling: **renommer**.
+  - Le champ est en place, le nom sans son extension choisi, comme dans l'explorateur ; le nom tapé est rogné.
+  - Entrée vérifie le nom par `checkFileName` : refusé, le champ reste ouvert, la raison sous la liste.
+  - Quitter le champ garde le nom ; un refus arrive alors en notification, par `renameFileBuild` à l'exécution.
+  - Échap abandonne, et le panneau reste.
+  - Coût si faux : nul.
+- Ruling: **« Retirer du nœud »** se fait sans question : une action, défaite par Ctrl+Z, et la copie reste au magasin. Coût si faux : une question.
+- Ruling: **un nœud mis à la corbeille pendant un import** (l'import est asynchrone) : les fichiers y sont écrits, comme toute modification d'un nœud à la corbeille par `editNode`, et reviennent avec lui. Un nœud absent est refusé, « Nœud introuvable. ». Coût si faux : une condition.
+- Ruling: **la capture `import-noeud`**.
+  - `CIRRUS_IMPORT` passe par les options de lancement en mode capture seulement : un lancement ordinaire n'importe jamais rien dans la base de l'utilisateur.
+  - Le preload ajoute ses chemins aux chemins déposés (décision du contrôleur). Après la première image, avant les clics et les touches, `App` appelle `dropFilesAt` du graphe par une poignée (`GraphHandle`). Le dépôt suit ensuite le chemin réel : `importInto`, `importFiles`, la porte du preload, le principal.
+  - La scène : le clic sur MDL ouvre son pop-up, haut de 720 pixels (`popupHeightPx`, réglage de la scène) pour montrer la liste. Le fichier `données_importées.txt` est écrit dans un dossier temporaire, que `captures.mjs` crée puis retire. La notification de l'ajout est en haut.
+  - « Modifié le » : une date de l'historique écrite depuis l'ouverture de la fenêtre porte la classe `volatile`, que le mode capture ne dessine pas, comme l'identifiant.
+  - Options pour la date :
+    - figer l'horloge du magasin en mode capture : une horloge à injecter dans `LocalStore`, hors des fichiers de la tâche ;
+    - masquer toujours les dates : `popup-noeud` perdrait ses dates fixées ;
+    - masquer les dates de la session (choix).
+  - Coût si faux : la capture ne montre pas la date de l'import.
+- Ruling: **`popup-noeud` refaite** : elle différait de 132 pixels (0,009 %, sous la tolérance). Seule différence, regardée : le pouce de la barre de défilement du pop-up est plus court, car le corps tient désormais le bouton « Ajouter des fichiers… ». Refaite pour que la référence reste au pixel. Coût si faux : nul.
+- Ruling: **`OpenResult`**, la réponse de `cirrus:files:open`, est déclarée dans `main/files.ts`, et `env.d.ts` comme `nodeFiles.ts` la reprennent. Coût si faux : nul.
+- Hors de la liste des fichiers du plan : `files/nodeFiles.ts` et son test, `nodeFiles.test.ts`, la logique pure du dépôt et du menu ; `actions.ts` (la constante `UP_TO_DATE`) ; `FloatingPanel.tsx`, `Panels.tsx` et `styles.css` ; `main/files.ts` (`OpenResult`) ; le preload et `env.d.ts`.

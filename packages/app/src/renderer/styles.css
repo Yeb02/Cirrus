@@ -215,6 +215,14 @@ button, input, select { font: inherit; color: var(--ink); }
 .node-popup .file { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 12.5px; }
 .node-popup .file .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-popup .file .kind, .node-popup .file .size { flex: none; color: var(--muted); white-space: nowrap; }
+/* A file Cirrus has no view for: a click opens it with the system's application. */
+.node-popup .file.system { cursor: pointer; }
+.node-popup .file .rename { padding: 0 4px; font: inherit; }
+.node-popup .add-files { margin-top: 6px; padding: 2px 0; border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
+/* Files dragged over a pop-up that takes them. */
+.panel.dropping { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 12px 32px rgba(2, 6, 16, 0.6); }
+/* A file's menu, at the click in window pixels: out of the body it is opened in, which scrolls and clips. */
+.panel .context-menu { position: fixed; }
 .capture .volatile { visibility: hidden; }
 .handles { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .handles line { stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }

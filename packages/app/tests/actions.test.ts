@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, groupOf, layoutKey, placementKey, setLayout, type State, type Vec2 } from '@cirrus/core';
+import { applyOp, applyOps, groupOf, invertAction, layoutKey, placementKey, setLayout, type State, type Vec2 } from '@cirrus/core';
 import { buildFixture, buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import {
@@ -9,8 +9,9 @@ import {
 } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
 import {
-  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, groupAt, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
-  dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
+  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, filesBuild, groupAt, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
+  dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeInPlanBuild, removeFileBuild, removeMemberBuild, renameBuild, renameFileBuild, roleBuild,
+  scaleBuild, splitBuild,
   withRepercussion,
 } from '../src/renderer/actions.ts';
 
@@ -290,4 +291,25 @@ test('création, importation, collage : avec l’index, seuls les éléments sou
   // The node created there enters that group, as with the scan.
   const a = createBuild(counted, 'Nouveau', at, 1, P, index)!(state);
   expect(a.ops.some((o) => o.t === 'branch' && o.key.plan === lobby && o.key.node === group && o.after)).toBe(true);
+});
+
+test('fichiers du nœud : un dépôt, un renommage, un retrait sur la base de test ; chaque action se défait seule par invertAction', () => {
+  const files = () => s.nodes.get(ids.nodes.mdl)!.files;
+  const before = files();
+  const incoming = [
+    { name: 'figure.svg', hash: 'b'.repeat(64), size: 20 }, { name: 'NOTES_LECTURE.md', hash: 'a'.repeat(64), size: 10 }, { name: 'données.tsv', hash: 'c'.repeat(64), size: 30 },
+  ];
+  const dropped = run(filesBuild(s, ids.nodes.mdl, incoming));
+  const afterDrop = files();
+  expect(afterDrop.map((f) => f.name)).toEqual([...before.map((f) => (f.name === 'notes_lecture.md' ? 'NOTES_LECTURE.md' : f.name)), 'figure.svg', 'données.tsv']);
+  const renamed = run(renameFileBuild(ids.nodes.mdl, 'figure.svg', 'figure_compression.svg'));
+  const afterRename = files();
+  expect(afterRename.find((f) => f.hash === 'b'.repeat(64))!.name).toBe('figure_compression.svg');
+  const removed = run(removeFileBuild(ids.nodes.mdl, 'données.tsv'));
+  expect(files().map((f) => f.name)).not.toContain('données.tsv');
+  // Each one, undone alone, gives back the list it found.
+  for (const [a, list] of [[removed, afterRename], [renamed, afterDrop], [dropped, before]] as const) {
+    applyOps(s, invertAction(a).ops);
+    expect(files(), a.label).toEqual(list);
+  }
 });

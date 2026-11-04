@@ -7,6 +7,9 @@ const launch = arg ? JSON.parse(arg.slice('--cirrus-launch='.length)) : {};
 // review). Scripts of the page cannot reach this closure (contextIsolation), and getPathForFile gives '' for any File
 // they make; so a script cannot have the main process read a file the user did not drop.
 const dropped = new Set<string>();
+// Captures (CIRRUS_IMPORT="sx,sy|path"): the paths the main process gives at launch are as trusted as a drop's; the
+// page drops them by its own drop function, through this gate.
+if (typeof launch.import === 'string') for (const p of launch.import.split('|').slice(1)) if (p) dropped.add(p);
 const nameOf = (p: unknown) => String(p).slice(Math.max(String(p).lastIndexOf('\\'), String(p).lastIndexOf('/')) + 1);
 
 contextBridge.exposeInMainWorld('cirrus', {

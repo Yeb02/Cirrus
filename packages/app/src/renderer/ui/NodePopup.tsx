@@ -1,17 +1,25 @@
 import {
-  type Action, connKind, connTrashed, effectiveTags, type Id, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId, type PlanRec, type State,
-  subjectOf, TagError, type TagValue,
+  type Action, connKind, connTrashed, effectiveTags, type FileRef, type Id, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId, type PlanRec,
+  type State, subjectOf, TagError, type TagValue,
 } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import type { HistorySummary } from '../../main/files.ts';
-import { type Build, renameBuild, summaryBuild, tagsBuild } from '../actions.ts';
+import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type FileKind, fileKind, formatSize } from '../files/kind.ts';
+import { checkFileName } from '../files/merge.ts';
+import { droppedPaths, type FileAction, fileMenu, type NodeFiles, systemOnClick } from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
+import { ContextMenu } from './ContextMenu.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
 
 const KIND: Record<FileKind, string> = { image: 'image', pdf: 'PDF', tex: 'LaTeX', text: 'texte', table: 'tableau', other: 'autre' };
 const DATE = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'long', timeStyle: 'short' });
+/**
+ * When this window opened: a date of the history written since (an edit of this session) differs from one capture to
+ * the next, so it is `volatile` (not drawn in captures), as the identifier is.
+ */
+const OPENED_AT = Date.now();
 
 /** « clé : valeur », a number the French way; a word alone. */
 const tagText = (t: TagValue) => (t.value === undefined ? t.key : `${t.key} : ${typeof t.value === 'number' ? t.value.toLocaleString('fr-FR') : t.value}`);
@@ -125,15 +133,87 @@ function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; on
 }
 
 /**
+ * The node's files (spec 12; plan 4a, task 4): name, kind, size. A right click opens the file's menu (fileMenu): open it
+ * with the system's application, rename it in place, take it out of the node (its copy stays in the store). A click on
+ * a file Cirrus has no view for opens it with the system. « Ajouter des fichiers… » takes files chosen in the system's
+ * dialog; files dropped on the pop-up come in too (NodePopup). A new name is checked on Enter (checkFileName), its
+ * refusal said under the list; leaving the field keeps it, a refusal then in a toast; Escape gives it up.
+ */
+function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(build: Build): Promise<boolean> }) {
+  const [menu, setMenu] = useState<{ x: number; y: number; file: FileRef } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** The rename given up by Escape: leaving the field then keeps the old name. */
+  const givenUp = useRef(false);
+  const pick = (action: FileAction, f: FileRef) => {
+    if (action === 'system') void props.actions.openWithSystem(f);
+    else if (action === 'rename') { givenUp.current = false; setError(null); setRenaming(f.name); }
+    else void props.onEdit(removeFileBuild(props.id, f.name));
+  };
+  const renamed = (f: FileRef, value: string) => {
+    setRenaming(null);
+    setError(null);
+    const v = value.trim();
+    if (!givenUp.current && v !== f.name) void props.onEdit(renameFileBuild(props.id, f.name, v));
+  };
+  return (
+    <>
+      {props.files.length === 0 ? <p className="dim">Aucun fichier.</p> : (
+        <ul className="files">
+          {props.files.map((f) => {
+            const system = systemOnClick(f.name);
+            return (
+              <li
+                key={f.name} className={system ? 'file system' : 'file'} data-name={f.name}
+                // Once, a double-click's second click aside (it would open a second copy of the application).
+                onClick={(e) => { if (system && e.detail <= 1 && renaming !== f.name) void props.actions.openWithSystem(f); }}
+                onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, file: f }); }}
+              >
+                {renaming === f.name ? (
+                  <input
+                    className="name rename" autoFocus defaultValue={f.name} spellCheck={false} aria-label="Nouveau nom du fichier"
+                    // The name without its extension is selected, as in the explorer.
+                    onFocus={(e) => { const dot = f.name.lastIndexOf('.'); e.currentTarget.setSelectionRange(0, dot > 0 ? dot : f.name.length); }}
+                    onChange={() => setError(null)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const why = checkFileName(e.currentTarget.value.trim(), props.files, f.name);
+                        if (why) setError(why);
+                        else e.currentTarget.blur();
+                      } else if (e.key === 'Escape') {
+                        // The field's: the panel stays.
+                        e.preventDefault();
+                        givenUp.current = true;
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onBlur={(e) => renamed(f, e.target.value)}
+                  />
+                ) : <span className="name" title={system ? `${f.name}\nUn clic l’ouvre avec l’application du système.` : f.name}>{f.name}</span>}
+                <span className="kind">{KIND[fileKind(f.name)]}</span>
+                <span className="size">{formatSize(f.size)}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {error && <p className="error">{error}</p>}
+      <button className="add-files" onClick={() => void props.actions.pickInto(props.id)}>Ajouter des fichiers…</button>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={fileMenu(menu.file.name)} onClose={() => setMenu(null)} onPick={(a) => pick(a, menu.file)} />}
+    </>
+  );
+}
+
+/**
  * A node's pop-up (spec 12), in a floating panel: its title in the header, typed in place (Enter or leaving the field
  * keeps it, Escape gives it up); its summary as LaTeX source, kept on leaving the field; its tags; its metadata (history,
- * plans, knowledge connections, identifier); its files (their actions come with task 4, their previews with tasks 5 and
- * 6). `found`: the node as resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses
- * (in a toast) puts its field back to the node's value.
+ * plans, knowledge connections, identifier); its files (Files; their previews come with tasks 5 and 6), which files
+ * dropped anywhere on the pop-up join (importInto). `found`: the node as resolveTarget finds it, null once it is gone
+ * (Review Focus 5). An edit the session refuses (in a toast) puts its field back to the node's value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void;
+  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
 }) {
   const { id, found: n, state: s } = props;
   const history = useHistory(id, props.rev, props.action);
@@ -173,6 +253,7 @@ export function NodePopup(props: {
     // « … » while it is read, « — » with no history or when it could not be read.
     const h = history === 'failed' ? { created: null, modified: null, changes: null } : history;
     const date = (ms: number | null | undefined) => (ms === undefined ? '…' : ms === null ? '—' : DATE.format(ms));
+    const fresh = (ms: number | null | undefined) => (ms != null && ms >= OPENED_AT ? 'volatile' : undefined);
     return (
       <>
         <h4>Résumé (LaTeX)</h4>
@@ -185,8 +266,8 @@ export function NodePopup(props: {
         <Tags s={s} id={id} tags={n.tags} suggested={props.params.tagSuggestions} onEdit={props.onEdit} />
         <h4>Métadonnées</h4>
         <dl className="meta">
-          <dt>Créé le</dt><dd>{date(h?.created)}</dd>
-          <dt>Modifié le</dt><dd>{date(h?.modified)}</dd>
+          <dt>Créé le</dt><dd className={fresh(h?.created)}>{date(h?.created)}</dd>
+          <dt>Modifié le</dt><dd className={fresh(h?.modified)}>{date(h?.modified)}</dd>
           <dt>Historique</dt><dd>{!h ? '…' : h.changes === null ? '—' : plural(h.changes, 'modification', 'modifications')}</dd>
           <dt>Plans</dt>
           <dd>
@@ -196,19 +277,14 @@ export function NodePopup(props: {
           <dt>Identifiant</dt><dd className="id volatile">{id}</dd>
         </dl>
         <h4>Fichiers</h4>
-        {n.files.length === 0 ? <p className="dim">Aucun fichier.</p> : (
-          <ul className="files">
-            {n.files.map((f) => (
-              <li key={f.name} className="file" data-name={f.name}>
-                <span className="name" title={f.name}>{f.name}</span>
-                <span className="kind">{KIND[fileKind(f.name)]}</span>
-                <span className="size">{formatSize(f.size)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+        <Files id={id} files={n.files} actions={props.files} onEdit={props.onEdit} />
       </>
     );
   })();
-  return <FloatingPanel frame={props.frame} className="node-popup" title={title}>{body}</FloatingPanel>;
+  // Files dropped anywhere on the pop-up of a node that is there.
+  const drop = n ? (dt: DataTransfer) => {
+    const d = droppedPaths(dt.files, (f) => window.cirrus.pathForFile(f));
+    if (d.paths.length + d.refused.length > 0) void props.files.importInto(id, d.paths, d.refused);
+  } : undefined;
+  return <FloatingPanel frame={props.frame} className="node-popup" title={title} onDropFiles={drop}>{body}</FloatingPanel>;
 }

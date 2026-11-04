@@ -1,5 +1,8 @@
-import { type Action, applyOp, canonical, createNode, createPlan, decodeState, editNode, emptyState, type Id, type State, toSnapshot } from '@cirrus/core';
+import {
+  type Action, applyOp, applyOps, canonical, createNode, createPlan, decodeState, editNode, emptyState, type FileRef, type Id, type State, toSnapshot,
+} from '@cirrus/core';
 import { expect, test, vi } from 'vitest';
+import { addImported } from '../src/renderer/files/nodeFiles.ts';
 import { EditSession, plansOf, SnapshotSaver } from '../src/renderer/session.ts';
 
 function world() {
@@ -288,4 +291,52 @@ test('un instantané que le principal n’a pas pu garder est refait : rien n’
   } finally {
     warn.mockRestore();
   }
+});
+
+/** A node « Note » holding two files, written straight into the state: the session's undo stack starts empty. */
+function withFiles() {
+  const { s, plan } = world();
+  const a = createNode(s, { plan, title: 'Note', x: 0, y: 0, k: 0 });
+  applyOps(s, a.ops);
+  const node = nodeId(a);
+  const files: FileRef[] = [{ name: 'Rapport.pdf', hash: '1'.repeat(64), size: 10 }, { name: 'notes.md', hash: '2'.repeat(64), size: 20 }];
+  applyOps(s, editNode(s, node, { files }).ops);
+  return { s, node, files };
+}
+
+test('un dépôt de trois fichiers donne un seul pas d’annulation ; Ctrl+Z rend la liste d’avant, Ctrl+Y la remet', async () => {
+  const { s, node, files } = withFiles();
+  const written: Action[] = [];
+  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const incoming: FileRef[] = [
+    { name: 'figure.png', hash: '3'.repeat(64), size: 30 }, { name: 'rapport.pdf', hash: '4'.repeat(64), size: 40 }, { name: 'données.csv', hash: '5'.repeat(64), size: 50 },
+  ];
+  expect(await addImported(session, node, { refs: incoming, refused: [] })).toEqual(['2 fichiers ajoutés à « Note » ; « rapport.pdf » remplacé']);
+  expect(written).toHaveLength(1);
+  const after = s.nodes.get(node)!.files;
+  expect(after.map((f) => f.name)).toEqual(['rapport.pdf', 'notes.md', 'figure.png', 'données.csv']);
+  expect((await session.undo()).ok).toBe(true);
+  expect(s.nodes.get(node)!.files).toEqual(files);
+  // One step only: nothing left to undo.
+  expect(await session.undo()).toEqual({ ok: false, message: 'Rien à annuler.' });
+  expect((await session.redo()).ok).toBe(true);
+  expect(s.nodes.get(node)!.files).toEqual(after);
+});
+
+test('addImported : les refus d’abord, puis ce que fait le dépôt ; « Déjà à jour. » sans rien écrire ; un nœud disparu, refusé', async () => {
+  const { s, node, files } = withFiles();
+  const written: Action[] = [];
+  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const refused = [{ name: 'photos', reason: 'c’est un dossier' }, { name: 'film.mkv', reason: 'plus de 200 Mo' }];
+  expect(await addImported(session, node, { refs: [{ ...files[0], hash: '6'.repeat(64) }], refused })).toEqual([
+    '2 fichiers non importés : photos (c’est un dossier), film.mkv (plus de 200 Mo)', '« Rapport.pdf » remplacé',
+  ]);
+  // Every file there already, unchanged: nothing written; only refusals: nothing asked of the session.
+  expect(await addImported(session, node, { refs: s.nodes.get(node)!.files, refused: [] })).toEqual(['Déjà à jour.']);
+  expect(await addImported(session, node, { refs: [], refused: refused.slice(0, 1) })).toEqual(['1 fichier non importé : photos (c’est un dossier)']);
+  expect(await addImported(session, node, { refs: [], refused: [] })).toEqual([]);
+  expect(written).toHaveLength(1);
+  // A node gone before the files reach it (its creation undone elsewhere): the session refuses, and says why.
+  expect(await addImported(session, 'absent', { refs: [{ name: 'a.txt', hash: '7'.repeat(64), size: 1 }], refused: [] })).toEqual(['Nœud introuvable.']);
+  expect(written).toHaveLength(1);
 });

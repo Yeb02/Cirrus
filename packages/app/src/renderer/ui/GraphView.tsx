@@ -8,7 +8,7 @@ import {
   PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines, layoutSplit, previewSplit,
   type PreviewSplit, type VisibleSet,
 } from '@cirrus/view';
-import { useEffect, useRef, useState } from 'react';
+import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
 import { createGl, type Gl } from '../gl/context.ts';
 import { loadFont } from '../render/font.ts';
@@ -24,6 +24,10 @@ import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
+import { carriesFiles, droppedPaths, type Refusal } from '../files/nodeFiles.ts';
+
+/** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
+export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
 
 /**
  * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
@@ -88,6 +92,9 @@ export function GraphView(props: {
   onOpenNode(node: Id, client: { x: number; y: number }): void;
   /** Any other click (background, connection, stub, absent or centre phantom, Ctrl+click) closes the loose pop-ups. */
   onClickAway(): void;
+  /** Files dropped on a node or a group (plan 4a, task 4): their paths, and those refused already (App's importInto). */
+  onDropFiles(node: Id, paths: string[], refused?: Refusal[]): Promise<void>;
+  ref?: Ref<GraphHandle>;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -852,7 +859,7 @@ export function GraphView(props: {
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  const local = (ev: React.PointerEvent) => {
+  const local = (ev: { clientX: number; clientY: number }) => {
     const r = root.current!.getBoundingClientRect();
     return { sx: ev.clientX - r.left, sy: ev.clientY - r.top };
   };
@@ -862,6 +869,19 @@ export function GraphView(props: {
     const w = screenToWorld(e.renderer.camera, sx, sy);
     return hits.hit(w.x, w.y, e.renderer.camera.zoom);
   };
+  /**
+   * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
+   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); elsewhere, a notice.
+   */
+  const dropFilesAt = (sx: number, sy: number, paths: string[], refused: Refusal[] = []): Promise<void> => {
+    const h = hitAt(sx, sy), i = h.kind === 'item' ? sceneRef.current?.byId.get(h.id) : undefined;
+    const node = nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false);
+    if (node !== null) return props.onDropFiles(node, paths, refused);
+    notify('Dépose le fichier sur un nœud pour l’y ajouter.');
+    return Promise.resolve();
+  };
+  useImperativeHandle(props.ref, () => ({ dropFilesAt }));
+  const takesFiles = (ev: React.DragEvent) => carriesFiles(ev) && !(ev.target as Element).closest?.('.popup, .ask');
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
@@ -1300,6 +1320,15 @@ export function GraphView(props: {
       ref={root}
       tabIndex={0}
       onContextMenu={(ev) => ev.preventDefault()}
+      // Files dropped on the graph (not on a connection's pop-up or a question over it: those refuse them).
+      onDragOver={(ev) => { if (takesFiles(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; } }}
+      onDrop={(ev) => {
+        if (!takesFiles(ev)) return;
+        ev.preventDefault();
+        if (ignored(ev)) return;
+        const { sx, sy } = local(ev), d = droppedPaths(ev.dataTransfer.files, (f) => window.cirrus.pathForFile(f));
+        if (d.paths.length + d.refused.length > 0) void dropFilesAt(sx, sy, d.paths, d.refused);
+      }}
       onPointerDown={(ev) => {
         if (ignored(ev)) return;
         root.current!.focus();

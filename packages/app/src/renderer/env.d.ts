@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import type { FileRef, Id } from '@cirrus/core';
-import type { HistorySummary, ImportResult } from '../main/files.ts';
+import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -32,7 +32,7 @@ export interface CirrusBridge {
    * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
    * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.
    */
-  openFile(ref: FileRef): Promise<{ ok: true; shown: 'app' | 'folder' } | { ok: false; message: string }>;
+  openFile(ref: FileRef): Promise<OpenResult>;
   /** A node's history for its pop-up: its first and last change (ms), and the number of actions. */
   historyOf(id: Id): Promise<HistorySummary>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
@@ -43,11 +43,12 @@ export interface CirrusBridge {
   ready(): void;
   /**
    * Launch options for visual checks: plan name, view "x,y,zoom", simulated hover "x,y", settings panel open; `bench`:
-   * the bench pass's label; `capture`: a capture is taken (CIRRUS_CAPTURE).
+   * the bench pass's label; `capture`: a capture is taken (CIRRUS_CAPTURE); `import`: "sx,sy|path", files dropped there
+   * once the first frame is drawn (CIRRUS_IMPORT, capture mode only).
    */
   launch: {
     plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; capture?: boolean; hide?: string; keys?: string; pointer?: string;
-    click?: string;
+    click?: string; import?: string;
   };
 }
 

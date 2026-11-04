@@ -1,4 +1,5 @@
 import { type ReactNode, useRef, useState } from 'react';
+import { carriesFiles } from '../../files/nodeFiles.ts';
 import { dragRect, type Edge, type Rect } from './geometry.ts';
 
 /** A floating panel's place and what its gestures do (Panels): where it is, how deep, pinned or not. */
@@ -23,11 +24,28 @@ const PinIcon = () => (
 /**
  * A panel over the window (spec 12): moved by its header, resized by its right edge, its bottom edge or its corner,
  * pinned or closed by the header's buttons; a press anywhere on it brings it in front. While a gesture goes on, only
- * the frame follows the pointer (its content is not drawn again); the panel's place is written once released.
+ * the frame follows the pointer (its content is not drawn again); the panel's place is written once released. With
+ * `onDropFiles`, files dragged over it are taken anywhere on it (a node's pop-up: plan 4a, task 4), the panel lit meanwhile.
  */
-export function FloatingPanel(props: { frame: Frame; title: ReactNode; className?: string; children: ReactNode }) {
+export function FloatingPanel(props: { frame: Frame; title: ReactNode; className?: string; onDropFiles?(dt: DataTransfer): void; children: ReactNode }) {
   const f = props.frame;
   const [live, setLive] = useState<Rect | null>(null);
+  // Files dragged over it: enter and leave come for each element crossed inside, counted.
+  const [over, setOver] = useState(false);
+  const depth = useRef(0);
+  const takes = (e: React.DragEvent) => props.onDropFiles !== undefined && carriesFiles(e);
+  const drops = {
+    onDragEnter: (e: React.DragEvent) => { if (takes(e)) { depth.current++; setOver(true); } },
+    onDragLeave: (e: React.DragEvent) => { if (takes(e) && --depth.current <= 0) { depth.current = 0; setOver(false); } },
+    onDragOver: (e: React.DragEvent) => { if (takes(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } },
+    onDrop: (e: React.DragEvent) => {
+      if (!takes(e)) return;
+      e.preventDefault();
+      depth.current = 0;
+      setOver(false);
+      props.onDropFiles!(e.dataTransfer);
+    },
+  };
   // The area it stays in is read once, when pressed, not at each move of the pointer.
   const gesture = useRef<{ edge: Edge; x: number; y: number; start: Rect; last: Rect; bounds: Rect } | null>(null);
   const press = (edge: Edge) => (e: React.PointerEvent<HTMLElement>) => {
@@ -55,9 +73,10 @@ export function FloatingPanel(props: { frame: Frame; title: ReactNode; className
   const r = live ?? f.rect;
   return (
     <section
-      className={`panel${props.className ? ` ${props.className}` : ''}${f.pinned ? ' pinned' : ''}`} data-panel={f.id}
+      className={`panel${props.className ? ` ${props.className}` : ''}${f.pinned ? ' pinned' : ''}${over ? ' dropping' : ''}`} data-panel={f.id}
       style={{ left: r.x, top: r.y, width: r.w, height: r.h, zIndex: f.z }}
       onPointerDownCapture={() => f.onFront()}
+      {...drops}
     >
       <header {...handles('move')}>
         <span className="grip" aria-hidden="true">⠿</span>

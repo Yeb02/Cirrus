@@ -3,6 +3,7 @@ import type { RenderParams, SceneItem } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Build } from '../../actions.ts';
 import { sameName } from '../../files/merge.ts';
+import type { NodeFiles } from '../../files/nodeFiles.ts';
 import { NodePopup } from '../NodePopup.tsx';
 import { clampRect, placeAt, type Rect } from './geometry.ts';
 
@@ -96,13 +97,14 @@ export interface PanelsHandle {
 /**
  * The floating panels of the window (plan 4a, D7), over every tab: pinned, they stay from one tab to the next; loose,
  * a click outside every panel or Escape closes them. A click on a panel brings it in front. Edits go through `onEdit`
- * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab.
+ * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab; a node's
+ * files are imported and opened by `files` (App).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
   /** The state, changed in place: `rev` counts the actions, `action` is the last one (App's Shown). */
   state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void;
+  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -175,6 +177,7 @@ export function Panels(props: {
           <NodePopup
             key={p.id} frame={frame} id={p.target.node} found={resolveTarget(props.state, p.target)?.node ?? null}
             state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
+            files={props.files}
           />
         );
       })}

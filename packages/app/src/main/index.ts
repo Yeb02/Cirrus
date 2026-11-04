@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { type Action, type FileRef, type Id, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
@@ -10,6 +11,7 @@ import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './ba
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, openFailure, openTarget } from './files.ts';
 import { lockBase } from './lock.ts';
+import { navigationAllowed } from './navigation.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
@@ -39,6 +41,8 @@ const launch = {
   keys: process.env.CIRRUS_KEYS,
   pointer: process.env.CIRRUS_POINTER,
   click: process.env.CIRRUS_CLICK,
+  // "sx,sy|path": files dropped on the graph at that point; captures only, whose base is a test copy (never the user's).
+  import: capture ? process.env.CIRRUS_IMPORT : undefined,
 };
 /** The main process's load marks, in absolute time like the interface's. */
 const benchMarks: Partial<Record<Phase, number>> = {};
@@ -110,8 +114,18 @@ function createWindow(): void {
     ipcMain.on('cirrus:quit:ready', done);
     win.webContents.send('cirrus:quit');
   });
+  // The window shows the app's page and nothing else (Review Focus 2): a file let go outside a drop zone, a link, a
+  // script's location do not take it elsewhere, and no other window opens.
+  const page = join(import.meta.dirname, '..', 'renderer', 'index.html');
+  const appUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(page).href;
+  win.webContents.on('will-navigate', (e) => {
+    if (navigationAllowed(e.url, appUrl)) return;
+    e.preventDefault();
+    console.warn(`Navigation refusée : ${e.url}`);
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void win.loadFile(join(import.meta.dirname, '..', 'renderer', 'index.html'));
+  else void win.loadFile(page);
 
   if (capture || bench || process.env.CIRRUS_LOG === '1') {
     win.webContents.on('console-message', (e) => console.log(`[interface] ${e.level}: ${e.message}`));

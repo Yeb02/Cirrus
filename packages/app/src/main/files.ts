@@ -220,6 +220,9 @@ export function openTarget(storeDir: string, ref: FileRef, root: string): { path
   return { path: openableCopy(storeDir, ref, root), shown: isRunnable(ref.name) ? 'folder' : 'app' };
 }
 
+/** What cirrus:files:open answers: opened by its application, or shown in the explorer; else why not, in French. */
+export type OpenResult = { ok: true; shown: 'app' | 'folder' } | { ok: false; message: string };
+
 /**
  * Why the file `name` did not open, in French: a sentence per known cause, a generic one otherwise. No English text of
  * Node or Windows reaches the user (the caller logs it). `e` is the error thrown, or shell.openPath's failure string.

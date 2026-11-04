@@ -51,6 +51,12 @@ const SCENES = [
   { name: 'plan-document', plan: 'Article MDL' },
   // Plan 4a: a click on MDL opens its pop-up, to the right of and below the click.
   { name: 'popup-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461' },
+  // A file written in a temporary folder, dropped on MDL (CIRRUS_IMPORT, by the graph's drop); its pop-up, opened by the
+  // click, is tall enough to show its files: the new one last, the notice above.
+  {
+    name: 'import-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 },
+    import: { at: '967,461', name: 'données_importées.txt', text: 'Longueur de description : 42 bits.\n' },
+  },
 ];
 
 /**
@@ -75,6 +81,8 @@ delete env0.ELECTRON_RUN_AS_NODE;
 let failed = 0;
 for (const s of SCENES) {
   const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-'));
+  // The folder of a file to drop, out of the base's: the store copies it in, as it would the user's.
+  const dropDir = s.import ? mkdtempSync(join(tmpdir(), 'cirrus-depot-')) : null;
   try {
     execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     fixHistoryTimes(data);
@@ -83,6 +91,11 @@ for (const s of SCENES) {
     for (const [key, name] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['pointer', 'CIRRUS_POINTER'], ['keys', 'CIRRUS_KEYS'], ['click', 'CIRRUS_CLICK']]) {
       if (s[key]) env[name] = s[key];
     }
+    if (s.import) {
+      const file = join(dropDir, s.import.name);
+      writeFileSync(file, s.import.text, 'utf8');
+      env.CIRRUS_IMPORT = `${s.import.at}|${file}`;
+    }
     const r = spawnSync(electron, [appDir], { env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 120_000 });
     if (r.status !== 0) {
       failed++;
@@ -90,6 +103,7 @@ for (const s of SCENES) {
     } else console.log(`${s.name}.png`);
   } finally {
     rmSync(data, { recursive: true, force: true, maxRetries: 5 });
+    if (dropDir) rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
   }
 }
 console.log(`${SCENES.length - failed} captures sur ${SCENES.length} dans ${out}`);

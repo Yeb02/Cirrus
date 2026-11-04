@@ -1,11 +1,13 @@
 import { type Action, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
+import type { ImportResult } from '../main/files.ts';
 import type { Build } from './actions.ts';
 import { mark } from './bench.ts';
+import { addImported, carriesFiles, type NodeFiles, openNotice, type Refusal } from './files/nodeFiles.ts';
 import { liveTabs } from './tabs.ts';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
-import { GraphView } from './ui/GraphView.tsx';
+import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
 import { Panels, type PanelsHandle } from './ui/panels/Panels.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
@@ -57,6 +59,7 @@ export function App() {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const panels = useRef<PanelsHandle>(null);
+  const graph = useRef<GraphHandle>(null);
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -92,6 +95,20 @@ export function App() {
     const events = ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const;
     for (const e of events) window.addEventListener(e, touch, { capture: true, passive: true });
     return () => { for (const e of events) window.removeEventListener(e, touch, { capture: true }); };
+  }, []);
+
+  // A file let go anywhere but on a node or a pop-up opens nothing (Review Focus 2): Chromium would show it in the window.
+  // The graph and the pop-ups take theirs first (their default prevented); elsewhere — tabs, settings, a text field — the
+  // drop is refused, and the main process refuses any navigation anyway. Text dragged in a field is left to the field.
+  useEffect(() => {
+    const guard = (e: DragEvent) => {
+      if (e.defaultPrevented || !carriesFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = 'none';
+    };
+    window.addEventListener('dragover', guard);
+    window.addEventListener('drop', guard);
+    return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); };
   }, []);
 
   // Closing: the last snapshot, if anything changed since the one before, then the main process may close the window.
@@ -148,10 +165,16 @@ export function App() {
     if (readySent.current) return;
     readySent.current = true;
     saver.current?.start();
-    // Visual checks: CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys.
+    // Visual checks: CIRRUS_IMPORT="sx,sy|path" drops that file at that point of the graph, by the drop's own path
+    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys.
+    const [at, ...dropped] = (window.cirrus.launch.import ?? '').split('|').filter(Boolean);
     const clicks = (window.cirrus.launch.click ?? '').split(',').filter(Boolean);
     const keys = (window.cirrus.launch.keys ?? '').split(',').filter(Boolean);
     void (async () => {
+      if (dropped.length > 0) {
+        const [sx, sy] = at.split(',').map(Number);
+        await graph.current?.dropFilesAt(sx, sy, dropped);
+      }
       for (const sel of clicks) {
         document.querySelector<HTMLElement>(sel)?.click();
         await new Promise((r) => setTimeout(r, 300));
@@ -181,6 +204,34 @@ export function App() {
   const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
+  /**
+   * Files imported into a node (plan 4a, D6): copied into the store by the main process (`imported`), then added through
+   * the session as one action; what came of it in toasts — the refused files (`refused`: already here, not on the disk)
+   * in one, then what the drop did or why not.
+   */
+  const addFiles = async (node: Id, imported: Promise<ImportResult>, refused: Refusal[] = []) => {
+    let r: ImportResult;
+    try {
+      r = await imported;
+    } catch (e) {
+      console.error('Import des fichiers :', e);
+      toast('Les fichiers n’ont pas pu être importés.');
+      return;
+    }
+    for (const notice of await addImported(session.current!, node, { refs: r.refs, refused: [...refused, ...r.refused] })) toast(notice);
+  };
+  const files: NodeFiles = {
+    importInto: (node, paths, refused) => addFiles(node, paths.length > 0 ? window.cirrus.importFiles(paths) : Promise.resolve({ refs: [], refused: [] }), refused),
+    pickInto: (node) => addFiles(node, window.cirrus.pickFiles()),
+    openWithSystem: async (file) => {
+      const r = await window.cirrus.openFile(file).catch((e: unknown) => {
+        console.error(`Ouverture de « ${file.name} » :`, e);
+        return { ok: false as const, message: `Impossible d’ouvrir « ${file.name} ».` };
+      });
+      const notice = openNotice(r);
+      if (notice) toast(notice);
+    },
+  };
   return (
     <div className="app">
       <Tabs
@@ -202,10 +253,11 @@ export function App() {
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onOpenPlan={openPlan}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
+            onDropFiles={files.importInto} ref={graph}
           />
         </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
-        <Panels ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} />
+        <Panels ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files} />
         <Toasts toasts={toasts} />
       </div>
     </div>
