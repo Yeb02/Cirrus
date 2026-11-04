@@ -1,10 +1,12 @@
 import { type Action, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
+import type { Build } from './actions.ts';
 import { mark } from './bench.ts';
 import { liveTabs } from './tabs.ts';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { GraphView } from './ui/GraphView.tsx';
+import { Panels, type PanelsHandle } from './ui/panels/Panels.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, Toasts } from './ui/Toasts.tsx';
@@ -13,6 +15,9 @@ import { EditSession, openState, type Result, SnapshotSaver } from './session.ts
 const TABS_KEY = 'cirrus.tabs';
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
+// What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
+// so that the captures repeat to the pixel.
+if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
 
 /** Open tabs are a per-PC convenience: kept in localStorage, which may be unavailable. */
 function loadTabs(): Id[] {
@@ -51,6 +56,7 @@ export function App() {
   activeRef.current = active;
   const paramsRef = useRef(params);
   paramsRef.current = params;
+  const panels = useRef<PanelsHandle>(null);
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -171,6 +177,10 @@ export function App() {
     setActive(live.active);
     return null;
   }
+  // The lobby has its own tab, always there: only another plan is added to the open ones.
+  const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
+  /** An edit from a pop-up, through the session like the graph's; a refusal is reported. */
+  const edit = (build: Build) => { if (build) void session.current!.run(build).then((r) => report(r)); };
   return (
     <div className="app">
       <Tabs
@@ -190,12 +200,12 @@ export function App() {
         <GraphBoundary plan={active}>
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
-            onResult={(r) => report(r)}
-            // The lobby has its own tab, always there: only another plan is added to the open ones.
-            onOpenPlan={(id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); }}
+            onResult={(r) => report(r)} onOpenPlan={openPlan}
+            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onBackgroundClick={() => panels.current?.closeLoose()}
           />
         </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
+        <Panels ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} />
         <Toasts toasts={toasts} />
       </div>
     </div>

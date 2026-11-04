@@ -8,6 +8,7 @@
   --accent: #8fb8ff;
   --edge: #4d6a9a;
   --panel: rgba(14, 23, 41, 0.94);
+  --warn: #ffb59a;
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -142,6 +143,76 @@ button, input, select { font: inherit; color: var(--ink); }
 .popup .adding input { width: 100%; margin-top: 6px; }
 .popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
 .popup .pick:hover { background: rgba(143, 184, 255, 0.14); }
+/*
+ * Floating panels (plan 4a): node pop-ups, file previews. In window pixels (position: fixed), over the graph and its
+ * hover marks, under the toasts, the graph's menus, dialogs and ghosts. `.panel > header` is HEADER_PX (geometry.ts) high.
+ */
+.panels { position: absolute; inset: 0; z-index: 15; pointer-events: none; }
+.panel {
+  position: fixed; display: flex; flex-direction: column; box-sizing: border-box; pointer-events: auto; user-select: text;
+  background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); border-radius: 10px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);
+  /* Its scroll bar and its fields' native parts dark, as the panel. */
+  color-scheme: dark;
+}
+.panel.pinned { border-color: rgba(143, 184, 255, 0.65); }
+.panel > header {
+  flex: none; display: flex; align-items: center; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 4px 0 6px;
+  border-bottom: 1px solid rgba(143, 184, 255, 0.14); cursor: move; user-select: none;
+}
+.panel > header .grip { flex: none; padding: 0 3px; color: var(--muted); opacity: 0.6; font-size: 12px; }
+.panel > header .title {
+  flex: 0 1 auto; field-sizing: content; min-width: 3ch; max-width: 100%; margin-right: auto; box-sizing: border-box; padding: 2px 5px;
+  font-weight: 600; background: none; border: 1px solid transparent; border-radius: 5px; cursor: text; user-select: text;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.panel > header input.title:hover { border-color: rgba(143, 184, 255, 0.25); }
+.panel > header input.title:focus { background: var(--sky1); border-color: var(--accent); outline: none; }
+.panel > header .title.gone { color: var(--muted); cursor: move; }
+.panel > header button {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 5px; background: none; color: var(--muted); cursor: pointer;
+}
+.panel > header button:hover { color: var(--ink); background: rgba(143, 184, 255, 0.14); }
+.panel > header .pin.on { color: var(--accent); }
+.panel > header .close { font-size: 17px; }
+.panel > .body { flex: 1; min-height: 0; overflow: auto; padding: 2px 12px 12px; }
+.panel .resize { position: absolute; }
+.panel .resize.e { top: 32px; right: -3px; bottom: 10px; width: 6px; cursor: ew-resize; }
+.panel .resize.s { left: 10px; right: 10px; bottom: -3px; height: 6px; cursor: ns-resize; }
+.panel .resize.se { right: -3px; bottom: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+.panel h4 { margin: 10px 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.panel input, .panel textarea {
+  box-sizing: border-box; background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 3px 6px; color: var(--ink);
+}
+.panel textarea { display: block; width: 100%; resize: vertical; font: 12.5px/1.4 Consolas, monospace; }
+.panel .dim { color: var(--muted); opacity: 0.7; }
+.node-popup .tags { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0 0 6px; padding: 0; }
+.node-popup .tag {
+  display: inline-flex; align-items: center; padding: 1px 2px 1px 8px; border-radius: 11px; font-size: 12.5px;
+  background: rgba(143, 184, 255, 0.13); border: 1px solid rgba(143, 184, 255, 0.25);
+}
+.node-popup .tag .remove { border: none; background: none; padding: 0 5px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.node-popup .tag .remove:hover { color: var(--ink); }
+.node-popup .tag.default { padding: 0; background: none; border-style: dashed; opacity: 0.6; }
+.node-popup .tag.default button { border: none; background: none; padding: 1px 8px; color: var(--muted); cursor: pointer; font-size: inherit; }
+.node-popup .tag-field { width: 100%; }
+.node-popup .error { margin: 4px 0 0; color: var(--warn); font-size: 12.5px; }
+.node-popup .suggestions { margin-top: 2px; padding: 2px; border: 1px solid rgba(143, 184, 255, 0.2); border-radius: 6px; }
+.node-popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 3px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px; }
+.node-popup .pick:hover, .node-popup .pick.on { background: rgba(143, 184, 255, 0.14); }
+.node-popup .meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: 12.5px; }
+.node-popup .meta dt { color: var(--muted); }
+.node-popup .meta dd { margin: 0; }
+.node-popup .meta .plan {
+  margin: 0 4px 2px 0; padding: 0 7px; border: 1px solid var(--edge); border-radius: 5px; background: var(--sky2); cursor: pointer; font-size: 12px;
+}
+.node-popup .meta .plan:hover { border-color: var(--accent); }
+.node-popup .meta .id { font: 11.5px/1.45 Consolas, monospace; color: var(--muted); overflow-wrap: anywhere; user-select: all; }
+.node-popup .files { list-style: none; margin: 0; padding: 0; }
+.node-popup .file { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 12.5px; }
+.node-popup .file .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-popup .file .kind, .node-popup .file .size { flex: none; color: var(--muted); white-space: nowrap; }
+.capture .volatile { visibility: hidden; }
 .handles { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .handles line { stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
 .handles circle { stroke-width: 1; }

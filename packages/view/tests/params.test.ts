@@ -59,6 +59,20 @@ test('taille maximale d’un fichier importé : 200 Mo, de 1 à 4096, réglage a
   expect(withOverrides({ maxImportMb: 0 }).maxImportMb).toBe(1);
 });
 
+test('pop-ups : taille d’ouverture, taille minimale, écart au clic et suggestions de tags, réglages avancés du groupe « Pop-ups » (plan 4a)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number][] = [
+    ['popupWidthPx', 380, 'Largeur d’un pop-up à son ouverture (px)', 200, 1600],
+    ['popupHeightPx', 460, 'Hauteur d’un pop-up à son ouverture (px)', 160, 1400],
+    ['panelMinPx', 200, 'Côté minimal d’un panneau flottant (px)', 120, 600],
+    ['panelGapPx', 12, 'Écart entre le clic et le pop-up qu’il ouvre (px)', 0, 60],
+    ['tagSuggestions', 8, 'Suggestions montrées pendant la saisie d’un tag', 1, 50],
+  ];
+  for (const [key, value, label, min, max] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Pop-ups', kind: 'number', min, max, step: 1 });
+  }
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

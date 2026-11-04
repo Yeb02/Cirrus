@@ -1,7 +1,7 @@
 import {
   type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
   exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placeNode, removeFromPlan,
-  removeMember, type Role, setBranches, setLayout, setRole, splitArm, type State, type Vec2,
+  removeMember, type Role, setBranches, setLayout, setRole, splitArm, type State, type TagKeyDef, type TagValue, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
@@ -288,6 +288,24 @@ const nodeRec = (s: State, node: Id): NodeRec => {
   if (!n) throw new CommandError('Nœud introuvable.');
   return n;
 };
+
+/** A node's summary as typed in its pop-up: LaTeX source (its compiled preview comes with plan 4b). */
+export function summaryBuild(node: Id, summary: string): Build {
+  return (st) => editNode(st, node, { summary });
+}
+
+/**
+ * A node's tags changed by `change` (withTag, withoutTag) on the state the action is computed on, so that two quick
+ * changes both count; one that changes nothing by then (the same tag added twice) is refused rather than written empty.
+ */
+export function tagsBuild(node: Id, change: (tags: TagValue[], defs: ReadonlyMap<string, TagKeyDef>) => TagValue[]): Build {
+  return (st) => {
+    const tags = nodeRec(st, node).tags, next = change(tags, st.tagKeys);
+    if (next === tags) throw new CommandError('Ces tags sont déjà à jour.');
+    return editNode(st, node, { tags: next });
+  };
+}
+
 /** Where the file `name` is among `files`, by its exact name; gone since the gesture began, refused. */
 const fileAt = (files: FileRef[], name: string): number => {
   const i = files.findIndex((f) => f.name === name);

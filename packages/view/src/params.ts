@@ -122,6 +122,16 @@ export interface RenderParams {
   // Files (plan 4a)
   /** A larger file is refused at import (the main process reads it through withOverrides, as snapshotQuitMs). */
   maxImportMb: number;
+  // Pop-ups (plan 4a): floating panels in window pixels
+  /** A node's pop-up as it opens, */
+  popupWidthPx: number;
+  popupHeightPx: number;
+  /** the smallest side a panel is resized to, */
+  panelMinPx: number;
+  /** and how far from the click it opens. */
+  panelGapPx: number;
+  /** The registry's keys or values offered while a tag is typed. */
+  tagSuggestions: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -240,6 +250,11 @@ export const DEFAULT_PARAMS: RenderParams = {
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
   maxImportMb: 200,
+  popupWidthPx: 380,
+  popupHeightPx: 460,
+  panelMinPx: 200,
+  panelGapPx: 12,
+  tagSuggestions: 8,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -383,6 +398,11 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),
   num('maxImportMb', 'Taille maximale d’un fichier importé (Mo)', A, 'Fichiers', 1, 4096, 1),
+  num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
+  num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
+  num('panelMinPx', 'Côté minimal d’un panneau flottant (px)', A, 'Pop-ups', 120, 600, 1),
+  num('panelGapPx', 'Écart entre le clic et le pop-up qu’il ouvre (px)', A, 'Pop-ups', 0, 60, 1),
+  num('tagSuggestions', 'Suggestions montrées pendant la saisie d’un tag', A, 'Pop-ups', 1, 50, 1),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

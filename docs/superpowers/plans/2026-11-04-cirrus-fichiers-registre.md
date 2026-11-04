@@ -258,3 +258,116 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
     - Il a été écrit par un script hors dépôt, dont le source n'est qu'ASCII : chaque octet est un échappement `\xNN`, passé par `Buffer.from(…, 'latin1')`. Le test des fixtures vérifie ses octets.
   - `notes_lecture.md` est en UTF-8 sans BOM, avec des fins de ligne LF.
   - Coût si faux : nul.
+
+## Tâche 3 : panneaux flottants et pop-up de nœud
+
+### Mesures
+
+- Suite complète : 518 tests sur 518 (507 + 10 dans `panels.test.ts` + 1 dans `params.test.ts`). `tsc` : `app` et `view` sans erreur.
+- Captures, contre `reference-3c` : 10 sur 11 à 0,000 % ; `selection` à 5,609 % (85 378 pixels), le pop-up de MDL ouvert par son premier clic ; `popup-noeud` est nouvelle. `docs/captures/plan4a/` reçoit les 12. Une seconde suite, refaite de zéro, y est à 0,000 % sur les 12 (0 pixel) : les captures se répètent au pixel.
+- Essai de l'app construite, hors dépôt : une base de test et un profil temporaires, un port de débogage, et des événements réels envoyés par CDP (`Input.dispatchMouseEvent`, `dispatchKeyEvent`, `insertText`). 34 vérifications passent, sans erreur ni avertissement dans la console de l'interface :
+  - ouverture à droite et en dessous du clic, retournée en hauteur ;
+  - déplacement par l'en-tête, agrandissement par le coin, bord droit arrêté à `panelMinPx`, en-tête gardé dans la fenêtre quand on le tire au-dehors, fenêtre réduite ;
+  - épingler, le nouveau pop-up devant, Échap et clic sur le fond sans effet sur un épinglé, un seul pop-up par nœud, clic sur les onglets ;
+  - titre (Entrée, Ctrl+Z hors du champ, Échap), résumé enregistré à la perte du focus, métadonnées relues ;
+  - tags : remplacement d'une valeur, message de refus, suggestions au clavier et au clic, retrait, tags obligatoires en grisé puis remplis ;
+  - Échap dans un champ, puis l'Échap suivant ; menu contextuel fermé par Échap sans fermer le pop-up ; déplacement de la vue sans fermer le pop-up ;
+  - nœud supprimé partout pendant que son pop-up est épinglé : « Ce nœud n’existe plus. », puis son contenu revient après Ctrl+Z (Review Focus 5).
+
+### Décisions
+
+- Ruling: **clic hors des panneaux**.
+  - Dans le graphe, un clic sur le fond (avec ou sans Ctrl) appelle `onBackgroundClick`. Un clic sans Ctrl sur un nœud ou un groupe ouvre son pop-up, ce qui ferme les autres non épinglés.
+  - Un Ctrl+clic sur un nœud, un clic sur une connexion, une amorce ou un fantôme laissent les panneaux. Un glissement de la vue ou d'un nœud n'est pas un clic : le pop-up reste.
+  - Hors du graphe (onglets, réglages), un appui hors de tout panneau ferme les non épinglés, comme pour le menu contextuel et le pop-up de connexion.
+  - Options :
+    - tout appui hors des panneaux, graphe compris (l'idiome du menu) : déplacer la vue fermerait le pop-up ;
+    - tout clic du graphe : le Ctrl+clic qui construit une sélection fermerait le pop-up qu'on lit ;
+    - le choix, qui suit les deux props du plan.
+  - Coût si faux : une ligne dans le `case 'click'` de `GraphView`. Conséquence : la capture `selection` garde le pop-up de MDL après le Ctrl+clic sur Solomonoff.
+- Ruling: **Échap**.
+  - `GraphView` prévient le défaut d'un Échap qu'il prend : un geste en cours (`gestures.busy`), une poignée tirée, son menu contextuel ou le pop-up d'une connexion ouverts.
+  - Les champs d'un pop-up prennent le leur, et le panneau reste :
+    - le titre rend sa valeur et se quitte ;
+    - le résumé se quitte, donc s'enregistre comme à toute perte du focus ;
+    - le champ des tags se vide, puis, vide, se quitte.
+
+    L'Échap suivant ferme le panneau.
+  - `Panels` écoute `keydown` sur `window`, en phase de bouillonnement, et ignore un événement dont `defaultPrevented` est vrai.
+  - Options écartées :
+    - le menu et le pop-up de connexion écoutant en capture et prévenant le défaut. Essayé puis retiré : l'Échap du champ « ajouter un nœud » du pop-up de connexion l'aurait fermé en entier ;
+    - une vérification différée (`setTimeout`), indépendante de l'ordre des écouteurs, mais plus obscure.
+  - Coût si faux : un Échap qui ferme deux choses. Une surcouche du graphe à venir devra s'ajouter à la condition.
+- Ruling: **`HEADER_PX` vaut 32** : une constante de `geometry.ts`, la hauteur de `.panel > header` dans `styles.css`, et non un réglage. C'est une dimension de la feuille de style, comme ses marges. Coût si faux : un réglage, et la hauteur de l'en-tête lue dans le style.
+- Ruling: **`clampRect` et `dragRect`**.
+  - La taille va de `min` à celle de `bounds` ; `min` l'emporte dans une fenêtre minuscule.
+  - L'en-tête est entier dans `bounds`, donc toute la largeur du panneau. En hauteur, le haut du panneau va du haut de `bounds` à `HEADER_PX` au-dessus du bas : le corps peut passer sous le bord.
+  - Un bord tiré ne sort pas de `bounds` : l'agrandissement s'arrête au bord. Le geste part du rectangle du début et du déplacement total, sans cumul d'arrondis.
+  - Une fenêtre réduite ramène chaque panneau par `clampRect`.
+  - Options : n'en garder visible qu'une partie de l'en-tête, comme Windows ; l'en-tête entier (choix, la lecture littérale du plan).
+  - Coût si faux : nul.
+- Ruling: **`placeAt`** : de chaque côté, à `gap` du clic. Un panneau qui ne tient d'aucun côté va contre le bord qu'il dépasserait (dans les captures, les 460 pixels ne tiennent ni sous ni sur le clic de MDL : le pop-up est collé au bas). Plus grand que `bounds`, il est réduit à `bounds`. Coût si faux : nul.
+- Ruling: **un nœud déjà ouvert** : son pop-up, épinglé ou non, passe devant là où il est, sans suivre le nouveau clic ; les autres non épinglés se ferment. Coût si faux : nul.
+- Ruling: **profondeur** : un panneau mis devant prend la profondeur au-dessus de tous (la plus haute plus un), sans compteur global. Un panneau déjà devant ne change pas, et rien n'est redessiné. Coût si faux : nul.
+- Ruling: **couche des panneaux** : `.panels`, `z-index: 15`, dans `.main`.
+  - Elle passe au-dessus du graphe et de ses marques (coin de hiérarchie, infobulle, rectangle de sélection), sous les notifications (20), le fantôme d'un geste (25), le pop-up de connexion (28), les menus (30) et les questions (40).
+  - Les panneaux sont en `position: fixed`, en pixels de la fenêtre (D7), et restent dans la zone sous les onglets : le rectangle de la couche.
+  - `color-scheme: dark` y rend sombres la barre de défilement et les parties natives des champs.
+  - Coût si faux : un `z-index`.
+- Ruling: **glissement d'un panneau** : pendant le geste, seul le cadre suit le pointeur, par un état local de `FloatingPanel` ; son contenu n'est pas redessiné. La place s'écrit dans `Panels` au relâchement, ou à la perte de la capture du pointeur. Coût si faux : nul.
+- Ruling: **`resolveTarget` trouve un fichier par `sameName`** : une nouvelle version déposée dans une autre casse garde son aperçu (Review Focus 1). Coût si faux : nul ; la tâche 5 en hérite.
+- Ruling: **`parseTag`**.
+  - Le texte est coupé au premier deux-points (une URL garde les siens), puis la clé et la valeur sont rognées.
+  - Une clé du registre tient à son type :
+    - un mot ne prend pas de valeur, et tout autre type en demande une ;
+    - un nombre accepte la virgule, le point et les espaces, insécables comprises ;
+    - une énumération se lit par son nom, ou par son rang écrit en chiffres ; un nom fait de chiffres reste un nom ;
+    - une date ou un texte gardent la valeur telle quelle : le plan 4a ne lit pas les dates.
+  - Une clé inconnue du registre est gardée telle quelle, mais « clé: » sans valeur est refusé.
+  - Messages, avec l'apostrophe typographique (tâche 1) :
+    - « Le tag est vide. » ;
+    - « Il manque le nom du tag avant « : ». » ;
+    - « Le tag « parallèle » ne prend pas de valeur. » ;
+    - « Le tag « nature » demande une valeur : « nature:… ». » ;
+    - « Il manque la valeur après « mot: ». » ;
+    - « Le tag « partie » demande un nombre : « deux » n’en est pas un. » ;
+    - celui de `normalizeTag` pour une valeur d'énumération inconnue, nom ou rang.
+  - Coût si faux : la formulation ; une date mal écrite est acceptée.
+- Ruling: **`withTag` et `withoutTag`**.
+  - Une clé inconnue du registre prend une seule valeur, comme une clé déclarée simple. Un remplacement prend la place de l'ancienne valeur. Un tag déjà là rend la même liste : rien à écrire.
+  - `withoutTag` retire exactement ce tag, cette valeur de sa clé.
+  - Options : une clé inconnue multiple, ce qui garderait les deux valeurs d'une faute de frappe corrigée.
+  - Coût si faux : la seconde valeur d'une clé non déclarée remplace la première ; il suffit de la déclarer multiple au registre.
+- Ruling: **suggestions de tags** (`tagSuggestions`, pur, dans `tags.ts`).
+  - Avant le deux-points : les clés de portée nœud (ou les deux) qui contiennent le texte, sans casse ni accents, celles qui commencent par lui d'abord, dans l'ordre du registre.
+  - Après « clé: » : les valeurs de cette énumération, par rang, qui contiennent ce qui suit ou dont c'est le rang. Les autres types ne suggèrent rien.
+  - Une clé choisie qui prend une valeur s'écrit dans le champ avec son deux-points, et ses valeurs s'affichent ; un mot s'ajoute. Flèches haut et bas, Entrée ou clic.
+  - Leur nombre est un réglage, `tagSuggestions` (8, de 1 à 50, groupe « Pop-ups »), en plus des quatre du plan, par la règle des constantes réglables. Le pop-up de connexion garde son 8 d'avant.
+  - Coût si faux : un réglage de trop.
+- Ruling: **tag obligatoire absent** : sa pastille, grisée et en pointillés, montre la valeur par défaut. Un clic écrit « clé: » dans le champ et propose les valeurs ; le tag choisi est écrit et quitte le grisé. Coût si faux : nul.
+- Ruling: **`tagsBuild` et `summaryBuild`** vont dans `actions.ts`, avec tous les `Build`, hors de la liste de fichiers du plan.
+  - `tagsBuild` applique le changement sur l'état où l'action se calcule, pour que deux changements rapides comptent tous deux.
+  - Il refuse un changement nul par « Ces tags sont déjà à jour. », plutôt que d'écrire une action vide (le même tag ajouté deux fois avant le premier enregistrement).
+  - Coût si faux : nul.
+- Ruling: **métadonnées**.
+  - Les dates sont en français, date longue et heure (« 5 janvier 2026 à 10:09 »), au fuseau du PC ; « … » pendant la lecture, « — » sans historique.
+  - L'historique se lit à l'ouverture. Il se relit après chaque action qui touche ce nœud (le `subjectOf` d'une de ses opérations : son enregistrement ou ses placements), annulations comprises, et quand plusieurs actions arrivent dans un même rendu.
+  - Les connexions de connaissance comptées excluent celles de la corbeille. L'identifiant se sélectionne d'un clic (`user-select: all`).
+  - Les genres s'affichent « image », « PDF », « LaTeX », « texte », « tableau », « autre ».
+  - Coût si faux : un libellé.
+- Ruling: **nœud disparu** : le corps dit « Ce nœud n’existe plus. », et l'en-tête garde le dernier titre vu, grisé. Le panneau reste où il était, et son contenu revient si la suppression est annulée (vérifié dans l'app). Coût si faux : nul.
+- Ruling: **captures reproductibles**.
+  - `captures.mjs` fixe les heures du journal de chaque base de test avant de lancer l'app : une action par minute, à partir du 5 janvier 2026 à 9 h UTC, dans l'ordre de leur écriture. Les dates d'un pop-up se lisent ainsi pareil à chaque capture.
+  - L'identifiant d'un nœud, tiré au hasard à chaque construction de la base, porte la classe `volatile`. Le mode capture ne la dessine pas (`visibility: hidden`), et la mise en page ne change pas.
+  - Options :
+    - laisser varier : environ 0,1 % des pixels, sous la tolérance, mais « à regarder » à chaque comparaison, alors que la suite se répète au pixel ;
+    - dater au jour seulement : varie encore d'un jour à l'autre ;
+    - rendre la base de test déterministe : les identifiants viennent de `uuidv7`, dans le socle.
+  - Coût si faux : une capture qui ne montre pas l'identifiant. Une capture qui fait une action, comme `import-noeud` à la tâche 4, aura « Modifié le » à l'heure de la capture : elle devra masquer ou fixer cette date à son tour.
+- Ruling (imposé par le plan): **`selection` refaite** : son premier clic, sur MDL, ouvre maintenant le pop-up du nœud ; le Ctrl+clic sur Solomonoff le laisse (premier `Ruling:` ci-dessus). L'image, regardée, ne diffère de `reference-3c` que par le pop-up, qui couvre le fantôme « Universalité algorithmique ». C'est la seule capture qui clique sur un nœud : `apercu-glissement` y appuie, mais glisse. Coût si faux : nul.
+- Ruling: **référence des captures** : `docs/captures/plan4a/` reçoit toute la suite (12 images), dont `selection` refaite et `popup-noeud`.
+  - Les dix autres sont identiques au pixel à `reference-3c`, qui reste telle quelle : la référence du plan 3c.
+  - Pourquoi : `compare-captures` compte une image absente d'un côté comme un échec. Une référence complète se compare donc en une fois.
+  - Options : refaire `selection` sur place dans `reference-3c` et ne mettre que les nouvelles dans `plan4a`, ce qui demande deux comparaisons dont chacune signale des absentes ; la suite complète (choix).
+  - Coût si faux : déplacer `selection.png` dans `reference-3c` et retirer les dix doublons (1,4 Mo).
+- Écart à la spec, imposé par le plan : un clic sur un fantôme n'ouvre aucun pop-up de nœud (« pas un fantôme »), alors que la spec 8.5 veut que le fantôme d'un nœud lointain ouvre le pop-up de ce nœud. Il suffirait d'appeler `onOpenNode(it.node, …)` pour un fantôme de genre `node`. À trancher par le contrôleur.

@@ -1,13 +1,15 @@
 // The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace]
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
 // compare-captures.mjs then compares two such folders: after each task that touches the rendering, a new suite (in a
-// new folder) against docs/captures/reference-3c. A folder that already holds files is refused, so the reference is
-// never replaced by mistake; --replace removes its captures first (to remake the reference on purpose).
+// new folder) against the reference, docs/captures/plan4a since plan 4a's task 3 (the whole suite; reference-3c before
+// it). A folder that already holds files is refused, so the reference is never replaced by mistake; --replace removes
+// its captures first (to remake the reference on purpose).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -47,7 +49,25 @@ const SCENES = [
   { name: 'fantomes-lobby', view: '480,420,1' },
   { name: 'fond-grille', settings: { background: 'grid' } },
   { name: 'plan-document', plan: 'Article MDL' },
+  // Plan 4a: a click on MDL opens its pop-up, to the right of and below the click.
+  { name: 'popup-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461' },
 ];
+
+/**
+ * The test base's history at fixed times, one action a minute from 2026-01-05 09:00 UTC in the order they were written,
+ * instead of the moment it was built: a pop-up's dates then read the same at every capture (the identifiers, random,
+ * are not drawn in captures: `.volatile`).
+ */
+const HISTORY_FROM = Date.UTC(2026, 0, 5, 9, 0);
+function fixHistoryTimes(dir) {
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  try {
+    db.exec(`WITH ranked AS (SELECT action_id, ROW_NUMBER() OVER (ORDER BY MIN(local_seq)) AS n FROM changes GROUP BY action_id)
+      UPDATE changes SET at = ${HISTORY_FROM} + 60000 * (SELECT n FROM ranked WHERE ranked.action_id = changes.action_id)`);
+  } finally {
+    db.close();
+  }
+}
 
 mkdirSync(out, { recursive: true });
 const env0 = { ...process.env };
@@ -57,6 +77,7 @@ for (const s of SCENES) {
   const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-'));
   try {
     execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
+    fixHistoryTimes(data);
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
     const env = { ...env0, CIRRUS_DATA: data, CIRRUS_CAPTURE: join(out, `${s.name}.png`), CIRRUS_SIZE: SIZE };
     for (const [key, name] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['pointer', 'CIRRUS_POINTER'], ['keys', 'CIRRUS_KEYS'], ['click', 'CIRRUS_CLICK']]) {

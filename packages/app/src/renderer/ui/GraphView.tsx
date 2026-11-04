@@ -80,6 +80,10 @@ export function GraphView(props: {
   session: EditSession | null; onResult(r: Result): void;
   /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
   onOpenPlan(plan: Id): void;
+  /** A click without Ctrl on a node or a group (not a phantom) opens its pop-up there, in window coordinates (plan 4a, D7). */
+  onOpenNode(node: Id, client: { x: number; y: number }): void;
+  /** A click on the background closes the loose pop-ups. */
+  onBackgroundClick(): void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -204,6 +208,9 @@ export function GraphView(props: {
   onResultRef.current = props.onResult;
   const onOpenPlanRef = useRef(props.onOpenPlan);
   onOpenPlanRef.current = props.onOpenPlan;
+  // The clicks replayed for captures go through the handlers of the first render: the pop-ups' callbacks are read here.
+  const panelsRef = useRef({ open: props.onOpenNode, away: props.onBackgroundClick });
+  panelsRef.current = { open: props.onOpenNode, away: props.onBackgroundClick };
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
   const [ready, setReady] = useState(false);
@@ -867,8 +874,9 @@ export function GraphView(props: {
         nav({ t: 'drag', dxPx: intent.dxPx, dyPx: intent.dyPx });
         break;
       case 'click': {
-        // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1).
+        // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1), and closes the loose pop-ups.
         const target = targetOf(intent.hit);
+        if (intent.hit.kind === 'background') panelsRef.current.away();
         if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
         setSelection(target ? toggle(emptySelection(), target) : emptySelection());
         // A stub or an absent phantom brings its node in (spec 11.3); a connection or a centre phantom opens its pop-up (spec 8.5).
@@ -880,6 +888,11 @@ export function GraphView(props: {
           const i = sc.byId.get(intent.hit.id), it = i === undefined ? undefined : sc.items[i];
           if (it?.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
           else if (it?.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
+          else if (it && it.kind !== 'phantom') {
+            // A node or a group: its pop-up, at the click (plan 4a).
+            const r = root.current!.getBoundingClientRect();
+            panelsRef.current.open(it.id, { x: r.left + intent.sx, y: r.top + intent.sy });
+          }
         }
         break;
       }
@@ -1319,7 +1332,13 @@ export function GraphView(props: {
       onPointerLeave={(ev) => { if (ignored(ev)) return; lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
       onKeyDown={(ev) => {
         if (ignored(ev)) return;
-        if (ev.key === 'Escape') { if (handleDrag.current) dropHandle(false); else feed({ t: 'key', key: 'Escape' }); return; }
+        if (ev.key === 'Escape') {
+          // Taken by the gesture it cancels, or by the menu or connection pop-up it closes, it is not the floating panels'
+          // (they close on an Escape nothing took).
+          if (handleDrag.current || gestures.current.busy || menu || popup) ev.preventDefault();
+          if (handleDrag.current) dropHandle(false); else feed({ t: 'key', key: 'Escape' });
+          return;
+        }
         const sc = sceneRef.current;
         // Ctrl+C, Ctrl+V and Suppr (spec 7), outside a gesture in progress.
         if (sc && !gestures.current.busy) {
