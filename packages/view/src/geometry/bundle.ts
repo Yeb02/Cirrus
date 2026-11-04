@@ -47,6 +47,13 @@ export interface Branch {
 
 export interface BundleGeometry { marker: Vec2; u: Vec2; kMax: number; trunk: [Vec2, Vec2] | null; branches: Branch[]; multi: boolean }
 
+/**
+ * Below this share of its distance to the marker, an associate counts as on the axis (plan 3c task 8: with two
+ * members it always is, and the sign of a zero left to the rounding put its curve on either side, the GPU's float32
+ * and the CPU's double disagreeing). Ruling R23: a numerical tolerance, not a rendering setting.
+ */
+export const SIDE_TOLERANCE = 1e-6;
+
 /** Where a line toward `toward` leaves the end's box (or a closed group's padded envelope), plus the anchor gap. */
 function anchor(e: BundleEnd, toward: Vec2, p: RenderParams): Vec2 {
   if (e.hull) {
@@ -120,7 +127,8 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
   const side = (a: Vec2, at: Vec2) => {
     let n = perp(u);
     const v = sub(at, M);
-    if (n.x * v.x + n.y * v.y < 0) n = mul(n, -1);
+    // An associate on the axis (always, with two members) joins from +n: its side is not left to the rounding.
+    if (n.x * v.x + n.y * v.y < -SIDE_TOLERANCE * len(v)) n = mul(n, -1);
     const t = p.trunkTension * len(sub(M, a));
     return { n, t };
   };

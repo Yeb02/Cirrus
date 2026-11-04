@@ -95,7 +95,7 @@ export interface EndPool {
  * What a plan shows (plan 3c, task 5): items in stable slots (a removed one leaves GONE_ITEM, its slot recycled), and
  * the parts of the connections in columns (a removed one is PART_GONE). Never changed once made: updateScene copies a
  * column before writing it, or writes past the end of every scene that shares it, so a scene held by a gesture stays
- * valid. `byId` and `connections` are read façades (not own properties: a scene sent to the frame worker leaves them).
+ * valid. `byId` and `connections` are read façades (not own properties: the scene's data is plain columns and objects).
  */
 export interface PlanScene {
   plan: PlanRec;
@@ -114,7 +114,7 @@ export interface PlanScene {
   /** far part: its centre phantom's slot; −1 otherwise. */
   center: Int32Array;
   layout: (ConnectionLayout | undefined)[];
-  /** The connection's identifier and title for each part: what drawing needs without the state (the frame worker). */
+  /** The connection's identifier and title for each part: what drawing needs without the state. */
   ids: Id[];
   titles: string[];
   endStart: Int32Array;
@@ -135,7 +135,7 @@ export interface PlanScene {
   readonly connections: readonly SceneConnection[];
 }
 
-/** The scene's own data: what is copied, shared between versions and sent to the frame worker. */
+/** The scene's own data: what is copied and shared between versions. */
 export type SceneData = Omit<PlanScene, 'byId' | 'connections'>;
 
 const NO_CHILDREN = Object.freeze([]) as unknown as number[];
@@ -315,16 +315,6 @@ export function makeScene(s: State | undefined, data: SceneData): PlanScene {
 /** The scene with some of its data replaced, everything else shared (previews: a drag, a scale gesture, a layout). */
 export function sceneWith(scene: PlanScene, patch: Partial<SceneData>): PlanScene {
   return makeScene(states.get(scene), { ...(scene as SceneData), ...patch });
-}
-
-/**
- * A scene received by structured clone (the frame worker): its façades and shared maps back, its removed slots the
- * sentinel again. Without the state, `byId` finds phantoms only and partOf scans the identifiers.
- */
-export function reviveScene(data: SceneData): PlanScene {
-  for (const m of [data.itemOfPhantom, data.stubs]) Object.setPrototypeOf(m, LayeredMap.prototype);
-  for (let i = 0; i < data.items.length; i++) if (data.items[i].id === '') data.items[i] = GONE_ITEM;
-  return makeScene(undefined, data);
 }
 
 /** Part i's ends, materialized (the hot paths read the pool's columns). */

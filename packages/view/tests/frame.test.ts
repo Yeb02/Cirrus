@@ -2,9 +2,12 @@ import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { groupPalette } from '../src/color.ts';
-import { buildFrame, groupColors } from '../src/frame.ts';
+import { groupColors } from '../src/frame.ts';
 import { buildHitIndex } from '../src/hit.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
+import { sampleBranch } from '../src/geometry/ribbon.ts';
+import { simpleBranches } from '../src/geometry/simple.ts';
+import { buildInstances, CURVE_AT, CURVE_FLOATS, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { placeTitle } from '../src/titles.ts';
 import { buildIndex, computeVisible } from '../src/visibility.ts';
@@ -20,30 +23,31 @@ const frameAt = (scene: PlanScene, k: number, px: number) => {
   const cam = camAtTextPx(scene, k, px);
   const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
   const origin = { x: cam.x, y: cam.y };
-  const frame = buildFrame(scene, visible, cam, origin, P);
-  return { cam, visible, origin, frame, hits: buildHitIndex(scene, visible, frame, origin, P) };
+  const inst = buildInstances(scene, visible, cam, origin, P);
+  return { cam, visible, origin, inst, hits: buildHitIndex(scene, visible, inst, P) };
 };
 
-test('cadre complet sans NaN sur les trois plans de la base de test, à cinq zooms (Review Focus 4, 5)', () => {
+test('instances complètes sans NaN sur les trois plans de la base de test, à cinq zooms (Review Focus 4, 5)', () => {
   for (const plan of Object.values(ids.plans)) {
     const scene = buildScene(s, plan, measure, P);
     for (const px of [0.5, 3, 5.5, 16, 200]) {
-      const { frame } = frameAt(scene, 0, px);
-      const all = [
-        ...Object.values(frame.connections.ribbons), ...Object.values(frame.connections.glyphs), ...Object.values(frame.envelopes),
-      ];
-      for (const list of all) expect([...list.view()].every(Number.isFinite)).toBe(true);
+      const { inst } = frameAt(scene, 0, px);
+      for (const list of [inst.curves, ...Object.values(inst.glyphs), ...Object.values(inst.envelopes)]) expect([...list.view()].every(Number.isFinite)).toBe(true);
     }
   }
 });
 
-test('le cadre contient les enveloppes, les rubans, les marqueurs et les titres', () => {
-  const { frame, visible } = frameAt(sc, 0, 16);
-  expect(frame.envelopes.alpha.length).toBeGreaterThan(0);
-  expect(frame.connections.ribbons.position.length).toBeGreaterThan(0);
-  expect(frame.markers.some((m) => m.multi)).toBe(true);
-  expect(frame.titles.map((t) => t.text)).toContain('Déduction jointe');
-  expect(new Set(frame.centerlines.map((c) => c.conn)).size).toBe(visible.connections.length);
+test('les instances contiennent les enveloppes, les connexions, les marqueurs et les titres', () => {
+  const { inst, visible } = frameAt(sc, 0, 16);
+  expect(inst.envelopes.alpha.length).toBeGreaterThan(0);
+  expect(inst.simple.length).toBeGreaterThan(0);
+  expect(inst.curves.length).toBeGreaterThan(0);
+  expect(inst.markers.some((m) => m.multi)).toBe(true);
+  expect(inst.titles.map((t) => t.text)).toContain('Déduction jointe');
+  const drawn = new Set<number>();
+  for (let o = 0; o < inst.simple.length; o += SIMPLE_INTS) drawn.add(inst.simple.view()[o + 3]);
+  for (let o = 0; o < inst.curves.length; o += CURVE_FLOATS) drawn.add(inst.curves.view()[o + CURVE_AT.width + 3]);
+  expect(drawn.size).toBe(visible.connections.length);
 });
 
 test('les groupes de premier niveau prennent les teintes dans leur ordre de création, leurs sous-groupes la même', () => {
@@ -58,22 +62,21 @@ test('les groupes de premier niveau prennent les teintes dans leur ordre de cré
 test('« n connexions » pour une agrégation', () => {
   // Universalité receives MDL (split, far part) and Solomonoff → Universalité; with Complexité et induction closed only
   // the second one reaches it from the group. Aggregation is covered in visibility tests; here: the label text.
-  const { frame, visible } = frameAt(sc, 1, 3);
-  for (const t of frame.titles) {
+  const { inst, visible } = frameAt(sc, 1, 3);
+  for (const t of inst.titles) {
     const vc = visible.connections[t.conn];
     if (vc.conns.length > 1) expect(t.text).toBe(`${vc.conns.length} connexions`);
   }
 });
 
 test('survol : nœud, connexion, groupe replié, fond d’un groupe ouvert', () => {
-  const { frame, origin, hits, cam } = frameAt(sc, 0, 16);
+  const { inst, visible, hits, cam } = frameAt(sc, 0, 16);
   const mdl = sc.items[sc.byId.get(ids.nodes.mdl)!];
   expect(hits.hit(mdl.x, mdl.y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.mdl), id: ids.nodes.mdl });
-  // A point on a connection's centerline, away from boxes.
-  const line = frame.centerlines.find((c) => c.points.length > 6)!;
-  const q = line.points[Math.floor(line.points.length / 2)];
-  const h = hits.hit(q.x + origin.x, q.y + origin.y, cam.zoom);
-  expect(['connection', 'item']).toContain(h.kind);
+  // A point on a simple connection's curve, as the GPU draws it (simpleBranches): that connection, by its branch.
+  const conn = inst.simple.view()[3], [a, b] = simpleEnds(sc, visible.connections[conn], { x: 0, y: 0 });
+  const branch = simpleBranches(a, b, P)[1], q = sampleBranch(branch, 32)[16];
+  expect(hits.hit(q.x, q.y, cam.zoom)).toMatchObject({ kind: 'connection', conn, key: branch.key });
   // Inside the padded ring of an open group: background, and the group is listed.
   const g = sc.items[sc.byId.get(ids.nodes.groupeML)!];
   const outer = offsetPolygon(g.hull!, g.pad!);
@@ -108,12 +111,12 @@ test('titre : « up » si libre, autre côté si une boîte le recouvre, côté 
 });
 
 test('l’enveloppe d’un sous-groupe porte le repli de son parent, pour s’estomper avec lui (I4 de la relecture)', () => {
-  const { frame, visible } = frameAt(sc, 0, 16);
-  const parentK = [...frame.envelopes.parentK.view()];
+  const { inst, visible } = frameAt(sc, 0, 16);
+  const parentK = [...inst.envelopes.parentK.view()];
   const kOfComplexite = sc.items[sc.byId.get(ids.nodes.groupeComplexite)!].maxChildK!;
   expect(parentK).toContain(kOfComplexite); // Induction universelle, inside Complexité et induction
   expect(parentK.some((k) => k > 1e8)).toBe(true); // a top-level group: no parent
-  expect(parentK).toHaveLength(frame.envelopes.alpha.length);
+  expect(parentK).toHaveLength(inst.envelopes.alpha.length);
   expect(visible.groups.length).toBeGreaterThan(0);
 });
 

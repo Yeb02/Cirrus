@@ -54,8 +54,11 @@ export interface BenchRun {
   intervalMs: Stats;
   rebuilds: number;
   worstFrame: { t: number; cpuMs: number; rebuilt: boolean };
-  /** Why each rebuild happened: view left the prepared rectangle, a level changed state, zoom outgrew the curves. */
+  /** Why each rebuild happened: view left the prepared rectangle, a level changed state, zooming out far, something left out
+   * becoming visible (reveal), the origin moved (origin); zoomIn before plan 3c task 8. */
   reasons: Record<string, number>;
+  /** Main-thread time of the frames that rebuilt (or built pending bundles: plan 3c task 8; absent from earlier runs). */
+  rebuildMs?: Stats;
   marks: Partial<Record<LoadMark, number>>;
   /** usedJSHeapSize after two gc() (Mo). */
   heapMb: number;
@@ -191,7 +194,7 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
   const timer = GpuTimer.create<{ t: number; steady: boolean }>(g);
   const { keys, deep } = benchPath(v.scene(), g.width, g.height, v.params());
   const end = keys[keys.length - 1].t;
-  const gpu: number[] = [], gpuSteady: number[] = [], cpu: number[] = [], intervals: number[] = [];
+  const gpu: number[] = [], gpuSteady: number[] = [], cpu: number[] = [], intervals: number[] = [], rebuildCpu: number[] = [];
   let previousRebuilt = false;
   let rebuilds = 0, worst = { t: 0, cpuMs: 0, rebuilt: false }, glyphs = { max: 0, t: 0 };
   const collect = () => timer?.poll((ms, { t, steady }) => {
@@ -216,6 +219,7 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
       collect();
       if (t >= 1) {
         cpu.push(ms);
+        if (rebuilt) rebuildCpu.push(ms);
         if (ms > worst.cpuMs) worst = { t, cpuMs: ms, rebuilt };
       }
       if (renderer.glyphCount > glyphs.max) glyphs = { max: renderer.glyphCount, t };
@@ -233,7 +237,7 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
   const edits = editFrom ? await editPass(v, editFrom) : null;
   return {
     label, gpuName, timer: timer !== null, disjoint: timer?.disjoint ?? 0, canvasPx: [g.canvas.width, g.canvas.height], gpuMs: summarize(gpu),
-    gpuSteadyMs: summarize(gpuSteady), cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, worstFrame: worst, reasons, marks: { ...marks },
+    gpuSteadyMs: summarize(gpuSteady), cpuMs: summarize(cpu), intervalMs: summarize(intervals), rebuilds, rebuildMs: summarize(rebuildCpu), worstFrame: worst, reasons, marks: { ...marks },
     ...heapAfterGc(), edits, beforeEdits, glyphs,
   };
 }

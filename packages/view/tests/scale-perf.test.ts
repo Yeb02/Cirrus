@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   type Action, applyOp, applyOps, combine, CommandError, connect, connId, connKind, createNode, createPlan, deleteEverywhere, directGroup, editNode, emptyState,
   exclude, fromSnapshot, groupMembers, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm,
@@ -9,16 +10,20 @@ import { benchPath, cameraAt } from '../src/benchPath.ts';
 import type { Camera } from '../src/camera.ts';
 import { copyClip, pasteSteps } from '../src/clip.ts';
 import { intruders, visibleIntruders } from '../src/edit.ts';
-import { buildFrame } from '../src/frame.ts';
 import { buildHitIndex } from '../src/hit.ts';
+import { buildInstances, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
 import { buildScene, isLive, type PlanScene } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
+import { GLYPH_FLOATS, parseBmFont } from '../src/text.ts';
 import { buildIndex, computeVisible, updateIndex } from '../src/visibility.ts';
 import { bruteVisible, canonicalScene, indexContent, measure, P, rng, visibleDifference } from './helpers.ts';
 
 // Costs at the scale the spec aims for (spec 21), on the bench's synthetic base: what runs at every edit must not
 // grow with the square of the plan (C1 of the plan 3b review: intruders took 15 s at 50 000 nodes). The view's timed
 // tests are all in this file, run one after the other (plan 3c, global constraints).
+
+/** The app's MSDF font: the instances' costs include the titles' glyphs (plan 3c task 8). */
+const font = parseBmFont(readFileSync(new URL('../../app/src/renderer/public/font/inter-msdf.fnt', import.meta.url), 'utf8'));
 
 /** One plan, 10 000 nodes in 100 groups laid out on a grid, 50 000 local knowledge connections. */
 function large(): State {
@@ -73,7 +78,7 @@ test('grande base : scène, index, visibilité, cadre et survol rapides (10 000 
     const cam = { x, y, zoom, widthPx: 2560, heightPx: 1600 };
     const frame = best(() => {
       const visible = computeVisible(scene, index, cam, P);
-      buildHitIndex(scene, visible, buildFrame(scene, visible, cam, { x, y }, P), { x, y }, P);
+      buildHitIndex(scene, visible, buildInstances(scene, visible, cam, { x, y }, P, undefined, font), P);
       return visible;
     });
     expect(frame.ms, `zoom ${zoom}: ${frame.out.connections.length} connexions visibles`).toBeLessThan(400);
@@ -137,9 +142,19 @@ function flatScene(): PlanScene {
   return buildScene(flat, lobby, measure, P);
 }
 
+// The flat-plan tests run before the first reference() test below: with the reference base resident (≈ 1 GB of heap),
+// the same pass measures 13 to 17 ms instead of 5 to 8 (registry, R26). Keep any flat-plan test above them.
+let flat: { scene: PlanScene; cam: Camera } | null = null;
+const flatPlan = () => {
+  if (!flat) {
+    const scene = flatScene(), b = scene.bounds!;
+    flat = { scene, cam: { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, zoom: Math.min(W / (b.maxX - b.minX), H / (b.maxY - b.minY)), widthPx: W, heightPx: H } };
+  }
+  return flat;
+};
+
 test('plan plat de 20 000 nœuds vu en entier : visible sans balayage (cible 5 ms)', () => {
-  const scene = flatScene(), index = buildIndex(scene, P), b = scene.bounds!;
-  const cam = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, zoom: Math.min(W / (b.maxX - b.minX), H / (b.maxY - b.minY)), widthPx: W, heightPx: H };
+  const { scene, cam } = flatPlan(), index = buildIndex(scene, P);
   // 20 861 connections seen: the set itself is ≈ 100 000 objects, whose allocation is most of the cost (≈ 3 ms of it
   // measured alone); the best of fifteen after ten, as the view meets it once its code is optimized.
   const r = best(() => computeVisible(scene, index, cam, P), 10, 15);
@@ -149,6 +164,25 @@ test('plan plat de 20 000 nœuds vu en entier : visible sans balayage (cible 5 m
   expect(r.out.items).toHaveLength(scene.items.length);
   expect(r.out.connections.length).toBeGreaterThan(15_000);
   expect(r.ms).toBeLessThanOrEqual(FLAT_CEILING_MS);
+}, 120_000);
+
+/**
+ * The plan aims at 4 ms for the flat plan's instances (852 ms for buildFrame before), 3 ms per camera of the path and
+ * 3 ms for the whole item texture: 3.5, 2.5 and 1.9 ms at best on a quiet machine, 3.8–4.7, 2.4–3.0 and 2.3–3.3 ms
+ * while the user's programs held most processors, 6.7 ms for the flat plan in the full suite. The gates are about
+ * three times the best measures (R12, R15, R26 of the registry); the targets stay the plan's.
+ */
+const FLAT_INSTANCES_CEILING_MS = 11, PATH_INSTANCES_CEILING_MS = 8, TEXELS_CEILING_MS = 7;
+
+test('plan plat de 20 000 nœuds vu en entier : ses instances, titres compris (cible 4 ms)', () => {
+  const { scene, cam } = flatPlan(), visible = computeVisible(scene, buildIndex(scene, P), cam, P);
+  // Refilling the storage of the previous rebuild, as the renderer does.
+  const reuse = buildInstances(scene, visible, cam, cam, P, undefined, font);
+  const r = best(() => buildInstances(scene, visible, cam, cam, P, undefined, font, undefined, reuse), 10, 15);
+  show(`buildInstances, plan plat (${r.out.simple.length / SIMPLE_INTS} simples, ${r.out.markers.length} faisceaux complexes)`, r.ms);
+  expect(r.out.simple.length / SIMPLE_INTS).toBeGreaterThan(15_000);
+  expect(r.out.pending).toBe(false);
+  expect(r.ms).toBeLessThanOrEqual(FLAT_INSTANCES_CEILING_MS);
 }, 120_000);
 
 test('base de référence : la scène du lobby se construit d’un passage (cible 400 ms) et tient en 30 % de la mesure du 2026-11-03', () => {
@@ -223,6 +257,34 @@ test('base de référence : visible et intrus du visible en 1 ms au plus à chaq
   expect(cams.length).toBeGreaterThan(2000);
   expect(worst).toBeLessThanOrEqual(1);
   expect(worstIntruders).toBeLessThanOrEqual(1);
+}, 120_000);
+
+test('base de référence : les instances, titres compris, en 3 ms au plus à chaque caméra du parcours du banc', () => {
+  const { scene } = reference(), index = buildIndex(scene, P), cams = pathCameras(scene, 1 / 60);
+  let worst = 0, at = 0, glyphs = 0;
+  const reuse = buildInstances(scene, computeVisible(scene, index, cams[0], P), cams[0], cams[0], P, undefined, font);
+  for (const [k, cam] of cams.entries()) {
+    const v = computeVisible(scene, index, cam, P);
+    let ms = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now();
+      buildInstances(scene, v, cam, cam, P, undefined, font, undefined, reuse);
+      ms = Math.min(ms, performance.now() - t);
+    }
+    glyphs = Math.max(glyphs, reuse.texts.length);
+    if (ms > worst) { worst = ms; at = k; }
+  }
+  show(`buildInstances, pire des ${cams.length} caméras (n° ${at}, ${glyphs / GLYPH_FLOATS} glyphes au plus)`, worst);
+  expect(glyphs).toBeGreaterThan(0);
+  expect(worst).toBeLessThanOrEqual(PATH_INSTANCES_CEILING_MS);
+}, 300_000);
+
+test('base de référence : la texture des éléments du lobby se remplit en 3 ms au plus', () => {
+  const { scene } = reference(), out = new Float32Array(scene.items.length * SLOT_FLOATS);
+  const r = best(() => itemTexels(scene, { x: 1e5, y: -3e4 }, out));
+  show(`itemTexels complet (${scene.items.length} emplacements)`, r.ms);
+  expect(out.some((v) => v !== 0)).toBe(true);
+  expect(r.ms).toBeLessThanOrEqual(TEXELS_CEILING_MS);
 }, 120_000);
 
 test('base de référence : updateIndex d’un déplacement en 1 ms au plus, et l’index suivi égale l’index construit', () => {

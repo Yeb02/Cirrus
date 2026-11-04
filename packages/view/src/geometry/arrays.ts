@@ -66,6 +66,52 @@ export class FloatList {
   }
 }
 
+/** Growable Int32Array (instances of slots and indices, plan 3c task 8): refilled in place like FloatList. */
+export class IntList {
+  private data: Int32Array;
+  private n = 0;
+
+  constructor(initial = 1024) {
+    this.data = new Int32Array(Math.max(4, initial));
+  }
+
+  /** Lengthens the list by `count` ints and returns where they start, to be written in `storage`. */
+  extend(count: number): number {
+    if (this.n + count > this.data.length) {
+      let cap = this.data.length * 2;
+      while (cap < this.n + count) cap *= 2;
+      const next = new Int32Array(cap);
+      next.set(this.data.subarray(0, this.n));
+      this.data = next;
+    }
+    const at = this.n;
+    this.n += count;
+    return at;
+  }
+
+  push1(a: number): void {
+    const at = this.extend(1);
+    this.data[at] = a;
+  }
+
+  /** The whole storage, valid until the list grows again. */
+  get storage(): Int32Array {
+    return this.data;
+  }
+
+  get length(): number {
+    return this.n;
+  }
+
+  view(): Int32Array {
+    return this.data.subarray(0, this.n);
+  }
+
+  clear(): void {
+    this.n = 0;
+  }
+}
+
 export class IndexList {
   private data: Uint32Array;
   private n = 0;

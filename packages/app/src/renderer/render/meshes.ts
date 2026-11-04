@@ -55,60 +55,61 @@ export class Mesh {
   }
 }
 
-/** One instance's attributes, interleaved: their names and sizes in floats, in order. */
+/** One instance's attributes, interleaved: their names and sizes in floats (or ints), in order. */
 export type InstanceLayout = AttributeSpec[];
 
 /**
- * A unit quad drawn once per instance (a triangle strip of corners (0, 0) to (1, 1) in `aCorner`), the instances'
- * attributes interleaved in one buffer: one upload and one draw call for all of them.
+ * Instances drawn by one or more programs (plan 3c task 8: a simple connection's ribbons and glyphs come from the same
+ * instances), their attributes interleaved in one buffer, all floats or all ints: one upload, one draw call per
+ * program. Each instance is `vertices` vertices of `mode` (by default a unit quad, a triangle strip of corners (0, 0)
+ * to (1, 1) in `aCorner`); a program that computes its vertices from gl_VertexID ignores the corners.
  */
 export class InstanceMesh {
-  readonly program: Program;
   private readonly corners: DynamicBuffer;
   private readonly instances: DynamicBuffer;
-  private readonly vao: VertexArray;
+  private readonly vaos: { program: Program; vao: VertexArray }[];
   private readonly gl: WebGL2RenderingContext;
-  private readonly floats: number;
+  private readonly size: number;
   private count = 0;
 
-  constructor(gl: WebGL2RenderingContext, program: Program, layout: InstanceLayout, initialInstances = 1024) {
+  constructor(gl: WebGL2RenderingContext, programs: Program[], layout: InstanceLayout, initialInstances = 1024, integer = false) {
     this.gl = gl;
-    this.program = program;
-    this.floats = layout.reduce((n, a) => n + a.size, 0);
+    this.size = layout.reduce((n, a) => n + a.size, 0);
     this.corners = new DynamicBuffer(gl, gl.ARRAY_BUFFER, 32);
     this.corners.upload(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]));
-    this.instances = new DynamicBuffer(gl, gl.ARRAY_BUFFER, initialInstances * this.floats * 4);
-    const stride = this.floats * 4;
+    this.instances = new DynamicBuffer(gl, gl.ARRAY_BUFFER, initialInstances * this.size * 4);
+    const stride = this.size * 4;
     let offset = 0;
     const attributes: Attribute[] = [{ name: 'aCorner', buffer: this.corners, size: 2 }];
     for (const a of layout) {
-      attributes.push({ name: a.name, buffer: this.instances, size: a.size, stride, offset, divisor: 1 });
+      attributes.push({ name: a.name, buffer: this.instances, size: a.size, stride, offset, divisor: 1, integer });
       offset += a.size * 4;
     }
-    this.vao = new VertexArray(gl, program, attributes);
+    this.vaos = programs.map((program) => ({ program, vao: new VertexArray(gl, program, attributes) }));
   }
 
-  /** `data`: whole instances, `floats` each. */
-  update(data: Float32Array): void {
+  /** `data`: whole instances, the layout's size each. */
+  update(data: Float32Array | Int32Array): void {
     this.instances.upload(data);
-    this.count = Math.floor(data.length / this.floats);
+    this.count = Math.floor(data.length / this.size);
   }
 
   get length(): number {
     return this.count;
   }
 
-  draw(): void {
+  /** Draws every instance with program `which` (in the constructor's order) and its uniforms as they are set. */
+  draw(which = 0, vertices = 4, mode: number = this.gl.TRIANGLE_STRIP): void {
     if (this.count === 0) return;
-    const gl = this.gl;
-    this.program.use();
-    this.vao.bind();
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
-    this.vao.unbind();
+    const { program, vao } = this.vaos[which];
+    program.use();
+    vao.bind();
+    this.gl.drawArraysInstanced(mode, 0, vertices, this.count);
+    vao.unbind();
   }
 
   dispose(): void {
-    this.vao.dispose();
+    for (const { vao } of this.vaos) vao.dispose();
     this.corners.dispose();
     this.instances.dispose();
   }

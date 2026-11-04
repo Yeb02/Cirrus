@@ -559,7 +559,7 @@ export function GraphView(props: {
         renderer = new PlanRenderer(g, props.params, font, atlas);
         console.log(`Shaders préchauffés en ${renderer.warmUp().toFixed(0)} ms.`);
       } catch (e) {
-        // What was made is let go: the renderer (its worker, its atlas), else the atlas alone.
+        // What was made is let go: the renderer (its textures, its atlas), else the atlas alone.
         if (renderer) renderer.destroy(); else atlas?.close();
         if (cancelled) return;
         const message = e instanceof Error ? e.message : String(e);

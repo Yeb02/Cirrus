@@ -45,7 +45,7 @@ export class DynamicBuffer {
   }
 }
 
-/** An attribute read from a buffer: `size` floats, at `offset` bytes in a vertex (or instance) of `stride` bytes. */
+/** An attribute read from a buffer: `size` floats (or 32-bit ints), at `offset` bytes in a vertex (or instance) of `stride` bytes. */
 export interface Attribute {
   name: string;
   buffer: DynamicBuffer;
@@ -54,6 +54,8 @@ export interface Attribute {
   offset?: number;
   /** 1: one value per instance (vertexAttribDivisor), 0 (default): per vertex. */
   divisor?: 0 | 1;
+  /** Read as signed ints (an `int`/`ivec` input: slots, flags), not converted to floats. */
+  integer?: boolean;
 }
 
 /**
@@ -74,7 +76,8 @@ export class VertexArray {
       if (loc < 0) continue;
       gl.bindBuffer(gl.ARRAY_BUFFER, a.buffer.buffer);
       gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, a.size, gl.FLOAT, false, a.stride ?? 0, a.offset ?? 0);
+      if (a.integer) gl.vertexAttribIPointer(loc, a.size, gl.INT, a.stride ?? 0, a.offset ?? 0);
+      else gl.vertexAttribPointer(loc, a.size, gl.FLOAT, false, a.stride ?? 0, a.offset ?? 0);
       gl.vertexAttribDivisor(loc, a.divisor ?? 0);
     }
     if (index) gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index.buffer);

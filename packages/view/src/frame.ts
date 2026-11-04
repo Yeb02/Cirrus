@@ -2,31 +2,16 @@ import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { groupPalette } from './color.ts';
-import { FloatList } from './geometry/arrays.ts';
+import type { FloatList } from './geometry/arrays.ts';
 import { type BundleEnd, type BundleGeometry, bundleGeometry } from './geometry/bundle.ts';
-import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes, NO_PARENT } from './geometry/envelope.ts';
+import { NO_PARENT } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
-import { appendBundle, clearConnectionMeshes, type ConnectionMeshes, newConnectionMeshes } from './geometry/ribbon.ts';
-import { foldT, stepScale, textPx } from './lod.ts';
+import { foldT, stepScale } from './lod.ts';
 import type { RenderParams, Rgb } from './params.ts';
 import type { PlanScene, SceneItem } from './scene.ts';
 import { appendTitle, type FontData, TITLE_CONNECTION, TITLE_GROUP_CLOSED, TITLE_GROUP_OPEN, TITLE_NODE } from './text.ts';
 import { placeTitle, type Rect, type TitleSide } from './titles.ts';
 import type { VisibleConnection, VisibleSet } from './visibility.ts';
-
-/** Everything a rebuild draws, in world units relative to `origin` (float32 precision at any zoom). Pure: Task 9 runs it in a worker. */
-export interface FrameGeometry {
-  origin: Vec2;
-  connections: ConnectionMeshes;
-  envelopes: EnvelopeMeshes;
-  /** key: the member the line leads to, null for a trunk. */
-  centerlines: { conn: number; points: Vec2[]; key: Id | null }[];
-  markers: { conn: number; pos: Vec2; kMax: number; multi: boolean }[];
-  titles: { conn: number; id: Id; text: string; box: Rect; kMax: number; side: TitleSide }[];
-  stubs: { conn: number; stub: number; pos: Vec2; title: string }[];
-  /** One instance per glyph of the titles drawn, GLYPH_FLOATS each (text.ts), in drawing order; empty without a font. */
-  glyphInstances: FloatList;
-}
 
 /**
  * A group's colours (spec 8.4): top-level groups take groupHues in their order of creation (the scene's hue ranks),
@@ -39,100 +24,12 @@ export function groupColors(scene: PlanScene, g: number, p: RenderParams): { ope
   return groupPalette({ depth: scene.items[g].depth, hue }, p);
 }
 
-/**
- * Builds the meshes of a visible set (spec 8.4, 8.5). `prevSides` keeps connection titles on the side they had;
- * `reuse` refills the typed arrays of a previous frame instead of allocating new ones; `font`: the titles' glyphs
- * are built with it (none without).
- */
-export function buildFrame(
-  scene: PlanScene, visible: VisibleSet, cam: Camera, origin: Vec2, p: RenderParams,
-  prevSides?: Map<Id, TitleSide>, reuse?: FrameGeometry, font?: FontData,
-): FrameGeometry {
-  const connections = reuse?.connections ?? newConnectionMeshes();
-  const envelopes = reuse?.envelopes ?? newEnvelopeMeshes();
-  const glyphInstances = reuse?.glyphInstances ?? new FloatList();
-  clearConnectionMeshes(connections);
-  clearEnvelopeMeshes(envelopes);
-  glyphInstances.clear();
-  const frame: FrameGeometry = { origin, connections, envelopes, centerlines: [], markers: [], titles: [], stubs: [], glyphInstances };
-  const rel = (q: Vec2): Vec2 => ({ x: q.x - origin.x, y: q.y - origin.y });
-  const items = scene.items;
-
-  // Envelopes, parents first so nested levels are drawn on top.
-  for (const g of visible.groups) {
-    const it = items[g];
-    appendEnvelope(envelopes, it.hull!.map(rel), it.pad!, groupColors(scene, g, p), it.maxChildK!, it.parent >= 0 ? items[it.parent].maxChildK! : NO_PARENT);
-  }
-
-  const padded = new Map<number, Vec2[]>();
-  const paddedOf = (i: number) => {
-    let poly = padded.get(i);
-    if (!poly) padded.set(i, (poly = offsetPolygon(items[i].hull!, items[i].pad!)));
-    return poly;
-  };
-  const extentOf = (it: SceneItem, i: number) =>
-    it.kind === 'group' ? Math.max(...paddedOf(i).map((q) => Math.hypot(q.x - it.x, q.y - it.y))) : Math.max(it.halfW, it.halfH);
-  const geometry = (vc: VisibleConnection, closed: boolean): BundleGeometry => bundleFor(scene, vc, p, origin, undefined, closed);
-
-  const camRel = rel(cam);
-  const pxPerUnit = cam.zoom * p.curveZoomHeadroom;
-  visible.connections.forEach((vc, ci) => {
-    const open = geometry(vc, false);
-    const closed = vc.fade === 'slide' ? geometry(vc, true) : null;
-    // The two endpoints nearest the camera carry the off-screen fade (spec 8.5); a far part: its node and its centre.
-    const pts = [...vc.ends.map((e) => e.item), ...(vc.center !== undefined ? [vc.center] : [])]
-      .map((i) => { const q = rel(items[i]); return { q, e: extentOf(items[i], i), d: Math.hypot(q.x - camRel.x, q.y - camRel.y) }; })
-      .sort((a, b) => a.d - b.d);
-    const e0 = pts[0], e1 = pts[1] ?? pts[0];
-    const lines = appendBundle(connections, open, closed, {
-      pxPerUnit, end0: [e0.q.x, e0.q.y, e0.e], end1: [e1.q.x, e1.q.y, e1.e], fade: vc.fade, foldK: vc.foldK, conn: ci,
-    }, p);
-    if (lines.length === 0) return;
-    for (const l of lines) frame.centerlines.push({ conn: ci, points: l.points, key: l.key });
-    frame.markers.push({ conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi });
-    open.branches.filter((b) => b.stub).forEach((b, si) => {
-      frame.stubs.push({ conn: ci, stub: si, pos: b.nodeEnd === 'p0' ? b.p0 : b.p3, title: vc.stubs[si].title });
-    });
-  });
-
-  placeTitles(scene, visible, frame, cam, p, prevSides, rel);
-  if (font) appendTitles(scene, visible, frame, cam, p, font, paddedOf);
-  return frame;
-}
-
-/**
- * The glyphs of the titles drawn (spec 8.2 to 8.5), in the order they are drawn: boxes, then each group's two titles
- * (open, at the top of its envelope; closed, at its centre), then connections. A title still unreadable at the deepest
- * zoom this frame serves is not built; the others fade in the shader, by the formulas BitmapText's alphas followed.
- */
-function appendTitles(
-  scene: PlanScene, visible: VisibleSet, frame: FrameGeometry, cam: Camera, p: RenderParams, font: FontData, paddedOf: (i: number) => Vec2[],
-): void {
-  const items = scene.items, out = frame.glyphInstances, o = frame.origin;
-  const maxZoom = cam.zoom * p.curveZoomHeadroom;
-  const readable = (k: number, scale: number) => textPx(k, maxZoom, p) * scale >= p.textFade[0];
-  const parentK = (it: SceneItem) => (it.parent >= 0 ? items[it.parent].maxChildK! : NO_PARENT);
-  visible.items.forEach((i, j) => {
-    const it = items[i];
-    if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) return;
-    const s = stepScale(it.k, p), size = p.baseFontPx * s;
-    appendTitle(out, font, it.title, size, (p.boxWidth - 2 * p.boxPadX) * s, size * p.lineHeight, it.x - o.x, it.y - o.y,
-      TITLE_NODE, j, it.kind === 'phantom' ? p.phantomTitleDim : 1, NO_PARENT, parentK(it));
-  });
-  visible.groups.forEach((g, j) => {
-    const it = items[g];
-    if (!readable(it.k, Math.max(p.groupTitleOpenScale, p.groupTitleClosedScale))) return;
-    const s = stepScale(it.k, p);
-    const top = Math.min(...paddedOf(g).map((q) => q.y));
-    const open = p.baseFontPx * s * p.groupTitleOpenScale, closed = p.baseFontPx * s * p.groupTitleClosedScale;
-    appendTitle(out, font, it.title, open, 0, open * p.lineHeight, it.x - o.x, top - o.y - open * p.groupTitleOffset, TITLE_GROUP_OPEN, j, 1, it.maxChildK!, parentK(it));
-    appendTitle(out, font, it.title, closed, p.boxWidth * s, closed * p.lineHeight, it.x - o.x, it.y - o.y, TITLE_GROUP_CLOSED, j, 1, it.maxChildK!, parentK(it));
-  });
-  for (const t of frame.titles) {
-    const size = p.titleFontPx * stepScale(t.kMax, p), vc = visible.connections[t.conn];
-    appendTitle(out, font, t.text, size, 0, size * p.lineHeight, t.box.x + t.box.w / 2, t.box.y + t.box.h / 2,
-      TITLE_CONNECTION, t.conn, 1, vc.fade === 'out' ? vc.foldK : NO_PARENT, NO_PARENT);
-  }
+/** An item as a bundle's end, relative to `origin`: its box, or a closed group's padded envelope. */
+export function bundleEnd(scene: PlanScene, i: number, role: BundleEnd['role'], hollow: boolean, dashed: boolean, key: Id, origin: Vec2): BundleEnd {
+  const it = scene.items[i];
+  const e: BundleEnd = { pos: { x: it.x - origin.x, y: it.y - origin.y }, halfW: it.halfW, halfH: it.halfH, role, k: it.k, hollow, dashed, key };
+  if (it.kind === 'group') e.hull = { poly: it.hull!.map((q) => ({ x: q.x - origin.x, y: q.y - origin.y })), centre: e.pos, pad: it.pad! };
+  return e;
 }
 
 /**
@@ -143,64 +40,130 @@ export function bundleFor(
   scene: PlanScene, vc: VisibleConnection, p: RenderParams, origin: Vec2 = { x: 0, y: 0 },
   layout?: Omit<ConnectionLayout, 'plan' | 'connection'>, closed = false,
 ): BundleGeometry {
-  const items = scene.items;
   const rel = (q: Vec2): Vec2 => ({ x: q.x - origin.x, y: q.y - origin.y });
-  const end = (i: number, role: BundleEnd['role'], hollow: boolean, dashed: boolean, key: Id): BundleEnd => {
-    const it = items[i];
-    const e: BundleEnd = { pos: rel(it), halfW: it.halfW, halfH: it.halfH, role, k: it.k, hollow, dashed, key };
-    if (it.kind === 'group') e.hull = { poly: it.hull!.map(rel), centre: rel(it), pad: it.pad! };
-    return e;
-  };
   const own = layout ?? (vc.conns.length === 1 ? scene.layout[vc.conns[0]] : undefined);
   return bundleGeometry({
-    ends: vc.ends.map((e) => end(closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key)),
+    ends: vc.ends.map((e) => bundleEnd(scene, closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key, origin)),
     stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
-    ...(vc.center !== undefined ? { centre: rel(items[vc.center]) } : {}),
+    ...(vc.center !== undefined ? { centre: rel(scene.items[vc.center]) } : {}),
     ...(own ? { layout: { ...own, marker: own.marker ? rel(own.marker) : undefined } } : {}),
   }, p);
 }
 
-function placeTitles(
-  scene: PlanScene, visible: VisibleSet, frame: FrameGeometry, cam: Camera, p: RenderParams,
-  prevSides: Map<Id, TitleSide> | undefined, rel: (q: Vec2) => Vec2,
-): void {
-  const items = scene.items;
-  // Obstacles: visible boxes, and groups more than half closed.
-  const obstacles: Rect[] = [];
-  for (const i of visible.items) {
-    const it = items[i], c = rel(it);
-    obstacles.push({ x: c.x - it.halfW, y: c.y - it.halfH, w: 2 * it.halfW, h: 2 * it.halfH });
-  }
-  for (const g of visible.groups) {
-    const it = items[g];
-    if (foldT(it.maxChildK!, cam.zoom, p) < p.foldClickable) continue;
-    const poly = offsetPolygon(it.hull!, it.pad!).map(rel);
-    const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
-    obstacles.push({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) });
-  }
-  const pts: Vec2[] = frame.centerlines.flatMap((c) => c.points);
-  const ptTree = pts.length > 0 ? new Flatbush(pts.length) : null;
-  if (ptTree) { for (const q of pts) ptTree.add(q.x, q.y, q.x, q.y); ptTree.finish(); }
-  const obTree = obstacles.length > 0 ? new Flatbush(obstacles.length) : null;
-  if (obTree) { for (const o of obstacles) obTree.add(o.x, o.y, o.x + o.w, o.y + o.h); obTree.finish(); }
-  const placed: Rect[] = [];
+/**
+ * The zoom from which an element of step k, its text `scale` times a box title's, is readable at the deepest zoom a
+ * rebuild serves (cam.zoom × curveZoomHeadroom): below it, its title is not built (spec 8.2).
+ */
+export const readableFrom = (k: number, scale: number, p: RenderParams): number =>
+  p.textFade[0] / (p.baseFontPx * stepScale(k, p) * scale * p.curveZoomHeadroom);
 
-  for (const m of frame.markers) {
+/**
+ * The glyphs of the items' titles (spec 8.2 to 8.4), in the order they are drawn: boxes, then each group's two titles
+ * (open, at the top of its envelope; closed, at its centre), each from its item's centre (the item texture gives it). A
+ * title still unreadable at the deepest zoom a rebuild serves is not built: the smallest zoom that would build one is
+ * returned (Infinity for none), and reaching it rebuilds. The others fade in the shader, by the formulas BitmapText's
+ * alphas followed. `paddedOf`: a group's padded envelope (world).
+ */
+export function appendItemTitles(
+  out: FloatList, scene: PlanScene, visible: VisibleSet, cam: Camera, p: RenderParams, font: FontData, paddedOf: (g: number) => Vec2[],
+): number {
+  const items = scene.items;
+  let reveal = Infinity, lastK = Number.NaN, lastScale = Number.NaN, lastFrom = 0;
+  const readable = (k: number, scale: number) => {
+    // Neighbours mostly share their step: the threshold is computed again only when it changes.
+    if (k !== lastK || scale !== lastScale) { lastK = k; lastScale = scale; lastFrom = readableFrom(k, scale, p); }
+    const from = lastFrom;
+    if (cam.zoom >= from) return true;
+    if (from < reveal) reveal = from;
+    return false;
+  };
+  const parentK = (it: SceneItem) => (it.parent >= 0 ? items[it.parent].maxChildK! : NO_PARENT);
+  visible.items.forEach((i, j) => {
+    const it = items[i];
+    if ((it.kind === 'phantom' && it.phantom !== 'node') || !readable(it.k, 1)) return;
+    const s = stepScale(it.k, p), size = p.baseFontPx * s;
+    appendTitle(out, font, it.title, size, (p.boxWidth - 2 * p.boxPadX) * s, size * p.lineHeight, 0, 0,
+      TITLE_NODE, j, it.kind === 'phantom' ? p.phantomTitleDim : 1, NO_PARENT, parentK(it), i);
+  });
+  visible.groups.forEach((g, j) => {
+    const it = items[g];
+    if (!readable(it.k, Math.max(p.groupTitleOpenScale, p.groupTitleClosedScale))) return;
+    const s = stepScale(it.k, p);
+    const top = Math.min(...paddedOf(g).map((q) => q.y));
+    const open = p.baseFontPx * s * p.groupTitleOpenScale, closed = p.baseFontPx * s * p.groupTitleClosedScale;
+    appendTitle(out, font, it.title, open, 0, open * p.lineHeight, 0, top - it.y - open * p.groupTitleOffset, TITLE_GROUP_OPEN, j, 1, it.maxChildK!, parentK(it), g);
+    appendTitle(out, font, it.title, closed, p.boxWidth * s, closed * p.lineHeight, 0, 0, TITLE_GROUP_CLOSED, j, 1, it.maxChildK!, parentK(it), g);
+  });
+  return reveal;
+}
+
+/** The zoom from which a connection's title, its largest step kMax, is readable at the deepest zoom a rebuild serves. */
+export const titleReadableFrom = (kMax: number, p: RenderParams): number => p.titleFade[0] / (p.titleFontPx * stepScale(kMax, p) * p.curveZoomHeadroom);
+
+/** A connection title placed: by its visible connection, its id (the parts' ids joined), its box relative to the origin. */
+export interface PlacedTitle { conn: number; id: Id; text: string; box: Rect; kMax: number; side: TitleSide }
+
+/** Where a visible connection's core is, relative to the origin, with its largest step. */
+export interface CoreAt { conn: number; pos: Vec2; kMax: number }
+
+/**
+ * The connection titles (spec 8.5): near each core, given in the visible order, covering neither the curves (the
+ * samples `samplesIn` gives in a rectangle, relative to the origin) nor the visible boxes, groups more than half
+ * closed and titles placed before; `prevSides` keeps a title on the side it had. A title still unreadable at the
+ * deepest zoom a rebuild serves is left out: the smallest zoom that would place one is returned (Infinity for none).
+ */
+export function placeConnectionTitles(
+  scene: PlanScene, visible: VisibleSet, cores: CoreAt[], cam: Camera, origin: Vec2, p: RenderParams,
+  samplesIn: (x0: number, y0: number, x1: number, y1: number) => Vec2[], prevSides: Map<Id, TitleSide> | undefined, out: PlacedTitle[],
+): number {
+  const items = scene.items;
+  let reveal = Infinity;
+  let obTree: Flatbush | null | undefined, obstacles: Rect[] = [];
+  /** Obstacles: visible boxes, and groups more than half closed (made at the first title read). */
+  const obstaclesIn = (x0: number, y0: number, x1: number, y1: number): Rect[] => {
+    if (obTree === undefined) {
+      obstacles = [];
+      for (const i of visible.items) {
+        const it = items[i];
+        obstacles.push({ x: it.x - origin.x - it.halfW, y: it.y - origin.y - it.halfH, w: 2 * it.halfW, h: 2 * it.halfH });
+      }
+      for (const g of visible.groups) {
+        const it = items[g];
+        if (foldT(it.maxChildK!, cam.zoom, p) < p.foldClickable) continue;
+        const poly = offsetPolygon(it.hull!, it.pad!).map((q) => ({ x: q.x - origin.x, y: q.y - origin.y }));
+        const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
+        obstacles.push({ x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) });
+      }
+      obTree = obstacles.length > 0 ? new Flatbush(obstacles.length) : null;
+      if (obTree) { for (const o of obstacles) obTree.add(o.x, o.y, o.x + o.w, o.y + o.h); obTree.finish(); }
+    }
+    return obTree ? obTree.search(x0, y0, x1, y1).map((i) => obstacles[i]) : [];
+  };
+  const placed: Rect[] = [];
+  for (const m of cores) {
     const vc = visible.connections[m.conn];
     const text = vc.conns.length > 1 ? `${vc.conns.length} connexions` : scene.titles[vc.conns[0]];
     if (!text) continue;
     const size = p.titleFontPx * stepScale(m.kMax, p);
-    // Unreadable until the next rebuild even at the deepest zoom it serves: skip (spec 8.2).
-    if (size * cam.zoom * p.curveZoomHeadroom < p.titleFade[0]) continue;
+    // Unreadable even at the deepest zoom a rebuild serves: left out until that zoom (spec 8.2).
+    const from = titleReadableFrom(m.kMax, p);
+    if (cam.zoom < from) { if (from < reveal) reveal = from; continue; }
     const w = p.titleCharWidth * size * text.length, h = size * p.titleBoxHeight, gap = p.titleGap * stepScale(m.kMax, p);
     const reach = w + gap * 4 + h;
-    const near = (x0: number, y0: number, x1: number, y1: number) => [x0 - reach, y0 - reach, x1 + reach, y1 + reach] as const;
-    const [qx0, qy0, qx1, qy1] = near(m.pos.x, m.pos.y, m.pos.x, m.pos.y);
-    const samples = ptTree ? ptTree.search(qx0, qy0, qx1, qy1).map((i) => pts[i]) : [];
-    const obs = [...(obTree ? obTree.search(qx0, qy0, qx1, qy1).map((i) => obstacles[i]) : []), ...placed];
+    const [qx0, qy0, qx1, qy1] = [m.pos.x - reach, m.pos.y - reach, m.pos.x + reach, m.pos.y + reach];
     const id = vc.conns.map((i) => scene.ids[i]).join('+');
-    const { side, rect } = placeTitle(m.pos, w, h, gap, samples, obs, prevSides?.get(id));
+    const { side, rect } = placeTitle(m.pos, w, h, gap, samplesIn(qx0, qy0, qx1, qy1), [...obstaclesIn(qx0, qy0, qx1, qy1), ...placed], prevSides?.get(id));
     placed.push(rect);
-    frame.titles.push({ conn: m.conn, id, text, box: rect, kMax: m.kMax, side });
+    out.push({ conn: m.conn, id, text, box: rect, kMax: m.kMax, side });
+  }
+  return reveal;
+}
+
+/** The glyphs of the connection titles placed, after the items' (TITLE_CONNECTION, anchored relative to the origin). */
+export function appendConnectionTitles(out: FloatList, visible: VisibleSet, titles: PlacedTitle[], p: RenderParams, font: FontData): void {
+  for (const t of titles) {
+    const size = p.titleFontPx * stepScale(t.kMax, p), vc = visible.connections[t.conn];
+    appendTitle(out, font, t.text, size, 0, size * p.lineHeight, t.box.x + t.box.w / 2, t.box.y + t.box.h / 2,
+      TITLE_CONNECTION, t.conn, 1, vc.fade === 'out' ? vc.foldK : NO_PARENT, NO_PARENT, -1);
   }
 }

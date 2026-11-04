@@ -6,8 +6,7 @@ import type { Measure } from './scene.ts';
 export interface FontChar { id: number; x: number; y: number; width: number; height: number; xoffset: number; yoffset: number; xadvance: number }
 
 /**
- * A bitmap font as its BMFont XML descriptor gives it (scripts/build-font.mjs): plain data, so that the render worker
- * receives it as it is (a structured clone).
+ * A bitmap font as its BMFont XML descriptor gives it (scripts/build-font.mjs): plain data.
  */
 export interface FontData {
   face: string;
@@ -30,7 +29,7 @@ const tags = (xml: string, name: string): Record<string, string>[] =>
   [...xml.matchAll(new RegExp(`<${name}\\b((?:\\s+\\w+="[^"]*")*)\\s*/?>`, 'g'))].map((m) => Object.fromEntries([...m[1].matchAll(ATTRIBUTE)].map((a) => [a[1], a[2]])));
 
 /**
- * The BMFont XML descriptor read with regular expressions (no DOMParser: it runs in the render worker too). Reads
+ * The BMFont XML descriptor read with regular expressions (no DOMParser: the tests read it under Node). Reads
  * `info`, `common`, `distanceField`, the characters (by their `id`, a code point) and the kernings.
  */
 export function parseBmFont(xml: string): FontData {
@@ -256,15 +255,17 @@ export function measureLines(font: FontData, p: RenderParams): Measure {
 export const TITLE_NODE = 0, TITLE_GROUP_OPEN = 1, TITLE_GROUP_CLOSED = 2, TITLE_CONNECTION = 3;
 
 /**
- * A glyph instance (`FrameGeometry.glyphInstances`): its fields in order, interleaved, with their sizes in floats. The
- * one definition: appendTitle writes at GLYPH_AT, the renderer's attributes are `a` + each field's name.
- * - anchor (2): the title's centre, world, relative to the frame's origin;
+ * A glyph instance (`Instances.texts`): its fields in order, interleaved, with their sizes in floats. The one
+ * definition: appendTitle writes at GLYPH_AT, the renderer's attributes are `a` + each field's name.
+ * - anchor (2): the title's centre, world: from its item's centre when it has a slot (a title follows its item through
+ *   the item texture, plan 3c task 8), else relative to the origin (a connection's title);
  * - glyph (4): x0, y0, w, h of its rectangle from the anchor, in font units;
  * - atlas (2): its top-left in the atlas, in texels;
  * - title (4): world font size, kind (TITLE_*), visible index (the connection's, for the hover), attenuation;
- * - fold (2): the group's or the fading connection's maxChildK, the parent group's (NO_PARENT: none).
+ * - fold (2): the group's or the fading connection's maxChildK, the parent group's (NO_PARENT: none);
+ * - slot (1): its item's slot in the item texture, −1 for none.
  */
-export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2]] as const;
+export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2], ['slot', 1]] as const;
 export type GlyphField = (typeof GLYPH_FIELDS)[number][0];
 
 const starts = {} as Record<GlyphField, number>;
@@ -274,12 +275,15 @@ for (const [f, size] of GLYPH_FIELDS) { starts[f] = floats; floats += size; }
 export const GLYPH_AT: Readonly<Record<GlyphField, number>> = starts;
 /** Floats per glyph instance. */
 export const GLYPH_FLOATS = floats;
-const { anchor: AT_ANCHOR, glyph: AT_GLYPH, atlas: AT_ATLAS, title: AT_TITLE, fold: AT_FOLD } = GLYPH_AT;
+const { anchor: AT_ANCHOR, glyph: AT_GLYPH, atlas: AT_ATLAS, title: AT_TITLE, fold: AT_FOLD, slot: AT_SLOT } = GLYPH_AT;
 
-/** Appends one instance per visible glyph of a title (world font size `size`, wrap and line height in world units). */
+/**
+ * Appends one instance per visible glyph of a title (world font size `size`, wrap and line height in world units):
+ * (x, y) from the centre of the item at `slot`, or relative to the origin without one (slot −1).
+ */
 export function appendTitle(
   out: FloatList, font: FontData, text: string, size: number, wrap: number, lineHeight: number,
-  x: number, y: number, kind: number, index: number, dim: number, foldK: number, parentK: number,
+  x: number, y: number, kind: number, index: number, dim: number, foldK: number, parentK: number, slot: number,
 ): void {
   const fi = indexOf(font);
   const l = cachedLayout(fi, text, wrap * (font.size / size), lineHeight * (font.size / size));
@@ -293,5 +297,6 @@ export function appendTitle(
     d[t] = g[u + 4]; d[t + 1] = g[u + 5];
     d[m] = size; d[m + 1] = kind; d[m + 2] = index; d[m + 3] = dim;
     d[f] = foldK; d[f + 1] = parentK;
+    d[o + AT_SLOT] = slot;
   }
 }

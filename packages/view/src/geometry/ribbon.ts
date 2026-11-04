@@ -1,12 +1,14 @@
-import type { Id, Vec2 } from '@cirrus/core';
+import type { Vec2 } from '@cirrus/core';
 import type { RenderParams } from '../params.ts';
 import { FloatList, IndexList } from './arrays.ts';
 import type { Branch, BundleGeometry } from './bundle.ts';
-import { len, mul, norm, perp, sub } from './vec.ts';
+import { mul, norm, perp, sub } from './vec.ts';
 
 /**
  * Segments needed to flatten a cubic Bézier within tolPx on screen (port of the bench). Wang's formula on the second
- * differences, keeping only their component across the chord: aligned control points always give one segment.
+ * differences, keeping only their component across the chord: aligned control points always give one segment. The
+ * GPU draws every cubic in curveSegments (plan 3c task 8); this sampling serves the connection titles' placement,
+ * which keeps the samples it always counted.
  */
 export function bezierSegments(p0: Vec2, c0: Vec2, c1: Vec2, p3: Vec2, pxPerUnit: number, tolPx: number): number {
   let ux = p3.x - p0.x, uy = p3.y - p0.y;
@@ -19,7 +21,8 @@ export function bezierSegments(p0: Vec2, c0: Vec2, c1: Vec2, p3: Vec2, pxPerUnit
   return Math.min(64, Math.max(1, Number.isFinite(n) ? n : 64));
 }
 
-function sample(b: Branch, segments: number): Vec2[] {
+/** The cubic at `segments + 1` evenly spaced parameters, as the shaders evaluate it. */
+export function sampleBranch(b: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, segments: number): Vec2[] {
   const pts: Vec2[] = [];
   for (let i = 0; i <= segments; i++) {
     const t = i / segments, u = 1 - t;
@@ -29,44 +32,36 @@ function sample(b: Branch, segments: number): Vec2[] {
   return pts;
 }
 
-/** Unit normal at each point of a polyline, from its neighbours. */
-function normals(pts: Vec2[]): Vec2[] {
-  const n = pts.length;
-  return pts.map((_, i) => perp(norm(sub(pts[Math.min(n - 1, i + 1)], pts[Math.max(0, i - 1)]))));
+/**
+ * A connection's opacity from its width alone (spec 8.5), its largest step `kTop` at `pxPerUnit` screen pixels per
+ * world unit: under ribbonCullAlpha it is not drawn.
+ */
+export function ribbonAlpha(kTop: number, pxPerUnit: number, p: RenderParams): number {
+  return Math.min(1, (p.widthBasePx * p.factor ** kTop * pxPerUnit) / p.widthMinPx);
 }
 
 type Lists<K extends string> = Record<K, FloatList> & { index: IndexList };
-type RibbonKey = 'position' | 'position2' | 'normal' | 'normal2' | 'scale' | 'side' | 'dist' | 'end0' | 'end1' | 'fold' | 'conn';
 type GlyphKey = 'position' | 'position2' | 'offset' | 'offset2' | 'scale' | 'fill' | 'end0' | 'end1' | 'fold' | 'conn';
 
 /**
- * Per-vertex attributes of the connection meshes. position2/normal2/offset2 hold the same vertex once the fading group
- * level is closed: the shader slides from one to the other (spec 8.5, "glisse en continu du membre vers le bord").
- * fold = (mode, foldK), mode 0 none, 1 slide, 2 out. Glyph fill: 1 connection colour, 2 absent colour, 0 sky (hollow
- * inside), 3 sky only once the level is more than half folded.
+ * Per-vertex attributes of the glyphs of complex bundles (arrows, dots, hollow insides), built on the CPU: their
+ * curves are GPU instances (instances.ts). position2/offset2 hold the same vertex once the fading group level is
+ * closed: the shader slides from one to the other (spec 8.5, "glisse en continu du membre vers le bord"). fold =
+ * (mode, foldK), mode 0 none, 1 slide, 2 out. Fill: 1 connection colour, 2 absent colour, 0 sky (hollow inside), 3 sky
+ * only once the level is more than half folded.
  */
-export interface ConnectionMeshes {
-  ribbons: Lists<RibbonKey>;
-  glyphs: Lists<GlyphKey>;
+export type GlyphMeshes = Lists<GlyphKey>;
+
+export function newGlyphMeshes(): GlyphMeshes {
+  const keys = ['position', 'position2', 'offset', 'offset2', 'scale', 'fill', 'end0', 'end1', 'fold', 'conn'] as const;
+  return Object.assign(Object.fromEntries(keys.map((k) => [k, new FloatList()])) as Record<GlyphKey, FloatList>, { index: new IndexList() });
 }
 
-const lists = <K extends string>(keys: readonly K[]): Lists<K> =>
-  Object.assign(Object.fromEntries(keys.map((k) => [k, new FloatList()])) as Record<K, FloatList>, { index: new IndexList() });
-
-export function newConnectionMeshes(): ConnectionMeshes {
-  return {
-    ribbons: lists(['position', 'position2', 'normal', 'normal2', 'scale', 'side', 'dist', 'end0', 'end1', 'fold', 'conn'] as const),
-    glyphs: lists(['position', 'position2', 'offset', 'offset2', 'scale', 'fill', 'end0', 'end1', 'fold', 'conn'] as const),
-  };
+export function clearGlyphMeshes(m: GlyphMeshes): void {
+  for (const l of Object.values(m)) l.clear();
 }
 
-export function clearConnectionMeshes(m: ConnectionMeshes): void {
-  for (const l of [...Object.values(m.ribbons), ...Object.values(m.glyphs)]) l.clear();
-}
-
-export interface AppendOptions {
-  /** zoom × curveZoomHeadroom: the flattening stays within tolerance until then. */
-  pxPerUnit: number;
+export interface GlyphOptions {
   /** Two endpoints (x, y, half extent) for the off-screen fade (spec 8.5). */
   end0: [number, number, number];
   end1: [number, number, number];
@@ -76,44 +71,15 @@ export interface AppendOptions {
   conn: number;
 }
 
-const MODE = { none: 0, slide: 1, out: 2 } as const;
+export const FADE_MODE = { none: 0, slide: 1, out: 2 } as const;
 
 /**
- * Appends one bundle: ribbons (trunk + branches) and glyphs (arrows, dots, hollow insides). Returns each line's
- * centerline in the open state with the member it leads to (null: the trunk), for hit testing and title placement. `closed` is the same bundle with the fading level
- * closed: same branches in the same order, sampled with the same counts, so vertex i of one matches vertex i of the other.
+ * Appends one bundle's glyphs at its branches' node ends, with the local width there: an arrow or a dot, a hollow
+ * inside, an absent member's dot. `closed` is the same bundle with the fading level closed: same branches in the same
+ * order, so glyph i of one matches glyph i of the other.
  */
-export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: BundleGeometry | null, o: AppendOptions, p: RenderParams): { points: Vec2[]; key: Id | null }[] {
-  const kTop = Math.max(open.kMax, closed?.kMax ?? -Infinity);
-  if (Math.min(1, (p.widthBasePx * p.factor ** kTop * o.pxPerUnit) / p.widthMinPx) < p.ribbonCullAlpha) return [];
-  const mode = MODE[o.fade], foldK = Number.isFinite(o.foldK) ? o.foldK : 0;
-  const lines: { points: Vec2[]; key: Id | null }[] = [];
-  const r = m.ribbons, g = m.glyphs;
-
-  const ribbon = (P: Vec2[], Q: Vec2[], scales: number[], dists: number[]) => {
-    const nP = normals(P), nQ = normals(Q);
-    const base = r.side.length;
-    for (let i = 0; i < P.length; i++) {
-      for (const side of [1, -1]) {
-        r.position.push2(P[i].x, P[i].y);
-        r.position2.push2(Q[i].x, Q[i].y);
-        r.normal.push2(nP[i].x, nP[i].y);
-        r.normal2.push2(nQ[i].x, nQ[i].y);
-        r.scale.push1(scales[i]);
-        r.side.push1(side);
-        r.dist.push1(dists[i]);
-        r.end0.push3(...o.end0);
-        r.end1.push3(...o.end1);
-        r.fold.push2(mode, foldK);
-        r.conn.push1(o.conn);
-      }
-    }
-    for (let i = 0; i < P.length - 1; i++) {
-      const a = base + i * 2;
-      r.index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-  };
-
+export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, closed: BundleGeometry | null, o: GlyphOptions, p: RenderParams): void {
+  const mode = FADE_MODE[o.fade], foldK = Number.isFinite(o.foldK) ? o.foldK : 0;
   /** A fan of glyph vertices around the node end: vertex 0 first, triangles given as offsets into the list. */
   const glyph = (at: Vec2, at2: Vec2, offs: Vec2[], offs2: Vec2[], tris: number[], scale: number, fill: number) => {
     const base = g.scale.length;
@@ -124,16 +90,13 @@ export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: 
       g.offset2.push2(offs2[i].x, offs2[i].y);
       g.scale.push1(scale);
       g.fill.push1(fill);
-      g.end0.push3(...o.end0);
-      g.end1.push3(...o.end1);
+      g.end0.push3(o.end0[0], o.end0[1], o.end0[2]);
+      g.end1.push3(o.end1[0], o.end1[1], o.end1[2]);
       g.fold.push2(mode, foldK);
       g.conn.push1(o.conn);
     }
     for (const t of tris) g.index.push(base + t);
   };
-
-  const DOT_SIDES = 12;
-  const dotTris = Array.from({ length: DOT_SIDES }, (_, i) => [0, 1 + i, 1 + ((i + 1) % DOT_SIDES)]).flat();
   const dot = (radius: number): Vec2[] => [{ x: 0, y: 0 }, ...Array.from({ length: DOT_SIDES }, (_, i) => {
     const a = (i * 2 * Math.PI) / DOT_SIDES;
     return { x: radius * Math.cos(a), y: radius * Math.sin(a) };
@@ -148,47 +111,25 @@ export function appendBundle(m: ConnectionMeshes, open: BundleGeometry, closed: 
     const d = norm(sub(b.p3, b.b2), norm(sub(b.p3, b.p0))), n = perp(d);
     return [{ x: 0, y: 0 }, sub(mul(n, H), mul(d, L)), mul(d, -L * p.arrowNotch), sub(mul(n, -H), mul(d, L))];
   };
-  const arrowTris = [0, 1, 2, 0, 2, 3];
   const inset = (offs: Vec2[]): Vec2[] => {
     const c = { x: offs.reduce((s, q) => s + q.x, 0) / offs.length, y: offs.reduce((s, q) => s + q.y, 0) / offs.length };
     return offs.map((q) => ({ x: c.x + (q.x - c.x) * p.hollowInset, y: c.y + (q.y - c.y) * p.hollowInset }));
   };
   const nodePoint = (b: Branch) => (b.nodeEnd === 'p0' ? b.p0 : b.p3);
 
-  if (open.trunk) {
-    const t2 = closed?.trunk ?? open.trunk, s = p.factor ** open.kMax;
-    ribbon([open.trunk[0], open.trunk[1]], [t2[0], t2[1]], [s, s], [-1, -1]);
-    lines.push({ points: [open.trunk[0], open.trunk[1]], key: null });
-  }
   open.branches.forEach((a, i) => {
     const b = closed?.branches[i] ?? a;
-    const segs = Math.max(
-      bezierSegments(a.p0, a.b1, a.b2, a.p3, o.pxPerUnit, p.curveTolerancePx),
-      closed ? bezierSegments(b.p0, b.b1, b.b2, b.p3, o.pxPerUnit, p.curveTolerancePx) : 0,
-    );
-    const P = sample(a, segs), Q = closed ? sample(b, segs) : P;
-    const scales = P.map((_, j) => {
-      const t = j / segs;
-      return a.nodeEnd === 'p0' ? p.factor ** (a.kNode + (a.kMarker - a.kNode) * t) : p.factor ** (a.kMarker + (a.kNode - a.kMarker) * t);
-    });
-    let acc = 0;
-    const dists = P.map((q, j) => {
-      if (!a.dashed) return -1;
-      if (j > 0) acc += len(sub(q, P[j - 1]));
-      return acc;
-    });
-    ribbon(P, Q, scales, dists);
-    lines.push({ points: P, key: a.key });
-
-    // Glyph at the node end, with the local width there.
     const sNode = p.factor ** a.kNode;
     const fill = a.dashed ? 2 : 1;
     const shape = a.role === 'associate' ? dot(p.dotRadius) : arrow(a);
     const shape2 = a.role === 'associate' ? shape : arrow(b);
-    const tris = a.role === 'associate' ? dotTris : arrowTris;
+    const tris = a.role === 'associate' ? DOT_TRIS : ARROW_TRIS;
     glyph(nodePoint(a), nodePoint(b), shape, shape2, tris, sNode, fill);
     if (a.hollow || b.hollow) glyph(nodePoint(a), nodePoint(b), inset(shape), inset(shape2), tris, sNode, a.hollow ? 0 : 3);
-    if (a.stub && a.role !== 'associate') glyph(nodePoint(a), nodePoint(b), dot(p.dotRadius), dot(p.dotRadius), dotTris, sNode, 2);
+    if (a.stub && a.role !== 'associate') glyph(nodePoint(a), nodePoint(b), dot(p.dotRadius), dot(p.dotRadius), DOT_TRIS, sNode, 2);
   });
-  return lines;
 }
+
+const DOT_SIDES = 12;
+const DOT_TRIS = Array.from({ length: DOT_SIDES }, (_, i) => [0, 1 + i, 1 + ((i + 1) % DOT_SIDES)]).flat();
+const ARROW_TRIS = [0, 1, 2, 0, 2, 3];

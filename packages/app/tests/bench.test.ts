@@ -28,7 +28,7 @@ function pass(label: string, steady: [number, number]): PassRecord {
 
 test('rapport à trois passes : le contenu vaut brut moins plancher ; le nom suit CIRRUS_BENCH_NAME', () => {
   process.env.CIRRUS_BENCH_NAME = 'essai-banc';
-  const vsync = { ...pass('vsync', [2.42, 4.79]), heapMb: 1672, beforeEdits: { heapMb: 557, processMb: { browser: 460, tab: 1300, gpu: 210 } } };
+  const vsync = { ...pass('vsync', [2.42, 4.79]), heapMb: 1672, beforeEdits: { heapMb: 557, processMb: { browser: 460, tab: 1300, gpu: 210 } }, rebuildMs: stats(1.25, 3.5) };
   expect(recordRun(dir, vsync, false, '1000,10000')).toBeNull();
   expect(recordRun(dir, pass('plancher', [0.78, 1.58]), false, '1000,10000')).toBeNull();
   const report = recordRun(dir, pass('throttled-x4', [2.5, 5]), true, '1000,10000');
@@ -45,6 +45,9 @@ test('rapport à trois passes : le contenu vaut brut moins plancher ; le nom sui
   expect(md).toContain('| vsync, après chargement | 557 | 460 | 1300 | 210 |');
   expect(md).toContain('| vsync, après éditions | 1672 | 700 | 900 | 300 |');
   expect(md).toContain('| plancher | 400 | 700 | 900 | 300 |');
+  // The frames that rebuilt, their main-thread time (plan 3c task 8); a pass recorded without it shows a dash.
+  expect(md).toContain('| 3 (rect 3) | 1.25 / 3.50 / 3.50 |');
+  expect(md).toContain('| 3 (rect 3) | — |');
 });
 
 test('nom du rapport par défaut : app-rendu-<date>', () => {

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, expect, test } from 'vitest';
-import { buildFrame } from '../src/frame.ts';
 import { NO_PARENT } from '../src/geometry/envelope.ts';
+import { buildInstances } from '../src/instances.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { FloatList } from '../src/geometry/arrays.ts';
 import {
@@ -19,7 +19,7 @@ beforeAll(() => {
 });
 
 /** Where a glyph instance's fields start. */
-const { anchor: A, title: T, fold: F } = GLYPH_AT;
+const { anchor: A, title: T, fold: F, slot: S } = GLYPH_AT;
 
 /** A node title at base size, wrapped at the box's inner width. */
 const node = (text: string) => layoutText(font, text, P.baseFontPx, P.boxWidth - 2 * P.boxPadX, P.baseFontPx * P.lineHeight);
@@ -99,10 +99,10 @@ test('le titre d’un nœud donne une instance par glyphe visible ; un texte ill
     const cam = camAtTextPx(sc, 0, px);
     const visible = computeVisible(sc, buildIndex(sc, P), cam, P);
     const origin = { x: cam.x, y: cam.y };
-    return { visible, origin, frame: buildFrame(sc, visible, cam, origin, P, undefined, undefined, font) };
+    return { visible, origin, inst: buildInstances(sc, visible, cam, origin, P, undefined, font) };
   };
-  const { visible, origin, frame } = frameAt(16);
-  const g = frame.glyphInstances.view();
+  const { visible, origin, inst } = frameAt(16);
+  const g = inst.texts.view();
   expect(g.length % GLYPH_FLOATS).toBe(0);
   const of = (j: number) => {
     const out: number[] = [];
@@ -110,33 +110,29 @@ test('le titre d’un nœud donne une instance par glyphe visible ; un texte ill
     return out;
   };
   const j = visible.items.indexOf(sc.byId.get(ids.nodes.kolmogorov)!);
-  const it = sc.items[visible.items[j]];
-  const at = of(j);
+  const at = of(j), it = sc.items[visible.items[j]];
   expect(at).toHaveLength(node(it.title).glyphs.length);
-  for (const o of at) {
-    expect(g[o + A]).toBeCloseTo(it.x - origin.x, 3);
-    expect(g[o + A + 1]).toBeCloseTo(it.y - origin.y, 3);
-    expect([g[o + T], g[o + T + 3], g[o + F]]).toEqual([P.baseFontPx, 1, NO_PARENT]);
-  }
+  // Anchored on its item (the item texture gives its centre, plan 3c task 8).
+  for (const o of at) expect([g[o + A], g[o + A + 1], g[o + S], g[o + T], g[o + T + 3], g[o + F]]).toEqual([0, 0, visible.items[j], P.baseFontPx, 1, NO_PARENT]);
   // A node's phantom is dimmed.
   const ph = visible.items.findIndex((i) => sc.items[i].kind === 'phantom' && sc.items[i].phantom === 'node');
   expect(ph).toBeGreaterThanOrEqual(0);
   expect(g[of(ph)[0] + T + 3]).toBeCloseTo(P.phantomTitleDim, 6);
   // Far out, no box title is readable even at the deepest zoom served: none is built.
-  const far = frameAt(1).frame.glyphInstances.view();
+  const far = frameAt(1).inst.texts.view();
   for (let o = 0; o < far.length; o += GLYPH_FLOATS) expect(far[o + T + 1]).not.toBe(TITLE_NODE);
   // Without a font, no glyph.
   const cam = camAtTextPx(sc, 0, 16);
-  expect(buildFrame(sc, visible, cam, origin, P).glyphInstances.length).toBe(0);
+  expect(buildInstances(sc, visible, cam, origin, P).texts.length).toBe(0);
 });
 
 test('la disposition d’une instance de glyphe n’a qu’une définition : appendTitle écrit chaque champ à sa place', () => {
-  expect(GLYPH_FIELDS.map(([f]) => f)).toEqual(['anchor', 'glyph', 'atlas', 'title', 'fold']);
+  expect(GLYPH_FIELDS.map(([f]) => f)).toEqual(['anchor', 'glyph', 'atlas', 'title', 'fold', 'slot']);
   expect(GLYPH_FIELDS.reduce((n, [, size]) => n + size, 0)).toBe(GLYPH_FLOATS);
   let at = 0;
   for (const [f, size] of GLYPH_FIELDS) { expect(GLYPH_AT[f]).toBe(at); at += size; }
   const out = new FloatList();
-  appendTitle(out, font, 'Ab', 32, 0, 40, 5, 6, TITLE_CONNECTION, 3, 0.5, 7, 8);
+  appendTitle(out, font, 'Ab', 32, 0, 40, 5, 6, TITLE_CONNECTION, 3, 0.5, 7, 8, 9);
   const l = layoutText(font, 'Ab', 32, 0, 40), d = out.view(), s = 32 / font.size, G = GLYPH_AT.glyph, U = GLYPH_AT.atlas;
   expect(d.length).toBe(l.glyphs.length * GLYPH_FLOATS);
   l.glyphs.forEach((gl, j) => {
@@ -145,6 +141,6 @@ test('la disposition d’une instance de glyphe n’a qu’une définition : app
     [gl.x, gl.y, gl.w, gl.h].forEach((v, c) => expect(d[o + G + c] * s).toBeCloseTo(v, 5));
     expect(d[o + U] / font.scaleW).toBeCloseTo(gl.u0, 9);
     expect(d[o + U + 1] / font.scaleH).toBeCloseTo(gl.v0, 9);
-    expect([d[o + T], d[o + T + 1], d[o + T + 2], d[o + T + 3], d[o + F], d[o + F + 1]]).toEqual([32, TITLE_CONNECTION, 3, 0.5, 7, 8]);
+    expect([d[o + T], d[o + T + 1], d[o + T + 2], d[o + T + 3], d[o + F], d[o + F + 1], d[o + S]]).toEqual([32, TITLE_CONNECTION, 3, 0.5, 7, 8, 9]);
   });
 });

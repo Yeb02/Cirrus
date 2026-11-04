@@ -1,14 +1,21 @@
+/** The WebGL calls a Texture2D makes (a recording stand-in serves the tests, without WebGL under Node). */
+export type TextureGl = Pick<WebGL2RenderingContext,
+  'createTexture' | 'bindTexture' | 'texParameteri' | 'pixelStorei' | 'texImage2D' | 'texSubImage2D' | 'activeTexture' | 'deleteTexture'
+  | 'TEXTURE_2D' | 'TEXTURE_MIN_FILTER' | 'TEXTURE_MAG_FILTER' | 'TEXTURE_WRAP_S' | 'TEXTURE_WRAP_T' | 'CLAMP_TO_EDGE' | 'LINEAR' | 'NEAREST'
+  | 'UNPACK_PREMULTIPLY_ALPHA_WEBGL' | 'UNPACK_FLIP_Y_WEBGL' | 'RGBA8' | 'RGBA' | 'UNSIGNED_BYTE' | 'RGBA32F' | 'FLOAT' | 'TEXTURE0'>;
+
 /**
  * A 2D texture, clamped at its edges: an 8-bit RGBA image (the MSDF atlas, sampled linearly, as it was decoded: no
- * premultiplication, no colour conversion), or RGBA32F data read texel by texel (texelFetch: nearest, no mipmaps).
+ * premultiplication, no colour conversion), or RGBA32F data read texel by texel (texelFetch: nearest, no mipmaps: the
+ * item texture, plan 3c task 8).
  */
 export class Texture2D {
   readonly texture: WebGLTexture | null;
   width = 0;
   height = 0;
-  private readonly gl: WebGL2RenderingContext;
+  private readonly gl: TextureGl;
 
-  constructor(gl: WebGL2RenderingContext, filter: 'linear' | 'nearest') {
+  constructor(gl: TextureGl, filter: 'linear' | 'nearest') {
     this.gl = gl;
     this.texture = gl.createTexture();
     const f = filter === 'linear' ? gl.LINEAR : gl.NEAREST;
@@ -31,18 +38,25 @@ export class Texture2D {
   }
 
   /**
-   * Float data, four per texel, rows of `width` texels: the first `rows` rows are sent (texSubImage2D); a texture too
-   * small is allocated anew at `width` × `height`.
+   * Float storage of `width` × `height` texels, made anew (contents undefined) unless it already has that size; returns
+   * whether it was made, after which every row is to be sent again.
    */
-  setData(width: number, height: number, data: Float32Array, rows = height): void {
+  allocate(width: number, height: number): boolean {
+    if (width === this.width && height === this.height) return false;
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    if (width !== this.width || height > this.height) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
-      this.width = width;
-      this.height = height;
-    }
-    if (rows > 0) gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, rows, gl.RGBA, gl.FLOAT, data, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+    this.width = width;
+    this.height = height;
+    return true;
+  }
+
+  /** Rows [from, to) of `data` (four floats per texel, rows of `width` texels from row 0), and only those (texSubImage2D). */
+  setRows(data: Float32Array, from: number, to: number): void {
+    if (to <= from) return;
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.texture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, from, this.width, to - from, gl.RGBA, gl.FLOAT, data, from * this.width * 4);
   }
 
   bind(unit: number): void {

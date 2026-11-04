@@ -67,6 +67,8 @@ export interface RenderParams {
   dashPx: Range;
   curveTolerancePx: number;
   curveZoomHeadroom: number;
+  /** Segments of every cubic the GPU draws (plan 3c task 8: the curves are evaluated in the vertex shaders). */
+  curveSegments: number;
   connectionFadePx: number;
   ribbonCullAlpha: number;
   hoverBoostPx: number;
@@ -105,6 +107,11 @@ export interface RenderParams {
   sceneCompactShare: number;
   /** Roots changed since the visibility index's tree was built beyond which it is built again (plan 3c, task 6). */
   indexDirtyMax: number;
+  // Rendering by the GPU (plan 3c, task 8)
+  /** Time a frame gives to the complex bundles of a rebuild; the others are built at the next frames. */
+  rebuildBudgetMs: number;
+  /** Camera distance from the local origin, on screen, beyond which the origin moves and the item texture is written again. */
+  originShiftPx: number;
   // Snapshot of the base (plan 3c, decision 4): the interface sends its state to be kept as the base's snapshot
   /** after this many actions, */
   snapshotAfterActions: number;
@@ -196,6 +203,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   dashPx: [4, 5],
   curveTolerancePx: 0.2,
   curveZoomHeadroom: 2,
+  curveSegments: 32,
   connectionFadePx: 150,
   ribbonCullAlpha: 0.03,
   hoverBoostPx: 1,
@@ -223,6 +231,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   cachedPlans: 4,
   sceneCompactShare: 0.25,
   indexDirtyMax: 256,
+  rebuildBudgetMs: 4,
+  originShiftPx: 100_000,
   snapshotAfterActions: 200,
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
@@ -327,8 +337,9 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('stubLength', 'Longueur des amorces', A, 'Connexions', 20, 600, 5),
   num('stubAngle', 'Écart angulaire des amorces (radians)', A, 'Connexions', 0, 1.5, 0.05),
   range('dashPx', 'Pointillés des amorces : trait et espace (px)', A, 'Connexions', 1, 20, 0.5),
-  num('curveTolerancePx', 'Précision des courbes (px)', A, 'Connexions', 0.05, 2, 0.05),
-  num('curveZoomHeadroom', 'Marge de zoom avant de recalculer les courbes', A, 'Connexions', 1.1, 8, 0.1),
+  num('curveTolerancePx', 'Précision des courbes pour placer les titres de connexion (px)', A, 'Connexions', 0.05, 2, 0.05),
+  num('curveZoomHeadroom', 'Marge de zoom d’avance des titres et des connexions fines', A, 'Connexions', 1.1, 8, 0.1),
+  num('curveSegments', 'Segments par courbe de connexion', A, 'Connexions', 4, 128, 1),
   num('connectionFadePx', 'Marge de fondu d’une connexion hors écran (px)', A, 'Connexions', 0, 600, 5),
   num('ribbonCullAlpha', 'Opacité sous laquelle une connexion n’est pas dessinée', A, 'Connexions', 0, 0.5, 0.005),
   num('hoverBoostPx', 'Élargissement d’une connexion survolée (px)', A, 'Connexions', 0, 4, 0.1),
@@ -362,6 +373,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('cachedPlans', 'Plans dont la scène reste prête (derniers onglets affichés)', A, 'Vue', 1, 32, 1),
   num('sceneCompactShare', 'Part d’emplacements libres au-delà de laquelle une scène est reconstruite', A, 'Vue', 0.05, 1, 0.05),
   num('indexDirtyMax', 'Éléments de premier niveau changés au-delà desquels l’index de la vue refait son arbre', A, 'Vue', 1, 100000, 1),
+  num('rebuildBudgetMs', 'Temps par image pour construire les faisceaux, le reste aux images suivantes (ms)', A, 'Vue', 0.5, 50, 0.5),
+  num('originShiftPx', 'Éloignement de la caméra à l’écran avant de déplacer l’origine locale (px)', A, 'Vue', 1000, 1000000, 1000),
   num('snapshotAfterActions', 'Actions après lesquelles l’instantané de la base est refait', A, 'Base', 10, 10000, 10),
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),

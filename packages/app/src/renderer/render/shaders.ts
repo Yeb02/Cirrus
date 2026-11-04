@@ -4,7 +4,8 @@ import { Program } from '../gl/program.ts';
 // Every mesh is drawn in world units relative to a local origin; uCamera and uView carry the camera (plan 3c task 7:
 // the projection Pixi's containers made). On-screen sizes (widths, feathers, stars, markers) and fold transitions are
 // computed here from uZoom, so geometry is only rebuilt when the visible set changes. Outputs are premultiplied.
-// Antialiasing is analytic (no MSAA).
+// Antialiasing is analytic (no MSAA). The items are read by slot from the item texture (plan 3c task 8): boxes, simple
+// connections and titles follow it; the connections' cubics are evaluated here, curveSegments segments each.
 
 const COMMON = /* glsl */ `
 uniform vec2 uCamera;  // the camera's centre, in world units relative to the local origin
@@ -33,6 +34,107 @@ float foldT(float k) { return k > 1e8 ? 0.0 : 1.0 - smoothRange(uFold0, uFold1, 
 
 /** No group: the sentinel step for foldT. */
 export const NO_GROUP = 1e9;
+
+/** The texture unit of the MSDF atlas, and of the item texture. */
+export const ATLAS_UNIT = 0, ITEMS_UNIT = 1;
+
+// The item texture (instances.ts, itemTexels): two RGBA32F texels per slot, 512 slots per row of 1024 texels.
+const ITEMS = /* glsl */ `
+uniform highp sampler2D uItems;
+// x, y (relative to the origin), halfW, halfH
+vec4 itemA(int s) { return texelFetch(uItems, ivec2((s & 511) << 1, s >> 9), 0); }
+// k, the parent's maxChildK (1e9: none), its own as a group (1e9 otherwise), flags (instances.ts, ITEM_*)
+vec4 itemB(int s) { return texelFetch(uItems, ivec2(((s & 511) << 1) + 1, s >> 9), 0); }
+`;
+
+// Cubics, evaluated as geometry/ribbon.ts's sampleBranch samples them.
+const CUBIC = /* glsl */ `
+uniform int uSegments;
+vec2 normOr(vec2 v, vec2 fallback) { float l = length(v); return l < 1e-9 ? fallback : v / l; }
+vec2 cubic(vec2 p0, vec2 b1, vec2 b2, vec2 p3, float t) {
+  float u = 1.0 - t;
+  return (u * u * u) * p0 + (3.0 * u * u * t) * b1 + (3.0 * u * t * t) * b2 + (t * t * t) * p3;
+}
+// The unit normal at point i of n, from its neighbours (as normals() of the CPU polylines).
+vec2 normalAt(vec2 p0, vec2 b1, vec2 b2, vec2 p3, int i, int n) {
+  vec2 d = cubic(p0, b1, b2, p3, float(min(i + 1, n)) / float(n)) - cubic(p0, b1, b2, p3, float(max(i - 1, 0)) / float(n));
+  d = normOr(d, vec2(1.0, 0.0));
+  return vec2(-d.y, d.x);
+}
+// The length of the polyline from point 0 to point i: the dashes' distance.
+float arcTo(vec2 p0, vec2 b1, vec2 b2, vec2 p3, int i, int n) {
+  float acc = 0.0;
+  vec2 prev = p0;
+  for (int j = 1; j <= i; j++) { vec2 q = cubic(p0, b1, b2, p3, float(j) / float(n)); acc += length(q - prev); prev = q; }
+  return acc;
+}
+`;
+
+// The ribbon drawn along a cubic: two vertices per point, pushed by half the on-screen width plus one pixel of
+// antialiasing, as the CPU ribbons were (a triangle strip: point i's two sides at vertices 2i and 2i + 1).
+const RIBBON_VERTEX = /* glsl */ `
+out float vAlpha; out float vD; out float vHalf; out float vDist;
+void ribbonVertex(vec2 pos, vec2 n, float side, float scale, float dist, vec3 e0, vec3 e1, vec2 fold, float conn) {
+  float w = widthPx(scale, conn);
+  float half_ = 0.5 * w + 1.0;
+  vAlpha = connectionAlpha(scale, e0, e1, fold, conn);
+  vD = side * half_;
+  vHalf = 0.5 * w;
+  vDist = dist < 0.0 ? -1.0 : dist * uZoom;
+  gl_Position = project(pos + n * side * half_ / uZoom);
+}
+`;
+
+// A simple connection's two branches (geometry/simple.ts, simpleBranches: its TS twin), from its two items' texels:
+// bundleGeometry with two members, no trunk, both branches meeting midway; branches in its order (sources, targets,
+// associates; a then b within a class). Flags: role codes (source 0, target 1, associate 2) of a then b, 2 bits each.
+const SIMPLE = /* glsl */ `
+uniform float uAnchorGap; uniform float uTension; uniform float uCullAlpha; uniform float uHeadroom;
+struct Simple { vec2 p0; vec2 b1; vec2 b2; vec2 p3; float kNode; float kMarker; bool atStart; int end; bool assoc; };
+vec2 anchorBox(vec2 pos, vec2 half_, float k, vec2 toward) {
+  float gap = uAnchorGap * uTextScale * pow(uFactor, k);
+  vec2 d = toward - pos;
+  float sx = abs(d.x) > 1e-9 ? (half_.x + gap) / abs(d.x) : 1e30;
+  float sy = abs(d.y) > 1e-9 ? (half_.y + gap) / abs(d.y) : 1e30;
+  return pos + d * min(min(sx, sy), 1.0);
+}
+Simple simpleBranch(int which, vec4 a0, vec4 a1, vec4 b0, vec4 b1, int flags) {
+  int ra = flags & 3, rb = (flags >> 2) & 3;
+  bool pairNeu = ra == 2 && rb == 2;
+  // Each end's class: 0 converges on the marker, 1 leaves it, 2 joins it from the side.
+  int ca = pairNeu ? 0 : ra, cb = pairNeu ? 1 : rb;
+  vec2 pa = a0.xy, pb = b0.xy, zero = vec2(0.0);
+  float nS = float(ca == 0) + float(cb == 0), nT = float(ca == 1) + float(cb == 1), nN = float(ca == 2) + float(cb == 2);
+  vec2 sS = (ca == 0 ? pa : zero) + (cb == 0 ? pb : zero), sT = (ca == 1 ? pa : zero) + (cb == 1 ? pb : zero);
+  vec2 sN = (ca == 2 ? pa : zero) + (cb == 2 ? pb : zero);
+  vec2 fallback = nN > 0.0 ? sN / nN : (pa + pb) / 2.0;
+  vec2 cs = nS > 0.0 ? sS / nS : fallback, ct = nT > 0.0 ? sT / nT : fallback;
+  vec2 M = (cs + ct) * 0.5, u = normOr(ct - cs, vec2(1.0, 0.0));
+  // a comes first unless b's class comes before a's.
+  int e = (which == 0) == !(cb < ca) ? 0 : 1, c = e == 0 ? ca : cb;
+  vec4 E0 = e == 0 ? a0 : b0, E1 = e == 0 ? a1 : b1;
+  vec2 at = anchorBox(E0.xy, E0.zw, E1.x, M);
+  float t = uTension * length(M - at);
+  Simple s;
+  s.kNode = E1.x; s.kMarker = max(a1.x, b1.x); s.end = e; s.assoc = pairNeu || (e == 0 ? ra : rb) == 2;
+  if (c == 0) { s.p0 = at; s.b1 = at + normOr(M - at, u) * (t * 0.6); s.b2 = M - u * t; s.p3 = M; s.atStart = true; }
+  else if (c == 1) { s.p0 = M; s.b1 = M + u * t; s.b2 = at + normOr(M - at, -u) * (t * 0.6); s.p3 = at; s.atStart = false; }
+  else {
+    // On the axis (always, with two members) it joins from +n, as on the CPU (bundle.ts, SIDE_TOLERANCE); float32's
+    // rounding of that zero reaches 1e-4 of the distance within originShiftPx of the origin, hence a wider margin.
+    vec2 n = vec2(-u.y, u.x), v = E0.xy - M;
+    if (dot(n, v) < -1e-3 * length(v)) n = -n;
+    s.p0 = at; s.b1 = at + normOr(M - at, -n) * (t * 0.6); s.b2 = M + n * t; s.p3 = M; s.atStart = true;
+  }
+  return s;
+}
+// Too thin at zoom × curveZoomHeadroom: not drawn (ribbonCullAlpha), as the CPU left such a bundle out.
+bool culled(float kMax) { return min(1.0, uWidthBase * pow(uFactor, kMax) * uZoom * uHeadroom / uWidthMin) < uCullAlpha; }
+// Flags beyond the roles (instances.ts, SIMPLE_*).
+bool dashedEnd(int flags, int e) { return (flags & (e == 0 ? 16 : 32)) != 0; }
+vec2 simpleFold(int flags, int fade) { return (flags & 64) != 0 ? vec2(2.0, itemB(fade).z) : vec2(0.0); }
+const vec4 NOWHERE = vec4(2.0, 2.0, 2.0, 1.0);
+`;
 
 type Values = Record<string, number | ArrayLike<number>>;
 const setAll = (pr: Program, values: Values) => { for (const [k, v] of Object.entries(values)) pr.set(k, v); };
@@ -69,28 +171,8 @@ const connection = (p: RenderParams): Values => ({
   uLineColor: p.connectionColor, uAbsent: p.absentColor, uSky: p.skyColor, uDash: p.dashPx,
 });
 
-/** Ribbons: two vertices per centerline point, pushed by half the on-screen width plus one pixel of antialiasing. */
-const RIBBON = {
-  vertex: /* glsl */ `#version 300 es
-  in vec2 aPosition; in vec2 aPosition2; in vec2 aNormal; in vec2 aNormal2;
-  in float aScale; in float aSide; in float aDist; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold; in float aConn;
-  out float vAlpha; out float vD; out float vHalf; out float vDist;
-  ${COMMON}
-  ${CONNECTION}
-  void main() {
-    float s = slideT(aFold);
-    vec2 pos = mix(aPosition, aPosition2, s);
-    vec2 n = mix(aNormal, aNormal2, s);
-    n = length(n) > 1e-6 ? normalize(n) : vec2(0.0, 1.0);
-    float w = widthPx(aScale, aConn);
-    float half_ = 0.5 * w + 1.0;
-    vAlpha = connectionAlpha(aScale, aEnd0, aEnd1, aFold, aConn);
-    vD = aSide * half_;
-    vHalf = 0.5 * w;
-    vDist = aDist < 0.0 ? -1.0 : aDist * uZoom;
-    gl_Position = project(pos + n * aSide * half_ / uZoom);
-  }`,
-  fragment: /* glsl */ `#version 300 es
+/** A ribbon's coverage: one pixel of antialiasing on its sides; dashed in the absent colour along a stub. */
+const RIBBON_FRAGMENT = /* glsl */ `#version 300 es
   precision highp float;
   in float vAlpha; in float vD; in float vHalf; in float vDist;
   uniform vec3 uLineColor; uniform vec3 uAbsent; uniform vec2 uDash;
@@ -103,7 +185,116 @@ const RIBBON = {
       c = uAbsent;
     }
     finalColor = vec4(c, 1.0) * vAlpha * cov;
+  }`;
+
+/**
+ * A simple connection's two ribbons, one instance (instances.ts, SIMPLE_FIELDS: aEnds = slot a, slot b, flags, visible
+ * index; aFade = the fading group's slot): one strip per branch, 2 (curveSegments + 1) vertices each, joined by two
+ * degenerate vertices. Its width and fade are the CPU ribbons'.
+ */
+const SIMPLE_RIBBON = {
+  vertex: /* glsl */ `#version 300 es
+  in ivec4 aEnds; in int aFade;
+  ${COMMON}
+  ${CONNECTION}
+  ${ITEMS}
+  ${CUBIC}
+  ${RIBBON_VERTEX}
+  ${SIMPLE}
+  void main() {
+    int n = uSegments, per = 2 * (n + 1), v = gl_VertexID;
+    int which = v <= per ? 0 : 1;
+    int j = v < per ? v : v == per ? per - 1 : v == per + 1 ? 0 : v - per - 2;
+    vec4 a0 = itemA(aEnds.x), a1 = itemB(aEnds.x), b0 = itemA(aEnds.y), b1 = itemB(aEnds.y);
+    if (culled(max(a1.x, b1.x))) { gl_Position = NOWHERE; return; }
+    Simple s = simpleBranch(which, a0, a1, b0, b1, aEnds.z);
+    int i = j >> 1;
+    float t = float(i) / float(n);
+    float k = s.atStart ? s.kNode + (s.kMarker - s.kNode) * t : s.kMarker + (s.kNode - s.kMarker) * t;
+    float dist = dashedEnd(aEnds.z, s.end) ? arcTo(s.p0, s.b1, s.b2, s.p3, i, n) : -1.0;
+    ribbonVertex(cubic(s.p0, s.b1, s.b2, s.p3, t), normalAt(s.p0, s.b1, s.b2, s.p3, i, n), (j & 1) == 0 ? 1.0 : -1.0, pow(uFactor, k), dist,
+      vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), simpleFold(aEnds.z, aFade), float(aEnds.w));
   }`,
+  fragment: RIBBON_FRAGMENT,
+};
+
+/**
+ * A simple connection's glyphs at its branches' node ends, computed here like its curves: per branch, 36 vertices of
+ * triangles, a dot (associates: 12 triangles) or a notched arrow (2 triangles, the others degenerate). The arrow and
+ * the dot of geometry/ribbon.ts's appendBundleGlyphs, sized in line widths.
+ */
+const SIMPLE_GLYPH = {
+  vertex: /* glsl */ `#version 300 es
+  in ivec4 aEnds; in int aFade;
+  out float vAlpha; out vec3 vColor;
+  uniform vec3 uLineColor; uniform vec3 uAbsent;
+  uniform float uArrowLength; uniform float uArrowHalfWidth; uniform float uArrowNotch; uniform float uDotRadius;
+  ${COMMON}
+  ${CONNECTION}
+  ${ITEMS}
+  ${CUBIC}
+  ${SIMPLE}
+  void main() {
+    int v = gl_VertexID, which = v / 36, l = v - which * 36;
+    vec4 a0 = itemA(aEnds.x), a1 = itemB(aEnds.x), b0 = itemA(aEnds.y), b1 = itemB(aEnds.y);
+    if (culled(max(a1.x, b1.x))) { gl_Position = NOWHERE; return; }
+    Simple s = simpleBranch(which, a0, a1, b0, b1, aEnds.z);
+    vec2 off;
+    if (s.assoc) {
+      int tri = l / 3, c = l - tri * 3;
+      int idx = c == 0 ? 0 : c == 1 ? 1 + tri : 1 + (tri + 1) % 12;
+      float ang = float(idx - 1) * 6.283185307179586 / 12.0;
+      off = idx == 0 ? vec2(0.0) : uDotRadius * vec2(cos(ang), sin(ang));
+    } else {
+      if (l >= 6) { gl_Position = NOWHERE; return; }
+      int idx = l < 3 ? l : l == 3 ? 0 : l == 4 ? 2 : 3;
+      float L = uArrowLength, H = uArrowHalfWidth;
+      vec2 chord = normOr(s.p3 - s.p0, vec2(1.0, 0.0));
+      if (s.atStart) {
+        vec2 d = normOr(s.b1 - s.p0, chord), q = vec2(-d.y, d.x);
+        off = idx == 0 ? d * L : idx == 1 ? q * H : idx == 2 ? d * (L * (1.0 - uArrowNotch)) : -q * H;
+      } else {
+        vec2 d = normOr(s.p3 - s.b2, chord), q = vec2(-d.y, d.x);
+        off = idx == 0 ? vec2(0.0) : idx == 1 ? q * H - d * L : idx == 2 ? d * (-L * uArrowNotch) : -q * H - d * L;
+      }
+    }
+    float sNode = pow(uFactor, s.kNode), conn = float(aEnds.w);
+    vec2 fold = simpleFold(aEnds.z, aFade);
+    vAlpha = connectionAlpha(sNode, vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), fold, conn);
+    vColor = dashedEnd(aEnds.z, s.end) ? uAbsent : uLineColor;
+    gl_Position = project((s.atStart ? s.p0 : s.p3) + off * widthPx(sNode, conn) / uZoom);
+  }`,
+  fragment: /* glsl */ `#version 300 es
+  precision highp float;
+  in float vAlpha; in vec3 vColor; out vec4 finalColor;
+  void main() { finalColor = vec4(vColor, 1.0) * vAlpha; }`,
+};
+
+/**
+ * A complex bundle's branch or trunk, one instance (instances.ts, CURVE_FIELDS): its cubic open and closed, slid from
+ * one to the other as the level folds; the scale from the step at t = 0 to the step at t = 1; dashed along a stub.
+ */
+const CURVE = {
+  vertex: /* glsl */ `#version 300 es
+  in vec4 aOpen0; in vec4 aOpen1; in vec4 aClosed0; in vec4 aClosed1; in vec4 aWidth; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold;
+  ${COMMON}
+  ${CONNECTION}
+  ${CUBIC}
+  ${RIBBON_VERTEX}
+  void main() {
+    int n = uSegments, j = gl_VertexID, i = j >> 1;
+    float t = float(i) / float(n);
+    vec2 pos = cubic(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, t), nrm = normalAt(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, i, n);
+    if (aFold.x == 1.0) {
+      float s = slideT(aFold);
+      pos = mix(pos, cubic(aClosed0.xy, aClosed0.zw, aClosed1.xy, aClosed1.zw, t), s);
+      nrm = mix(nrm, normalAt(aClosed0.xy, aClosed0.zw, aClosed1.xy, aClosed1.zw, i, n), s);
+      nrm = length(nrm) > 1e-6 ? normalize(nrm) : vec2(0.0, 1.0);
+    }
+    float dist = aWidth.z > 0.5 ? arcTo(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, i, n) : -1.0;
+    ribbonVertex(pos, nrm, (j & 1) == 0 ? 1.0 : -1.0, pow(uFactor, aWidth.x + (aWidth.y - aWidth.x) * t), dist, aEnd0, aEnd1, aFold, aWidth.w);
+  }`,
+  fragment: RIBBON_FRAGMENT,
 };
 
 /** Arrows, dots and hollow insides, sized in line widths at the node end (spec 8.5: the arrow follows the width). */
@@ -152,31 +343,36 @@ const ENVELOPE = {
 };
 
 /**
- * Boxes as signed-distance rounded rectangles (one quad each), with a border and one pixel of antialiasing. Style:
- * 0 node, 1 phantom of a node (translucent, dashed border), 2 centre phantom (disc), 3 absent phantom (dot).
- * A top-level node keeps minNodePx on screen (spec 8.2); a badge is a dot on the top-right corner (spec 11.3).
+ * Boxes as signed-distance rounded rectangles (one quad each, an instance per slot, read from the item texture), with
+ * a border and one pixel of antialiasing. Style: 0 node, 1 phantom of a node (translucent, dashed border), 2 centre
+ * phantom (disc), 3 absent phantom (dot). A top-level node keeps minNodePx on screen (spec 8.2); a badge is a dot on
+ * the top-right corner (spec 11.3).
  */
 const BOX = {
   vertex: /* glsl */ `#version 300 es
-  in vec2 aCenter; in vec2 aHalf; in vec2 aCorner; in float aParentK; in float aStyle; in float aBadge;
+  in int aSlot; in vec2 aCorner;
   out vec2 vLocal; out vec2 vHalf; out float vRadius; out float vAlpha; out float vStyle; out float vBadge;
   uniform float uMinNodePx; uniform float uRadius; uniform float uBoxHalf; uniform float uBadgePx;
   ${COMMON}
+  ${ITEMS}
   void main() {
-    vec2 half_ = aHalf;
-    if (aParentK > 1e8) {
+    vec4 a = itemA(aSlot), b = itemB(aSlot);
+    int flags = int(b.w);
+    float parentK = b.y, badge = float((flags >> 2) & 1);
+    vec2 half_ = a.zw;
+    if (parentK > 1e8) {
       float px = max(half_.x, half_.y) * uZoom;
       if (px < 0.5 * uMinNodePx) half_ *= 0.5 * uMinNodePx / max(px, 1e-9);
     }
-    float pad = (1.5 + aBadge * 2.0 * uBadgePx) / uZoom;
-    vLocal = aCorner * (half_ + pad);
+    float pad = (1.5 + badge * 2.0 * uBadgePx) / uZoom;
+    vLocal = (aCorner * 2.0 - 1.0) * (half_ + pad);
     vHalf = half_;
     // The corner radius scales with the box: boxRadius at the width of a step-0 box.
     vRadius = min(uRadius * half_.x / uBoxHalf, min(half_.x, half_.y));
-    vAlpha = 1.0 - foldT(aParentK);
-    vStyle = aStyle;
-    vBadge = aBadge;
-    gl_Position = project(aCenter + vLocal);
+    vAlpha = 1.0 - foldT(parentK);
+    vStyle = float(flags & 3);
+    vBadge = badge;
+    gl_Position = project(a.xy + vLocal);
   }`,
   fragment: /* glsl */ `#version 300 es
   precision highp float;
@@ -303,16 +499,19 @@ const OUTLINE = {
  * followed, from uZoom: a box's text with its step and its parent's fold (a phantom's dimmed), a group's two titles
  * swapping with its fold, a connection's with its size, its fading level, and lit when hovered. Below 1 %, a glyph is
  * not drawn (BitmapText was hidden). The coverage is Pixi's MSDF shader's: the median's distance in screen pixels
- * (distanceRange · size · zoom / font size), its gamma by the ink's luminance, premultiplied.
+ * (distanceRange · size · zoom / font size), its gamma by the ink's luminance, premultiplied. An item's title is
+ * anchored on its item's centre, read from the item texture (plan 3c task 8); a connection's has its anchor.
  */
 const TEXT = {
   vertex: /* glsl */ `#version 300 es
-  in vec2 aCorner; in vec2 aAnchor; in vec4 aGlyph; in vec2 aAtlas; in vec4 aTitle; in vec2 aFold;
+  in vec2 aCorner; in vec2 aAnchor; in vec4 aGlyph; in vec2 aAtlas; in vec4 aTitle; in vec2 aFold; in float aSlot;
   out vec2 vUv; out float vAlpha; out vec3 vColor; out float vDistance;
   uniform vec2 uTextFade; uniform vec2 uTitleFade; uniform vec2 uSwap; uniform float uHot;
   uniform vec3 uInk; uniform vec3 uTitleInk; uniform vec2 uAtlasSize; uniform float uFontSize; uniform float uRange;
   ${COMMON}
+  ${ITEMS}
   void main() {
+    vec2 anchor = aSlot >= 0.0 ? itemA(int(aSlot)).xy + aAnchor : aAnchor;
     float size = aTitle.x, kind = aTitle.y, px = size * uZoom;
     float a;
     if (kind == 3.0) {
@@ -328,7 +527,7 @@ const TEXT = {
     vec2 corner = aCorner * aGlyph.zw;
     vUv = (aAtlas + corner) / uAtlasSize;
     vDistance = uRange * s * uZoom;
-    gl_Position = a > 0.01 ? project(aAnchor + (aGlyph.xy + corner) * s) : vec4(2.0, 2.0, 2.0, 1.0);
+    gl_Position = a > 0.01 ? project(anchor + (aGlyph.xy + corner) * s) : vec4(2.0, 2.0, 2.0, 1.0);
   }`,
   fragment: /* glsl */ `#version 300 es
   precision highp float;
@@ -349,23 +548,38 @@ const TEXT = {
 };
 
 export interface Programs {
-  ribbon: Program; arrow: Program; envelope: Program; box: Program; marker: Program; outline: Program; star: Program; sky: Program; text: Program;
+  simpleRibbon: Program; simpleGlyph: Program; curve: Program; arrow: Program; envelope: Program; box: Program; marker: Program; outline: Program;
+  star: Program; sky: Program; text: Program;
 }
 
 export function createPrograms(gl: WebGL2RenderingContext): Programs {
   const make = (name: string, s: { vertex: string; fragment: string }) => new Program(gl, name, s.vertex, s.fragment);
   return {
-    ribbon: make('rubans', RIBBON), arrow: make('pointes', ARROW), envelope: make('enveloppes', ENVELOPE), box: make('boîtes', BOX),
-    marker: make('marqueurs', MARKER), outline: make('contours', OUTLINE), star: make('étoiles', STAR), sky: make('ciel', SKY), text: make('titres', TEXT),
+    simpleRibbon: make('rubans simples', SIMPLE_RIBBON), simpleGlyph: make('pointes simples', SIMPLE_GLYPH), curve: make('courbes', CURVE),
+    arrow: make('pointes', ARROW), envelope: make('enveloppes', ENVELOPE), box: make('boîtes', BOX), marker: make('marqueurs', MARKER),
+    outline: make('contours', OUTLINE), star: make('étoiles', STAR), sky: make('ciel', SKY), text: make('titres', TEXT),
   };
 }
 
-/** The uniforms the settings give (set once, and again when they change); the atlas is read from texture unit 0. */
+/** The programs drawn in the world (setView), and those that draw connections (their fade and hover uniforms). */
+export const worldPrograms = (pr: Programs): Program[] =>
+  [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.envelope, pr.box, pr.marker, pr.outline, pr.star, pr.text];
+export const connectionPrograms = (pr: Programs): Program[] => [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow];
+
+/**
+ * The uniforms the settings give (set once, and again when they change); the atlas is read from texture unit
+ * ATLAS_UNIT, the item texture from ITEMS_UNIT.
+ */
 export function setParamUniforms(pr: Programs, p: RenderParams, font: FontData): void {
   const l = lod(p);
-  for (const x of [pr.ribbon, pr.arrow, pr.envelope, pr.box, pr.marker, pr.outline, pr.star, pr.text]) setAll(x, l);
-  setAll(pr.ribbon, connection(p));
-  setAll(pr.arrow, connection(p));
+  for (const x of worldPrograms(pr)) setAll(x, l);
+  for (const x of connectionPrograms(pr)) setAll(x, connection(p));
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve]) setAll(x, { uSegments: p.curveSegments });
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph]) {
+    setAll(x, { uAnchorGap: p.anchorGap, uTension: p.trunkTension, uCullAlpha: p.ribbonCullAlpha, uHeadroom: p.curveZoomHeadroom });
+  }
+  setAll(pr.simpleGlyph, { uArrowLength: p.arrowLength, uArrowHalfWidth: p.arrowHalfWidth, uArrowNotch: p.arrowNotch, uDotRadius: p.dotRadius });
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.box, pr.text]) setAll(x, { uItems: ITEMS_UNIT });
   setAll(pr.envelope, { uFeatherOpen: p.featherOpenPx, uFeatherClosed: p.featherClosedPx });
   setAll(pr.box, {
     uMinNodePx: p.minNodePx, uRadius: p.boxRadius, uBoxHalf: p.boxWidth / 2, uBadgePx: p.badgeRadiusPx, uBorderPx: p.boxBorderPx,
@@ -380,7 +594,7 @@ export function setParamUniforms(pr: Programs, p: RenderParams, font: FontData):
   setAll(pr.outline, { uGapPx: p.selectionGapPx, uWidthPx: p.selectionWidthPx });
   setAll(pr.text, {
     uTextFade: p.textFade, uTitleFade: p.titleFade, uSwap: p.groupTitleSwap, uInk: p.inkColor, uTitleInk: p.titleColor,
-    uAtlas: 0, uAtlasSize: [font.scaleW, font.scaleH], uFontSize: font.size, uRange: font.distanceRange,
+    uAtlas: ATLAS_UNIT, uAtlasSize: [font.scaleW, font.scaleH], uFontSize: font.size, uRange: font.distanceRange,
   });
 }
 

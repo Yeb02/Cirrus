@@ -1,7 +1,7 @@
 import type { Role } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { type BundleEnd, type BundleInput, bundleGeometry } from '../src/geometry/bundle.ts';
-import { appendBundle, newConnectionMeshes } from '../src/geometry/ribbon.ts';
+import { appendBundleGlyphs, newGlyphMeshes, sampleBranch } from '../src/geometry/ribbon.ts';
 import { DEFAULT_PARAMS } from '../src/params.ts';
 
 const P = DEFAULT_PARAMS;
@@ -11,7 +11,7 @@ const end = (x: number, y: number, role: Role, k = 0, extra: Partial<BundleEnd> 
 const src = (x: number, y: number, k = 0) => end(x, y, 'source', k);
 const tgt = (x: number, y: number, k = 0) => end(x, y, 'target', k);
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-const opts = { pxPerUnit: 2, end0: [0, 0, 100] as [number, number, number], end1: [1000, 0, 100] as [number, number, number], fade: 'none' as const, foldK: Number.NaN, conn: 0 };
+const opts = { end0: [0, 0, 100] as [number, number, number], end1: [1000, 0, 100] as [number, number, number], fade: 'none' as const, foldK: Number.NaN, conn: 0 };
 
 test('1 vers 1 : pas de tronc, les deux branches se rejoignent en M, tangentes à u', () => {
   const g = bundleGeometry({ ends: [src(0, 0), tgt(1000, 0)], stubs: [] }, P);
@@ -97,9 +97,9 @@ const degenerate: [string, BundleInput][] = [
 ];
 
 test.each(degenerate)('géométrie dégénérée sans NaN : %s (Review Focus 4)', (_name, input) => {
-  const m = newConnectionMeshes();
-  appendBundle(m, bundleGeometry(input, P), null, opts, P);
-  for (const list of [...Object.values(m.ribbons), ...Object.values(m.glyphs)]) {
-    expect([...list.view()].every(Number.isFinite)).toBe(true);
-  }
+  const m = newGlyphMeshes(), g = bundleGeometry(input, P);
+  appendBundleGlyphs(m, g, null, opts, P);
+  for (const list of Object.values(m)) expect([...list.view()].every(Number.isFinite)).toBe(true);
+  // The curves the GPU evaluates from the same control points.
+  for (const b of g.branches) for (const q of sampleBranch(b, P.curveSegments)) expect([q.x, q.y].every(Number.isFinite)).toBe(true);
 });

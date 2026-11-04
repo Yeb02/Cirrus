@@ -2,8 +2,10 @@ import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { connectTarget, nodeSuggestions, otherPlans } from '../src/connect.ts';
-import { buildFrame } from '../src/frame.ts';
+import { sampleBranch } from '../src/geometry/ribbon.ts';
+import { simpleMarker } from '../src/geometry/simple.ts';
 import { buildHitIndex } from '../src/hit.ts';
+import { buildInstances, CURVE_AT, CURVE_FLOATS, SIMPLE_INTS } from '../src/instances.ts';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
@@ -20,25 +22,35 @@ const frameAt = (scene: PlanScene, k: number, px: number) => {
   const cam = camAtTextPx(scene, k, px);
   const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
   const origin = { x: cam.x, y: cam.y };
-  const frame = buildFrame(scene, visible, cam, origin, P);
-  return { cam, visible, origin, frame, hits: buildHitIndex(scene, visible, frame, origin, P) };
+  const inst = buildInstances(scene, visible, cam, origin, P);
+  return { cam, visible, origin, inst, hits: buildHitIndex(scene, visible, inst, P) };
 };
 const at = (id: string) => sc.byId.get(id)!;
 const mainOf = (id: string) => sc.connections.findIndex((c) => c.id === id && c.part === 'main');
+/** The complex curves of visible connection `vi`: each with the member it leads to, and its open cubic's points (relative to the origin). */
+const curvesOf = (inst: ReturnType<typeof frameAt>['inst'], vi: number) => {
+  const c = inst.curves.view(), out: { key: string | null; points: { x: number; y: number }[] }[] = [];
+  for (let j = 0, o = 0; o < c.length; j++, o += CURVE_FLOATS) {
+    if (c[o + CURVE_AT.width + 3] !== vi) continue;
+    const q = o + CURVE_AT.open0;
+    out.push({ key: inst.curveKeys[j], points: sampleBranch({ p0: { x: c[q], y: c[q + 1] }, b1: { x: c[q + 2], y: c[q + 3] }, b2: { x: c[q + 4], y: c[q + 5] }, p3: { x: c[q + 6], y: c[q + 7] } }, 32) });
+  }
+  return out;
+};
 
 test('chaque tronçon de ligne nomme son membre ; le tronc n’en nomme aucun', () => {
-  const { frame, visible } = frameAt(sc, 0, 16);
+  const { inst, visible } = frameAt(sc, 0, 16);
   const vi = visible.connections.findIndex((vc) => sc.connections[vc.conns[0]].title === 'Déduction jointe');
-  const lines = frame.centerlines.filter((c) => c.conn === vi);
+  const lines = curvesOf(inst, vi);
   expect(lines.filter((c) => c.key === null)).toHaveLength(1);
   const n = ids.nodes;
   expect(new Set(lines.flatMap((c) => (c.key === null ? [] : [c.key])))).toEqual(new Set([n.kolmogorov, n.solomonoff, n.mdl, n.occam]));
 });
 
 test('le survol d’une branche dit de quel membre elle part ; le menu propose alors de la scinder (spec 8.5)', () => {
-  const { frame, visible, origin, hits, cam } = frameAt(sc, 0, 16);
+  const { inst, visible, origin, hits, cam } = frameAt(sc, 0, 16);
   const vi = visible.connections.findIndex((vc) => sc.connections[vc.conns[0]].title === 'Déduction jointe');
-  const line = frame.centerlines.find((c) => c.conn === vi && c.key === ids.nodes.occam)!;
+  const line = curvesOf(inst, vi).find((c) => c.key === ids.nodes.occam)!;
   const q = line.points[Math.floor(line.points.length / 2)];
   const h = hits.hit(q.x + origin.x, q.y + origin.y, cam.zoom);
   // Stable ids: the line is known by its connection, not by indices that change at the next rebuild (I9 of the review).
@@ -52,11 +64,17 @@ test('le survol d’une branche dit de quel membre elle part ; le menu propose a
 });
 
 test('le cœur d’une connexion se touche, celui d’une connexion 1 vers 1 aussi (spec 11.1)', () => {
-  const { frame, hits, cam, origin } = frameAt(sc, 0, 16);
-  expect(frame.markers.some((m) => !m.multi)).toBe(true);
-  for (const m of frame.markers) expect(hits.markerAt(m.pos.x + origin.x, m.pos.y + origin.y, cam.zoom)).not.toBeNull();
-  const one = frame.markers.find((m) => !m.multi)!;
-  expect(hits.markerAt(one.pos.x + origin.x, one.pos.y + origin.y, cam.zoom)).toBe(one.conn);
+  const { inst, hits, cam, origin } = frameAt(sc, 0, 16);
+  for (const m of inst.markers) expect(hits.markerAt(m.pos.x + origin.x, m.pos.y + origin.y, cam.zoom)).not.toBeNull();
+  // A simple connection's core: midway between its boxes.
+  const sv = inst.simple.view();
+  expect(sv.length).toBeGreaterThan(0);
+  for (let o = 0; o < sv.length; o += SIMPLE_INTS) {
+    const m = simpleMarker(sc.items[sv[o]], sc.items[sv[o + 1]]);
+    expect(hits.markerAt(m.x, m.y, cam.zoom)).not.toBeNull();
+  }
+  const one = simpleMarker(sc.items[sv[0]], sc.items[sv[1]]);
+  expect(hits.markerAt(one.x, one.y, cam.zoom)).toBe(sv[3]);
   expect(hits.markerAt(1e7, 1e7, cam.zoom)).toBeNull();
 });
 
@@ -101,8 +119,8 @@ test('suggestions d’un nœud à ajouter : sans accents ni casse, débuts de ti
 
 test('un appui sur une amorce dit son nœud, sa connexion et son titre ; sur un élément, son id (I9 de la relecture 3b)', () => {
   const these = buildScene(s, ids.plans.these, measure, P);
-  const { frame, hits, cam, origin } = frameAt(these, 0, 16);
-  const st = frame.stubs[0];
+  const { inst, hits, cam, origin } = frameAt(these, 0, 16);
+  const st = inst.stubs[0];
   const h = hits.hit(st.pos.x + origin.x, st.pos.y + origin.y, cam.zoom);
   expect(h).toMatchObject({ kind: 'stub', connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: 'Entropie de Shannon' });
   const mdl = these.items[these.byId.get(ids.nodes.mdl)!];
