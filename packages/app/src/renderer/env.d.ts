@@ -30,7 +30,7 @@ export interface CirrusBridge {
   pickFiles(): Promise<ImportResult>;
   /**
    * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
-   * instead (`shown: 'folder'`). `message`, in French, says why it could not be.
+   * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.
    */
   openFile(ref: FileRef): Promise<{ ok: true; shown: 'app' | 'folder' } | { ok: false; message: string }>;
   /** A node's history for its pop-up: its first and last change (ms), and the number of actions. */

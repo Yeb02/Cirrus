@@ -157,14 +157,12 @@ test('importPaths : un chemin réseau ou de périphérique est refusé avant tou
   expect(importPaths(store, [join(dir, 'lien')], 2 ** 20)).toEqual({ refs: [], refused: [{ name: 'lien', reason: 'pas un fichier ordinaire' }] });
 });
 
-test('isRunnable : la liste des pièces jointes bloquées par Outlook, plus les paquets d’applications, quelle que soit la casse (Review Focus 3)', () => {
-  for (const name of ['Script.PY', 'a.ps1', 'raccourci.lnk', 'setup.exe', 'x.appref-ms', 'tâche.bat', 'a.js', 'm.psm1', 'p.msix', 'p.appxbundle', 'p.MsixBundle']) {
-    expect(isRunnable(name), name).toBe(true);
-  }
-  for (const name of ['compilé.pyc', 'archive.pyzw', 'aide.chm', 'outil.application', 'explorateur.scf', 'pilote.inf', 'macro.xll']) expect(isRunnable(name), name).toBe(true);
+test('isRunnable : scripts, exécutables et raccourcis, quelle que soit la casse (Review Focus 3)', () => {
+  // .sh runs in Git Bash on this PC (Git for Windows' association).
+  for (const name of ['train.sh', 'calcul.py', 'Script.PY', 'tâche.bat', 'setup.exe', 'raccourci.lnk', 'a.ps1', 'x.appref-ms']) expect(isRunnable(name), name).toBe(true);
   // Windows drops trailing dots and spaces (« a.bat. » opens as « a.bat »), and « .lnk » alone has the extension .lnk.
-  for (const name of ['a.bat.', 'a.cmd ', 'a.vbs. .', '.lnk']) expect(isRunnable(name), name).toBe(true);
-  for (const name of ['notes.txt', 'figure.png', 'article.pdf', 'rapport.docx', 'mesures.csv', 'Makefile', 'py', 'a.python', 'a.py.txt']) {
+  for (const name of ['a.bat.', 'a.cmd ', 'a.vbs. .', '.lnk', 'facture.pdf.exe']) expect(isRunnable(name), name).toBe(true);
+  for (const name of ['article.pdf', 'figure.png', 'rapport.docx', 'mesures.csv', 'notes.txt', 'Makefile', 'py', 'a.python', 'a.py.txt']) {
     expect(isRunnable(name), name).toBe(false);
   }
 });
@@ -216,7 +214,7 @@ test('openableCopy : une copie rendue modifiable est refaite, même écrite à t
 
 test('openTarget : un exécutable ou un script est montré dans l’explorateur, le reste ouvert par son application (Review Focus 3)', () => {
   const root = join(dir, 'ouverts');
-  const cases = [['calcul.py', 'folder'], ['Outil.EXE', 'folder'], ['aide.chm', 'folder'], ['article.pdf', 'app'], ['présentation.pptx', 'app']] as const;
+  const cases = [['calcul.py', 'folder'], ['Outil.EXE', 'folder'], ['train.sh', 'folder'], ['article.pdf', 'app'], ['présentation.pptx', 'app']] as const;
   for (const [name, shown] of cases) {
     const ref = stored(name, counting(10 + name.length));
     const target = openTarget(store, ref, root);
@@ -226,12 +224,26 @@ test('openTarget : un exécutable ou un script est montré dans l’explorateur,
   expect(() => openTarget(store, { name: '..', hash: 'a'.repeat(64), size: 1 }, root)).toThrow('nom de fichier refusé');
 });
 
-test('openFailure : un message français, la raison de Node ou de Windows après les deux-points (Minor 2)', () => {
-  expect(openFailure(Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }))).toBe('Impossible d’ouvrir le fichier : il manque dans la base');
-  expect(openFailure(new Error('nom de fichier refusé'))).toBe('Impossible d’ouvrir le fichier : nom de fichier refusé');
-  expect(openFailure(new Error('EBUSY: resource busy or locked'))).toBe('Impossible d’ouvrir le fichier : EBUSY: resource busy or locked');
-  // What shell.openPath returns when it fails.
-  expect(openFailure('Failed to open path')).toBe('Impossible d’ouvrir le fichier : Failed to open path');
+test('openFailure : une phrase française qui nomme le fichier, jamais le texte anglais de Node ou de Windows (Minor 2)', () => {
+  const nodeError = (code: string) => Object.assign(new Error(`${code}: some English text`), { code });
+  const said = (e: unknown) => openFailure('Thèse.pdf', e);
+  expect(said(nodeError('ENOENT'))).toBe('Impossible d’ouvrir « Thèse.pdf » : le fichier manque dans la base.');
+  expect(said(nodeError('EBUSY'))).toBe('Impossible d’ouvrir « Thèse.pdf » : sa copie est encore ouverte dans une autre application.');
+  for (const code of ['EACCES', 'EPERM']) expect(said(nodeError(code))).toBe('Impossible d’ouvrir « Thèse.pdf » : Windows refuse l’accès à sa copie.');
+  expect(said(nodeError('ENOSPC'))).toBe('Impossible d’ouvrir « Thèse.pdf » : le disque est plein.');
+  // What shell.openPath returns when it fails: a string.
+  expect(said('Failed to open path')).toBe('Windows n’a pas pu ouvrir « Thèse.pdf » : aucune application ne semble associée à ce type de fichier.');
+  // A name openableCopy refuses, then anything else (another code, a TypeError of a malformed reference): a generic sentence.
+  let refused: unknown = null;
+  try {
+    openableCopy(store, { name: 'CON', hash: 'a'.repeat(64), size: 1 }, join(dir, 'ouverts'));
+  } catch (e) {
+    refused = e;
+  }
+  expect(openFailure('CON', refused)).toBe('Impossible d’ouvrir « CON » : ce nom de fichier n’est pas permis.');
+  for (const e of [nodeError('EIO'), new TypeError('Cannot read properties of null'), 42]) {
+    expect(said(e)).toBe('Impossible d’ouvrir « Thèse.pdf » : une erreur inattendue s’est produite.');
+  }
 });
 
 test('openableCopy : un nom ou une empreinte qui sortirait du dossier des copies est refusé', () => {

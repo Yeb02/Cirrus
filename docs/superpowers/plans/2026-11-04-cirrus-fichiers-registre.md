@@ -72,9 +72,9 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Options : l'apostrophe droite du plan, mot pour mot ; l'apostrophe typographique (choix).
   - Pourquoi : tous les libellés de `params.ts` et les messages de `index.ts` emploient ’, et les plans écrivent ' partout, y compris pour les libellés déjà livrés en ’.
   - Coût si faux : un test d'une tâche suivante qui comparerait la forme droite échoue visiblement ; un caractère à changer.
-- Ruling: **extension d'un exécutable**, lue comme Windows la lit.
+- Ruling: **extension d'un fichier ouvert par le système**, lue comme Windows la lit.
   - Les points et les espaces finaux tombent : « a.bat. » s'ouvrirait comme « a.bat ». Un nom qui n'est qu'une extension (« .lnk ») la porte.
-  - La liste est fixe : une liste de sécurité n'est pas un réglage. Celle du plan a été remplacée à la correction 1 (I3 ci-dessous).
+  - La liste est fixe : une liste de sécurité n'est pas un réglage. C'est celle du plan, plus `sh`, depuis la correction 2 (ci-dessous).
   - Coût si faux : nul.
 - Ruling: **`openableCopy` vérifie la référence reçue par IPC**.
   - L'empreinte doit avoir 64 caractères hexadécimaux. Le nom doit être un simple nom de fichier : aucun de `<>:"/\|?*`, ni caractère de contrôle, ni point ou espace final, ni nom de périphérique réservé (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, avec ou sans extension). Sinon la fonction lève.
@@ -93,11 +93,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Les fichiers repassent en écriture, puis `unlinkSync` les efface ; c'est ce qui marche sous le Node d'Electron, mesuré. Les dossiers vidés s'effacent par `rmdirSync`, et un fichier qui ne s'efface pas (encore ouvert) repasse en lecture seule.
   - `cleanCopies` est appelé juste après `createWindow`, pendant que la fenêtre charge, et seulement hors banc et hors captures. Le banc de construction et le banc d'instantanés rendent la main avant. Un lancement normal sur une autre base (`CIRRUS_DATA`) fait aussi le ménage.
   - Coût si faux : deux instances sur deux bases partagent `%TEMP%\cirrus-ouverts`, et le démarrage de la seconde efface les copies fermées de la première. Une application qui a lu son fichier puis l'a fermé continue de l'afficher.
-- Ruling: **messages d'`openFile`** (Minor 2 de la relecture, correction 1) : toujours « Impossible d’ouvrir le fichier : <raison> », par `openFailure`.
-  - « il manque dans la base » pour un fichier absent du magasin, « nom de fichier refusé » pour une référence refusée.
-  - Sinon, le texte anglais de Node ou de `shell.openPath` suit les deux-points.
-
-  Coût si faux : la formulation.
+- Ruling: **messages d'`openFile`** : remplacé à la correction 2 (ci-dessous). La correction 1 laissait passer le texte anglais de Node et de `shell.openPath` après un cadre français.
 - Ruling: **décision d'ouvrir ou de montrer** (Minor 4, correction 1) : `openTarget` dans `files.ts` rend `{ path, shown }` et se teste. Le gestionnaire IPC ne fait plus qu'appeler `shell.showItemInFolder` ou `shell.openPath`. Coût si faux : nul.
 - Ruling: **types du pont** : `env.d.ts` importe `ImportResult` et `HistorySummary` de `../main/files.ts` par `import type`, effacé à la construction.
   - Options : recopier les formes dans `env.d.ts`, comme le fait le reste du fichier ; importer le type (choix).
@@ -131,9 +127,34 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Pourquoi : le magasin ne garde que le flux principal d'un fichier importé, et Cirrus ne doit pas blanchir la marque d'un fichier téléchargé. Sans elle, SmartScreen, le mode protégé d'Office, son blocage des macros venues d'Internet et les blocages de zone des CHM et HTA ne jouent plus.
   - Options écartées : garder la zone d'origine de chaque fichier, ce qui demanderait un champ de `FileRef` synchronisé entre PC ; ne marquer que les exécutables.
   - Coût si faux : les documents Office de l'utilisateur ouverts depuis Cirrus passent par le mode protégé, à un clic. Une modification d'une copie en lecture seule n'est de toute façon pas gardée.
-- Ruling (I3, imposé par le plan): **liste des exécutables**.
+    - Les macros, elles, ne s'activent plus du tout : depuis 2022, Office bloque sans bouton les macros VBA d'un fichier venu d'Internet (relecture 1 de la correction). Un `.docm` ou un `.xlsm` de l'utilisateur ouvert depuis Cirrus s'ouvre donc sans ses macros.
+- Ruling (I3, imposé par le plan): **liste des exécutables** — **abandonné à la correction 2**, à la demande de l'utilisateur, pour la liste courte du plan plus `sh` (ci-dessous). Il reste ici pour l'historique.
   - Elle reprend la table de Microsoft « File types blocked in Outlook » (page « Blocked attachments in Outlook », support.microsoft.com/office/434752e1-02d3-4e90-9124-8b81e49a8519). La page ne parle plus de « Level 1 ». Elle a été lue le 2026-11-04 et compte 133 extensions, dont `pyc`, `pyzw`, `chm`, `application`, `scf`, `inf`, `xll`, `settingcontent-ms`, `iso` et `mht`.
   - S'y ajoutent les entrées du plan qui n'y sont pas, `psm1`, et les autres paquets d'applications : `msix`, `msixbundle`, `appxbundle`. `appref-ms` et `appx` y sont déjà.
   - Pourquoi : la liste du plan oubliait des types qui exécutent du code à l'ouverture. Une liste tenue par Microsoft est la référence habituelle, sans excès.
   - Option écartée : une liste blanche de documents, qui échoue fermée, mais bloque tout format légitime non listé et demande un entretien.
   - Coût si faux : un type de document inhabituel est montré dans l'explorateur au lieu d'être ouvert.
+
+### Correction 2 (relecture 1 de la correction)
+
+- Ruling (abandonne la liste d'Outlook, I3) : **liste courte des exécutables : celle du plan, plus `sh`**, à la demande de l'utilisateur.
+  - `isRunnable` garde son nom et son sens : vrai veut dire « montré dans l'explorateur, jamais ouvert ». Sa liste redevient celle du plan (`exe com bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp msc scr pif cpl hta lnk url reg jar py pyw pyz appref-ms`), plus `sh`.
+  - Pourquoi `sh` : sur ce PC, `.sh` (`sh_auto_file`, Git for Windows) s'ouvre dans `git-bash.exe` et s'exécute (relecture 1 de la correction).
+  - Pourquoi pas plus : l'utilisateur a jugé excessives la liste d'Outlook et la liste blanche que la relecture proposait ensuite. Celle-ci a été écrite puis retirée avant tout commit.
+  - Ce qui limite l'exposition : à partir de la tâche 4, « ouvrir avec l'application du système » n'est proposé que pour les images, les PDF et les formats que Cirrus ne sait pas afficher. Le texte, le code et les tableaux ne s'affichent jamais qu'à l'intérieur de Cirrus. Toute copie ouverte porte en outre la marque du web (I2).
+  - Options :
+    - la liste d'Outlook (correction 1) ;
+    - une liste blanche de documents ;
+    - la liste du plan plus `sh` (choix, décision de l'utilisateur).
+  - Coût si faux : un type qui s'exécute à l'ouverture et manque à la liste (relevés par la relecture : `.pyc`, `.chm`, `.application`, `.vsto`, `.xaml`…) serait ouvert par son application, sur une copie marquée de la zone Internet.
+- Ruling (Minor 2, prolongé) : **chaque échec d'`openFile` atteint l'utilisateur en français et nomme le fichier**, par `openFailure(name, e)`.
+  - Une phrase par cause connue :
+    - « Impossible d’ouvrir « nom » : le fichier manque dans la base. » (`ENOENT`) ;
+    - « … : sa copie est encore ouverte dans une autre application. » (`EBUSY`) ;
+    - « … : Windows refuse l’accès à sa copie. » (`EACCES`, `EPERM`) ;
+    - « … : le disque est plein. » (`ENOSPC`) ;
+    - « … : ce nom de fichier n’est pas permis. » (référence refusée par `openableCopy`, code `CIRRUS_REFUSED_NAME`) ;
+    - « Windows n’a pas pu ouvrir « nom » : aucune application ne semble associée à ce type de fichier. » (échec de `shell.openPath`, qui rend une chaîne).
+  - Toute autre erreur, y compris une référence malformée : « … : une erreur inattendue s’est produite. »
+  - Aucun texte anglais n'atteint l'utilisateur : le gestionnaire IPC écrit la cause à la console.
+  - Coût si faux : la formulation.

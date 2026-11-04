@@ -134,27 +134,20 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
 }
 
 /**
- * Opened by Windows, these would run or load code (a .py by Python, a .lnk its target, a .chm its scripts): the explorer
- * shows them instead (plan 4a, D5). Microsoft's list of attachments Outlook blocks (« Blocked attachments in Outlook »,
- * table « File types blocked in Outlook », formerly Level 1, read on 2026-11-04 at
- * https://support.microsoft.com/office/434752e1-02d3-4e90-9124-8b81e49a8519), then the plan's entries missing from it
- * and the other application packages. A fixed security list, not a setting.
+ * Opened by Windows, these would run (a .py by Python, a .lnk its target, a .sh in Git Bash): the explorer shows them
+ * instead (plan 4a, D5). The plan's list, plus sh. A fixed security list, not a setting.
  */
 const RUNNABLE = new Set([
-  'ade', 'adp', 'apk', 'app', 'appcontent-ms', 'application', 'appref-ms', 'appx', 'asp', 'aspx', 'asx', 'bas', 'bat', 'bgi', 'cab', 'cdxml', 'cer',
-  'chm', 'cmd', 'cnt', 'com', 'cpl', 'crt', 'csh', 'der', 'diagcab', 'exe', 'fxp', 'gadget', 'grp', 'hlp', 'hpj', 'hta', 'htc', 'img', 'inf', 'ins',
-  'iso', 'isp', 'its', 'jar', 'jnlp', 'js', 'jse', 'ksh', 'library-ms', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav',
-  'maw', 'mcf', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'mht', 'mhtml', 'msh', 'msh1', 'msh2', 'mshxml', 'msh1xml', 'msh2xml', 'msi', 'msp',
-  'mst', 'msu', 'ops', 'osd', 'pcd', 'pif', 'pl', 'plg', 'prf', 'prg', 'printerexport', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'psd1',
-  'psdm1', 'pssc', 'pst', 'py', 'pyc', 'pyo', 'pyw', 'pyz', 'pyzw', 'reg', 'scf', 'scr', 'sct', 'search-ms', 'settingcontent-ms', 'shb', 'shs', 'theme',
-  'tmp', 'udl', 'url', 'vb', 'vbe', 'vbp', 'vbs', 'vhd', 'vhdx', 'vsmacros', 'vsw', 'webpnp', 'website', 'ws', 'wsb', 'wsc', 'wsf', 'wsh', 'xbap', 'xll',
-  'xnk',
-  'psm1', 'msix', 'msixbundle', 'appxbundle',
+  'exe', 'com', 'bat', 'cmd', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msi', 'msp', 'msc', 'scr', 'pif', 'cpl', 'hta', 'lnk', 'url',
+  'reg', 'jar', 'py', 'pyw', 'pyz', 'appref-ms', 'sh',
 ]);
 
 export function isRunnable(name: string): boolean {
   return RUNNABLE.has(extensionOf(name));
 }
+
+/** The code of the error openableCopy throws for a refused name or hash. */
+const REFUSED_NAME = 'CIRRUS_REFUSED_NAME';
 
 /** A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite. */
 function plainName(name: string): boolean {
@@ -185,7 +178,7 @@ const marked = (path: string) => {
  * removed) it is made again. A name or a hash that would leave `root`, and a blob missing from the store, throw.
  */
 export function openableCopy(storeDir: string, ref: FileRef, root: string): string {
-  if (!HASH.test(ref.hash) || !plainName(ref.name)) throw new Error('nom de fichier refusé');
+  if (!HASH.test(ref.hash) || !plainName(ref.name)) throw Object.assign(new Error('nom de fichier refusé'), { code: REFUSED_NAME });
   const src = filePath(storeDir, ref);
   const size = statSync(src).size;
   const folder = join(root, ref.hash.slice(0, 16));
@@ -227,10 +220,20 @@ export function openTarget(storeDir: string, ref: FileRef, root: string): { path
   return { path: openableCopy(storeDir, ref, root), shown: isRunnable(ref.name) ? 'folder' : 'app' };
 }
 
-/** Why a file did not open, in French: Node's or Windows' own text, in English, follows the colon. */
-export function openFailure(e: unknown): string {
-  const reason = (e as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'il manque dans la base' : e instanceof Error ? e.message : String(e);
-  return `Impossible d’ouvrir le fichier : ${reason}`;
+/**
+ * Why the file `name` did not open, in French: a sentence per known cause, a generic one otherwise. No English text of
+ * Node or Windows reaches the user (the caller logs it). `e` is the error thrown, or shell.openPath's failure string.
+ */
+export function openFailure(name: string, e: unknown): string {
+  if (typeof e === 'string') return `Windows n’a pas pu ouvrir « ${name} » : aucune application ne semble associée à ce type de fichier.`;
+  const why = (e as NodeJS.ErrnoException | null)?.code;
+  const reason = why === 'ENOENT' ? 'le fichier manque dans la base'
+    : why === 'EBUSY' ? 'sa copie est encore ouverte dans une autre application'
+    : why === 'EACCES' || why === 'EPERM' ? 'Windows refuse l’accès à sa copie'
+    : why === 'ENOSPC' ? 'le disque est plein'
+    : why === REFUSED_NAME ? 'ce nom de fichier n’est pas permis'
+    : 'une erreur inattendue s’est produite';
+  return `Impossible d’ouvrir « ${name} » : ${reason}.`;
 }
 
 /**

@@ -166,18 +166,23 @@ ipcMain.handle('cirrus:files:pick', async (e) => {
   return chosen.canceled ? { refs: [], refused: [] } : importPaths(dir, chosen.filePaths, maxImportBytes());
 });
 // A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
-// instead, never run (plan 4a, D5).
+// instead, never run (plan 4a, D5). Failures reach the user in French, their cause in the console.
 ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
+  const name = typeof ref?.name === 'string' ? ref.name : '';
   try {
     const { path, shown } = openTarget(dir, ref, copies);
     if (shown === 'folder') shell.showItemInFolder(path);
     else {
       const error = await shell.openPath(path);
-      if (error) return { ok: false, message: openFailure(error) };
+      if (error) {
+        console.error(`Ouverture de « ${name} » : ${error}`);
+        return { ok: false, message: openFailure(name, error) };
+      }
     }
     return { ok: true, shown };
   } catch (e) {
-    return { ok: false, message: openFailure(e) };
+    console.error(`Ouverture de « ${name} » :`, e);
+    return { ok: false, message: openFailure(name, e) };
   }
 });
 ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));
