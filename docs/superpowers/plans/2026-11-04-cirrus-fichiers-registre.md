@@ -590,7 +590,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 - Ruling: **six réglages de plus que le plan**, chaque constante étant un réglage :
   - groupe « Fichiers » :
     - `imageMaxZoom` : 32, entre 1 et 256, le zoom maximal d'une image ;
-    - `imageFitMaxZoom` : 1, entre 1 et 32, l'agrandissement maximal de l'ajustement ;
+    - `imageFitMaxZoom` : 1, entre 1 et 32, l'agrandissement maximal de l'ajustement (remplacé à la correction 1 : 4 par défaut) ;
     - `tableColumnMaxPx` : 320, entre 60 et 2000, la largeur maximale d'une colonne ;
     - `tableMarginPx` : 240, entre 0 et 2000, la marge préparée autour de la vue d'un tableau, pour qu'un défilement ne montre pas d'abord des lignes vides ;
   - groupe « Pop-ups », à côté de la taille du pop-up :
@@ -716,3 +716,25 @@ Relecture : `task-5-review.md`, 0 Critique, 3 Importants, 8 Mineurs. Les décisi
   - la lecture répétée dans le texte et le tableau ;
   - le décodage sur le fil de l'interface ;
   - pas de test des composants.
+
+### Correction 2 (relecture 1 de la correction 1)
+
+Relecture : `task-5-rereview-1.md`. Les six points de la correction 1 sont réglés, et un nouvel Important est ouvert.
+
+#### Mesures
+
+- Avant le code, le nouveau test échoue. L'image de 32 pixels, ajustée à ×4, reste à ×4 au double-clic : « expected { zoom: 4, cx: 16, cy: 16 } to deeply equal { zoom: 1, cx: 16, cy: 16 } ».
+- Suite complète : 549 tests sur 549 (548 + 1). `tsc` : `app` et `view` sans erreur.
+- Captures, une suite neuve (G) : `reference-3c` 11 sur 11 et `plan4a` 6 sur 6 à 0 pixel. L'ajustement ne change pas, seule la borne basse du zoom change.
+- Le pilote par CDP passe 62 vérifications sur 62, dont 4 nouvelles. Une image de 40 × 30 pixels en plein écran :
+  - s'ajuste à ×4 ;
+  - passe au 1:1 au double-clic, puis revient à l'ajustement ;
+  - descend à la molette jusqu'à sa taille, pas plus bas.
+
+#### Décisions
+
+- Ruling (Important 1 de la relecture): **le zoom d'une image va du plus petit de l'ajustement et du 1:1 au plus grand de l'ajustement et de `imageMaxZoom`.**
+  - Avec l'ajustement à ×4 (correction 1), la borne basse de l'ajustement rendait le double-clic du plan, « de l'ajustement au 1:1 », sans effet pour toute image que l'ajustement agrandit : un schéma, une petite figure. Elle empêchait aussi la molette de revenir à la taille de l'image.
+  - Une image que l'ajustement réduit garde l'ajustement pour borne basse.
+  - Coût si faux : une ligne.
+- Le commentaire d'`ImageViewer` et la ligne `imageFitMaxZoom` du réglage de la tâche 5 disent désormais 4 (Mineur de la relecture).

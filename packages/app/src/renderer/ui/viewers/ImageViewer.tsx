@@ -9,8 +9,9 @@ const NO_SIZE: Size = { w: 300, h: 150 };
 
 /**
  * An image (plan 4a, task 5), served by cirrus-file: to an <img>: fitted to the view, enlarged at most to
- * imageFitMaxZoom (by default never past its own size); the wheel zooms around the cursor (imageZoomSpeed, up to
- * imageMaxZoom), a drag moves it, a double-click goes from the fit to its own size around the point, and back. It is
+ * imageFitMaxZoom (4 by default); the wheel zooms around the cursor (imageZoomSpeed), from the smaller of the fit and
+ * its own size up to imageMaxZoom; a drag moves it; a double-click goes from the fit to its own size around the point,
+ * and back. It is
  * drawn at its zoomed size rather than scaled by a transform, so that an SVG is drawn sharp. Its place is kept by its
  * hash: fitted (fitted again to the view it opens in), or its zoom and centre.
  */

@@ -293,6 +293,33 @@ test('image : ajustée sans être agrandie (imageFitMaxZoom) ; la molette zoome 
   expect(toggleFit(fitView(icon), icon, at)).toEqual(fitView(icon));
 });
 
+test('image que l’ajustement agrandit (imageFitMaxZoom 4) : le double-clic passe au 1:1 et revient, la molette descend jusqu’au 1:1, pas plus bas', () => {
+  const at = { x: 100, y: 300 };
+  // The 32 px fixture image in a large view: fitted at ×4.
+  const icon: ImageFrame = { image: { w: 32, h: 32 }, view: { w: 1584, h: 921 }, maxZoom: 32, fitMaxZoom: 4 };
+  const fit = fitView(icon);
+  expect(fit.zoom).toBe(4);
+  const one = toggleFit(fit, icon, at);
+  expect(one).toEqual({ zoom: 1, cx: 16, cy: 16 });
+  expect(isFit(one, icon)).toBe(false);
+  expect(toggleFit(one, icon, at)).toEqual(fit);
+  // The wheel: down to its own size, never below; up past the fit, to the maximum.
+  expect(zoomAt(fit, icon, at, 0.5).zoom).toBe(2);
+  expect(zoomAt(fit, icon, at, 1e-6).zoom).toBe(1);
+  expect(zoomAt(one, icon, at, 1e6).zoom).toBe(32);
+  // A 640 × 480 figure in full screen: fitted at ×1.92, back to ×1 and to the fit again.
+  const figure: ImageFrame = { image: { w: 640, h: 480 }, view: { w: 1584, h: 920 }, maxZoom: 32, fitMaxZoom: 4 };
+  const fitted = fitView(figure);
+  expect(fitted.zoom).toBeCloseTo(920 / 480);
+  const own = toggleFit(fitted, figure, at);
+  expect(own.zoom).toBe(1);
+  expect(toggleFit(own, figure, at)).toEqual(fitted);
+  expect(zoomAt(fitted, figure, at, 1e-6).zoom).toBe(1);
+  // An image larger than the view: the fit stays the lower bound (below ×1).
+  const large: ImageFrame = { ...figure, image: { w: 4000, h: 2000 } };
+  expect(zoomAt(fitView(large), large, at, 1e-6)).toEqual(fitView(large));
+});
+
 test('tableau : seules les lignes et les colonnes visibles, avec leur marge ; la largeur des colonnes par leur plus longue valeur, plafonnée', () => {
   // Rows of 24 px under a header of 24: a view of 240 px at the top shows rows 0 to 9.
   expect(rowWindow(0, 240, 24, 100_000, 0)).toEqual({ first: 0, last: 9 });

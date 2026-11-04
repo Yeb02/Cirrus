@@ -41,7 +41,7 @@ export interface Size { w: number; h: number }
 export interface ImageView { zoom: number; cx: number; cy: number }
 /**
  * What an image's view is computed in: the image's own size, the view's, the largest zoom (imageMaxZoom) and the largest
- * a fit enlarges it to (imageFitMaxZoom: 1, an image smaller than the view is shown at its own size).
+ * a fit enlarges it to (imageFitMaxZoom; 1 would show an image smaller than the view at its own size).
  */
 export interface ImageFrame { image: Size; view: Size; maxZoom: number; fitMaxZoom: number }
 
@@ -61,13 +61,16 @@ function axis(c: number, size: number, view: number, zoom: number): number {
   return size <= 2 * half ? size / 2 : clamp(c, half, size - half);
 }
 
-/** A zoom between the fit and maxZoom (the fit wins when it is larger). */
+/**
+ * A zoom from the smaller of the fit and 1:1 to the larger of the fit and maxZoom: an image the fit shrinks is never
+ * smaller than its fit, one the fit enlarges can still be seen at its own size (the double-click's 1:1, the wheel).
+ */
 const bounded = (zoom: number, f: ImageFrame) => {
-  const lo = fitZoom(f);
-  return clamp(zoom, lo, Math.max(lo, f.maxZoom));
+  const fit = fitZoom(f);
+  return clamp(zoom, Math.min(fit, 1), Math.max(fit, f.maxZoom));
 };
 
-/** A view kept usable: its scale between the fit and maxZoom, the image never dragged out of it. */
+/** A view kept usable: its scale within `bounded`, the image never dragged out of it. */
 export function clampView(v: ImageView, f: ImageFrame): ImageView {
   const zoom = bounded(v.zoom, f);
   return { zoom, cx: axis(v.cx, f.image.w, f.view.w, zoom), cy: axis(v.cy, f.image.h, f.view.h, zoom) };
