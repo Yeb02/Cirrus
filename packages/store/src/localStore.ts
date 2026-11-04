@@ -180,8 +180,14 @@ export class LocalStore {
   static open(dir: string, opts: { pc: string }): LocalStore {
     mkdirSync(dir, { recursive: true });
     const db = new DatabaseSync(join(dir, 'cirrus.db'));
-    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    migrate(db);
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+      migrate(db);
+    } catch (e) {
+      // Not a base, or one that cannot be migrated: the file is not left open (the main process quits on this).
+      db.close();
+      throw e;
+    }
     return new LocalStore(db, opts.pc);
   }
 

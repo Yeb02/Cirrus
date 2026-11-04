@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -32,6 +32,14 @@ test('ouvrir crée la base au schéma courant, avec la table de l’instantané'
   expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'snapshot'").get()).toBeDefined();
   db.close();
   expect(SCHEMA_VERSION).toBe(2);
+});
+
+test('un fichier qui n’est pas une base : ouvrir échoue sans le garder ouvert (il s’efface aussitôt)', () => {
+  const file = join(dir, 'cirrus.db');
+  writeFileSync(file, Buffer.alloc(8192, 0x5a));
+  expect(() => LocalStore.open(dir, { pc: 'pc1' })).toThrow(/not a database/);
+  rmSync(file);
+  expect(existsSync(file)).toBe(false);
 });
 
 test('une action validée persiste et se recharge depuis les tables à la réouverture', () => {

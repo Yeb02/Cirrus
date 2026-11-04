@@ -4,7 +4,7 @@ import { type Action, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
 import { withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { lockBase } from './lock.ts';
@@ -166,6 +166,18 @@ ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'proce
   app.exit(0);
 });
 
+/**
+ * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
+ * without a window, holding the locks that would drop the next launches. Measuring runs have no one to click the box.
+ */
+function failOpen(e: unknown): void {
+  const message = `La base de Cirrus ne peut pas être ouverte : ${dir}\n\n${e instanceof Error ? e.message : String(e)}`;
+  if (bench || capture) console.error(message);
+  else dialog.showErrorBox('Cirrus', message);
+  lock?.release();
+  app.exit(2);
+}
+
 void app.whenReady().then(() => {
   if (!first) return;
   if (benchBuild) {
@@ -190,7 +202,12 @@ void app.whenReady().then(() => {
     app.exit(2);
     return;
   }
-  lock = lockBase(dir);
+  try {
+    lock = lockBase(dir);
+  } catch (e) {
+    failOpen(e);
+    return;
+  }
   if (!lock) {
     console.error(`Base déjà ouverte par une autre instance de Cirrus (une capture, le banc ou une autre fenêtre) : ${dir}. Cette instance s’arrête.`);
     app.exit(2);
@@ -211,7 +228,12 @@ void app.whenReady().then(() => {
     app.exit(0);
     return;
   }
-  store = openBase(dir);
+  try {
+    store = openBase(dir);
+  } catch (e) {
+    failOpen(e);
+    return;
+  }
   markNow('baseOpened');
   createWindow();
 });
