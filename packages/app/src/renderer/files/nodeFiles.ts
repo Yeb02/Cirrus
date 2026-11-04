@@ -125,12 +125,15 @@ export function fileClick(name: string, detail: number): 'preview' | 'system' | 
 }
 
 /**
- * An image's thumbnail in its node's pop-up: the image itself up to `thumbMaxMb` (the <img> reads it whole), the icon
- * of its kind past it, so that opening a pop-up reads no file past thumbMaxMb (ruling I3 of the task 5 review); none
- * for another kind.
+ * A file's thumbnail in its node's pop-up: an image itself up to `thumbMaxMb` (the <img> reads it whole), the icon of
+ * its kind past it, so that opening a pop-up reads no image past thumbMaxMb (ruling I3 of the task 5 review); a PDF's
+ * first page at any size, which pdf.js reads by ranges, without fetching ahead, and no more than thumbMaxMb of it
+ * (pageThumbnail, task 6: past them, the PDF's icon); none for another kind.
  */
-export function thumbFor(file: FileRef, thumbMaxMb: number): 'image' | 'icon' | null {
-  if (fileKind(file.name) !== 'image') return null;
+export function thumbFor(file: FileRef, thumbMaxMb: number): 'image' | 'icon' | 'pdf' | null {
+  const kind = fileKind(file.name);
+  if (kind === 'pdf') return 'pdf';
+  if (kind !== 'image') return null;
   return file.size <= thumbMaxMb * 2 ** 20 ? 'image' : 'icon';
 }
 

@@ -11,7 +11,7 @@ import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './ba
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, openFailure, openTarget } from './files.ts';
 import { lockBase } from './lock.ts';
-import { navigationAllowed } from './navigation.ts';
+import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
@@ -197,6 +197,19 @@ ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
   } catch (e) {
     console.error(`Ouverture de « ${name} » :`, e);
     return { ok: false, message: openFailure(name, e) };
+  }
+});
+// A link clicked in a PDF (plan 4a, task 6): its address goes to the system's handler (the browser, the mail client)
+// only in http:, https: or mailto: (externalUrlAllowed), checked here whatever the interface did; any other is refused.
+ipcMain.handle('cirrus:open-url', async (_e, url: unknown) => {
+  if (typeof url !== 'string' || !externalUrlAllowed(url)) {
+    console.warn(`Lien refusé : ${String(url).slice(0, 200)}`);
+    return;
+  }
+  try {
+    await shell.openExternal(url);
+  } catch (e) {
+    console.error(`Ouverture du lien ${url} :`, e);
   }
 });
 ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));

@@ -205,9 +205,11 @@ export function App() {
         const [sx, sy] = at.split(',').map(Number);
         await graph.current?.dropFilesAt(sx, sy, dropped);
       }
+      // Each click waits for what the views it opened load (a PDF's reader, its pages): the next one acts on them.
       for (const sel of clicks) {
         document.querySelector<HTMLElement>(sel)?.click();
         await new Promise((r) => setTimeout(r, 300));
+        await viewsSettled();
       }
       for (const combo of keys) {
         const parts = combo.split('+');

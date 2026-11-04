@@ -141,12 +141,28 @@ export interface RenderParams {
   imageMaxZoom: number;
   /** which enlarges an image smaller than the view at most this many times (1: shown at its own size). */
   imageFitMaxZoom: number;
-  /** An image's thumbnail in its node's pop-up, */
+  /** An image's thumbnail, or a PDF's first page, in its node's pop-up, */
   thumbPx: number;
-  /** read only for an image this large at most; a larger one shows its kind's icon. */
+  /**
+   * read only for an image this large at most, a larger one showing its kind's icon; a PDF's is read by ranges, at most
+   * this much of it (past it, its icon).
+   */
   thumbMaxMb: number;
   /** The files whose view is kept (« au même endroit »), the one left longest ago forgotten first. */
   viewStatesKept: number;
+  // The PDF reader (plan 4a, task 6)
+  /** Pages drawn above and below those in view (the others are boxes at their size), */
+  pdfPagesAhead: number;
+  /** the zoom's step (Ctrl+wheel, + and −), between these bounds (1: the page's real size), */
+  pdfZoomStep: number;
+  pdfMaxZoom: number;
+  pdfMinZoom: number;
+  /** the documents kept open once their view is left (the one used longest ago closed first), */
+  pdfDocsKept: number;
+  /** the gap between the pages and around them, */
+  pdfGapPx: number;
+  /** and the largest drawing of a page, in megapixels: past it, the page is drawn less dense and stretched. */
+  pdfCanvasMaxMp: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -290,6 +306,13 @@ export const DEFAULT_PARAMS: RenderParams = {
   thumbPx: 64,
   thumbMaxMb: 4,
   viewStatesKept: 200,
+  pdfPagesAhead: 1,
+  pdfZoomStep: 1.15,
+  pdfMaxZoom: 5,
+  pdfMinZoom: 0.25,
+  pdfDocsKept: 4,
+  pdfGapPx: 12,
+  pdfCanvasMaxMp: 16,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -449,9 +472,16 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('imageZoomSpeed', 'Vitesse du zoom d’une image à la molette', A, 'Fichiers', 0.0002, 0.01, 0.0001),
   num('imageMaxZoom', 'Zoom maximal d’une image (× sa taille réelle)', A, 'Fichiers', 1, 256, 1),
   num('imageFitMaxZoom', 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', A, 'Fichiers', 1, 32, 0.5),
-  num('thumbPx', 'Taille des vignettes d’images (px)', A, 'Fichiers', 24, 256, 1),
-  num('thumbMaxMb', 'Taille maximale d’une image pour sa vignette (Mo)', A, 'Fichiers', 0, 64, 1),
+  num('thumbPx', 'Taille des vignettes d’images et de PDF (px)', A, 'Fichiers', 24, 256, 1),
+  num('thumbMaxMb', 'Lecture maximale pour la vignette d’une image ou d’un PDF (Mo)', A, 'Fichiers', 0, 64, 1),
   num('viewStatesKept', 'Fichiers dont la vue est gardée (au même endroit)', A, 'Fichiers', 10, 5000, 10),
+  num('pdfPagesAhead', 'Pages d’un PDF dessinées d’avance au-dessus et au-dessous de la vue', A, 'Fichiers', 0, 5, 1),
+  num('pdfZoomStep', 'Pas du zoom d’un PDF (Ctrl+molette, + et −)', A, 'Fichiers', 1.02, 2, 0.01),
+  num('pdfMaxZoom', 'Zoom maximal d’un PDF (× sa taille réelle)', A, 'Fichiers', 1, 10, 0.25),
+  num('pdfMinZoom', 'Zoom minimal d’un PDF (× sa taille réelle)', A, 'Fichiers', 0.05, 1, 0.05),
+  num('pdfDocsKept', 'PDF gardés ouverts en mémoire', A, 'Fichiers', 1, 32, 1),
+  num('pdfGapPx', 'Écart entre les pages d’un PDF et autour d’elles (px)', A, 'Fichiers', 0, 64, 1),
+  num('pdfCanvasMaxMp', 'Taille maximale du dessin d’une page de PDF (mégapixels)', A, 'Fichiers', 1, 64, 1),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),

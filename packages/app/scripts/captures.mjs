@@ -65,6 +65,14 @@ const SCENES = [
   { name: 'plein-ecran-image', view: '0,140,1', pointer: 'down 967 181; up 967 181', click: fileThenFull('schéma_compression.png') },
   // The pop-up tall enough to show its files, the preview of the Markdown notes beside it (on its left: no room on its right).
   { name: 'apercu-fichier', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 }, click: '.file[data-name="notes_lecture.md"]' },
+  // Plan 4a, task 6: the publication (−420, −300 in the world, at the view's centre) carries the two PDFs. Its
+  // three-page chapter in full screen, zoomed out by nine steps of « − » from the fit (195 % to 55 %), so that its
+  // first page and the top of the second show; then its pop-up, tall enough to show both PDFs' first-page thumbnails.
+  {
+    name: 'plein-ecran-pdf', view: '-420,-300,1', pointer: 'down 792 461; up 792 461',
+    click: [fileThenFull('Li_Vitányi_chapitre_1.pdf'), ...Array(9).fill('.full-screen .pdf-tools .zoom-out')].join(','),
+  },
+  { name: 'popup-vignettes', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { popupHeightPx: 720 } },
 ];
 
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */

@@ -215,7 +215,7 @@ test('plein écran modal : Tab tourne en rond dans ses éléments, sans jamais e
   expect(tabTarget(0, -1, false)).toBeNull();
 });
 
-test('vignette : l’image elle-même jusqu’à thumbMaxMb, au-delà l’icône de son genre ; rien pour un autre genre (ruling I3)', () => {
+test('vignette : l’image elle-même jusqu’à thumbMaxMb, au-delà l’icône de son genre ; la première page d’un PDF à toute taille ; rien pour un autre genre (ruling I3, tâche 6)', () => {
   const MB = 2 ** 20;
   expect(thumbFor({ name: 'schéma.png', hash: 'a'.repeat(64), size: 517 }, 4)).toBe('image');
   expect(thumbFor({ name: 'photo.JPG', hash: 'a'.repeat(64), size: 4 * MB }, 4)).toBe('image');
@@ -223,7 +223,11 @@ test('vignette : l’image elle-même jusqu’à thumbMaxMb, au-delà l’icône
   // 0: no image is read for its thumbnail.
   expect(thumbFor({ name: 'schéma.png', hash: 'a'.repeat(64), size: 517 }, 0)).toBe('icon');
   expect(thumbFor({ name: 'notes.md', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
-  expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
+  // A PDF's first page is read by ranges (pdf.ts): cheap at any size, under any thumbMaxMb.
+  expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 4)).toBe('pdf');
+  expect(thumbFor({ name: 'Thèse.PDF', hash: 'a'.repeat(64), size: 150 * MB }, 4)).toBe('pdf');
+  expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 0)).toBe('pdf');
+  expect(thumbFor({ name: 'présentation.pptx', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
 });
 
 test('le menu d’un fichier gagne « Ouvrir en plein écran » pour les genres que Cirrus affiche', () => {

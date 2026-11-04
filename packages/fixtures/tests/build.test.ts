@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ancestors, canonical, checkState, groupOf, placementKey, type State } from '@cirrus/core';
 import { filePath, LocalStore } from '@cirrus/store';
 import { buildFixture } from '../src/build.ts';
+import { chapterPdf } from '../src/pdf.ts';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cirrus-fixture-')); });
@@ -85,7 +86,8 @@ test('chaque fonctionnalité est présente', () => {
   const pub = s.nodes.get(ids.nodes.publication)!;
   expect(pub.tags.filter((t) => t.key === 'auteur')).toHaveLength(2);
   expect(pub.tags.some((t) => t.key === 'date_de_publication')).toBe(true);
-  expect(pub.files.some((f) => f.name.endsWith('.pdf'))).toBe(true);
+  // A one-page PDF and a three-page one (plan 4a, task 6: the reader's capture shows two pages).
+  expect(pub.files.map((f) => f.name)).toEqual(['Li_Vitányi_extrait.pdf', 'Li_Vitányi_chapitre_1.pdf']);
   expect([...s.nodes.values()].some((n) => n.files.some((f) => f.name.endsWith('.png')))).toBe(true);
   // A format the app does not show (plan 4a): opened by the system's application.
   expect(s.nodes.get(ids.nodes.theseOnly)!.files.map((f) => f.name)).toEqual(['présentation.pptx']);
@@ -116,6 +118,43 @@ test('le CSV est en octets Windows-1252, à points-virgules et virgules décimal
   expect([...md.subarray(0, 3)]).not.toEqual([0xef, 0xbb, 0xbf]);
   expect(new TextDecoder('utf-8', { fatal: true }).decode(md)).toMatch(/^# Notes de lecture/);
   store.close();
+});
+
+test('le PDF de trois pages est celui qu’écrit chapterPdf, sans dépendance : xref exacte, trois pages de texte, liens internes et externes (plan 4a, tâche 6)', () => {
+  const store = LocalStore.open(dir, { pc: 'fixture' });
+  const ids = buildFixture(store, dir);
+  const f = store.loadState().nodes.get(ids.nodes.publication)!.files.find((x) => x.name === 'Li_Vitányi_chapitre_1.pdf')!;
+  const bytes = readFileSync(filePath(dir, f));
+  store.close();
+  // The asset is the script's output (scripts/make-pdf.ts), byte for byte: the two never drift apart.
+  expect(Buffer.from(chapterPdf()).equals(bytes)).toBe(true);
+  // Written in ASCII only (accents as octal escapes): a byte offset is a character offset.
+  expect(bytes.every((b) => b < 0x80)).toBe(true);
+  const text = bytes.toString('latin1');
+  expect(text.startsWith('%PDF-1.4\n')).toBe(true);
+  expect(text.endsWith('%%EOF\n')).toBe(true);
+  // startxref points at the table, and each entry at its object.
+  const start = Number(/startxref\n(\d+)\n%%EOF\n$/.exec(text)![1]);
+  expect(text.slice(start, start + 5)).toBe('xref\n');
+  const [, count] = /^xref\n0 (\d+)\n/.exec(text.slice(start))!.map(Number);
+  const entries = text.slice(start).split('\n').slice(2, 2 + count);
+  expect(entries[0]).toBe('0000000000 65535 f ');
+  for (let i = 1; i < count; i++) {
+    expect(entries[i], `objet ${i}`).toMatch(/^\d{10} 00000 n $/);
+    const at = Number(entries[i].slice(0, 10));
+    expect(text.slice(at, at + `${i} 0 obj`.length), `objet ${i}`).toBe(`${i} 0 obj`);
+  }
+  expect(text).toContain(`trailer\n<< /Size ${count} /Root 1 0 R >>`);
+  // Three pages, each with its text; links to pages 2 and 3, back to page 1, to a web page and to an address.
+  expect(text).toContain('/Type /Pages /Kids [');
+  expect(text).toContain('/Count 3');
+  expect(text.match(/\/Type \/Page /g)).toHaveLength(3);
+  expect(text.match(/\/Subtype \/Link/g)!.length).toBeGreaterThanOrEqual(5);
+  expect(text).toContain('/URI (https://example.org/complexite-de-kolmogorov)');
+  expect(text).toContain('/URI (mailto:auteur@example.org)');
+  expect(text.match(/\/Dest \[\d+ 0 R \/XYZ /g)!.length).toBeGreaterThanOrEqual(3);
+  // « Préliminaires », in Windows-1252 (WinAnsiEncoding): « é » is byte E9, written \351.
+  expect(text).toContain('(Chapitre 1 \\227 Pr\\351liminaires)');
 });
 
 test('réouverture identique', () => {

@@ -108,7 +108,8 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   const publication = node(lobby, 'An Introduction to Kolmogorov Complexity and Its Applications', -420, -300, {
     tags: [kv('auteur', 'Ming Li'), kv('auteur', 'Paul Vitányi'), kv('date_de_publication', '2008')],
   });
-  attach(publication, 'Li_Vitányi_extrait.pdf');
+  // A one-page PDF, and three pages with links written by scripts/make-pdf.ts (plan 4a, task 6), in one action.
+  attach(publication, 'Li_Vitányi_extrait.pdf', 'Li_Vitányi_chapitre_1.pdf');
 
   for (const [n, g] of [
     [groupeComplexite, groupeTheorie], [groupeInduction, groupeComplexite],

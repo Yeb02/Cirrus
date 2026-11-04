@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('cirrus', {
   },
   pickFiles: () => ipcRenderer.invoke('cirrus:files:pick'),
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
+  openUrl: (url: string) => ipcRenderer.invoke('cirrus:open-url', url),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),
   launch,
 });

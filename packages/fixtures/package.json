@@ -5,7 +5,8 @@
   "exports": "./src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "fixture": "node scripts/make-fixture.ts"
+    "fixture": "node scripts/make-fixture.ts",
+    "pdf": "node scripts/make-pdf.ts"
   },
   "dependencies": {
     "@cirrus/core": "*",

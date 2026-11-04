@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
-import { navigationAllowed } from '../src/main/navigation.ts';
+import { externalUrlAllowed, navigationAllowed } from '../src/main/navigation.ts';
 
 // The window's two addresses: the dev server's (ELECTRON_RENDERER_URL), and the built app's page, a file: URL.
 const DEV = 'http://localhost:5173/';
@@ -29,4 +29,16 @@ test('navigationAllowed : ni un PDF en file:, ni une page https:, ni about:blank
   expect(navigationAllowed(pathToFileURL('C:\\Users\\alpha\\Desktop\\Cirrus\\packages\\app\\out\\renderer\\autre.html').href, BUILT)).toBe(false);
   // Served by the app's own protocol, a blob is not the app either.
   expect(navigationAllowed(`cirrus-file://blob/${'0'.repeat(64)}/a.svg`, BUILT)).toBe(false);
+});
+
+test('externalUrlAllowed : un lien d’un PDF vers http:, https: ou mailto: seulement (plan 4a, tâche 6)', () => {
+  for (const url of ['https://example.org/kolmogorov', 'http://example.org/', 'HTTPS://EXAMPLE.ORG/a?b=c#d', 'mailto:auteur@example.org', 'mailto:a@b.c?subject=Cirrus']) {
+    expect(externalUrlAllowed(url), url).toBe(true);
+  }
+  for (const url of [
+    'file:///C:/Windows/System32/calc.exe', 'javascript:alert(1)', 'cirrus:noeud/0193', `cirrus-file://blob/${'0'.repeat(64)}/a.pdf`, 'ftp://example.org/',
+    'tel:+33123456789', 'data:text/html,<p>', 'about:blank', 'pas une adresse', '', 'https:',
+  ]) {
+    expect(externalUrlAllowed(url), url).toBe(false);
+  }
 });

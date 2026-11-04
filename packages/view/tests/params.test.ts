@@ -84,8 +84,8 @@ test('vues des fichiers : plafonds de lecture, tableaux, images, vignettes, vues
     ['imageZoomSpeed', 0.0015, 'Vitesse du zoom d’une image à la molette', 0.0002, 0.01, 0.0001],
     ['imageMaxZoom', 32, 'Zoom maximal d’une image (× sa taille réelle)', 1, 256, 1],
     ['imageFitMaxZoom', 4, 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', 1, 32, 0.5],
-    ['thumbPx', 64, 'Taille des vignettes d’images (px)', 24, 256, 1],
-    ['thumbMaxMb', 4, 'Taille maximale d’une image pour sa vignette (Mo)', 0, 64, 1],
+    ['thumbPx', 64, 'Taille des vignettes d’images et de PDF (px)', 24, 256, 1],
+    ['thumbMaxMb', 4, 'Lecture maximale pour la vignette d’une image ou d’un PDF (Mo)', 0, 64, 1],
     ['viewStatesKept', 200, 'Fichiers dont la vue est gardée (au même endroit)', 10, 5000, 10],
   ];
   for (const [key, value, label, min, max, step] of specs) {
@@ -100,6 +100,22 @@ test('vues des fichiers : plafonds de lecture, tableaux, images, vignettes, vues
     key: 'previewHeightPx', label: 'Hauteur d’un aperçu de fichier à son ouverture (px)', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 160, max: 1400, step: 1,
   });
   expect([DEFAULT_PARAMS.previewWidthPx, DEFAULT_PARAMS.previewHeightPx]).toEqual([560, 460]);
+});
+
+test('lecteur PDF : pages d’avance, pas et bornes du zoom, documents gardés, écart, taille d’un dessin, réglages avancés du groupe « Fichiers » (plan 4a, tâche 6)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['pdfPagesAhead', 1, 'Pages d’un PDF dessinées d’avance au-dessus et au-dessous de la vue', 0, 5, 1],
+    ['pdfZoomStep', 1.15, 'Pas du zoom d’un PDF (Ctrl+molette, + et −)', 1.02, 2, 0.01],
+    ['pdfMaxZoom', 5, 'Zoom maximal d’un PDF (× sa taille réelle)', 1, 10, 0.25],
+    ['pdfMinZoom', 0.25, 'Zoom minimal d’un PDF (× sa taille réelle)', 0.05, 1, 0.05],
+    ['pdfDocsKept', 4, 'PDF gardés ouverts en mémoire', 1, 32, 1],
+    ['pdfGapPx', 12, 'Écart entre les pages d’un PDF et autour d’elles (px)', 0, 64, 1],
+    ['pdfCanvasMaxMp', 16, 'Taille maximale du dessin d’une page de PDF (mégapixels)', 1, 64, 1],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Fichiers', kind: 'number', min, max, step });
+  }
 });
 
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {

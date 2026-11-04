@@ -220,7 +220,8 @@ button, input, select { font: inherit; color: var(--ink); }
 /* An image's thumbnail (thumbPx, its size set on the element): the image whole in its square. */
 .node-popup .file.with-thumb { align-items: center; }
 .node-popup .file .thumb { flex: none; object-fit: contain; border-radius: 4px; background: rgba(143, 184, 255, 0.06); }
-/* An image past thumbMaxMb: its kind's icon, not read. */
+/* A PDF's first page (white) keeps its box while it is drawn; an image past thumbMaxMb: its kind's icon, not read. */
+.node-popup .file span.thumb { display: inline-block; }
 .node-popup .file .thumb.icon { color: var(--muted); }
 .node-popup .file .rename { padding: 0 4px; font: inherit; }
 .node-popup .add-files { margin-top: 6px; padding: 2px 0; border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
@@ -266,6 +267,60 @@ button, input, select { font: inherit; color: var(--ink); }
 .viewer-table .cell { box-shadow: inset -1px 0 rgba(143, 184, 255, 0.08); }
 .viewer-table .num { position: sticky; left: 0; z-index: 1; text-align: right; color: var(--muted); background: #0e1729; box-shadow: inset -1px 0 rgba(143, 184, 255, 0.2); }
 .viewer-table .thead .num { z-index: 3; background: #16233d; }
+/*
+ * The PDF reader (plan 4a, task 6): a tool bar, then the pages one under the other in a scroll that always shows its
+ * scroll bar (a fit to the width that made it appear would change the width it fits to). Each page is a white box at
+ * its place and size; its canvas, text layer and links fill it.
+ */
+.viewer-pdf .pdf-tools {
+  flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 12.5px; user-select: none;
+  border-bottom: 1px solid rgba(143, 184, 255, 0.14);
+}
+.viewer-pdf .pdf-tools button {
+  min-width: 26px; padding: 1px 7px; border-radius: 5px; background: var(--sky2); border: 1px solid var(--edge); cursor: pointer;
+}
+.viewer-pdf .pdf-tools button:disabled { opacity: 0.4; cursor: default; }
+.viewer-pdf .pdf-tools .fit.on { border-color: var(--accent); }
+.viewer-pdf .pdf-tools .zoom { min-width: 46px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.viewer-pdf .pdf-tools .spacer { flex: 1; }
+.viewer-pdf .pdf-tools .page { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.viewer-pdf .pdf-tools .page input {
+  box-sizing: content-box; padding: 1px 4px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink);
+  background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px;
+}
+.viewer-pdf .pdf-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: scroll; position: relative; outline: none; }
+.viewer-pdf .pdf-sizer { position: relative; }
+.viewer-pdf .pdf-page {
+  position: absolute; background: #fff; box-shadow: 0 1px 6px rgba(2, 6, 16, 0.55); overflow: hidden;
+  --scale-round-x: 1px; --scale-round-y: 1px;
+}
+.viewer-pdf .pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.viewer-pdf .pdf-links { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.viewer-pdf .pdf-links a { position: absolute; pointer-events: auto; cursor: pointer; }
+.viewer-pdf .pdf-links a:hover, .viewer-pdf .pdf-links a:focus-visible { background: rgba(143, 184, 255, 0.18); outline: 1px solid rgba(80, 120, 200, 0.5); }
+/* pdf.js's text layer (its pdf_viewer.css, the rules the text needs): transparent text over the canvas, at its place. */
+.viewer-pdf .textLayer {
+  position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; z-index: 1;
+  letter-spacing: normal; word-spacing: normal; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
+  caret-color: CanvasText; color-scheme: only light;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.viewer-pdf .textLayer :is(span, br) {
+  color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text;
+}
+.viewer-pdf .textLayer > :not(.markedContent), .viewer-pdf .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.viewer-pdf .textLayer .markedContent { display: contents; }
+.viewer-pdf .textLayer span[role="img"] { user-select: none; cursor: default; }
+.viewer-pdf .textLayer ::selection { background: rgba(0, 90, 255, 0.28); color: transparent; }
+.viewer-pdf .textLayer br::selection { background: transparent; }
+.viewer-pdf .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.viewer-pdf .textLayer.selecting .endOfContent { top: 0; }
+.viewer-pdf [data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.viewer-pdf [data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.viewer-pdf [data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 /* Tokens of the text view (CodeMirror's classHighlighter), in the palette's cool tones. */
 .tok-keyword, .tok-tagName { color: #c3a6ff; }
 .tok-string, .tok-inserted { color: #a8d8a0; }

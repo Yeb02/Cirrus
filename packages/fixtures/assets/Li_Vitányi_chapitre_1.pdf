@@ -1,0 +1,108 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Annots [11 0 R 12 0 R 13 0 R 14 0 R] >>
+endobj
+6 0 obj
+<< /Length 1120 >>
+stream
+BT /F2 20 Tf 72 770 Td (Chapitre 1 \227 Pr\351liminaires) Tj ET
+BT /F1 10 Tf 72 745 Td (Ming Li et Paul Vit\341nyi, An Introduction to Kolmogorov Complexity and Its Applications) Tj ET
+BT /F1 10 Tf 72 730 Td (Fichier d\222exemple de la base de test de Cirrus \(publication fictive, trois pages\).) Tj ET
+BT /F2 13 Tf 72 694 Td (Sommaire) Tj ET
+BT /F1 12 Tf 90 668 Td (1.1  Notations et d\351finitions . . . . . . . . . . . . . . . page 2) Tj ET
+BT /F1 12 Tf 90 648 Td (1.2  Complexit\351 de Kolmogorov . . . . . . . . . . . . . . page 3) Tj ET
+BT /F1 12 Tf 72 600 Td (Ce chapitre fixe les notations du livre : cha\356nes binaires, longueur |x|, codes) Tj ET
+BT /F1 12 Tf 72 584 Td (pr\351fixes et machines de Turing universelles. La complexit\351 de Kolmogorov d\222une) Tj ET
+BT /F1 12 Tf 72 568 Td (cha\356ne est la longueur du plus court programme qui l\222\351crit, \340 une constante pr\350s.) Tj ET
+BT /F1 12 Tf 72 520 Td (Page de r\351f\351rence : https://example.org/complexite-de-kolmogorov) Tj ET
+BT /F1 12 Tf 72 500 Td (\311crire \340 l\222auteur : auteur@example.org) Tj ET
+BT /F1 10 Tf 294.5 40 Td (1) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 8 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Annots [15 0 R] >>
+endobj
+8 0 obj
+<< /Length 829 >>
+stream
+BT /F2 16 Tf 72 770 Td (1.1  Notations et d\351finitions) Tj ET
+BT /F1 12 Tf 72 730 Td (Une cha\356ne binaire x est un mot sur l\222alphabet {0, 1} ; |x| est sa longueur,) Tj ET
+BT /F1 12 Tf 72 714 Td (et e la cha\356ne vide. Un code est pr\351fixe si aucun de ses mots n\222est le d\351but) Tj ET
+BT /F1 12 Tf 72 698 Td (d\222un autre : il se lit sans s\351parateur. L\222in\351galit\351 de Kraft borne alors les) Tj ET
+BT /F1 12 Tf 72 682 Td (longueurs l\(i\) de ses mots : la somme des 2^-l\(i\) vaut au plus 1.) Tj ET
+BT /F1 12 Tf 72 650 Td (Une machine de Turing pr\351fixe U est universelle si elle simule toute autre) Tj ET
+BT /F1 12 Tf 72 634 Td (machine pr\351fixe, pour un programme allong\351 d\222une longueur fixe.) Tj ET
+BT /F1 12 Tf 72 560 Td (\253 Retour au sommaire \273) Tj ET
+BT /F1 10 Tf 294.5 40 Td (2) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 10 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Annots [16 0 R] >>
+endobj
+10 0 obj
+<< /Length 697 >>
+stream
+BT /F2 16 Tf 72 770 Td (1.2  Complexit\351 de Kolmogorov) Tj ET
+BT /F1 12 Tf 72 730 Td (K\(x\) = min { |p| : U\(p\) = x }, o\371 U est une machine universelle pr\351fixe.) Tj ET
+BT /F1 12 Tf 72 714 Td (Th\351or\350me d\222invariance : pour deux machines universelles U et V, il existe) Tj ET
+BT /F1 12 Tf 72 698 Td (une constante c telle que |K_U\(x\) - K_V\(x\)| <= c pour toute cha\356ne x.) Tj ET
+BT /F1 12 Tf 72 666 Td (La plupart des cha\356nes sont incompressibles : moins de 2^\(n-c\) cha\356nes) Tj ET
+BT /F1 12 Tf 72 650 Td (de longueur n ont une complexit\351 inf\351rieure \340 n - c.) Tj ET
+BT /F1 12 Tf 72 540 Td (\253 Retour au sommaire \273) Tj ET
+BT /F1 10 Tf 294.5 40 Td (3) Tj ET
+endstream
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Link /Rect [90 665 486 678.8] /Border [0 0 0] /Dest [7 0 R /XYZ null 842 null] >>
+endobj
+12 0 obj
+<< /Type /Annot /Subtype /Link /Rect [90 645 474 658.8] /Border [0 0 0] /Dest [9 0 R /XYZ null 842 null] >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Link /Rect [192 517 456 530.8] /Border [0 0 0] /A << /S /URI /URI (https://example.org/complexite-de-kolmogorov) >> >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Link /Rect [192 497 300 510.8] /Border [0 0 0] /A << /S /URI /URI (mailto:auteur@example.org) >> >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Link /Rect [72 557 204 570.8] /Border [0 0 0] /Dest [5 0 R /XYZ null 842 null] >>
+endobj
+16 0 obj
+<< /Type /Annot /Subtype /Link /Rect [72 537 204 550.8] /Border [0 0 0] /Dest [5 0 R /XYZ null 842 null] >>
+endobj
+xref
+0 17
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000326 00000 n 
+0000000500 00000 n 
+0000001672 00000 n 
+0000001825 00000 n 
+0000002705 00000 n 
+0000002859 00000 n 
+0000003608 00000 n 
+0000003732 00000 n 
+0000003856 00000 n 
+0000004017 00000 n 
+0000004159 00000 n 
+0000004283 00000 n 
+trailer
+<< /Size 17 /Root 1 0 R >>
+startxref
+4407
+%%EOF

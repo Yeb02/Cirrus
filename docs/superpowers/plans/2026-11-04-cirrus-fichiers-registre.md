@@ -738,3 +738,143 @@ Relecture : `task-5-rereview-1.md`. Les six points de la correction 1 sont régl
   - Une image que l'ajustement réduit garde l'ajustement pour borne basse.
   - Coût si faux : une ligne.
 - Le commentaire d'`ImageViewer` et la ligne `imageFitMaxZoom` du réglage de la tâche 5 disent désormais 4 (Mineur de la relecture).
+
+## Tâche 6 : PDF — lecteur, vignettes, liens
+
+### Mesures
+
+- Suite complète : 560 tests sur 560 (549 + 11 : 8 dans `pdfLayout.test.ts`, 1 dans `navigation.test.ts`, 1 dans `params.test.ts`, 1 dans `build.test.ts` des fixtures). Le test des vignettes de `viewers.test.ts` couvre les PDF. `tsc` : `app`, `view` et `fixtures` sans erreur.
+  - Avant le code : `pdfLayout.test.ts` échouait au chargement, faute de `files/pdfLayout.ts`, et le test des fixtures faute de `src/pdf.ts`. `externalUrlAllowed is not a function` ; `thumbFor` rendait `null` au lieu de `'pdf'` ; `pdfPagesAhead` valait `undefined` au lieu de 1.
+- pdf.js, installé le 2026-11-04 par `npm install -w packages/app` : `pdfjs-dist` 6.5.438, la dernière version stable (publiée le 2026-11-01), figée exactement dans `package.json` et par `package-lock.json`.
+  - 3 paquets ajoutés à `node_modules`, 75 Mo sur le disque : `pdfjs-dist`, 37 Mo, et sa dépendance facultative `@napi-rs/canvas` avec son binaire `win32-x64-msvc`, 38 Mo. Ce dernier sert pdf.js sous Node seulement ; l'app ne le charge jamais.
+  - `npm audit` donne les 30 alertes d'avant, toutes de `msdf-bmfont-xml` ; aucune ne vient des nouveaux paquets.
+- Ce qui est copié dans l'interface construite (`out/renderer`) :
+  - le travailleur de pdf.js, `assets/pdf.worker.min-*.mjs`, tel quel (`?url`) : 1 271 915 octets ;
+  - pdf.js et `files/pdf.ts`, dans un morceau à part (`assets/pdf-*.js`, non minifié comme toute la construction) : 802 969 octets, lu à la première vignette ou vue d'un PDF ; le lecteur, `assets/PdfViewer-*.js` : 22 827 octets ;
+  - les données de pdf.js, sous leurs propres noms dans `pdfjs/` (greffon `pdfjsData` d'`electron.vite.config.ts`) :
+    - `cmaps/` : 169 fichiers, 1 167 747 octets ;
+    - `standard_fonts/` : 16 fichiers, 798 046 octets ;
+    - `wasm/` : 11 fichiers, 910 945 octets (décodeurs JPEG 2000 et JBIG2, profils de couleur, leurs replis en JavaScript, leurs licences ; sans `quickjs`, le moteur des scripts de formulaires) ;
+    - `iccs/` : 2 fichiers, 15 017 octets ;
+  - le paquet de départ passe de 1 254 206 à 1 258 388 octets (+4 182, mesuré sur a4fbef4 dans une copie de travail jetable) : il ne contient pas pdf.js. La feuille de style passe de 20 573 à 24 691 octets ;
+  - `out/renderer` passe de 4 373 790 à 9 371 126 octets (+4,77 Mo).
+- Deux PDF de 2 000 pages de 40 Ko (78,5 Mo, une page sur sept en paysage), écrits pour la mesure, hors dépôt :
+  - avant le transport par plages (voir les décisions) : `getDocument({ url })` sur `cirrus-file:` lit le fichier entier, en une réponse 200 de 82 334 081 octets, dès la vignette ;
+  - arbre de pages équilibré, 6 enfants par nœud, comme l'écrit pdfTeX :
+    - vignette : 4 requêtes, 248 Ko ;
+    - plein écran, le document déjà ouvert par sa vignette : première page dessinée 104 ms après le double-clic ;
+    - ouvert à froid à la page 1000 (« au même endroit », vignettes coupées par `thumbMaxMb` à 0) : premier canevas 146 à 158 ms après le double-clic, 7 requêtes, 440 Ko ;
+    - une séance entière (page 1, page 1000, 40 crans de molette de 400 px, page 1001, retour) : 13 requêtes, 0,8 Mo ;
+    - pendant les 40 crans : aucune tâche longue (plus de 50 ms) sur le fil de l'interface, au plus 4 canevas à la fois ;
+  - toutes les pages sous la racine (le PDF « à plat ») : pdf.js lit d'avance chaque enfant de la racine (`Catalog.getPageDict`), quel que soit le chargeur :
+    - en plein écran, il lit donc tout : première page en 1,3 s, 1 257 requêtes, 78,5 Mo ;
+    - sa vignette s'arrête au budget de 4 Mo (64 requêtes, 3,96 Mo) et montre l'icône du PDF.
+  - Sept vignettes, dont ces deux PDF, en 1,1 à 1,6 s depuis le clic sur le nœud.
+- Captures, quatre suites neuves (A à D) :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel, à chaque suite ;
+  - contre `plan4a` : les 6 d'avant à 0 pixel, à chaque suite ;
+  - deux nouvelles, prises de la suite B : `plein-ecran-pdf` et `popup-vignettes`. B, C et D sont identiques au pixel pour elles ; D est à 0 pixel contre `plan4a`, 8 sur 8.
+  - La suite A montrait `plein-ecran-pdf` à 64 % au lieu de 55 % : un des neuf clics sur « − » arrivait avant la vue. Corrigé (voir les décisions).
+  - Regardées :
+    - `plein-ecran-pdf` : le chapitre de trois pages à 55 %, la page 1 entière (son sommaire, ses accents, ses adresses) et le haut de la page 2 ; « Page 1 / 3 », le bouton du système dans l'en-tête ;
+    - `popup-vignettes` : le pop-up de la publication, ses deux PDF avec la vignette de leur première page, de 64 pixels ; celle du chapitre montre ses lignes.
+- Essai de l'app construite par CDP. Le pilote est hors dépôt, sur une base de test, un profil et un TEMP temporaires, avec de vrais clics, double-clics, glissements, molettes, touches et dépôts de fichiers. Son principal remplace `shell.openExternal` par un enregistreur : aucun navigateur ne s'ouvre. 50 vérifications sur 50 passent sur le code final :
+  - vignettes : la première page de chaque PDF lisible en `blob:` de 64 pixels ; l'icône du PDF pour un faux PDF, un PDF absent du magasin et le PDF à plat (budget) ; `thumbMaxMb` à 0 : aucun PDF lu ;
+  - aperçu : ajusté à la largeur, marges ôtées ; 3 cases, un canevas pour la page en vue et un de plus ; la densité de l'écran ; l'aperçu agrandi par son coin s'ajuste de nouveau ;
+  - plein écran : le focus aux pages ; le texte se choisit à la souris, et Ctrl+C le copie (l'événement `copy` porte « Chapitre 1 — Préliminaires », et rien ne l'empêche ; le presse-papiers du système n'est pas lisible depuis cette session, `Get-Clipboard` y échoue aussi) ;
+  - liens : le sommaire mène en haut des pages 2 et 3, « Retour au sommaire » à la page 1 ; un lien `https:` et un lien `mailto:` vont au système ; des liens `javascript:`, `file:`, `ftp:`, `tel:` et `cirrus:` ne sont pas des liens ; le principal refuse `openUrl` pour `file:`, `javascript:` et `cirrus:` (« Lien refusé ») ;
+  - le champ de page : 2 puis Entrée mène en haut de la page 2, 9 nulle part ; Échap rend le focus aux pages sans fermer le plein écran ;
+  - zoom : + et − font un pas de 1,15 ; Ctrl+molette fait un pas par cran, le point sous le curseur y restant au pixel près ; 500 % au plus (« + » inactif), 25 % au moins (« − » inactif, les trois pages en vue) ; « Largeur » ajuste de nouveau ; à 500 %, un dessin de page d'au plus 16 Mpx, étiré ;
+  - Tab ne sort jamais du plein écran ; Échap le quitte ;
+  - le PDF de 2 000 pages : 2 000 cases ; à la page 1000, les canevas du début sont libérés ; une page en paysage prend sa taille une fois lue, plus large que la vue, l'ajustement suivant la première page ; tout passe par plages ;
+  - « au même endroit » : page, décalage et zoom retrouvés au plein écran rouvert, puis après un redémarrage de l'app ;
+  - une page tournée d'un quart : en paysage, son texte vertical dans la page ;
+  - au plus `pdfDocsKept` (4) documents ouverts : le plus ancien est relu, un récent non ;
+  - un seul travailleur pdf.js pour tous les documents, chargé de l'app (`file:`), jamais le « fake worker » ; il compile du WebAssembly ;
+  - aucune violation de la CSP, ni dans la page ni dans le travailleur ; aucune requête vers le réseau.
+- Deux essais de plus, sur l'app construite, puis sur le serveur de dev (`electron-vite dev` en mode capture, sur une base de test) :
+  - un PDF aux polices non incorporées : Symbol et ZapfDingbats lisent `standard_fonts/FoxitSymbol.pfb` et `FoxitDingbats.pfb` ; une police CID japonaise lit `cmaps/UniJIS-UCS2-H.bcmap` et `Adobe-Japan1-UCS2.bcmap`. Le texte s'affiche et se lit (« αβγδπθ », « 日本語テキスト ») ;
+  - une image JPEG 2000 : `wasm/openjpeg.wasm` est lu, l'image se décode dans le travailleur, sans le repli en JavaScript ;
+  - aucune violation de la CSP.
+- Contrôles :
+  - le pilote a trouvé trois défauts, corrigés : la vignette d'un PDF de 80 Mo lisait le fichier entier ; la file des vignettes restait bloquée après l'échec d'un document ; l'ajustement passait de 195 à 138 % en découvrant une page en paysage ;
+  - un `WebAssembly.compile` essayé dans la page, et non dans le travailleur, a levé l'écouteur de la CSP : la page refuse bien WebAssembly ; pdf.js n'en a pas besoin dans la page.
+
+### Décisions
+
+- Ruling: **les plages par un transport à nous** (`StoreRanges`, un `PDFDataRangeTransport`), au lieu du `getDocument({ url: fileUrl(ref), disableAutoFetch: true })` du plan.
+  - pdf.js 6 ne demande des plages qu'aux adresses `http:` et `https:` (`isHttp` de son chargeur XHR) : sur `cirrus-file:`, il lit le fichier entier (mesuré ci-dessus).
+  - Le transport fait un `fetch` avec `Range` pour chaque plage que pdf.js demande, de 64 Ko (sa taille par défaut, qui n'est pas un réglage : le grain de ses lectures). La tête du fichier, sa première plage, est lue avant par `readHead` : un fichier absent du magasin le dit en français. Un fichier qui tient dans la tête est lu une fois.
+  - `disableStream` accompagne `disableAutoFetch`, comme l'exige sa documentation.
+  - Options : l'adresse du plan, qui lit tout ; servir l'app par `http:` ; un transport (choix).
+  - Coût si faux : une classe de 50 lignes.
+- Ruling: **la vignette d'un PDF lit au plus `thumbMaxMb`**, puis montre l'icône du PDF.
+  - Le contrôleur la voulait à toute taille, bornée par les plages, `disableAutoFetch` et la première page. Cela tient pour un arbre de pages équilibré. Mais pdf.js lit en entier un PDF dont toutes les pages pendent de la racine, ou un PDF abîmé (« Indexing all PDF objects »).
+  - Le budget compte les octets lus, tête comprise. Il est levé dès qu'une vue tient le document : une vue lit ce qu'elle montre.
+  - La règle du plan se lit donc toujours « ouvrir un pop-up ne lit aucun fichier au-delà de `thumbMaxMb` », pour les PDF aussi. `thumbFor` rend `'pdf'` à toute taille. Le libellé de `thumbMaxMb` devient « Lecture maximale pour la vignette d’une image ou d’un PDF (Mo) », celui de `thumbPx` « Taille des vignettes d’images et de PDF (px) ».
+  - Options : sans borne, contre la règle du pop-up ; la taille du fichier, comme pour les images, qui priverait de vignette les grands PDF bien faits ; les octets lus (choix).
+  - Coût si faux : un grand PDF à plat montre son icône dans le pop-up.
+- Ruling: **un document qui ne peut plus être lu le dit.** Fermé pendant qu'il s'ouvre ou qu'il lit une page, pdf.js laisse ses promesses en attente pour toujours ; le pilote l'a montré, la file des vignettes restait bloquée. Chaque document a sa propre promesse d'échec (`failure`), que les vignettes et la vue courent contre celles de pdf.js. La vue dit alors « n’a pas pu être lu ». Coût si faux : nul.
+- Ruling: **un seul travailleur pour tous les documents**, fait par l'app (`new Worker(url, { type: 'module' })`, puis `PDFWorker.create({ port })`).
+  - pdf.js en ferait un par document.
+  - Il envelopperait aussi toute adresse d'une autre origine — et une page `file:` a une origine opaque — dans un script `blob:`, que la CSP devrait permettre (`worker-src blob:`).
+  - Coût si faux : une ligne.
+- Ruling: **la CSP ne change pas.**
+  - Le travailleur vient de l'app : `'self'` le couvre (`worker-src` retombe sur `default-src`).
+  - Les cartes de caractères, les polices et les décodeurs sont lus par XHR sur `file:`, dans la page (`connect-src 'self'`).
+  - Les polices passent par `FontFace` avec leurs octets : rien pour `font-src`. Les vignettes sont des `blob:`, que `img-src` permettait déjà.
+  - WebAssembly ne tourne que dans le travailleur, qui n'a pas de CSP : son script `file:` n'en porte aucune. Il y décode le JPEG 2000. Ni `'wasm-unsafe-eval'` ni `blob:` ne sont ajoutés.
+  - Vérifié : aucune violation dans la page ni dans le travailleur, sur l'app construite comme sur le serveur de dev.
+  - Coût si faux : une source à ajouter plus tard, avec son `Ruling:`.
+- Ruling: **les données de pdf.js, copiées par un greffon de la construction** (`pdfjsData`) sous leurs propres noms dans `pdfjs/<dossier>/`, puisque pdf.js les demande par leur nom ; les éléments hachés de Vite les renommeraient. Le serveur de dev les sert aux mêmes adresses.
+  - `quickjs` n'est pas copié : Cirrus n'exécute aucun script de PDF.
+  - Le profil CMJN est copié. Mais sur `file:`, pdf.js lit ses données depuis la page (`useWorkerFetch` faux), et coupe alors la gestion des couleurs ICC : le CMJN passe par sa conversion intégrée. Sur le serveur de dev, ICC fonctionne.
+  - Coût si faux : des couleurs CMJN approchées dans l'app construite.
+- Ruling: **au plus `pdfDocsKept` documents restent ouverts, le plus ancien sans vue fermé d'abord.** Un document qu'une vue tient reste ouvert, sinon la vue casserait. Les vignettes en ouvrent aussi, l'une après l'autre (une file), et laissent le document ouvert pour la vue qui suit souvent. Coût si faux : plus de `pdfDocsKept` documents ouverts tant que plus de vues le sont.
+- Ruling: **l'ajustement suit la largeur de la première page**, comme le lecteur de pdf.js, et non celle de la plus large.
+  - Mesuré : ajusté à la plus large, un document passait de 195 à 138 % en découvrant au défilement une page en paysage.
+  - Une page plus large déborde, centrée, et se lit par le défilement horizontal.
+  - Coût si faux : une page en paysage demande un défilement horizontal à l'ajustement.
+- Ruling: **les tailles des pages** : toutes à celle de la première tant qu'elles ne sont pas lues, comme le fait le lecteur de pdf.js. Ouvrir un document ne lit donc que sa première page. Une page lue prend sa taille, et le point du document en haut de la vue y reste. Coût si faux : de petits sauts dans un document aux pages de tailles différentes.
+- Ruling: **les pages virtualisées.**
+  - Toutes les cases sont dans le DOM, en composants mémorisés, redessinés seulement quand la plage ou la mise en page change. Seules les pages de `visiblePages` ± `pdfPagesAhead` ont un canevas, leur texte et leurs liens.
+  - Un canevas qui sort est libéré tout de suite (largeur 0), son dessin annulé, la page nettoyée (`cleanup`). Pendant un zoom, l'ancien dessin reste, étiré, jusqu'au nouveau.
+  - Le dessin se fait sur le fil de l'interface. pdf.js 6 sait dessiner dans un second travailleur par document (`rendererSrc`) ; non retenu : aucune tâche longue mesurée, et un fil de plus par document.
+  - Coût si faux : le dessin dans un travailleur, plus tard.
+- Ruling: **deux réglages de plus que le plan**, groupe « Fichiers » :
+  - `pdfMinZoom` : 0,25, entre 0,05 et 1, « Zoom minimal d’un PDF (× sa taille réelle) ». Sans plancher, « − » mènerait au zoom 0 ;
+  - `pdfCanvasMaxMp` : 16, entre 1 et 64, « Taille maximale du dessin d’une page de PDF (mégapixels) ». À 500 %, une page A4 dessinée à la densité de l'écran ferait 34 Mpx, soit 135 Mo par canevas. Au-delà du plafond, la page est dessinée moins dense, puis étirée.
+  - Les cinq réglages du plan prennent ses valeurs exactes ; `pdfMaxZoom` va par pas de 0,25.
+  - `pdfGapPx` est aussi la marge de l'ajustement.
+  - Coût si faux : un réglage chacun.
+- Ruling: **le zoom** : 1 est la taille réelle de la page (96/72 pixel CSS par point), affichée en pour cent. Ctrl+molette compte ses crans comme le graphe (`scaleWheelStepPx` : un cran est un pas, les petits défilements d'un pavé tactile s'ajoutent), autour du curseur. Les touches + (et =) et −, les boutons « − » et « + » agissent autour du centre de la vue ; « Largeur » ajuste de nouveau. Coût si faux : nul.
+- Ruling: **la page affichée** est celle qui occupe le plus la vue, la première à égalité. Le champ mène en haut de la page demandée. Échap y abandonne la saisie et rend le focus aux pages, sans fermer le plein écran ni l'aperçu. Coût si faux : nul.
+- Ruling: **« au même endroit »** garde la page, la part de la page en haut de la vue, le centre horizontal et le zoom, ou l'ajustement (`fit`), alors refait dans la vue où le document se rouvre. Coût si faux : nul.
+- Ruling: **les liens, une couche à nous** (`getAnnotations`), sans la couche d'annotations de pdf.js ni sa feuille de style.
+  - Un lien vers une adresse que pdf.js a validée et qu'`externalUrlAllowed` accepte (`http:`, `https:`, `mailto:`) passe par `openUrl`, que le principal vérifie de nouveau.
+  - Un lien interne mène à sa destination : `XYZ`, `FitH`, `FitR` et les autres.
+  - Tout autre lien n'en est pas un : pas de case, et le texte dessous reste à choisir.
+  - Les liens sont des `<a href>`. Le piège de Tab du plein écran les prend sans changer `FOCUSABLE` : le lecteur n'a ni `iframe`, ni `embed`, ni `object`.
+  - Coût si faux : nul.
+- Ruling: **la couche de texte** est le `TextLayer` de pdf.js, avec les seules règles de sa feuille de style que le texte demande, recopiées dans `styles.css`, et la bascule `endOfContent` pendant un choix. Coût si faux : nul.
+- Ruling: **le PDF de trois pages de la base de test** : `Li_Vitányi_chapitre_1.pdf`, 4 813 octets, trois pages A4 de texte, avec des liens internes et externes.
+  - Il est écrit par `scripts/make-pdf.ts`, sans dépendance (`src/pdf.ts`), et joint à la publication dans la même action que l'extrait, qui garde sa page unique.
+  - Le test vérifie que l'élément est la sortie du script, octet pour octet, et que sa table de références croisées est exacte.
+  - Coût si faux : nul.
+- Ruling: **`plein-ecran-pdf` montre le chapitre, non `Li_Vitányi_extrait.pdf`** que nomme la parenthèse du plan : le plan demande deux pages à l'écran, et l'extrait n'en a qu'une. Ajusté, à 195 %, le chapitre ne montre qu'un tiers de page : la capture fait neuf pas de « − ». Coût si faux : une capture.
+- Ruling: **les captures attendent les vues après chaque clic** (`viewsSettled`, dans le crochet de capture d'`App`). Sinon, un clic sur « − » pouvait arriver avant le lecteur (suite A). Les autres captures n'en changent pas (0 pixel). Coût si faux : nul.
+- Ruling: **`pageThumbnail(ref, px, kept, budget)`**, quand le plan donnait `(ref, px)` : les documents gardés et le budget viennent des réglages du pop-up. Les vignettes, des `blob:`, sont gardées pour la séance par empreinte, taille, densité et budget, un échec aussi. Elles ne sont pas libérées (quelques Ko chacune). Coût si faux : quelques Ko par PDF et par séance.
+- Ruling: **les messages d'un PDF qui ne s'ouvre pas**, en français :
+  - « « nom » est introuvable dans la base. » ;
+  - « « nom » n’est pas un PDF lisible. » ;
+  - « « nom » est protégé par un mot de passe : ouvre-le avec l’application du système. » ;
+  - « « nom » n’a pas pu être lu. »
+  - Coût si faux : une phrase.
+- Hors de la liste des fichiers du plan :
+  - `App.tsx` (l'attente des captures) et `files/nodeFiles.ts` (`thumbFor`), avec le test des vignettes de `viewers.test.ts` ;
+  - `styles.css` ;
+  - `packages/fixtures` : `src/pdf.ts`, `scripts/make-pdf.ts`, `src/build.ts`, l'élément, `package.json` (`npm run pdf`) et le test ;
+  - `packages/view/tests/params.test.ts`.
+- Limites connues :
+  - fermé pendant sa lecture d'avance, un PDF à plat laisse dans la console du travailleur des rejets non traités de pdf.js (`AbortException: Worker was terminated`), sans effet ;
+  - un PDF protégé par un mot de passe n'a pas été essayé, faute d'un chiffrement fait à la main ; son message est celui de `PasswordException`.

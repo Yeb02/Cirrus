@@ -16,3 +16,19 @@ export function navigationAllowed(url: string, appUrl: string): boolean {
     return false;
   }
 }
+
+/** The schemes a PDF's link may hand to the system (plan 4a, task 6); the app's own scheme comes with plan 4b. */
+const EXTERNAL = new Set(['http:', 'https:', 'mailto:']);
+
+/**
+ * Whether `url`, a link clicked in a PDF (openUrl), may be opened by the system's handler (shell.openExternal): an
+ * address in http:, https: or mailto: only. Anything else — file:, javascript:, cirrus:, the store's cirrus-file:,
+ * ftp:, tel:, a string that is no address — is refused, so a document never has Windows run or open a local file.
+ */
+export function externalUrlAllowed(url: string): boolean {
+  try {
+    return EXTERNAL.has(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}

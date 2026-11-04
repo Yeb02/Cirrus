@@ -33,6 +33,11 @@ export interface CirrusBridge {
    * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.
    */
   openFile(ref: FileRef): Promise<OpenResult>;
+  /**
+   * A PDF's link to an address (plan 4a, task 6): opened by the system's handler (the browser, the mail client) if the
+   * main process takes its scheme (externalUrlAllowed: http:, https:, mailto:); refused otherwise, said in the console.
+   */
+  openUrl(url: string): Promise<void>;
   /** A node's history for its pop-up: its first and last change (ms), and the number of actions. */
   historyOf(id: Id): Promise<HistorySummary>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */

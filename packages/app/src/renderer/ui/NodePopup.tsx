@@ -8,6 +8,7 @@ import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
+import { loading } from '../files/read.ts';
 import { droppedPaths, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor } from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
 import { ContextMenu } from './ContextMenu.tsx';
@@ -141,21 +142,59 @@ const ImageIcon = (props: { px: number }) => (
   </svg>
 );
 
+/** The icon of a PDF whose first page could not be drawn: a sheet, its corner folded, lines of text. */
+const PdfIcon = (props: { px: number }) => (
+  <svg className="thumb icon" viewBox="0 0 24 24" width={props.px} height={props.px} aria-hidden="true">
+    <path d="M6.5 3.5h8l3.5 3.5v13.5h-11.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M14.5 3.5v3.5h3.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M9 11h6.5M9 13.5h6.5M9 16h4.5" stroke="currentColor" strokeWidth="1" opacity="0.6" />
+  </svg>
+);
+
+/**
+ * A PDF's first page as its thumbnail (pageThumbnail: read by ranges whatever the file's size, at most thumbMaxMb),
+ * drawn once per session; pdf.js comes with the reader's chunk, loaded with the first of them. Its box keeps its size
+ * meanwhile; the PDF icon if it cannot be drawn, or not within thumbMaxMb.
+ */
+function PdfThumb(props: { file: FileRef; px: number; kept: number; maxMb: number }) {
+  const [src, setSrc] = useState<string | 'failed' | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loading((async () => {
+      try {
+        const m = await import('../files/pdf.ts');
+        const url = await m.pageThumbnail(props.file, props.px, props.kept, props.maxMb * 2 ** 20);
+        if (live) setSrc(url);
+      } catch (e) {
+        // Past thumbMaxMb is no fault (BudgetError): pdf.ts says it in the console.
+        if (!(e instanceof Error && e.name === 'BudgetError')) console.error(`Vignette de « ${props.file.name} » :`, e);
+        if (live) setSrc('failed');
+      }
+    })());
+    return () => { live = false; };
+  }, [props.file.hash, props.px, props.maxMb]);
+  if (src === 'failed') return <PdfIcon px={props.px} />;
+  if (src === null) return <span className="thumb" style={{ width: props.px, height: props.px }} />;
+  return <img className="thumb" src={src} alt="" draggable={false} width={props.px} height={props.px} />;
+}
+
 /** How a file of the pop-up is opened: its preview beside the pop-up, or its full screen (Panels). */
 export type OpenFile = (name: string, how: 'preview' | 'full') => void;
 
 /**
- * The node's files (spec 12; plan 4a, tasks 4 and 5): name, kind, size, an image's thumbnail (thumbPx, read only once
- * in view, and only up to thumbMaxMb: thumbFor). A click on a file opens its preview, a double-click its full screen
- * (`onOpen`); a click on a file Cirrus has no view for opens it with the system (fileClick). A right click opens the
- * file's menu (fileMenu): full screen, open it with the system's application, rename it in place, take it out of the
- * node (its copy stays in the store). The click that closes the menu does nothing else: the click guard swallows it
- * (clickGuard.ts). « Ajouter des fichiers… » takes files chosen in the system's dialog; files dropped on the pop-up come
- * in too (NodePopup). A new name is checked on Enter (checkFileName), its refusal said under the list; leaving the field
- * keeps it, a refusal then in a toast; Escape gives it up.
+ * The node's files (spec 12; plan 4a, tasks 4 to 6): name, kind, size, an image's thumbnail (thumbPx, read only once
+ * in view, and only up to thumbMaxMb: thumbFor), a PDF's first page (PdfThumb, at most thumbMaxMb read). A click on
+ * a file opens its preview, a double-click its full screen (`onOpen`); a click on a file Cirrus has no view for opens
+ * it with the system (fileClick). A right click opens the file's menu (fileMenu): full screen, open it with the
+ * system's application, rename it in place, take it out of the node (its copy stays in the store). The click that
+ * closes the menu does nothing else: the click guard swallows it (clickGuard.ts). « Ajouter des fichiers… » takes
+ * files chosen in the system's dialog; files dropped on the pop-up come in too (NodePopup). A new name is checked on
+ * Enter (checkFileName), its refusal said under the list; leaving the field keeps it, a refusal then in a toast;
+ * Escape gives it up.
  */
 function Files(props: {
-  id: Id; files: FileRef[]; thumbPx: number; thumbMaxMb: number; actions: NodeFiles; onOpen: OpenFile; onEdit(build: Build): Promise<boolean>;
+  id: Id; files: FileRef[]; thumbPx: number; thumbMaxMb: number; pdfDocsKept: number; actions: NodeFiles; onOpen: OpenFile;
+  onEdit(build: Build): Promise<boolean>;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; file: FileRef } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -202,6 +241,7 @@ function Files(props: {
                   />
                 )}
                 {thumb === 'icon' && <ImageIcon px={props.thumbPx} />}
+                {thumb === 'pdf' && <PdfThumb file={f} px={props.thumbPx} kept={props.pdfDocsKept} maxMb={props.thumbMaxMb} />}
                 {renaming === f.name ? (
                   <input
                     className="name rename" autoFocus defaultValue={f.name} spellCheck={false} aria-label="Nouveau nom du fichier"
@@ -324,8 +364,8 @@ export function NodePopup(props: {
         </dl>
         <h4>Fichiers</h4>
         <Files
-          id={id} files={n.files} thumbPx={props.params.thumbPx} thumbMaxMb={props.params.thumbMaxMb} actions={props.files} onOpen={props.onOpenFile}
-          onEdit={props.onEdit}
+          id={id} files={n.files} thumbPx={props.params.thumbPx} thumbMaxMb={props.params.thumbMaxMb} pdfDocsKept={props.params.pdfDocsKept}
+          actions={props.files} onOpen={props.onOpenFile} onEdit={props.onEdit}
         />
       </>
     );
