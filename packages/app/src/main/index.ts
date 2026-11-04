@@ -1,18 +1,21 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type Action, OpConflictError } from '@cirrus/core';
+import { type Action, type FileRef, type Id, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
 import { withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
+import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, isRunnable, openableCopy } from './files.ts';
 import { lockBase } from './lock.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
- * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. Closing waits, at most
+ * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. It serves the nodes' files
+ * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). Closing waits, at most
  * snapshotQuitMs, for the interface's last snapshot. CIRRUS_CAPTURE=<png> captures the window once the first frame is
  * drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
@@ -48,6 +51,13 @@ if (bench) {
 }
 // Bench and captures keep their own profile: the tabs they open (localStorage) never replace the user's.
 if (bench || capture) app.setPath('userData', join(app.getPath('temp'), 'cirrus-mesure'));
+// The store's files, for fetch, <img> and pdf.js (plan 4a, D1): privileges are given before ready. Without corsEnabled,
+// Chromium refuses fetch and XHR from the page (file://, or the dev server's http://) to the scheme (registry, task 1).
+protocol.registerSchemesAsPrivileged([
+  { scheme: FILE_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
+]);
+/** The read-only copies opened by the system's applications (plan 4a, D5), cleared at the next startup. */
+const copies = join(tmpdir(), 'cirrus-ouverts');
 /**
  * One instance per base (I3 of the final review): every base has its lock (lockBase, taken below). On the user's own
  * base (no CIRRUS_DATA, neither bench nor capture), Electron's lock too, which is per profile: a second launch shows the
@@ -145,6 +155,31 @@ ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { sa
 const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir));
 ipcMain.handle('cirrus:settings:get', () => settings());
 ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => { if (!bench) writeSettings(dir, overrides); });
+/** The largest file an import takes, in bytes (setting maxImportMb). */
+const maxImportBytes = () => withOverrides(settings()).maxImportMb * 2 ** 20;
+// Files dropped on a node or chosen in the dialog, copied into the store before an action refers to them (plan 4a, D6).
+ipcMain.handle('cirrus:files:import', (_e, paths: string[]) => importPaths(dir, paths, maxImportBytes()));
+ipcMain.handle('cirrus:files:pick', async (e) => {
+  const chosen = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile', 'multiSelections'] });
+  return chosen.canceled ? { refs: [], refused: [] } : importPaths(dir, chosen.filePaths, maxImportBytes());
+});
+// A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
+// instead, never run (plan 4a, D5).
+ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
+  try {
+    const copy = openableCopy(dir, ref, copies);
+    if (isRunnable(ref.name)) {
+      shell.showItemInFolder(copy);
+      return { ok: true, shown: 'folder' };
+    }
+    const error = await shell.openPath(copy);
+    return error ? { ok: false, message: `Aucune application n’ouvre « ${ref.name} » : ${error}` } : { ok: true, shown: 'app' };
+  } catch (e) {
+    const reason = (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'il manque dans la base' : e instanceof Error ? e.message : String(e);
+    return { ok: false, message: `« ${ref?.name} » ne peut pas être ouvert : ${reason}.` };
+  }
+});
+ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));
 // An edit computed by the interface (spec 4: only this process writes), each "before" checked against the base. A
 // conflicting record refuses it. Returns the journal number of its last line.
 ipcMain.handle('cirrus:commit', (_e, action: Action) => {
@@ -235,7 +270,10 @@ void app.whenReady().then(() => {
     return;
   }
   markNow('baseOpened');
+  protocol.handle(FILE_SCHEME, (request) => blobResponse(dir, request));
   createWindow();
+  // The copies of earlier sessions, while the window loads; measuring runs leave the user's alone.
+  if (!bench && !capture) cleanCopies(copies);
 });
 app.on('window-all-closed', () => {
   store?.close();

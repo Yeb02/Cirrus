@@ -50,6 +50,15 @@ test('un choix hors liste et un nombre non fini sont ignorés', () => {
   expect(withOverrides({ background: 'grid', groupHues: [10, 20] })).toMatchObject({ background: 'grid', groupHues: [10, 20] });
 });
 
+test('taille maximale d’un fichier importé : 200 Mo, de 1 à 4096, réglage avancé du groupe « Fichiers » (plan 4a)', () => {
+  expect(DEFAULT_PARAMS.maxImportMb).toBe(200);
+  expect(PARAM_SPECS.find((s) => s.key === 'maxImportMb')).toEqual({
+    key: 'maxImportMb', label: 'Taille maximale d’un fichier importé (Mo)', section: 'avancé', group: 'Fichiers', kind: 'number', min: 1, max: 4096, step: 1,
+  });
+  expect(withOverrides({ maxImportMb: 1e6 }).maxImportMb).toBe(4096);
+  expect(withOverrides({ maxImportMb: 0 }).maxImportMb).toBe(1);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

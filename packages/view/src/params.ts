@@ -119,6 +119,9 @@ export interface RenderParams {
   snapshotIdleMs: number;
   /** and at closing, which waits for it this long at most. */
   snapshotQuitMs: number;
+  // Files (plan 4a)
+  /** A larger file is refused at import (the main process reads it through withOverrides, as snapshotQuitMs). */
+  maxImportMb: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -236,6 +239,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   snapshotAfterActions: 200,
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
+  maxImportMb: 200,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -378,6 +382,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('snapshotAfterActions', 'Actions après lesquelles l’instantané de la base est refait', A, 'Base', 10, 10000, 10),
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),
+  num('maxImportMb', 'Taille maximale d’un fichier importé (Mo)', A, 'Fichiers', 1, 4096, 1),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

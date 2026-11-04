@@ -1,4 +1,6 @@
 /// <reference types="vite/client" />
+import type { FileRef, Id } from '@cirrus/core';
+import type { HistorySummary, ImportResult } from '../main/files.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -17,6 +19,19 @@ export interface CirrusBridge {
   onQuit(fn: () => void): () => void;
   /** Ready to close (after the last snapshot): the main process closes the window. */
   quitReady(): void;
+  /** A dropped file's path on the disk; '' for a file that is not on it (made in the page, or not a File). */
+  pathForFile(file: File): string;
+  /** Copies files into the store (plan 4a, D6): their references, and the refused ones with their reason in French. */
+  importFiles(paths: string[]): Promise<ImportResult>;
+  /** The same for files chosen in the system's dialog; empty lists when nothing is chosen. */
+  pickFiles(): Promise<ImportResult>;
+  /**
+   * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
+   * instead (`shown: 'folder'`). `message`, in French, says why it could not be.
+   */
+  openFile(ref: FileRef): Promise<{ ok: true; shown: 'app' | 'folder' } | { ok: false; message: string }>;
+  /** A node's history for its pop-up: its first and last change (ms), and the number of actions. */
+  historyOf(id: Id): Promise<HistorySummary>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */
