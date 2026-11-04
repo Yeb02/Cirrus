@@ -141,8 +141,10 @@ export interface RenderParams {
   imageMaxZoom: number;
   /** which enlarges an image smaller than the view at most this many times (1: shown at its own size). */
   imageFitMaxZoom: number;
-  /** An image's thumbnail in its node's pop-up. */
+  /** An image's thumbnail in its node's pop-up, */
   thumbPx: number;
+  /** read only for an image this large at most; a larger one shows its kind's icon. */
+  thumbMaxMb: number;
   /** The files whose view is kept (« au même endroit »), the one left longest ago forgotten first. */
   viewStatesKept: number;
   // Pop-ups (plan 4a): floating panels in window pixels
@@ -284,8 +286,9 @@ export const DEFAULT_PARAMS: RenderParams = {
   tableMarginPx: 240,
   imageZoomSpeed: 0.0015,
   imageMaxZoom: 32,
-  imageFitMaxZoom: 1,
+  imageFitMaxZoom: 4,
   thumbPx: 64,
+  thumbMaxMb: 4,
   viewStatesKept: 200,
   popupWidthPx: 380,
   popupHeightPx: 460,
@@ -447,6 +450,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('imageMaxZoom', 'Zoom maximal d’une image (× sa taille réelle)', A, 'Fichiers', 1, 256, 1),
   num('imageFitMaxZoom', 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', A, 'Fichiers', 1, 32, 0.5),
   num('thumbPx', 'Taille des vignettes d’images (px)', A, 'Fichiers', 24, 256, 1),
+  num('thumbMaxMb', 'Taille maximale d’une image pour sa vignette (Mo)', A, 'Fichiers', 0, 64, 1),
   num('viewStatesKept', 'Fichiers dont la vue est gardée (au même endroit)', A, 'Fichiers', 10, 5000, 10),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),

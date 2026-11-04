@@ -581,7 +581,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Un tableau coupé par `tableMaxRows` dit aussi « Seules les N premières lignes sont affichées. ». Sans ce bandeau, la coupure d'un CSV de 150 000 petites lignes resterait muette.
   - Un tableau lu jusqu'au plafond d'octets perd sa dernière ligne, probablement coupée, sauf si le plafond de lignes est venu avant.
   - Coût si faux : une phrase.
-- Ruling: **une image ajustée n'est pas agrandie.**
+- Ruling: **une image ajustée n'est pas agrandie** (remplacé à la correction 1, ci-dessous : elle l'est jusqu'à 4 fois).
   - L'ajustement fait tenir l'image entière dans la vue, sans la grandir au-delà de sa taille : c'est l'usage des navigateurs et des visionneuses. Une image plus petite que la vue s'affiche donc à sa taille, et le double-clic n'y change rien.
   - Le zoom reste entre l'ajustement et `imageMaxZoom`. Le glissement garde l'image dans la vue : un axe que la vue contient en entier reste centré.
   - L'image est dessinée à sa taille zoomée, et non agrandie par une transformation, pour qu'un SVG reste net.
@@ -603,7 +603,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - `placeAt` appliqué au coin du pop-up, la lettre du plan, mettrait l'aperçu sur le pop-up dès qu'il se retourne.
   - Coût si faux : nul.
 - Ruling: **un aperçu non épinglé à la fois** (`withFile`). Un clic sur un autre fichier remplace l'aperçu non épinglé. Le pop-up et les panneaux épinglés restent. Un fichier déjà en aperçu passe devant, et n'en ouvre pas un second. Coût si faux : une règle.
-- Ruling: **un aperçu et le plein écran suivent leur fichier** (`followTarget`, `followPanels`).
+- Ruling: **un aperçu et le plein écran suivent leur fichier** (`followTarget`, `followPanels`) (remplacé à la correction 1, ci-dessous : le fichier est trouvé par son nom seulement).
   - La cible d'un fichier garde son nom et, une fois trouvée, son empreinte (`PanelTarget.hash`, facultatif). `resolveTarget` cherche par le nom, puis par l'empreinte : un renommage est suivi, une nouvelle version aussi, et l'annulation de l'un ou de l'autre. La cible est ensuite ancrée sur le fichier trouvé.
   - Sans cela, renommer un fichier depuis son pop-up ferait dire à son aperçu que le fichier n'est plus là.
   - Le plein écran se ferme quand `followTarget` devient null (Review Focus 5) : fichier retiré, son ajout annulé, nœud supprimé. C'est la fonction pure testée, bâtie sur `resolveTarget`.
@@ -615,13 +615,13 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Le plein écran est au `z-index` 50, au-dessus des dialogues (40). Les notifications passent de 20 à 60, au-dessus de lui : un échec de « Ouvrir avec l’application du système » s'y lit. Elles ne recouvrent rien dans les captures (0 pixel).
   - Le plein écran prend le focus, pour que les touches ne passent pas au graphe, et le rend en se fermant.
   - Coût si faux : nul.
-- Ruling: **Échap, Ctrl+F et Ctrl+Z dans un texte.**
+- Ruling: **Échap, Ctrl+F et Ctrl+Z dans un texte** (Ctrl+Z et le champ modifiable remplacés à la correction 1, ci-dessous).
   - Le raccourci Échap de CodeMirror (réduire la sélection) est retiré de son clavier par défaut : Échap ferme le plein écran ou l'aperçu non épinglé, même avec du texte choisi. Seule la recherche le garde pour se fermer, et le plein écran ne se ferme qu'au second Échap.
   - Le texte est un champ modifiable en lecture seule (`EditorState.readOnly`), comme le veut la recherche au clavier. Ctrl+Z et Ctrl+Y y restent donc au champ, comme dans tout champ (spec 6.4) : ils n'y font rien. Dans un tableau ou une image, ils défont et refont les actions de l'app.
   - Les textes de CodeMirror sont en français (`EditorState.phrases`) : la recherche, « aller à la ligne », le titre d'un caractère de contrôle.
   - Coût si faux : un raccourci.
 - Ruling: **le double-clic.** Son premier clic ouvre l'aperçu, son double-clic le plein écran. En sortant du plein écran, on retrouve donc l'aperçu de ce fichier. Le double-clic ne choisit pas le nom au passage. Options : attendre le délai du double-clic avant d'ouvrir l'aperçu, ce qui retarderait chaque clic. Coût si faux : nul.
-- Ruling (Minor 5 de la relecture de la tâche 4): **le clic qui ferme le menu ne fait rien d'autre.**
+- Ruling (Minor 5 de la relecture de la tâche 4): **le clic qui ferme le menu ne fait rien d'autre** (remplacé à la correction 1, ci-dessous : avalé dans toute l'app).
   - `ContextMenu` passe à `onClose` l'appui qui l'a fermé. Le fichier compare cet appui à celui qu'il reçoit, le même événement natif, et ignore le clic qui suit (`fileClick`, testé). Le clic suivant agit.
   - Options : avaler le prochain clic de la fenêtre, qui risquait d'avaler un clic sans rapport après un glissement ; comparer l'événement (choix).
   - Le menu du graphe ne change pas.
@@ -645,7 +645,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Coût si faux : nul.
 - Ruling: **les couleurs du texte** sont des classes (`classHighlighter` de `@lezer/highlight`, `.tok-*`), colorées dans `styles.css` aux tons de la palette, comme toutes les couleurs de l'interface. Elles ne sont pas des réglages : seules les couleurs du graphe le sont. Le thème de l'éditeur reprend les variables de la feuille de style. Coût si faux : un thème.
 - Ruling: **le langage**, par `LanguageDescription.matchFilename`, l'extension lue sans la casse (« LISEZ-MOI.TXT »). Un carnet `.ipynb` est lu comme du JSON, que `language-data` ne relie pas à cette extension. Un `.tex` est coloré comme du LaTeX (`stex`). Le retour à la ligne vaut pour `txt`, `md` et `log`, comme le dit le plan : pas pour le `.tex`, que le plan 4b éditera. Coût si faux : une ligne.
-- Ruling: **les vignettes** sont des `<img loading="lazy" decoding="async">` du fichier, comme le dit le plan. Une image visible dans la liste est donc lue en entier. La règle « ouvrir un pop-up ne lit aucun fichier entier » vaut pour les textes, les tableaux et les PDF, que le pop-up ne lit pas. Coût si faux : des vignettes faites par le principal.
+- Ruling: **les vignettes** (remplacé à la correction 1, ci-dessous : plafonnées par `thumbMaxMb`) sont des `<img loading="lazy" decoding="async">` du fichier, comme le dit le plan. Une image visible dans la liste est donc lue en entier. La règle « ouvrir un pop-up ne lit aucun fichier entier » vaut pour les textes, les tableaux et les PDF, que le pop-up ne lit pas. Coût si faux : des vignettes faites par le principal.
 - Ruling: **le PDF, en attendant la tâche 6** : son aperçu et son plein écran disent « Aperçu du PDF : à venir ». `Viewer` choisit la vue par genre ; la tâche 6 n'y remplace qu'une branche. Le plein écran d'un PDF offre déjà le système. Coût si faux : nul.
 - Ruling: **`readHead`** lit le corps en flux et le lâche au plafond : même un serveur qui ignorerait la plage n'est pas lu au-delà. Un fichier absent du magasin (404) ou une réponse en erreur lève une `ReadError` en français, que la vue affiche. Coût si faux : nul.
 - Hors de la liste des fichiers du plan :
@@ -654,3 +654,65 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - `ui/panels/FloatingPanel.tsx` (`tools`, les boutons propres d'un panneau : le ⤢) et `ui/panels/geometry.ts` (`placeBeside`) ;
   - `files/nodeFiles.ts` (`offersSystem`, `fileClick`, `fileDoubleClick`, l'action `full`) et son test ;
   - `packages/view/tests/params.test.ts`.
+
+### Correction 1 (relecture de la tâche 5)
+
+Relecture : `task-5-review.md`, 0 Critique, 3 Importants, 8 Mineurs. Les décisions du contrôleur règlent les trois Importants, et les Mineurs 1, 4 et 5 sont repris dans cette correction.
+
+#### Mesures
+
+- Suite complète : 548 tests sur 548 (545 + 3 : le garde des clics, le tour de Tab du plein écran, le choix de la vignette). Le test du plein écran est réécrit sur `resolveTarget`, avec le jumeau. `tsc` : `app` et `view` sans erreur.
+  - Avant le code : `viewers.test.ts` échouait au chargement, faute de `ui/clickGuard.ts`, et le test des réglages, `imageFitMaxZoom` valant 1 au lieu de 4.
+  - Le défaut I1 est reproduit à 0cd21bd par un test jetable : le jumeau `copie_des_notes.md` présent, `notes_lecture.md` retiré, `followTarget` rend le jumeau au lieu de null.
+- Captures, deux suites neuves (E et F) :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel ;
+  - contre `plan4a` : seule `plein-ecran-image` change, de 1,061 % (16 145 pixels), l'image de 32 pixels étant désormais ajustée à 128 pixels. Regardée, puis refaite ;
+  - la suite F est à 0 pixel contre `plan4a`, 6 sur 6. E et F sont identiques au pixel, 17 images sur 17.
+- Le pilote par CDP passe 58 vérifications sur 58 sur le code final. Les 43 premières sont reprises, avec deux d'entre elles changées par les décisions : le renommage pendant un aperçu, et Ctrl+Z sous le plein écran. Les nouvelles vérifications :
+  - une image au-delà de `thumbMaxMb` (1 Mo pour l'essai) montre l'icône de son genre, et aucune requête ne la lit ;
+  - le texte en plein écran n'est pas modifiable mais reçoit le focus, et le plein écran porte `aria-modal` ;
+  - le clic qui ferme le menu du graphe et tombe sur un fichier n'ouvre rien. De même pour le clic qui ferme le menu d'un fichier dans un pop-up épinglé et tombe sur un fichier d'un autre pop-up. Le clic suivant ouvre l'aperçu ;
+  - renommé pendant son aperçu, un fichier n'est plus là. Retiré alors qu'un jumeau de même contenu reste, il n'est plus là non plus ;
+  - Tab et Maj+Tab ne sortent jamais du plein écran, et Ctrl+Z n'y défait rien ;
+  - une image absente du magasin dit « « absente.png » est introuvable dans la base. » ;
+  - le morceau d'un langage retiré de l'app construite : le texte reste, sans couleurs, avec son bandeau ;
+  - le morceau de la vue du texte retiré : un message dans la vue, la fenêtre et le pop-up restent, et une autre vue s'ouvre encore.
+  - Contrôle : le garde des clics non installé, les trois vérifications du clic qui ferme un menu échouent, et l'aperçu s'ouvre à chaque fois.
+
+#### Décisions
+
+- Ruling (I1, décision du contrôleur): **un panneau de fichier trouve son fichier par son nom (`sameName`), jamais par son contenu.**
+  - `PanelTarget` perd son empreinte, et `followTarget` et `followPanels` disparaissent. Le plein écran se ferme quand `resolveTarget` rend null.
+  - Un fichier retiré ferme son plein écran, et son aperçu dit « Ce fichier n’est plus dans le nœud. », même si le nœud garde un jumeau de même contenu. Un fichier renommé aussi. Une nouvelle version, sous le même nom dans une autre casse, reste montrée.
+  - Coût si faux : un fichier renommé ferme les vues qui le montrent.
+- Ruling (I2, décision du contrôleur): **le clic qui ferme un menu contextuel est avalé dans toute l'app.**
+  - `ui/clickGuard.ts` : `ClickGuard` est pur et testé. `guardClicks(window)` l'installe dans `App`, en capture sur la fenêtre.
+  - `ContextMenu` lui donne l'appui qui l'a fermé. Le clic de cet appui est arrêté avant tout le reste, où qu'il tombe : un fichier, un bouton, un autre pop-up. Le double-clic dont le premier appui a fermé le menu est arrêté aussi.
+  - Un clic du clavier ou d'un script (`detail` 0) passe toujours, et le clic d'un autre appui aussi : un appui qui a fermé un menu puis glissé ne retient rien.
+  - Le menu du graphe y passe aussi. Les gestes du graphe vont par appui et relâchement, non par clic : ils ne changent pas, et `GraphView` n'est pas touché.
+  - La comparaison propre à chaque pop-up (`closedBy`) disparaît, et `fileClick` perd son paramètre `dismissed`.
+  - Coût si faux : nul.
+- Ruling (I3, décision du contrôleur, imposé par le plan): **une vignette ne lit l'image que jusqu'à `thumbMaxMb`.**
+  - `thumbMaxMb` vaut 4, entre 0 et 64, « Taille maximale d’une image pour sa vignette (Mo) », groupe « Fichiers ».
+  - Au-delà, la ligne montre l'icône de son genre, à la même taille (`thumbFor`, testé).
+  - La contrainte du plan se lit désormais « ouvrir un pop-up ne lit aucun fichier au-delà de `thumbMaxMb` ».
+  - Coût si faux : une grande photo montre une icône dans le pop-up.
+- Ruling (Mineur 1, décision du contrôleur): **« ajustée à la vue » comprend l'agrandissement.** `imageFitMaxZoom` vaut 4 par défaut. `plein-ecran-image` est refaite : l'image de 32 pixels s'y montre à 128. Coût si faux : une valeur de réglage.
+- Ruling (Mineur 4, décision du contrôleur): **une vue qui échoue ne fait rien tomber.**
+  - `Viewer` est entouré d'une frontière d'erreur. Un morceau qui ne se charge pas, ou une erreur de la vue, affiche « La vue de « nom » n’a pas pu s’ouvrir. » dans la vue ; la cause va à la console. La fenêtre, ses panneaux et les autres vues restent.
+  - Un langage qui ne se charge pas laisse le texte montré, sans couleurs, avec son bandeau.
+  - Une image qui ne se charge pas demande son premier octet (`readHead`). Absente du magasin, elle dit « « nom » est introuvable dans la base. ». Sinon, « Image illisible. ».
+  - Les messages seuls d'une vue (lecture, PDF à venir, aucune vue) sont dans un cadre de vue, et ne recouvrent plus l'en-tête du plein écran.
+  - Coût si faux : nul.
+- Ruling (Mineur 5, décision du contrôleur): **le plein écran est modal.**
+  - Il porte `aria-modal`. Tab y tourne en rond (`tabTarget`, testé), et un focus parti ailleurs y revient.
+  - `App` ne fait pas Ctrl+Z ni Ctrl+Y sous lui. Suppr et les touches du graphe n'atteignent pas le graphe, dont le focus est hors du plein écran.
+  - Le texte n'est plus un champ modifiable (`EditorView.editable.of(false)`), mais garde le focus par un `tabindex`. La recherche au clavier marche toujours (vérifié par le pilote).
+  - Hors du plein écran, dans l'aperçu d'un texte, Ctrl+Z défait donc les actions de l'app, comme dans un tableau ou une image.
+  - Coût si faux : on ne peut pas défaire une action depuis le plein écran.
+- Mineurs non repris (décision du contrôleur) :
+  - aucune capture ne montre de vignette, et les captures ne les attendent pas ;
+  - `viewsSettled` n'attend pas une vue pas encore montée ;
+  - la lecture répétée dans le texte et le tableau ;
+  - le décodage sur le fil de l'interface ;
+  - pas de test des composants.

@@ -7,10 +7,12 @@ import { LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { filesBuild, removeFileBuild, renameFileBuild } from '../src/renderer/actions.ts';
-import { fileClick, fileDoubleClick, fileMenu } from '../src/renderer/files/nodeFiles.ts';
+import { fileClick, fileDoubleClick, fileMenu, thumbFor } from '../src/renderer/files/nodeFiles.ts';
 import { rangeHeader, ReadError, readHead } from '../src/renderer/files/read.ts';
+import { ClickGuard } from '../src/renderer/ui/clickGuard.ts';
+import { tabTarget } from '../src/renderer/ui/FullScreen.tsx';
 import { placeBeside, type Rect } from '../src/renderer/ui/panels/geometry.ts';
-import { followTarget, type Panel, type PanelTarget, previewRect, withFile } from '../src/renderer/ui/panels/Panels.tsx';
+import { type Panel, type PanelTarget, previewRect, resolveTarget, withFile } from '../src/renderer/ui/panels/Panels.tsx';
 import { languageFor } from '../src/renderer/ui/viewers/language.ts';
 import {
   clampView, columnOffsets, columnWidths, columnWindow, fitView, type ImageFrame, isFit, panBy, rowsNotice, rowWindow, toggleFit, truncationNotice, viewOf,
@@ -113,58 +115,115 @@ test('les bandeaux d’une lecture tronquée', () => {
   expect(rowsNotice(100_000)).toBe('Seules les 100 000 premières lignes sont affichées.');
 });
 
-test('plein écran (Review Focus 5) : fermé quand le fichier est retiré, son ajout annulé ou le nœud supprimé ; il suit un renommage et une nouvelle version', () => {
+test('plein écran (Review Focus 5) : le fichier trouvé par son nom seulement — fermé quand il est retiré, même si un jumeau de même contenu reste, renommé, son ajout annulé ou le nœud supprimé', () => {
   const s: State = store.loadState(), mdl = ids.nodes.mdl;
+  const notes = s.nodes.get(mdl)!.files.find((f) => f.name === 'notes_lecture.md')!;
   const full: PanelTarget = { kind: 'file', node: mdl, name: 'notes_lecture.md' };
-  const shown = followTarget(s, full)!;
-  expect(shown.file?.name).toBe('notes_lecture.md');
-  // Re-anchored on the file's content, which the target did not know.
-  const anchored = shown.target;
-  expect(anchored).toEqual({ ...full, hash: shown.file!.hash });
-  expect(followTarget(s, anchored)!.target).toBe(anchored);
-  // Renamed: found by its content, under its new name.
-  applyOps(s, renameFileBuild(mdl, 'notes_lecture.md', 'notes.md')!(s).ops);
-  const renamed = followTarget(s, anchored)!;
-  expect(renamed.file?.name).toBe('notes.md');
-  expect(renamed.target).toEqual({ kind: 'file', node: mdl, name: 'notes.md', hash: anchored.kind === 'file' ? anchored.hash : '' });
-  // A new version dropped (same name, other content): found by its name, with its new content.
-  const version = filesBuild(s, mdl, [{ name: 'notes.md', hash: 'b'.repeat(64), size: 9 }])!(s);
+  expect(resolveTarget(s, full)?.file).toEqual(notes);
+  // A twin: the same content under another name (ruling I1 of the review).
+  applyOps(s, filesBuild(s, mdl, [{ ...notes, name: 'copie_des_notes.md' }])!(s).ops);
+  const twin: PanelTarget = { kind: 'file', node: mdl, name: 'copie_des_notes.md' };
+  expect(resolveTarget(s, twin)?.file?.hash).toBe(notes.hash);
+  // A new version in another case: found by its name, with its new content.
+  const version = filesBuild(s, mdl, [{ name: 'Notes_Lecture.md', hash: 'b'.repeat(64), size: 9 }])!(s);
   applyOps(s, version.ops);
-  const next = followTarget(s, renamed.target)!;
-  expect(next.file).toEqual({ name: 'notes.md', hash: 'b'.repeat(64), size: 9 });
-  // Its addition undone: the old version comes back under the same name, still shown.
+  expect(resolveTarget(s, full)?.file).toEqual({ name: 'Notes_Lecture.md', hash: 'b'.repeat(64), size: 9 });
   applyOps(s, invertAction(version).ops);
-  expect(followTarget(s, next.target)?.file?.hash).toBe(anchored.kind === 'file' ? anchored.hash : '');
-  // Taken out of the node: the full screen closes.
-  applyOps(s, removeFileBuild(mdl, 'notes.md')!(s).ops);
-  expect(followTarget(s, next.target)).toBeNull();
-  // A file added, then the addition undone: closed too.
+  expect(resolveTarget(s, full)?.file).toEqual(notes);
+  // Taken out of the node: closed, though its twin holds the same content.
+  const removal = removeFileBuild(mdl, 'notes_lecture.md')!(s);
+  applyOps(s, removal.ops);
+  expect(resolveTarget(s, full)).toBeNull();
+  expect(resolveTarget(s, twin)?.file?.name).toBe('copie_des_notes.md');
+  applyOps(s, invertAction(removal).ops);
+  // Renamed: no longer the file opened under that name, closed too (ruling I1: the cost accepted).
+  applyOps(s, renameFileBuild(mdl, 'notes_lecture.md', 'notes.md')!(s).ops);
+  expect(resolveTarget(s, full)).toBeNull();
+  // A file added, then the addition undone: closed.
   const added = filesBuild(s, mdl, [{ name: 'nouveau.txt', hash: 'c'.repeat(64), size: 3 }])!(s);
   applyOps(s, added.ops);
-  const nouveau = followTarget(s, { kind: 'file', node: mdl, name: 'nouveau.txt' })!;
+  const nouveau: PanelTarget = { kind: 'file', node: mdl, name: 'nouveau.txt' };
+  expect(resolveTarget(s, nouveau)?.file?.size).toBe(3);
   applyOps(s, invertAction(added).ops);
-  expect(followTarget(s, nouveau.target)).toBeNull();
+  expect(resolveTarget(s, nouveau)).toBeNull();
   // The node deleted everywhere: every file of it closes.
-  const tex = followTarget(s, { kind: 'file', node: mdl, name: 'Enoncé_détaillé.tex' })!;
   applyOps(s, deleteEverywhere(s, mdl).ops);
-  expect(followTarget(s, tex.target)).toBeNull();
-  expect(followTarget(s, { kind: 'node', node: mdl })).toBeNull();
+  expect(resolveTarget(s, { kind: 'file', node: mdl, name: 'Enoncé_détaillé.tex' })).toBeNull();
+  expect(resolveTarget(s, twin)).toBeNull();
 });
 
-test('clic sur un fichier : l’aperçu, ou le système pour un autre genre, une fois ; le double-clic, le plein écran ; un clic qui ferme le menu ne fait rien', () => {
-  expect(fileClick('notes_lecture.md', 1, false)).toBe('preview');
+test('clic sur un fichier : l’aperçu, ou le système pour un autre genre, une fois ; le double-clic, le plein écran', () => {
+  expect(fileClick('notes_lecture.md', 1)).toBe('preview');
   // HTMLElement.click(), as the captures click: no count.
-  expect(fileClick('notes_lecture.md', 0, false)).toBe('preview');
+  expect(fileClick('notes_lecture.md', 0)).toBe('preview');
   // A double-click's second click: the preview is open already.
-  expect(fileClick('notes_lecture.md', 2, false)).toBeNull();
-  expect(fileClick('présentation.pptx', 1, false)).toBe('system');
-  expect(fileClick('présentation.pptx', 2, false)).toBeNull();
-  // The press that closed the file's menu (Minor 5 of the task 4 review): neither a preview nor the system's application.
-  expect(fileClick('notes_lecture.md', 1, true)).toBeNull();
-  expect(fileClick('présentation.pptx', 1, true)).toBeNull();
+  expect(fileClick('notes_lecture.md', 2)).toBeNull();
+  expect(fileClick('présentation.pptx', 1)).toBe('system');
+  expect(fileClick('présentation.pptx', 2)).toBeNull();
   expect(fileDoubleClick('schéma_compression.png')).toBe('full');
   expect(fileDoubleClick('mesures_compression.csv')).toBe('full');
   expect(fileDoubleClick('présentation.pptx')).toBeNull();
+});
+
+test('le clic qui ferme un menu est avalé partout, son double-clic aussi ; le clic suivant, un clic au clavier et le clic d’un autre appui passent (ruling I2)', () => {
+  const g = new ClickGuard();
+  const press = () => ({});
+  // No menu: every click passes, a double-click too.
+  let p = press();
+  g.press(p);
+  expect(g.click(1)).toBe(false);
+  g.press(press());
+  expect([g.click(2), g.dblclick()]).toEqual([false, false]);
+  // A press closes a menu (in whatever pop-up or panel it lands): its click is swallowed, once.
+  p = press();
+  g.press(p);
+  g.dismissedBy(p);
+  expect(g.click(1)).toBe(true);
+  expect(g.click(1)).toBe(false);
+  // The same, followed by a second click: the double-click whose first click closed the menu is swallowed too.
+  p = press();
+  g.press(p);
+  g.dismissedBy(p);
+  expect(g.click(1)).toBe(true);
+  g.press(press());
+  expect([g.click(2), g.dblclick()]).toEqual([false, true]);
+  // The next double-click passes.
+  g.press(press());
+  expect(g.click(1)).toBe(false);
+  g.press(press());
+  expect([g.click(2), g.dblclick()]).toEqual([false, false]);
+  // A press that closed a menu then dragged away (no click): the next press's click passes, and a click of the keyboard
+  // (detail 0) is never one that closed a menu.
+  p = press();
+  g.press(p);
+  g.dismissedBy(p);
+  expect(g.click(0)).toBe(false);
+  g.press(press());
+  expect(g.click(1)).toBe(false);
+});
+
+test('plein écran modal : Tab tourne en rond dans ses éléments, sans jamais en sortir', () => {
+  // Three focusable elements: past the last back to the first, before the first to the last, inside left to the browser.
+  expect(tabTarget(3, 2, false)).toBe(0);
+  expect(tabTarget(3, 0, true)).toBe(2);
+  expect(tabTarget(3, 0, false)).toBeNull();
+  expect(tabTarget(3, 1, true)).toBeNull();
+  // The focus on the full screen itself (or nowhere in it): to the first, or the last backwards.
+  expect(tabTarget(3, -1, false)).toBe(0);
+  expect(tabTarget(3, -1, true)).toBe(2);
+  expect(tabTarget(1, 0, false)).toBe(0);
+  expect(tabTarget(0, -1, false)).toBeNull();
+});
+
+test('vignette : l’image elle-même jusqu’à thumbMaxMb, au-delà l’icône de son genre ; rien pour un autre genre (ruling I3)', () => {
+  const MB = 2 ** 20;
+  expect(thumbFor({ name: 'schéma.png', hash: 'a'.repeat(64), size: 517 }, 4)).toBe('image');
+  expect(thumbFor({ name: 'photo.JPG', hash: 'a'.repeat(64), size: 4 * MB }, 4)).toBe('image');
+  expect(thumbFor({ name: 'photo.jpg', hash: 'a'.repeat(64), size: 4 * MB + 1 }, 4)).toBe('icon');
+  // 0: no image is read for its thumbnail.
+  expect(thumbFor({ name: 'schéma.png', hash: 'a'.repeat(64), size: 517 }, 0)).toBe('icon');
+  expect(thumbFor({ name: 'notes.md', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
+  expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
 });
 
 test('le menu d’un fichier gagne « Ouvrir en plein écran » pour les genres que Cirrus affiche', () => {
@@ -177,16 +236,16 @@ test('le menu d’un fichier gagne « Ouvrir en plein écran » pour les genres 
 test('aperçus : un fichier ouvert ferme l’autre aperçu non épinglé, garde les pop-ups et les épinglés, n’ouvre pas deux fois le même', () => {
   const at = (x: number): Rect => ({ x, y: 100, w: 560, h: 460 });
   const popup: Panel = { id: 1, target: { kind: 'node', node: 'n' }, rect: at(0), pinned: false, z: 1 };
-  let ps = withFile([popup], 'n', 'a.md', 'h1', at(400), 2);
-  expect(ps.map((p) => [p.id, p.target, p.z])).toEqual([[1, popup.target, 1], [2, { kind: 'file', node: 'n', name: 'a.md', hash: 'h1' }, 2]]);
+  let ps = withFile([popup], 'n', 'a.md', at(400), 2);
+  expect(ps.map((p) => [p.id, p.target, p.z])).toEqual([[1, popup.target, 1], [2, { kind: 'file', node: 'n', name: 'a.md' }, 2]]);
   // Another file: its preview replaces the loose one; the pop-up stays.
-  ps = withFile(ps, 'n', 'b.py', 'h2', at(400), 3);
+  ps = withFile(ps, 'n', 'b.py', at(400), 3);
   expect(ps.map((p) => p.id)).toEqual([1, 3]);
   // Pinned, a preview stays when another opens.
-  ps = withFile(ps.map((p) => (p.id === 3 ? { ...p, pinned: true } : p)), 'n', 'c.csv', 'h3', at(400), 4);
+  ps = withFile(ps.map((p) => (p.id === 3 ? { ...p, pinned: true } : p)), 'n', 'c.csv', at(400), 4);
   expect(ps.map((p) => p.id)).toEqual([1, 3, 4]);
   // The same file again (in another case): no second preview, it comes in front where it was; the loose one closes.
-  const again = withFile(ps, 'n', 'B.PY', 'h2', at(999), 5);
+  const again = withFile(ps, 'n', 'B.PY', at(999), 5);
   expect(again.map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 0, 1], [3, 400, 5]]);
 });
 

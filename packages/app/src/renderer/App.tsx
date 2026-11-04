@@ -8,10 +8,11 @@ import { addImported, carriesFiles, type NodeFiles, openNotice, type Refusal } f
 import { viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { liveTabs } from './tabs.ts';
+import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen } from './ui/FullScreen.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
-import { followTarget, type PanelTarget, Panels, type PanelsHandle } from './ui/panels/Panels.tsx';
+import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
@@ -76,8 +77,10 @@ export function App() {
   paramsRef.current = params;
   const panels = useRef<PanelsHandle>(null);
   const graph = useRef<GraphHandle>(null);
-  /** The file in full screen, if any: followed as its preview is (followTarget), closed once it is gone. */
+  /** The file in full screen, if any, by its name: closed once it is gone (resolveTarget). */
   const [full, setFull] = useState<PanelTarget | null>(null);
+  const fullRef = useRef(full);
+  fullRef.current = full;
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
   const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
 
@@ -96,11 +99,12 @@ export function App() {
     }
   };
 
-  // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field they belong to the text (spec 6.4).
+  // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field they belong to the text (spec 6.4). Not
+  // under a full screen: they would change the graph hidden under it (ruling of the task 5 review).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (!session.current || !e.ctrlKey || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
+      if (!session.current || !e.ctrlKey || fullRef.current || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
       const k = e.key.toLowerCase();
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); void session.current.undo().then((r) => report(r, 'Annulé')); }
       else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); void session.current.redo().then((r) => report(r, 'Rétabli')); }
@@ -108,6 +112,9 @@ export function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // A click whose press closed a context menu is swallowed, wherever it lands (clickGuard.ts).
+  useEffect(() => guardClicks(window), []);
 
   // The snapshot is due once nothing has happened for a while: any input starts that wait again.
   useEffect(() => {
@@ -224,10 +231,11 @@ export function App() {
     setActive(live.active);
     return null;
   }
-  // The file in full screen, followed: renamed or in a new version, it stays; gone, the full screen closes (Review Focus 5).
-  const fullNow = full && followTarget(state, full);
-  if (full && fullNow?.target !== full) {
-    setFull(fullNow?.target ?? null);
+  // The file in full screen: a new version of it stays; gone — removed, renamed, its addition undone, its node deleted —
+  // the full screen closes (Review Focus 5).
+  const fullNow = full && resolveTarget(state, full);
+  if (full && !fullNow) {
+    setFull(null);
     return null;
   }
   // The lobby has its own tab, always there: only another plan is added to the open ones.

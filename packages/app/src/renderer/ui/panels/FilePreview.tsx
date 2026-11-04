@@ -13,9 +13,9 @@ const ExpandIcon = () => (
 
 /**
  * A file's preview (plan 4a, task 5): its Viewer in a floating panel, pinned, moved and resized as a node's pop-up; ⤢
- * shows it in full screen. `found`: the file as followTarget finds it, null once it is gone (Review Focus 5): the panel
- * says why (`gone`), its last name in the header. While the file is in full screen (`covered`), its view here is left
- * (its place kept), and comes back where the full screen leaves it.
+ * shows it in full screen. `found`: the file as resolveTarget finds it by its name, null once it is gone (Review Focus 5):
+ * the panel says why (`gone`), its last name in the header. While its content is in full screen (`covered`: views keep
+ * their place by content), its view here is left, its place kept, and comes back where the full screen leaves it.
  */
 export function FilePreview(props: {
   frame: Frame; node: Id; found: FileRef | null; gone: string; covered: boolean; params: RenderParams; views: ViewStates; onFull(): void;

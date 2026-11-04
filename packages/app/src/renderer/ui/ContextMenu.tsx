@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { clickGuard } from './clickGuard.ts';
 
 const stop = (e: React.PointerEvent) => e.stopPropagation();
 
@@ -6,12 +7,10 @@ const stop = (e: React.PointerEvent) => e.stopPropagation();
  * The context menu (spec 9.1), at the click: the graph's (MenuItem of @cirrus/view), or a file's in a pop-up (plan 4a).
  * It stays in the window: moved up and left by what it would overflow (a file low in a pop-up at the window's bottom).
  * Escape or a click elsewhere closes it. Its Escape is taken first, and only closes it: a floating panel under it stays.
- * Closed by a press elsewhere, it hands that press to `onClose`: what the press lands on may then ignore the click it
- * begins, which only meant to close the menu (a file of a pop-up).
+ * Closed by a press elsewhere, it tells the click guard: the click that press begins is swallowed, wherever it lands
+ * (ruling I2 of the task 5 review).
  */
-export function ContextMenu<A extends string>(props: {
-  x: number; y: number; items: { action: A; label: string }[]; onPick(action: A): void; onClose(press?: PointerEvent): void;
-}) {
+export function ContextMenu<A extends string>(props: { x: number; y: number; items: { action: A; label: string }[]; onPick(action: A): void; onClose(): void }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current!, r = el.getBoundingClientRect();
@@ -20,7 +19,11 @@ export function ContextMenu<A extends string>(props: {
   }, [props.x, props.y]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); props.onClose(); } };
-    const away = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) props.onClose(e); };
+    const away = (e: PointerEvent) => {
+      if (ref.current?.contains(e.target as Node)) return;
+      clickGuard.dismissedBy(e);
+      props.onClose();
+    };
     window.addEventListener('keydown', key, true);
     window.addEventListener('pointerdown', away, true);
     return () => { window.removeEventListener('keydown', key, true); window.removeEventListener('pointerdown', away, true); };

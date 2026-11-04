@@ -65,6 +65,9 @@ export function TextViewer(props: ViewProps & { wrap: boolean }) {
         let state = EditorState.create({
           doc: d.text,
           extensions: [
+            // Not editable (no field the app's keys would skip), yet focusable, so that Ctrl+F and the keys reach it;
+            // read-only too, so that the search offers no replacement.
+            EditorView.editable.of(false),
             EditorState.readOnly.of(true),
             EditorState.phrases.of(PHRASES_FR),
             lineNumbers(),
@@ -75,7 +78,7 @@ export function TextViewer(props: ViewProps & { wrap: boolean }) {
             syntaxHighlighting(classHighlighter),
             language.of([]),
             props.wrap ? EditorView.lineWrapping : [],
-            EditorView.contentAttributes.of({ 'aria-label': file.name }),
+            EditorView.contentAttributes.of({ 'aria-label': file.name, tabindex: '0' }),
             THEME,
           ],
         });
@@ -90,10 +93,15 @@ export function TextViewer(props: ViewProps & { wrap: boolean }) {
         }, { passive: true });
         setShown({ banner: truncated ? [truncationNotice(maxMb)] : [] });
         if (props.mode === 'full') v.focus();
+        // A language that could not be loaded leaves the text as it is shown, uncoloured, its banner kept.
         const desc = languageFor(file.name);
         if (desc) {
-          const support = await loading(desc.load());
-          if (!stop.signal.aborted) v.dispatch({ effects: language.reconfigure(support) });
+          try {
+            const support = await loading(desc.load());
+            if (!stop.signal.aborted) v.dispatch({ effects: language.reconfigure(support) });
+          } catch (e) {
+            console.error(`Langage de « ${file.name} » (${desc.name}) :`, e);
+          }
         }
       } catch (e) {
         if (!stop.signal.aborted) setShown({ message: readFailure(file.name, e) });

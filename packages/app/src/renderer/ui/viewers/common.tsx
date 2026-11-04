@@ -16,6 +16,9 @@ export const BINARY = 'Fichier binaire : Cirrus ne peut pas l’afficher.';
 /** A message in the middle of a view: reading, unreadable, nothing to show. */
 export const Message = (props: { text: string }) => <p className="viewer-message">{props.text}</p>;
 
+/** A view that is only a message (no view yet, or none). */
+export const Notice = (props: { text: string }) => <div className="viewer"><Message text={props.text} /></div>;
+
 /** A banner over a view: what a head read leaves out. */
 export const Banner = (props: { lines: string[] }) => (props.lines.length === 0 ? null : <p className="viewer-banner">{props.lines.join(' ')}</p>);
 

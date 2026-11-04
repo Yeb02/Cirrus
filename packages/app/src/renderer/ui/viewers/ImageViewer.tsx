@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../files/kind.ts';
-import { loading } from '../../files/read.ts';
+import { loading, ReadError, readHead } from '../../files/read.ts';
 import { keptView, Message, useKeptView, type ViewProps } from './common.tsx';
 import { clampView, fitView, type ImageFrame, type ImageView, isFit, panBy, type Size, toggleFit, zoomAt } from './views.ts';
 
@@ -20,7 +20,7 @@ export function ImageViewer(props: ViewProps) {
   const img = useRef<HTMLImageElement>(null);
   const [view, setView] = useState<Size | null>(null);
   const [image, setImage] = useState<Size | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [shown, setShown] = useState<{ at: ImageView; fit: boolean } | null>(null);
   const kept = useKeptView(props.views, file.hash);
   const frameOf = (im: Size | null, v: Size | null): ImageFrame | null =>
@@ -120,9 +120,14 @@ export function ImageViewer(props: ViewProps) {
       <img
         ref={img} src={fileUrl(file)} alt={file.name} draggable={false} style={style}
         onLoad={(e) => loaded(e.currentTarget)}
-        onError={() => { setFailed(true); settle.current?.(); }}
+        onError={() => {
+          // Why: a blob missing from the store (readHead's 404, one byte asked) or an image that does not decode.
+          void loading(readHead(file, 1).then(() => 'Image illisible.', (e: unknown) => (e instanceof ReadError ? e.message : 'Image illisible.')))
+            .then(setFailed)
+            .finally(() => settle.current?.());
+        }}
       />
-      {failed && <Message text="Image illisible." />}
+      {failed && <Message text={failed} />}
     </div>
   );
 }

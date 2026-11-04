@@ -8,7 +8,7 @@ import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
-import { droppedPaths, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick } from '../files/nodeFiles.ts';
+import { droppedPaths, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor } from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
@@ -132,30 +132,36 @@ function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; on
   );
 }
 
+/** The icon of an image too large for its thumbnail (thumbMaxMb): a frame, a hill and a sun. */
+const ImageIcon = (props: { px: number }) => (
+  <svg className="thumb icon" viewBox="0 0 24 24" width={props.px} height={props.px} aria-hidden="true">
+    <rect x="3.5" y="5.5" width="17" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    <path d="M5 17l4.5-5 3.5 3.5 2.5-2.5L19 17z" fill="currentColor" opacity="0.55" />
+    <circle cx="15.5" cy="9.5" r="1.5" fill="currentColor" opacity="0.7" />
+  </svg>
+);
+
 /** How a file of the pop-up is opened: its preview beside the pop-up, or its full screen (Panels). */
 export type OpenFile = (name: string, how: 'preview' | 'full') => void;
 
 /**
  * The node's files (spec 12; plan 4a, tasks 4 and 5): name, kind, size, an image's thumbnail (thumbPx, read only once
- * in view). A click on a file opens its preview, a double-click its full screen (`onOpen`); a click on a file Cirrus has
- * no view for opens it with the system (fileClick). A right click opens the file's menu (fileMenu): full screen, open
- * it with the system's application, rename it in place, take it out of the node (its copy stays in the store). The
- * press that closes the menu does nothing else: the click it ends is not one on the file (Minor 5 of the task 4
- * review). « Ajouter des fichiers… » takes files chosen in the system's dialog; files dropped on the pop-up come in too
- * (NodePopup). A new name is checked on Enter (checkFileName), its refusal said under the list; leaving the field keeps
- * it, a refusal then in a toast; Escape gives it up.
+ * in view, and only up to thumbMaxMb: thumbFor). A click on a file opens its preview, a double-click its full screen
+ * (`onOpen`); a click on a file Cirrus has no view for opens it with the system (fileClick). A right click opens the
+ * file's menu (fileMenu): full screen, open it with the system's application, rename it in place, take it out of the
+ * node (its copy stays in the store). The click that closes the menu does nothing else: the click guard swallows it
+ * (clickGuard.ts). « Ajouter des fichiers… » takes files chosen in the system's dialog; files dropped on the pop-up come
+ * in too (NodePopup). A new name is checked on Enter (checkFileName), its refusal said under the list; leaving the field
+ * keeps it, a refusal then in a toast; Escape gives it up.
  */
-function Files(props: { id: Id; files: FileRef[]; thumbPx: number; actions: NodeFiles; onOpen: OpenFile; onEdit(build: Build): Promise<boolean> }) {
+function Files(props: {
+  id: Id; files: FileRef[]; thumbPx: number; thumbMaxMb: number; actions: NodeFiles; onOpen: OpenFile; onEdit(build: Build): Promise<boolean>;
+}) {
   const [menu, setMenu] = useState<{ x: number; y: number; file: FileRef } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** The rename given up by Escape: leaving the field then keeps the old name. */
   const givenUp = useRef(false);
-  /**
-   * The press that closed the menu (ContextMenu hands it over), and whether the last press on a file was it: the menu
-   * closes in the press's capture, before the file sees the same event.
-   */
-  const closedBy = useRef<Event | null>(null), dismissing = useRef(false);
   const pick = (action: FileAction, f: FileRef) => {
     if (action === 'full') props.onOpen(f.name, 'full');
     else if (action === 'system') void props.actions.openWithSystem(f);
@@ -173,29 +179,29 @@ function Files(props: { id: Id; files: FileRef[]; thumbPx: number; actions: Node
       {props.files.length === 0 ? <p className="dim">Aucun fichier.</p> : (
         <ul className="files">
           {props.files.map((f) => {
-            const system = systemOnClick(f.name), image = fileKind(f.name) === 'image';
+            const system = systemOnClick(f.name), thumb = thumbFor(f, props.thumbMaxMb);
             return (
               <li
-                key={f.name} className={`file${system ? ' system' : ''}${image ? ' with-thumb' : ''}`} data-name={f.name}
-                onPointerDown={(e) => { dismissing.current = e.nativeEvent === closedBy.current; }}
+                key={f.name} className={`file${system ? ' system' : ''}${thumb ? ' with-thumb' : ''}`} data-name={f.name}
                 // A double-click opens the full screen, without selecting the name on the way.
                 onMouseDown={(e) => { if (e.detail > 1 && renaming !== f.name) e.preventDefault(); }}
                 // Once, a double-click's second click aside (it would open a second copy of the application).
                 onClick={(e) => {
                   if (renaming === f.name) return;
-                  const act = fileClick(f.name, e.detail, dismissing.current);
+                  const act = fileClick(f.name, e.detail);
                   if (act === 'system') void props.actions.openWithSystem(f);
                   else if (act === 'preview') props.onOpen(f.name, 'preview');
                 }}
                 onDoubleClick={() => { if (renaming !== f.name && fileDoubleClick(f.name)) props.onOpen(f.name, 'full'); }}
                 onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, file: f }); }}
               >
-                {image && (
+                {thumb === 'image' && (
                   <img
                     className="thumb" src={fileUrl(f)} alt="" loading="lazy" decoding="async" draggable={false}
                     width={props.thumbPx} height={props.thumbPx}
                   />
                 )}
+                {thumb === 'icon' && <ImageIcon px={props.thumbPx} />}
                 {renaming === f.name ? (
                   <input
                     className="name rename" autoFocus defaultValue={f.name} spellCheck={false} aria-label="Nouveau nom du fichier"
@@ -236,7 +242,7 @@ function Files(props: { id: Id; files: FileRef[]; thumbPx: number; actions: Node
       {menu && (
         <ContextMenu
           x={menu.x} y={menu.y} items={fileMenu(menu.file.name)} onPick={(a) => pick(a, menu.file)}
-          onClose={(press) => { closedBy.current = press ?? null; setMenu(null); }}
+          onClose={() => setMenu(null)}
         />
       )}
     </>
@@ -317,7 +323,10 @@ export function NodePopup(props: {
           <dt>Identifiant</dt><dd className="id volatile">{id}</dd>
         </dl>
         <h4>Fichiers</h4>
-        <Files id={id} files={n.files} thumbPx={props.params.thumbPx} actions={props.files} onOpen={props.onOpenFile} onEdit={props.onEdit} />
+        <Files
+          id={id} files={n.files} thumbPx={props.params.thumbPx} thumbMaxMb={props.params.thumbMaxMb} actions={props.files} onOpen={props.onOpenFile}
+          onEdit={props.onEdit}
+        />
       </>
     );
   })();

@@ -83,8 +83,9 @@ test('vues des fichiers : plafonds de lecture, tableaux, images, vignettes, vues
     ['tableMarginPx', 240, 'Marge préparée autour de la vue d’un tableau (px)', 0, 2000, 10],
     ['imageZoomSpeed', 0.0015, 'Vitesse du zoom d’une image à la molette', 0.0002, 0.01, 0.0001],
     ['imageMaxZoom', 32, 'Zoom maximal d’une image (× sa taille réelle)', 1, 256, 1],
-    ['imageFitMaxZoom', 1, 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', 1, 32, 0.5],
+    ['imageFitMaxZoom', 4, 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', 1, 32, 0.5],
     ['thumbPx', 64, 'Taille des vignettes d’images (px)', 24, 256, 1],
+    ['thumbMaxMb', 4, 'Taille maximale d’une image pour sa vignette (Mo)', 0, 64, 1],
     ['viewStatesKept', 200, 'Fichiers dont la vue est gardée (au même endroit)', 10, 5000, 10],
   ];
   for (const [key, value, label, min, max, step] of specs) {

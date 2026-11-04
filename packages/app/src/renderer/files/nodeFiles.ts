@@ -117,12 +117,21 @@ export const systemOnClick = (name: string): boolean => fileKind(name) === 'othe
 /**
  * What a click on a file of a pop-up does: its preview, or, for a kind Cirrus has no view for, its system's application.
  * Once: a double-click's second click (`detail` 2) does nothing more (HTMLElement.click(), as the captures click, counts
- * 0). Nothing when its press closed the file's menu (`dismissed`, Minor 5 of the task 4 review): that click only meant
- * to close it.
+ * 0). A click whose press closed a menu never comes here: the click guard swallows it (ui/clickGuard.ts).
  */
-export function fileClick(name: string, detail: number, dismissed: boolean): 'preview' | 'system' | null {
-  if (dismissed || detail > 1) return null;
+export function fileClick(name: string, detail: number): 'preview' | 'system' | null {
+  if (detail > 1) return null;
   return systemOnClick(name) ? 'system' : 'preview';
+}
+
+/**
+ * An image's thumbnail in its node's pop-up: the image itself up to `thumbMaxMb` (the <img> reads it whole), the icon
+ * of its kind past it, so that opening a pop-up reads no file past thumbMaxMb (ruling I3 of the task 5 review); none
+ * for another kind.
+ */
+export function thumbFor(file: FileRef, thumbMaxMb: number): 'image' | 'icon' | null {
+  if (fileKind(file.name) !== 'image') return null;
+  return file.size <= thumbMaxMb * 2 ** 20 ? 'image' : 'icon';
 }
 
 /** A double-click on a file Cirrus shows: its full screen (its first click opened the preview). */
