@@ -1,16 +1,16 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import {
   appendTitle, buildHitIndex, buildIndex, buildInstances, type Camera, computeVisible, CURVE_FIELDS, CURVE_FLOATS, emptySelection, FloatList, type FontData,
-  foldSignature, GLYPH_FIELDS, gridLevels, type HitIndex, IndexList, type Instances, ITEM_TEXTURE_WIDTH, itemTexels, offsetPolygon, type PlanScene,
-  type RenderParams, resumeInstances, rowRuns, type SceneChanges, type SceneIndex, type Selection, SIMPLE_FIELDS, SIMPLE_INTS, simpleMarker,
-  starLayerAlpha, starLayers, starsInRect, texelSlots, textureRows, TITLE_NODE, type TitleSide, updateIndex, vertexNormals, visibleFrom, visibleIntruders,
-  type VisibleSet,
+  foldSignature, GLYPH_FIELDS, gridLevels, type HitIndex, IndexList, InstanceBuffers, type Instances, ITEM_TEXTURE_WIDTH, itemTexels, markerCores, offsetPolygon,
+  type PlanScene, type RenderParams, rowRuns, type SceneChanges, type SceneIndex, type Selection, SIMPLE_FIELDS, starLayerAlpha, starLayers, starsInRect,
+  texelSlots, textureRows, TITLE_NODE, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
 } from '@cirrus/view';
 import type { Gl } from '../gl/context.ts';
 import { Texture2D } from '../gl/texture.ts';
 import { type AttributeSpec, InstanceMesh, Mesh } from './meshes.ts';
 import {
-  ATLAS_UNIT, connectionPrograms, createPrograms, ITEMS_UNIT, NO_GROUP, type Programs, setOutlineColor, setParamUniforms, setView, worldPrograms,
+  ATLAS_UNIT, connectionPrograms, createPrograms, ITEMS_UNIT, NO_GROUP, type Programs, setOutlineColor, setParamUniforms, setView, SIMPLE_GLYPH_VERTICES,
+  worldPrograms,
 } from './shaders.ts';
 
 interface Rect { minX: number; maxX: number; minY: number; maxY: number }
@@ -34,8 +34,6 @@ const TEXT = fields(GLYPH_FIELDS), SIMPLE = fields(SIMPLE_FIELDS), CURVE = field
 const BOX: AttributeSpec[] = [{ name: 'aSlot', size: 1 }];
 const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
 const QUAD_INDEX = new Uint32Array([0, 1, 2, 0, 2, 3]);
-/** A simple connection's glyphs: 36 vertices per branch (a dot's twelve triangles; an arrow uses six). */
-const SIMPLE_GLYPH_VERTICES = 72;
 
 interface Meshes {
   envelope: Mesh; arrow: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; stars: Mesh[]; sky: Mesh;
@@ -46,7 +44,8 @@ interface Meshes {
  * Draws a plan scene (spec 8) with our own WebGL 2 engine (plan 3c task 7, gl/), driven by the item texture (plan 3c
  * task 8): each item's slot holds its position, half sizes, step, folds and style, relative to a local origin; boxes,
  * simple connections (their curves computed in the shaders) and titles read it by slot. Complex bundles are cubics
- * built here, within rebuildBudgetMs per frame, the rest at the next frames. Everything is built on the main thread.
+ * built here, within rebuildBudgetMs per frame, the rest at the next frames, the previous frame drawn whole until then
+ * (InstanceBuffers). Everything is built on the main thread.
  * Geometry is rebuilt when the view leaves the prepared rectangle, a group level changes state, zooming out far, or
  * zooming in to where a title or a thin connection left out becomes visible; the item texture is written whole for a
  * new scene and when the camera goes originShiftPx from the origin, and only the rows of the slots an action changed
@@ -80,8 +79,8 @@ export class PlanRenderer {
   private real: { scene: PlanScene; index: SceneIndex } | null = null;
   /** The intruders among what is drawn (visibleIntruders), with their group: the ring and the tooltip (spec 10). */
   private intruderMap = new Map<number, number>();
-  private visibleSet: VisibleSet | null = null;
-  private inst: Instances | null = null;
+  /** What is drawn and hit-tested (complete), and the rebuild in progress (pending complex bundles). */
+  private readonly frames = new InstanceBuffers<{ scene: PlanScene; visible: VisibleSet; inst: Instances }>();
   private hits: HitIndex | null = null;
   private titleSides = new Map<Id, TitleSide>();
   private cam: Camera = { x: 0, y: 0, zoom: 1, widthPx: 1, heightPx: 1 };
@@ -272,9 +271,10 @@ export class PlanRenderer {
 
   /** The visible connection lit: the hovered one, else the first selected one shown. */
   private lit(): number {
-    if (this.hot >= 0 || !this.scene || !this.visibleSet || this.selection.connections.size === 0) return this.hot;
-    const i = this.visibleSet.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(this.scene!.ids[c])));
-    return i;
+    const front = this.frames.front;
+    if (this.hot >= 0 || !front || this.selection.connections.size === 0) return this.hot;
+    // Among what is drawn, by the scene it was built for.
+    return front.visible.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(front.scene.ids[c])));
   }
 
   /** The group that would receive a drop, lit while dragging (spec 10). */
@@ -340,12 +340,13 @@ export class PlanRenderer {
 
   /** What is under a point, from the instances drawn (complete or not: what is on screen). */
   get hitIndex(): HitIndex | null {
-    if (!this.hits && this.hasFrame && this.inst && this.scene && this.visibleSet) this.hits = buildHitIndex(this.scene, this.visibleSet, this.inst, this.p);
+    const front = this.frames.front;
+    if (!this.hits && this.hasFrame && front) this.hits = buildHitIndex(front.scene, front.visible, front.inst, this.p);
     return this.hits;
   }
 
   get visible(): VisibleSet | null {
-    return this.visibleSet;
+    return this.frames.front?.visible ?? null;
   }
 
   /** Compiles every shader now instead of on first sight (ANGLE compiles on first use: a 5 s freeze in the bench). */
@@ -387,20 +388,24 @@ export class PlanRenderer {
 
   /** Why the prepared geometry no longer serves the camera, or null. */
   private rebuildReason(): string | null {
-    if (this.stale || !this.lastRect || !this.index || !this.inst) return this.shifted ? 'origin' : 'stale';
+    const front = this.frames.front;
+    if (this.stale || !this.lastRect || !this.index || !front) return this.shifted ? 'origin' : 'stale';
     if (foldSignature(this.index, this.cam.zoom, this.p) !== this.lastSignature) return 'fold';
     // A title or a thin complex bundle left out becomes visible (the curves themselves are never sampled again).
-    if (this.cam.zoom >= this.inst.revealZoom) return 'reveal';
+    if (this.cam.zoom >= front.inst.revealZoom) return 'reveal';
     if (this.cam.zoom < this.builtZoom / (2 * this.p.curveZoomHeadroom)) return 'zoomOut';
     const v = this.viewRect(0), r = this.lastRect;
     return v.minX < r.minX || v.maxX > r.maxX || v.minY < r.minY || v.maxY > r.maxY ? 'rect' : null;
   }
 
-  /** Draws one frame (nothing while the context is lost); returns whether the visible geometry changed. */
+  /**
+   * Draws one frame (nothing while the context is lost); returns whether it did rebuild work (a rebuild started or
+   * resumed: what is drawn changes when one completes).
+   */
   renderFrame(): boolean {
     if (this.g.lost) return false;
     const budget = { deadline: performance.now() + this.p.rebuildBudgetMs };
-    let rebuilt = false;
+    let rebuilt = false, swapped = false;
     const scene = this.scene;
     if (scene) {
       const c = this.cam, far = Math.hypot(c.x - this.origin.x, c.y - this.origin.y) * c.zoom > this.p.originShiftPx;
@@ -412,10 +417,10 @@ export class PlanRenderer {
         this.stale = true;
       }
       // One rebuild at a time: complex bundles pending are built at the next frames, in order, before the camera is
-      // looked at again (no bundle is left behind by a camera that keeps moving).
-      if (this.inst?.pending && !this.stale) {
-        resumeInstances(this.inst, budget);
-        this.uploadComplex();
+      // looked at again (no bundle is left behind by a camera that keeps moving); the previous frame stays drawn.
+      const shown = this.frames.front;
+      if (this.frames.building && !this.stale) {
+        if (this.frames.resume(budget)) this.show();
         rebuilt = true;
       } else {
         const reason = this.rebuildReason();
@@ -428,9 +433,10 @@ export class PlanRenderer {
           rebuilt = true;
         }
       }
-      if (this.inst?.pending) this.onUpdate();
+      swapped = this.frames.front !== shown;
+      if (this.frames.building) this.onUpdate();
     }
-    this.updateBackground(rebuilt);
+    this.updateBackground(swapped);
     this.draw();
     return rebuilt;
   }
@@ -503,12 +509,24 @@ export class PlanRenderer {
     this.stale = false;
   }
 
-  /** The visible set from the camera and its instances, uploaded; complex bundles beyond the budget are left pending. */
+  /**
+   * The visible set from the camera and its instances, built into storage that is not on screen; shown at once if
+   * complete, else at the frame that completes it (complex bundles beyond the budget left pending).
+   */
   private rebuild(budget: { deadline: number } | undefined): void {
     this.prepare();
     const scene = this.scene!, visible = computeVisible(scene, this.index!, this.cam, this.p);
-    this.inst = buildInstances(scene, visible, this.cam, this.origin, this.p, budget, this.font, this.titleSides, this.inst ?? undefined);
-    this.visibleSet = visible;
+    const inst = buildInstances(scene, visible, this.cam, this.origin, this.p, budget, this.font, this.titleSides, this.frames.storage());
+    if (this.frames.start({ scene, visible, inst })) this.show();
+  }
+
+  /**
+   * The rebuild just completed replaces what was drawn, all at once (fix 1 of plan 3c task 8): until then the previous
+   * frame stayed drawn and hit-tested whole, its visible set with it, as the render worker's did — a camera rebuild
+   * moves no item, and whatever moves one (an action, a preview, new settings, the origin) builds whole.
+   */
+  private show(): void {
+    const { scene, visible, inst } = this.frames.front!, m = this.meshes;
     this.hasFrame = true;
     // The hovered index belonged to the previous visible set (I1 of the review); hover() sets it again.
     this.hot = -1;
@@ -518,62 +536,40 @@ export class PlanRenderer {
       this.intruderMap = visibleIntruders(scene, visible);
       this.intruderItems = [...this.intruderMap.keys()];
     }
-    const inst = this.inst, m = this.meshes;
     m.envelope.update({
       aPosition: inst.envelopes.position.view(), aNormal: inst.envelopes.normal.view(), aAlpha: inst.envelopes.alpha.view(), aOpen: inst.envelopes.open.view(),
       aClosed: inst.envelopes.closed.view(), aFoldK: inst.envelopes.foldK.view(), aParentK: inst.envelopes.parentK.view(),
     }, inst.envelopes.index.view());
     m.box.update(inst.boxes.view());
     m.simple.update(inst.simple.view());
-    this.updateOutline();
-    this.uploadComplex();
-  }
-
-  /** What resuming adds to: the complex bundles' curves, glyphs and markers, and the titles (connections' once complete). */
-  private uploadComplex(): void {
-    const inst = this.inst!, gm = inst.glyphs, m = this.meshes;
     m.curve.update(inst.curves.view());
+    const gm = inst.glyphs;
     m.arrow.update({
       aPosition: gm.position.view(), aPosition2: gm.position2.view(), aOffset: gm.offset.view(), aOffset2: gm.offset2.view(), aScale: gm.scale.view(),
       aFill: gm.fill.view(), aEnd0: gm.end0.view(), aEnd1: gm.end1.view(), aFold: gm.fold.view(), aConn: gm.conn.view(),
     }, gm.index.view());
     m.text.update(inst.texts.view());
     this.updateMarkers();
-    if (inst.pending) return;
-    // Complete: what is under the pointer is found among everything drawn. A hit index made while bundles were pending
-    // knew the bundles built then (its own copies), and served until now: one more index, not one per frame.
-    this.hits = null;
+    this.updateOutline();
     for (const t of inst.titles) this.titleSides.set(t.id, t.side);
   }
 
   /** Bundle markers: the complex bundles' with several members; while a connection is drawn, every core (spec 11.1). */
   private updateMarkers(): void {
     const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), index = new IndexList();
-    let j = 0;
-    const marker = (x: number, y: number, kMax: number, c: number) => {
+    // The cores of what is drawn, read in the scene its instances were built for (an action may have compacted the
+    // scene since: the slots would be another's).
+    const front = this.frames.front, cores = front ? markerCores(front.scene, front.inst, this.cam.zoom, this.p, this.allCores) : [];
+    cores.forEach((c, j) => {
       for (let q = 0; q < 4; q++) {
-        center.push2(x, y);
+        center.push2(c.x, c.y);
         corner.push2(QUAD[q * 2], QUAD[q * 2 + 1]);
-        k.push1(kMax);
-        conn.push1(c);
+        k.push1(c.kMax);
+        conn.push1(c.conn);
       }
-      const v = j++ * 4;
+      const v = j * 4;
       index.push(v, v + 1, v + 2, v, v + 2, v + 3);
-    };
-    const inst = this.inst, scene = this.scene;
-    if (inst && scene) {
-      for (const mk of inst.markers) if (mk.multi || this.allCores) marker(mk.pos.x, mk.pos.y, mk.kMax, mk.conn);
-      if (this.allCores) {
-        // A simple connection's core, midway between its boxes, where its curves are drawn.
-        const s = inst.simple.view(), o = inst.origin;
-        for (let q = 0; q < s.length; q += SIMPLE_INTS) {
-          const a = scene.items[s[q]], b = scene.items[s[q + 1]], kMax = Math.max(a.k, b.k);
-          if (this.cam.zoom < visibleFrom(kMax, this.p)) continue;
-          const mk = simpleMarker(a, b);
-          marker(mk.x - o.x, mk.y - o.y, kMax, s[q + 3]);
-        }
-      }
-    }
+    });
     this.meshes.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
   }
 

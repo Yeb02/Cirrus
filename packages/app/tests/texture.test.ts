@@ -11,6 +11,12 @@ import { type TextureGl, Texture2D } from '../src/renderer/gl/texture.ts';
 function recorder() {
   const calls: { fn: string; args: unknown[] }[] = [];
   const rec = (fn: string) => (...args: unknown[]) => { calls.push({ fn, args }); };
+  // WebGL raises INVALID_OPERATION when the rows asked for run past the data from srcOffset (4 floats per texel).
+  const subImage = (...args: unknown[]) => {
+    const [, , , , w, h, , , data, offset] = args as [number, number, number, number, number, number, number, number, Float32Array, number];
+    if (offset + w * h * 4 > data.length) throw new Error(`texSubImage2D : ${w} × ${h} texels depuis ${offset}, au-delà des ${data.length} flottants`);
+    calls.push({ fn: 'texSubImage2D', args });
+  };
   const constants = {
     TEXTURE_2D: 0x0de1, TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800, TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803, CLAMP_TO_EDGE: 0x812f,
     LINEAR: 0x2601, NEAREST: 0x2600, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241, UNPACK_FLIP_Y_WEBGL: 0x9240, RGBA8: 0x8058, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401,
@@ -18,7 +24,7 @@ function recorder() {
   };
   const gl = {
     ...constants, createTexture: () => ({}) as WebGLTexture, bindTexture: rec('bindTexture'), texParameteri: rec('texParameteri'), pixelStorei: rec('pixelStorei'),
-    texImage2D: rec('texImage2D'), texSubImage2D: rec('texSubImage2D'), activeTexture: rec('activeTexture'), deleteTexture: rec('deleteTexture'),
+    texImage2D: rec('texImage2D'), texSubImage2D: subImage, activeTexture: rec('activeTexture'), deleteTexture: rec('deleteTexture'),
   } as unknown as TextureGl;
   return { gl, calls, constants };
 }
@@ -57,7 +63,8 @@ test('une action ne renvoie que les rangées de ses emplacements : deux texels p
   store.close();
   rmSync(dir, { recursive: true, force: true });
   const scene = buildScene(s, ids.plans.lobby, (x) => Math.max(1, Math.ceil(x.length / 23)), DEFAULT_PARAMS);
-  const texels = new Float32Array(Math.max(1, textureRows(scene.items.length)) * ITEM_TEXTURE_WIDTH * 4);
+  // Three rows of mirror, as the renderer would hold for a slot in row 2 (its capacity covers every slot it sends).
+  const texels = new Float32Array(Math.max(3, textureRows(scene.items.length)) * ITEM_TEXTURE_WIDTH * 4);
   itemTexels(scene, { x: 0, y: 0 }, texels);
   // Slot i is at texels 2i and 2i + 1: row ⌊i / 512⌋, columns 2 (i mod 512) and the next.
   const i = scene.byId.get(ids.nodes.mdl)!, it = scene.items[i], row = Math.floor(i / 512), col = 2 * (i % 512);

@@ -1,4 +1,7 @@
-import type { FontData, RenderParams, Rgb } from '@cirrus/view';
+import {
+  DOT_SIDES, type FontData, ITEM_BADGE, ITEM_STYLE, type RenderParams, type Rgb, SIMPLE_DASHED_A, SIMPLE_DASHED_B, SIMPLE_FADE_OUT, SIMPLE_ROLE_BITS, SLOT_ROW_SHIFT,
+  TEXELS_PER_SLOT,
+} from '@cirrus/view';
 import { Program } from '../gl/program.ts';
 
 // Every mesh is drawn in world units relative to a local origin; uCamera and uView carry the camera (plan 3c task 7:
@@ -38,13 +41,16 @@ export const NO_GROUP = 1e9;
 /** The texture unit of the MSDF atlas, and of the item texture. */
 export const ATLAS_UNIT = 0, ITEMS_UNIT = 1;
 
+/** A simple connection's glyph vertices per branch (a dot's triangles; an arrow uses six), and per instance. */
+export const SIMPLE_GLYPH_PER_BRANCH = 3 * DOT_SIDES, SIMPLE_GLYPH_VERTICES = 2 * SIMPLE_GLYPH_PER_BRANCH;
+
 // The item texture (instances.ts, itemTexels): two RGBA32F texels per slot, 512 slots per row of 1024 texels.
 const ITEMS = /* glsl */ `
 uniform highp sampler2D uItems;
 // x, y (relative to the origin), halfW, halfH
-vec4 itemA(int s) { return texelFetch(uItems, ivec2((s & 511) << 1, s >> 9), 0); }
+vec4 itemA(int s) { return texelFetch(uItems, ivec2((s & ${(1 << SLOT_ROW_SHIFT) - 1}) * ${TEXELS_PER_SLOT}, s >> ${SLOT_ROW_SHIFT}), 0); }
 // k, the parent's maxChildK (1e9: none), its own as a group (1e9 otherwise), flags (instances.ts, ITEM_*)
-vec4 itemB(int s) { return texelFetch(uItems, ivec2(((s & 511) << 1) + 1, s >> 9), 0); }
+vec4 itemB(int s) { return texelFetch(uItems, ivec2((s & ${(1 << SLOT_ROW_SHIFT) - 1}) * ${TEXELS_PER_SLOT} + 1, s >> ${SLOT_ROW_SHIFT}), 0); }
 `;
 
 // Cubics, evaluated as geometry/ribbon.ts's sampleBranch samples them.
@@ -99,7 +105,7 @@ vec2 anchorBox(vec2 pos, vec2 half_, float k, vec2 toward) {
   return pos + d * min(min(sx, sy), 1.0);
 }
 Simple simpleBranch(int which, vec4 a0, vec4 a1, vec4 b0, vec4 b1, int flags) {
-  int ra = flags & 3, rb = (flags >> 2) & 3;
+  int ra = flags & ${(1 << SIMPLE_ROLE_BITS) - 1}, rb = (flags >> ${SIMPLE_ROLE_BITS}) & ${(1 << SIMPLE_ROLE_BITS) - 1};
   bool pairNeu = ra == 2 && rb == 2;
   // Each end's class: 0 converges on the marker, 1 leaves it, 2 joins it from the side.
   int ca = pairNeu ? 0 : ra, cb = pairNeu ? 1 : rb;
@@ -131,8 +137,8 @@ Simple simpleBranch(int which, vec4 a0, vec4 a1, vec4 b0, vec4 b1, int flags) {
 // Too thin at zoom × curveZoomHeadroom: not drawn (ribbonCullAlpha), as the CPU left such a bundle out.
 bool culled(float kMax) { return min(1.0, uWidthBase * pow(uFactor, kMax) * uZoom * uHeadroom / uWidthMin) < uCullAlpha; }
 // Flags beyond the roles (instances.ts, SIMPLE_*).
-bool dashedEnd(int flags, int e) { return (flags & (e == 0 ? 16 : 32)) != 0; }
-vec2 simpleFold(int flags, int fade) { return (flags & 64) != 0 ? vec2(2.0, itemB(fade).z) : vec2(0.0); }
+bool dashedEnd(int flags, int e) { return (flags & (e == 0 ? ${SIMPLE_DASHED_A} : ${SIMPLE_DASHED_B})) != 0; }
+vec2 simpleFold(int flags, int fade) { return (flags & ${SIMPLE_FADE_OUT}) != 0 ? vec2(2.0, itemB(fade).z) : vec2(0.0); }
 const vec4 NOWHERE = vec4(2.0, 2.0, 2.0, 1.0);
 `;
 
@@ -235,15 +241,15 @@ const SIMPLE_GLYPH = {
   ${CUBIC}
   ${SIMPLE}
   void main() {
-    int v = gl_VertexID, which = v / 36, l = v - which * 36;
+    int v = gl_VertexID, which = v / ${SIMPLE_GLYPH_PER_BRANCH}, l = v - which * ${SIMPLE_GLYPH_PER_BRANCH};
     vec4 a0 = itemA(aEnds.x), a1 = itemB(aEnds.x), b0 = itemA(aEnds.y), b1 = itemB(aEnds.y);
     if (culled(max(a1.x, b1.x))) { gl_Position = NOWHERE; return; }
     Simple s = simpleBranch(which, a0, a1, b0, b1, aEnds.z);
     vec2 off;
     if (s.assoc) {
       int tri = l / 3, c = l - tri * 3;
-      int idx = c == 0 ? 0 : c == 1 ? 1 + tri : 1 + (tri + 1) % 12;
-      float ang = float(idx - 1) * 6.283185307179586 / 12.0;
+      int idx = c == 0 ? 0 : c == 1 ? 1 + tri : 1 + (tri + 1) % ${DOT_SIDES};
+      float ang = float(idx - 1) * 6.283185307179586 / ${DOT_SIDES}.0;
       off = idx == 0 ? vec2(0.0) : uDotRadius * vec2(cos(ang), sin(ang));
     } else {
       if (l >= 6) { gl_Position = NOWHERE; return; }
@@ -358,7 +364,7 @@ const BOX = {
   void main() {
     vec4 a = itemA(aSlot), b = itemB(aSlot);
     int flags = int(b.w);
-    float parentK = b.y, badge = float((flags >> 2) & 1);
+    float parentK = b.y, badge = (flags & ${ITEM_BADGE}) != 0 ? 1.0 : 0.0;
     vec2 half_ = a.zw;
     if (parentK > 1e8) {
       float px = max(half_.x, half_.y) * uZoom;
@@ -370,7 +376,7 @@ const BOX = {
     // The corner radius scales with the box: boxRadius at the width of a step-0 box.
     vRadius = min(uRadius * half_.x / uBoxHalf, min(half_.x, half_.y));
     vAlpha = 1.0 - foldT(parentK);
-    vStyle = float(flags & 3);
+    vStyle = float(flags & ${ITEM_STYLE});
     vBadge = badge;
     gl_Position = project(a.xy + vLocal);
   }`,

@@ -4,7 +4,7 @@ import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { type Camera } from '../src/camera.ts';
 import {
-  buildInstances, CURVE_AT, CURVE_FLOATS, type Instances, isSimple, ITEM_BADGE, ITEM_GROUP, ITEM_STYLE, itemTexels, resumeInstances, rowRuns, SIMPLE_INTS,
+  buildInstances, CURVE_AT, CURVE_FLOATS, InstanceBuffers, type Instances, isSimple, markerCores, ITEM_BADGE, ITEM_GROUP, ITEM_STYLE, itemTexels, resumeInstances, rowRuns, SIMPLE_INTS,
   SLOT_FLOATS, texelSlots,
 } from '../src/instances.ts';
 import { buildScene, isLive, type PlanScene } from '../src/scene.ts';
@@ -33,6 +33,13 @@ function drawn(inst: Instances): { simple: number[]; complex: Set<number> } {
   for (let o = 0; o < c.length; o += CURVE_FLOATS) complex.add(c[o + CURVE_AT.width + 3]);
   return { simple, complex };
 }
+
+/** Everything the instances hold, copied out of their storage (deep-equal comparisons). */
+const contentOf = (x: Instances) => structuredClone({
+  boxes: [...x.boxes.view()], simple: [...x.simple.view()], curves: [...x.curves.view()], keys: x.curveKeys, texts: [...x.texts.view()],
+  glyphs: Object.fromEntries(Object.entries(x.glyphs).map(([k, l]) => [k, [...l.view()]])), markers: x.markers, stubs: x.stubs, titles: x.titles,
+  reveal: x.revealZoom,
+});
 
 /** Every slot the instances cite is a live item of the scene (Review Focus 3). */
 function deadSlot(scene: PlanScene, inst: Instances): string | null {
@@ -210,12 +217,66 @@ test('budget dépassé : un faisceau complexe par image, repris dans l’ordre j
     frames++;
   }
   expect(frames).toBe(whole.markers.length);
-  const same = (x: Instances) => ({
-    boxes: [...x.boxes.view()], simple: [...x.simple.view()], curves: [...x.curves.view()], keys: x.curveKeys, texts: [...x.texts.view()],
-    glyphs: Object.fromEntries(Object.entries(x.glyphs).map(([k, l]) => [k, [...l.view()]])), markers: x.markers, stubs: x.stubs, titles: x.titles,
-    reveal: x.revealZoom,
+  expect(contentOf(inst)).toEqual(contentOf(whole));
+});
+
+test('reconstruction de la caméra au-delà du budget : ce qui est affiché reste entier jusqu’à la fin, puis tout change d’un coup (fix 1)', () => {
+  const scene = buildScene(s, ids.plans.lobby, measure, P), camA = camAtTextPx(scene, 0, 16), camB = { ...camA, x: camA.x + 400, y: camA.y - 150 };
+  const buffers = new InstanceBuffers<{ visible: VisibleSet; inst: Instances }>();
+  const make = (cam: Camera, budget?: { deadline: number }) => {
+    const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
+    return { visible, inst: buildInstances(scene, visible, cam, camA, P, budget, font, new Map(), buffers.storage()) };
+  };
+  expect(buffers.start(make(camA))).toBe(true);
+  const shown = buffers.front!, before = contentOf(shown.inst);
+  expect(before.markers.length).toBeGreaterThan(3);
+  expect(before.texts.length).toBeGreaterThan(0);
+  // Over budget at once: nothing on screen changes, neither its complex bundles nor its connection titles.
+  expect(buffers.start(make(camB, { deadline: 0 }))).toBe(false);
+  expect(buffers.building!.inst).not.toBe(shown.inst);
+  let frames = 0;
+  for (;;) {
+    expect(buffers.front).toBe(shown);
+    expect(contentOf(shown.inst)).toEqual(before);
+    frames++;
+    if (buffers.resume({ deadline: 0 })) break;
+  }
+  expect(frames).toBeGreaterThan(2);
+  // Then the new set whole, as if built at once; its visible set with it.
+  const whole = buildInstances(scene, computeVisible(scene, buildIndex(scene, P), camB, P), camB, camA, P, undefined, font, new Map());
+  expect(contentOf(buffers.front!.inst)).toEqual(contentOf(whole));
+  expect(buffers.front!.visible).toEqual(computeVisible(scene, buildIndex(scene, P), camB, P));
+  // The next rebuild refills the storage shown before, never what is on screen; a pending build given up gives its own.
+  const third = make(camA, { deadline: 0 });
+  expect(third.inst).toBe(shown.inst);
+  expect(third.inst).not.toBe(buffers.front!.inst);
+  expect(buffers.start(third)).toBe(false);
+  expect(buffers.storage()).toBe(third.inst);
+  expect(buffers.building).toBeNull();
+  expect(buffers.resume()).toBe(false);
+});
+
+test('cœurs montrés pendant un tracé de connexion : lus dans la scène des instances, pas dans une scène compactée depuis (fix 2)', () => {
+  const st = copyOf(s), plan = created(run(st, createPlan(st, 'Cœurs', 'plan')), 'plan'), p = { ...P, sceneCompactShare: 0.05 };
+  const nodes = Array.from({ length: 12 }, (_, i) => created(run(st, createNode(st, { plan, title: `N${i}`, x: i * 400, y: (i % 3) * 300, k: 0 })), 'node'));
+  for (let i = 0; i + 1 < nodes.length; i += 2) run(st, connect(st, { plan, members: [{ node: nodes[i], role: 'source' }, { node: nodes[i + 1], role: 'target' }] }));
+  const scene = buildScene(st, plan, measure, p), cam = camAtTextPx(scene, 0, 16);
+  const visible = computeVisible(scene, buildIndex(scene, p), cam, p), inst = buildInstances(scene, visible, cam, cam, p, undefined, font);
+  expect(markerCores(scene, inst, cam.zoom, p, false)).toEqual([]); // two members: no marker drawn
+  const cores = markerCores(scene, inst, cam.zoom, p, true), sv = inst.simple.view();
+  expect(cores).toHaveLength(sv.length / SIMPLE_INTS);
+  cores.forEach((c, j) => {
+    const a = scene.items[sv[j * SIMPLE_INTS]], b = scene.items[sv[j * SIMPLE_INTS + 1]];
+    expect([c.x, c.y, c.conn]).toEqual([(a.x + b.x) * 0.5 - cam.x, (a.y + b.y) * 0.5 - cam.y, sv[j * SIMPLE_INTS + 3]]);
   });
-  expect(same(inst)).toEqual(same(whole));
+  // An action that compacts the scene: its slots are no longer those the instances cite.
+  let next = scene;
+  for (const n of nodes.slice(0, 9)) {
+    const a = run(st, removeFromPlan(st, plan, n));
+    next = updateScene(next, st, a.ops, measure, p).scene;
+  }
+  expect(Math.max(...sv)).toBeGreaterThanOrEqual(next.items.length);
+  expect(markerCores(scene, inst, cam.zoom, p, true)).toEqual(cores);
 });
 
 test('titres : chaque glyphe d’un élément porte son emplacement, celui d’un groupe ouvert son écart au centre, celui d’une connexion son ancre', () => {

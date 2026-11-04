@@ -22,8 +22,9 @@ import type { VisibleConnection, VisibleSet } from './visibility.ts';
 /** Texels per row of the item texture. */
 export const ITEM_TEXTURE_WIDTH = 1024;
 /** Each slot has two RGBA32F texels side by side: eight floats. */
-export const SLOT_FLOATS = 8;
-const SLOT_ROW_SHIFT = 9; // 512 slots per row
+export const TEXELS_PER_SLOT = 2, SLOT_FLOATS = 4 * TEXELS_PER_SLOT;
+/** A slot's row is its index shifted by this (512 slots per row); the shaders read the texture by the same layout. */
+export const SLOT_ROW_SHIFT = Math.log2(ITEM_TEXTURE_WIDTH / TEXELS_PER_SLOT);
 /** A slot's flags (its second texel's w): its box style (0 node, 1 node phantom, 2 centre, 3 absent), a badge, a group. */
 export const ITEM_STYLE = 3, ITEM_BADGE = 4, ITEM_GROUP = 8;
 const STYLE_NODE = 1, STYLE_CENTER = 2, STYLE_ABSENT = 3;
@@ -102,8 +103,11 @@ export function texelSlots(prev: PlanScene, scene: PlanScene, changes: SceneChan
  */
 export const SIMPLE_FIELDS = [['ends', 4], ['fade', 1]] as const;
 export const SIMPLE_INTS: number = SIMPLE_FIELDS.reduce((n, [, size]) => n + size, 0);
-/** Flags of a simple connection: each end's role code (source 0, target 1, associate 2) in two bits, then these. */
-export const SIMPLE_DASHED_A = 16, SIMPLE_DASHED_B = 32, SIMPLE_FADE_OUT = 64;
+/**
+ * Flags of a simple connection: each end's role code (source 0, target 1, associate 2) in SIMPLE_ROLE_BITS bits, a's
+ * then b's, then these.
+ */
+export const SIMPLE_ROLE_BITS = 2, SIMPLE_DASHED_A = 16, SIMPLE_DASHED_B = 32, SIMPLE_FADE_OUT = 64;
 const ROLE_CODE = { source: 0, target: 1, associate: 2 } as const;
 
 /**
@@ -249,7 +253,7 @@ export function buildInstances(
     if (o + SIMPLE_INTS > d.length) d = simple.storage;
     d[o] = a.item;
     d[o + 1] = b.item;
-    d[o + 2] = ROLE_CODE[a.role] | (ROLE_CODE[b.role] << 2) | (a.dashed ? SIMPLE_DASHED_A : 0) | (b.dashed ? SIMPLE_DASHED_B : 0) | (fade >= 0 ? SIMPLE_FADE_OUT : 0);
+    d[o + 2] = ROLE_CODE[a.role] | (ROLE_CODE[b.role] << SIMPLE_ROLE_BITS) | (a.dashed ? SIMPLE_DASHED_A : 0) | (b.dashed ? SIMPLE_DASHED_B : 0) | (fade >= 0 ? SIMPLE_FADE_OUT : 0);
     d[o + 3] = ci;
     d[o + 4] = fade;
     if (titles[vc.conns[0]] !== '') w.titled.push(ci);
@@ -270,6 +274,73 @@ export function resumeInstances(inst: Instances, budget?: { deadline: number }):
   finishTitles(inst, w);
   inst.pending = false;
   inst.work = null;
+}
+
+/**
+ * The cores drawn as markers (spec 8.5, 11.1), relative to the origin: the complex bundles' with several members, and
+ * with `all` (while a connection is drawn) every core, a simple connection's midway between its boxes where the GPU
+ * draws it at `zoom`. `scene` is the one the instances were built for: their slots are its own (a scene updated since,
+ * compacted, holds others).
+ */
+export function markerCores(scene: PlanScene, inst: Instances, zoom: number, p: RenderParams, all: boolean): { x: number; y: number; kMax: number; conn: number }[] {
+  const out: { x: number; y: number; kMax: number; conn: number }[] = [];
+  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn });
+  if (!all) return out;
+  const s = inst.simple.view(), o = inst.origin, items = scene.items;
+  for (let q = 0; q < s.length; q += SIMPLE_INTS) {
+    const a = items[s[q]], b = items[s[q + 1]], kMax = Math.max(a.k, b.k);
+    if (zoom < visibleFrom(kMax, p)) continue;
+    const m = simpleMarker(a, b);
+    out.push({ x: m.x - o.x, y: m.y - o.y, kMax, conn: s[q + 3] });
+  }
+  return out;
+}
+
+/**
+ * What is drawn and what is being built (plan 3c task 8, fix 1): a rebuild left pending does not touch the instances
+ * shown, which stay drawn and hit-tested whole, their visible set with them, until it completes; then the two swap at
+ * once, as the render worker's frames did. Each holds its own storage: the next rebuild refills the instances shown
+ * before last (or a pending build given up), never those on screen. `T`: what goes with the instances (their scene and
+ * visible set).
+ */
+export class InstanceBuffers<T extends { inst: Instances }> {
+  /** Drawn and hit-tested: always complete. */
+  front: T | null = null;
+  /** Pending, built at the next frames. */
+  building: T | null = null;
+  private spare: Instances | null = null;
+
+  /** Storage for a new rebuild, never the front's: a pending build given up, or the instances shown before. */
+  storage(): Instances | undefined {
+    if (this.building) {
+      const inst = this.building.inst;
+      this.building = null;
+      return inst;
+    }
+    const inst = this.spare;
+    this.spare = null;
+    return inst ?? undefined;
+  }
+
+  /** A rebuild just made: shown at once if complete (returns true), else built on by resume. */
+  start(next: T): boolean {
+    this.building = next;
+    return next.inst.pending ? false : this.swap();
+  }
+
+  /** The pending rebuild built on until the deadline; returns whether it completed and is now shown. */
+  resume(budget?: { deadline: number }): boolean {
+    if (!this.building) return false;
+    resumeInstances(this.building.inst, budget);
+    return this.building.inst.pending ? false : this.swap();
+  }
+
+  private swap(): boolean {
+    this.spare = this.front?.inst ?? null;
+    this.front = this.building;
+    this.building = null;
+    return true;
+  }
 }
 
 function paddedOf(w: Work, g: number): Vec2[] {
@@ -310,9 +381,15 @@ function appendComplex(inst: Instances, w: Work, ci: number): void {
   const e0 = pts[0], e1 = pts[1] ?? pts[0];
   const mode = slide ? 1 : vc.fade === 'out' ? 2 : 0, foldK = Number.isFinite(vc.foldK) ? vc.foldK : 0;
   const curve = (a: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, b: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, k0: number, k1: number, dashed: boolean, key: Id | null) => {
+    // Written in place, field by field (CURVE_FIELDS): open0, open1, closed0, closed1, width, end0, end1, fold.
     const at = inst.curves.extend(CURVE_FLOATS), d = inst.curves.storage;
-    d.set([a.p0.x, a.p0.y, a.b1.x, a.b1.y, a.b2.x, a.b2.y, a.p3.x, a.p3.y, b.p0.x, b.p0.y, b.b1.x, b.b1.y, b.b2.x, b.b2.y, b.p3.x, b.p3.y,
-      k0, k1, dashed ? 1 : 0, ci, e0.x, e0.y, e0.e, e1.x, e1.y, e1.e, mode, foldK], at);
+    d[at] = a.p0.x; d[at + 1] = a.p0.y; d[at + 2] = a.b1.x; d[at + 3] = a.b1.y;
+    d[at + 4] = a.b2.x; d[at + 5] = a.b2.y; d[at + 6] = a.p3.x; d[at + 7] = a.p3.y;
+    d[at + 8] = b.p0.x; d[at + 9] = b.p0.y; d[at + 10] = b.b1.x; d[at + 11] = b.b1.y;
+    d[at + 12] = b.b2.x; d[at + 13] = b.b2.y; d[at + 14] = b.p3.x; d[at + 15] = b.p3.y;
+    d[at + 16] = k0; d[at + 17] = k1; d[at + 18] = dashed ? 1 : 0; d[at + 19] = ci;
+    d[at + 20] = e0.x; d[at + 21] = e0.y; d[at + 22] = e0.e; d[at + 23] = e1.x; d[at + 24] = e1.y; d[at + 25] = e1.e;
+    d[at + 26] = mode; d[at + 27] = foldK;
     inst.curveKeys.push(key);
   };
   /** A trunk as a cubic: its control points a third of the way along. */

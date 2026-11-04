@@ -130,6 +130,7 @@ export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, closed:
   });
 }
 
-const DOT_SIDES = 12;
+/** The sides of a dot (an associate's end, an absent member's): the shaders draw the same (render/shaders.ts). */
+export const DOT_SIDES = 12;
 const DOT_TRIS = Array.from({ length: DOT_SIDES }, (_, i) => [0, 1 + i, 1 + ((i + 1) % DOT_SIDES)]).flat();
 const ARROW_TRIS = [0, 1, 2, 0, 2, 3];
