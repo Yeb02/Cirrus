@@ -1,9 +1,9 @@
 // The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace]
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
-// compare-captures.mjs then compares two such folders: after each task that touches the rendering, a new suite (in a
-// new folder) against the reference, docs/captures/plan4a since plan 4a's task 3 (the whole suite; reference-3c before
-// it). A folder that already holds files is refused, so the reference is never replaced by mistake; --replace removes
-// its captures first (to remake the reference on purpose).
+// compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
+// suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes) and docs/captures/plan4a (those new in
+// plan 4a), each compared on its own images. A folder that already holds files is refused, so a reference is never
+// replaced by mistake; --replace removes its captures first (to remake a reference on purpose).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

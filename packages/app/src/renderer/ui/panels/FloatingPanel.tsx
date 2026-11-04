@@ -3,6 +3,8 @@ import { dragRect, type Edge, type Rect } from './geometry.ts';
 
 /** A floating panel's place and what its gestures do (Panels): where it is, how deep, pinned or not. */
 export interface Frame {
+  /** The panel's id, on its element (`data-panel`): Panels leaves a field of a panel it closes. */
+  id: number;
   rect: Rect; z: number; pinned: boolean;
   /** Its smallest side (panelMinPx), and the area it stays in (the window under the tabs). */
   min: number; bounds(): Rect;
@@ -26,18 +28,19 @@ const PinIcon = () => (
 export function FloatingPanel(props: { frame: Frame; title: ReactNode; className?: string; children: ReactNode }) {
   const f = props.frame;
   const [live, setLive] = useState<Rect | null>(null);
-  const gesture = useRef<{ edge: Edge; x: number; y: number; start: Rect; last: Rect } | null>(null);
+  // The area it stays in is read once, when pressed, not at each move of the pointer.
+  const gesture = useRef<{ edge: Edge; x: number; y: number; start: Rect; last: Rect; bounds: Rect } | null>(null);
   const press = (edge: Edge) => (e: React.PointerEvent<HTMLElement>) => {
     if (e.button !== 0 || (edge === 'move' && (e.target as Element).closest(OWN_PRESS))) return;
     // No text selected on the way.
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
-    gesture.current = { edge, x: e.clientX, y: e.clientY, start: f.rect, last: f.rect };
+    gesture.current = { edge, x: e.clientX, y: e.clientY, start: f.rect, last: f.rect, bounds: f.bounds() };
   };
   const move = (e: React.PointerEvent) => {
     const g = gesture.current;
     if (!g) return;
-    g.last = dragRect(g.start, g.edge, e.clientX - g.x, e.clientY - g.y, f.bounds(), f.min);
+    g.last = dragRect(g.start, g.edge, e.clientX - g.x, e.clientY - g.y, g.bounds, f.min);
     setLive(g.last);
   };
   // Released, or the capture lost (a lost focus): the panel stays where it was shown.
@@ -52,13 +55,15 @@ export function FloatingPanel(props: { frame: Frame; title: ReactNode; className
   const r = live ?? f.rect;
   return (
     <section
-      className={`panel${props.className ? ` ${props.className}` : ''}${f.pinned ? ' pinned' : ''}`}
+      className={`panel${props.className ? ` ${props.className}` : ''}${f.pinned ? ' pinned' : ''}`} data-panel={f.id}
       style={{ left: r.x, top: r.y, width: r.w, height: r.h, zIndex: f.z }}
       onPointerDownCapture={() => f.onFront()}
     >
       <header {...handles('move')}>
         <span className="grip" aria-hidden="true">⠿</span>
         {props.title}
+        {/* Room to take the panel by, however long the title (it shrinks first). */}
+        <span className="drag" aria-hidden="true" />
         <button className={`pin${f.pinned ? ' on' : ''}`} title={f.pinned ? 'Détacher' : 'Épingler'} aria-pressed={f.pinned} onClick={() => f.onPin()}>
           <PinIcon />
         </button>

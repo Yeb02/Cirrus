@@ -1,9 +1,10 @@
-// Compares two folders of captures (plan 3c): node scripts/compare-captures.mjs <dossierA> <dossierB> [--max=0.5]
-// For each PNG of either folder, the share of its pixels where a channel differs by more than 16 levels. Exits with 1
-// when one exceeds --max percent (0.5 by default, the plan's tolerance), differs in size or is missing on one side;
-// with 2 on a usage error or when a folder holds no capture. An image that differs at all, within the tolerance, is
-// listed « à regarder »: a lost selection ring, hover light, stub or phantom stays under 0.5 %, and the suite repeats
-// to the pixel from one run to the next, so it is looked at.
+// Compares a folder of captures with a reference (plan 3c): node scripts/compare-captures.mjs <référence> <captures> [--max=0.5]
+// For each PNG of the reference, the share of its pixels where a channel differs by more than 16 levels. Exits with 1
+// when one exceeds --max percent (0.5 by default, the plan's tolerance), differs in size or is missing from the
+// captures; with 2 on a usage error or when a folder holds no capture. The captures may hold more images than the
+// reference (a run holds every scene, a reference only its own: reference-3c, plan4a): those are listed, not compared.
+// An image that differs at all, within the tolerance, is listed « à regarder »: a lost selection ring, hover light, stub
+// or phantom stays under 0.5 %, and the suite repeats to the pixel from one run to the next, so it is looked at.
 // The images are decoded by Electron's nativeImage: run with Node, the script starts itself again under Electron.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const LEVELS = 16;
-const USAGE = 'Usage : node scripts/compare-captures.mjs <dossierA> <dossierB> [--max=0.5] (--max : un pourcentage positif ou nul)';
+const USAGE = 'Usage : node scripts/compare-captures.mjs <référence> <captures> [--max=0.5] (--max : un pourcentage positif ou nul)';
 const args = process.argv.slice(2);
 const dirs = args.filter((a) => !a.startsWith('--'));
 const maxArg = args.find((a) => a.startsWith('--max='))?.slice(6);
@@ -40,12 +41,13 @@ if (!process.versions.electron) {
 const { app, nativeImage } = await import('electron');
 // Not awaited at the top level: an ES module entry that waits for "ready" keeps Electron from ever emitting it.
 void app.whenReady().then(() => {
-  const names = [...new Set([a, b].flatMap((d) => readdirSync(d).filter((f) => f.toLowerCase().endsWith('.png'))))].sort();
+  const pngs = (d) => readdirSync(d).filter((f) => f.toLowerCase().endsWith('.png')).sort();
+  const names = pngs(a), extra = pngs(b).filter((f) => !names.includes(f));
   let bad = 0;
   const toLook = [];
   for (const name of names) {
     const [pa, pb] = [join(a, name), join(b, name)];
-    if (!existsSync(pa) || !existsSync(pb)) { bad++; console.log(`${name} : absente de ${existsSync(pa) ? b : a}`); continue; }
+    if (!existsSync(pb)) { bad++; console.log(`${name} : absente de ${b}`); continue; }
     const [ia, ib] = [nativeImage.createFromPath(pa), nativeImage.createFromPath(pb)];
     const [sa, sb] = [ia.getSize(), ib.getSize()];
     if (sa.width !== sb.width || sa.height !== sb.height) { bad++; console.log(`${name} : tailles différentes (${sa.width}×${sa.height}, ${sb.width}×${sb.height})`); continue; }
@@ -60,6 +62,7 @@ void app.whenReady().then(() => {
     console.log(`${name} : ${share.toFixed(3)} % des pixels diffèrent de plus de ${LEVELS} niveaux (${differ} pixels)${share > max ? ` : au-delà de ${max} %` : ''}`);
   }
   console.log(`${names.length} images comparées, ${bad} hors tolérance, ${toLook.length} à regarder.`);
+  if (extra.length > 0) console.log(`Hors de cette référence, non comparées : ${extra.join(', ')}.`);
   for (const line of toLook) console.log(`À regarder : ${line}`);
   app.exit(bad > 0 ? 1 : 0);
 });

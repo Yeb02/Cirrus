@@ -19,17 +19,21 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * The node's history in three figures (historyOf), read at opening, then again after each action on it — its record or
- * its places, undo and redo included. Several actions gathered into one render are not told apart: read again.
+ * its places, undo and redo included. Several actions gathered into one render are not told apart: read again. Null
+ * while it is read; « failed » when it could not be (Minor 3 of the review).
  */
-function useHistory(id: Id, rev: number, action: Action | null): HistorySummary | null {
-  const [summary, setSummary] = useState<HistorySummary | null>(null);
+function useHistory(id: Id, rev: number, action: Action | null): HistorySummary | 'failed' | null {
+  const [summary, setSummary] = useState<HistorySummary | 'failed' | null>(null);
   const seen = useRef<number | null>(null), asked = useRef(0);
   useEffect(() => {
     const before = seen.current;
     seen.current = rev;
     if (before !== null && rev === before + 1 && !action?.ops.some((op) => subjectOf(op) === id)) return;
     const n = ++asked.current;
-    window.cirrus.historyOf(id).then((h) => { if (asked.current === n) setSummary(h); }, (e: unknown) => console.error('Historique du nœud illisible :', e));
+    window.cirrus.historyOf(id).then(
+      (h) => { if (asked.current === n) setSummary(h); },
+      (e: unknown) => { console.error('Historique du nœud illisible :', e); if (asked.current === n) setSummary('failed'); },
+    );
   }, [id, rev]);
   return summary;
 }
@@ -38,8 +42,9 @@ function useHistory(id: Id, rev: number, action: Action | null): HistorySummary 
  * The tags (spec 5.4): removable « clé : valeur » chips; the required keys it lacks, greyed with their default value
  * (effectiveTags), which a click lets choose. A field adds a tag (parseTag), with suggestions from the registry's keys,
  * then from the values of the key's enumeration (`suggested` at most); arrows pick one, Enter adds it, or adds what is typed.
+ * A tag the session refuses gives back the text that asked for it (the refusal is in a toast).
  */
-function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; onEdit(build: Build): void }) {
+function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; onEdit(build: Build): Promise<boolean> }) {
   const defs = props.s.tagKeys;
   const missing = effectiveTags(props.tags, 'node', defs).slice(props.tags.length);
   const [text, setText] = useState('');
@@ -50,8 +55,10 @@ function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; on
   const found = focused ? tagSuggestions(text, defs, 'node', props.suggested) : [];
   const type = (v: string) => { setText(v); setPick(-1); setError(null); };
   const add = (tag: TagValue) => {
-    if (withTag(props.tags, tag, defs) !== props.tags) props.onEdit(tagsBuild(props.id, (tags, d) => withTag(tags, tag, d)));
+    const typed = text;
     type('');
+    if (withTag(props.tags, tag, defs) === props.tags) return;
+    void props.onEdit(tagsBuild(props.id, (tags, d) => withTag(tags, tag, d))).then((ok) => { if (!ok) setText((t) => (t === '' ? typed : t)); });
   };
   const submit = (input: string) => {
     try {
@@ -121,17 +128,24 @@ function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; on
  * A node's pop-up (spec 12), in a floating panel: its title in the header, typed in place (Enter or leaving the field
  * keeps it, Escape gives it up); its summary as LaTeX source, kept on leaving the field; its tags; its metadata (history,
  * plans, knowledge connections, identifier); its files (their actions come with task 4, their previews with tasks 5 and
- * 6). `found`: the node as resolveTarget finds it, null once it is gone (Review Focus 5).
+ * 6). `found`: the node as resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses
+ * (in a toast) puts its field back to the node's value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): void; onOpenPlan(plan: Id): void;
+  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void;
 }) {
   const { id, found: n, state: s } = props;
   const history = useHistory(id, props.rev, props.action);
-  // The last title seen stays in the header once the node is gone.
+  // The last title seen stays in the header once the node is gone; a refused edit reads the node as it is by then.
   const lastTitle = useRef('');
   if (n) lastTitle.current = n.title;
+  const latest = useRef(n);
+  latest.current = n;
+  /** Runs an edit from this field; refused, the field shows the node's value again, as it is once answered. */
+  const commit = (el: HTMLInputElement | HTMLTextAreaElement, build: Build, value: (node: NodeRec) => string) => {
+    void props.onEdit(build).then((ok) => { if (!ok && el.isConnected && latest.current) el.value = value(latest.current); });
+  };
 
   const title = n
     ? (
@@ -139,7 +153,7 @@ export function NodePopup(props: {
         key={`t${n.title}`} className="title" defaultValue={n.title} placeholder="Titre du nœud" spellCheck={false}
         onBlur={(e) => {
           const v = e.target.value.trim();
-          if (v && v !== n.title) props.onEdit(renameBuild(id, v));
+          if (v && v !== n.title) commit(e.target, renameBuild(id, v), (x) => x.title);
           else e.target.value = n.title;
         }}
         onKeyDown={(e) => {
@@ -156,22 +170,24 @@ export function NodePopup(props: {
     const plans: PlanRec[] = row < 0 ? [] : Array.from(placedIn(s, row), (p) => s.plans.get(planId(s, p))).filter((p) => p !== undefined);
     let knowledge = 0;
     if (row >= 0) for (const c of memberOf(s, row)) if (connKind(s, c) === KNOWLEDGE && !connTrashed(s, c)) knowledge++;
+    // « … » while it is read, « — » with no history or when it could not be read.
+    const h = history === 'failed' ? { created: null, modified: null, changes: null } : history;
     const date = (ms: number | null | undefined) => (ms === undefined ? '…' : ms === null ? '—' : DATE.format(ms));
     return (
       <>
         <h4>Résumé (LaTeX)</h4>
         <textarea
           key={`r${n.summary}`} defaultValue={n.summary} rows={4} placeholder="Résumé, en LaTeX" spellCheck={false}
-          onBlur={(e) => { const v = e.target.value; if (v !== n.summary) props.onEdit(summaryBuild(id, v)); }}
+          onBlur={(e) => { const v = e.target.value; if (v !== n.summary) commit(e.target, summaryBuild(id, v), (x) => x.summary); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); } }}
         />
         <h4>Tags</h4>
         <Tags s={s} id={id} tags={n.tags} suggested={props.params.tagSuggestions} onEdit={props.onEdit} />
         <h4>Métadonnées</h4>
         <dl className="meta">
-          <dt>Créé le</dt><dd>{date(history?.created)}</dd>
-          <dt>Modifié le</dt><dd>{date(history?.modified)}</dd>
-          <dt>Historique</dt><dd>{history ? plural(history.changes, 'modification', 'modifications') : '…'}</dd>
+          <dt>Créé le</dt><dd>{date(h?.created)}</dd>
+          <dt>Modifié le</dt><dd>{date(h?.modified)}</dd>
+          <dt>Historique</dt><dd>{!h ? '…' : h.changes === null ? '—' : plural(h.changes, 'modification', 'modifications')}</dd>
           <dt>Plans</dt>
           <dd>
             {plans.length === 0 ? 'aucun' : plans.map((p) => <button key={p.id} className="plan" title="Ouvrir ce plan" onClick={() => props.onOpenPlan(p.id)}>{p.name}</button>)}

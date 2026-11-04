@@ -8,7 +8,9 @@ import { afterAll, beforeAll, expect, test } from 'vitest';
 import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/renderer/actions.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
-import { inFront, type Panel, resolveTarget, withNode, withoutLoose, withoutTopLoose } from '../src/renderer/ui/panels/Panels.tsx';
+import {
+  closedIds, inFront, nodeOpenedBy, openingRect, type Panel, resolveTarget, withNode, withoutLoose, withoutTopLoose,
+} from '../src/renderer/ui/panels/Panels.tsx';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
 let dir: string, store: LocalStore, ids: FixtureIds;
@@ -115,6 +117,44 @@ test('panneaux : un nœud ouvert ferme les non épinglés, garde les épinglés,
   expect(withoutTopLoose([...loose2, { id: 8, target: { kind: 'node', node: 'f' }, rect: at(60), pinned: false, z: 1 }]).map((p) => p.id)).toEqual([2, 8]);
   expect(withoutTopLoose(loose2.filter((p) => p.pinned))).toEqual(loose2.filter((p) => p.pinned));
   expect(withoutLoose(loose2).map((p) => p.id)).toEqual([2]);
+});
+
+test('fermeture : les panneaux qu’une règle ferme, dont un champ en cours de saisie est quitté d’abord (I1 de la relecture)', () => {
+  const at: Rect = { x: 10, y: 100, w: 380, h: 460 };
+  const ps: Panel[] = [
+    { id: 1, target: { kind: 'node', node: 'a' }, rect: at, pinned: true, z: 1 },
+    { id: 2, target: { kind: 'node', node: 'b' }, rect: at, pinned: false, z: 2 },
+    { id: 3, target: { kind: 'node', node: 'c' }, rect: at, pinned: false, z: 3 },
+  ];
+  expect(closedIds(ps, withoutLoose(ps))).toEqual([2, 3]);
+  expect(closedIds(ps, withoutTopLoose(ps))).toEqual([3]);
+  // A new node's pop-up closes the loose ones; asked again, a loose pop-up stays (only the others close).
+  expect(closedIds(ps, withNode(ps, 'd', at, 4))).toEqual([2, 3]);
+  expect(closedIds(ps, withNode(ps, 'b', at, 4))).toEqual([3]);
+  expect(closedIds(ps, inFront(ps, 2))).toEqual([]);
+  expect(closedIds(ps, ps.filter((p) => p.id !== 1))).toEqual([1]);
+});
+
+test('clic dans le graphe : un nœud, un groupe ou le fantôme d’un nœud lointain ouvre un pop-up ; tout autre clic ferme les non épinglés', () => {
+  const node = { kind: 'node', id: 'n', node: 'n' } as const, group = { kind: 'group', id: 'g', node: 'g' } as const;
+  const far = { kind: 'phantom', id: 'ph1', node: 'loin', phantom: 'node' } as const;
+  expect(nodeOpenedBy(node, false)).toBe('n');
+  expect(nodeOpenedBy(group, false)).toBe('g');
+  // Spec 8.5: the far node's phantom opens that node's pop-up, as the original would.
+  expect(nodeOpenedBy(far, false)).toBe('loin');
+  // An absent phantom brings its node in, a centre phantom opens its connection's pop-up: no node pop-up.
+  expect(nodeOpenedBy({ kind: 'phantom', id: 'ph2', node: 'loin', phantom: 'absent' }, false)).toBeNull();
+  expect(nodeOpenedBy({ kind: 'phantom', id: 'ph3', node: 'loin', phantom: 'center' }, false)).toBeNull();
+  // Ctrl+click builds a selection; the background, a connection or a stub designate no item.
+  expect(nodeOpenedBy(node, true)).toBeNull();
+  expect(nodeOpenedBy(undefined, false)).toBeNull();
+});
+
+test('openingRect : la taille d’ouverture n’est jamais sous panelMinPx (Minor 2 de la relecture)', () => {
+  const p = { popupWidthPx: 380, popupHeightPx: 460, panelMinPx: 200, panelGapPx: 12 };
+  expect(openingRect({ x: 100, y: 100 }, p, SCREEN)).toEqual({ x: 112, y: 112, w: 380, h: 460 });
+  expect(openingRect({ x: 100, y: 100 }, { ...p, popupHeightPx: 160, popupWidthPx: 150 }, SCREEN)).toEqual({ x: 112, y: 112, w: 200, h: 200 });
+  expect(openingRect({ x: 1580, y: 955 }, { ...p, panelMinPx: 600 }, SCREEN)).toEqual({ x: 1580 - 12 - 600, y: 955 - 12 - 600, w: 600, h: 600 });
 });
 
 test('parseTag, sur le registre de la base de test : mot, nombre à virgule, énumération par nom et par rang', () => {

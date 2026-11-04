@@ -179,8 +179,8 @@ export function App() {
   }
   // The lobby has its own tab, always there: only another plan is added to the open ones.
   const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
-  /** An edit from a pop-up, through the session like the graph's; a refusal is reported. */
-  const edit = (build: Build) => { if (build) void session.current!.run(build).then((r) => report(r)); };
+  /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
+  const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
   return (
     <div className="app">
       <Tabs
@@ -201,7 +201,7 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onOpenPlan={openPlan}
-            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onBackgroundClick={() => panels.current?.closeLoose()}
+            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
           />
         </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}

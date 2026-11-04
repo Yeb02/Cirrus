@@ -23,6 +23,7 @@ import {
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
+import { nodeOpenedBy } from './panels/Panels.tsx';
 
 /**
  * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
@@ -80,10 +81,13 @@ export function GraphView(props: {
   session: EditSession | null; onResult(r: Result): void;
   /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
   onOpenPlan(plan: Id): void;
-  /** A click without Ctrl on a node or a group (not a phantom) opens its pop-up there, in window coordinates (plan 4a, D7). */
+  /**
+   * A click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up there, in
+   * window coordinates (plan 4a, D7).
+   */
   onOpenNode(node: Id, client: { x: number; y: number }): void;
-  /** A click on the background closes the loose pop-ups. */
-  onBackgroundClick(): void;
+  /** Any other click (background, connection, stub, absent or centre phantom, Ctrl+click) closes the loose pop-ups. */
+  onClickAway(): void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -209,8 +213,8 @@ export function GraphView(props: {
   const onOpenPlanRef = useRef(props.onOpenPlan);
   onOpenPlanRef.current = props.onOpenPlan;
   // The clicks replayed for captures go through the handlers of the first render: the pop-ups' callbacks are read here.
-  const panelsRef = useRef({ open: props.onOpenNode, away: props.onBackgroundClick });
-  panelsRef.current = { open: props.onOpenNode, away: props.onBackgroundClick };
+  const panelsRef = useRef({ open: props.onOpenNode, away: props.onClickAway });
+  panelsRef.current = { open: props.onOpenNode, away: props.onClickAway };
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
   const [ready, setReady] = useState(false);
@@ -874,25 +878,24 @@ export function GraphView(props: {
         nav({ t: 'drag', dxPx: intent.dxPx, dyPx: intent.dyPx });
         break;
       case 'click': {
-        // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1), and closes the loose pop-ups.
+        // Click selects; Ctrl+click adds or removes; a click on the background lets go (spec 9.1).
+        // By ids, not indices: a frame may have been rebuilt between the press and the release (I9 of the review).
         const target = targetOf(intent.hit);
-        if (intent.hit.kind === 'background') panelsRef.current.away();
+        const i = intent.hit.kind === 'item' ? sc.byId.get(intent.hit.id) : undefined, it = i === undefined ? undefined : sc.items[i];
+        // A node's pop-up opens (plan 4a, spec 8.5: a far node's phantom opens that node's), or the loose ones close.
+        const opened = nodeOpenedBy(it, intent.ctrl);
+        if (opened === null) panelsRef.current.away();
         if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
         setSelection(target ? toggle(emptySelection(), target) : emptySelection());
         // A stub or an absent phantom brings its node in (spec 11.3); a connection or a centre phantom opens its pop-up (spec 8.5).
-        // By ids, not indices: a frame may have been rebuilt between the press and the release (I9 of the review).
         const here = { x: intent.sx, y: intent.sy };
         if (intent.hit.kind === 'stub') startPlacing({ kind: 'import', node: intent.hit.node }, intent.hit.title, here);
         else if (intent.hit.kind === 'connection') openPopup(intent.hit.ids, intent.sx, intent.sy);
-        else if (intent.hit.kind === 'item') {
-          const i = sc.byId.get(intent.hit.id), it = i === undefined ? undefined : sc.items[i];
-          if (it?.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
-          else if (it?.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
-          else if (it && it.kind !== 'phantom') {
-            // A node or a group: its pop-up, at the click (plan 4a).
-            const r = root.current!.getBoundingClientRect();
-            panelsRef.current.open(it.id, { x: r.left + intent.sx, y: r.top + intent.sy });
-          }
+        else if (it?.phantom === 'absent') startPlacing({ kind: 'import', node: it.node }, it.title, here);
+        else if (it?.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
+        else if (opened !== null) {
+          const r = root.current!.getBoundingClientRect();
+          panelsRef.current.open(opened, { x: r.left + intent.sx, y: r.top + intent.sy });
         }
         break;
       }

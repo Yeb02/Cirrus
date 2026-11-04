@@ -276,7 +276,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 
 ### Décisions
 
-- Ruling: **clic hors des panneaux**.
+- Ruling: **clic hors des panneaux** — **remplacé à la correction 1** par la règle du plan, sur décision du contrôleur (ci-dessous). Il reste ici pour l'historique.
   - Dans le graphe, un clic sur le fond (avec ou sans Ctrl) appelle `onBackgroundClick`. Un clic sans Ctrl sur un nœud ou un groupe ouvre son pop-up, ce qui ferme les autres non épinglés.
   - Un Ctrl+clic sur un nœud, un clic sur une connexion, une amorce ou un fantôme laissent les panneaux. Un glissement de la vue ou d'un nœud n'est pas un clic : le pop-up reste.
   - Hors du graphe (onglets, réglages), un appui hors de tout panneau ferme les non épinglés, comme pour le menu contextuel et le pop-up de connexion.
@@ -309,7 +309,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 - Ruling: **`placeAt`** : de chaque côté, à `gap` du clic. Un panneau qui ne tient d'aucun côté va contre le bord qu'il dépasserait (dans les captures, les 460 pixels ne tiennent ni sous ni sur le clic de MDL : le pop-up est collé au bas). Plus grand que `bounds`, il est réduit à `bounds`. Coût si faux : nul.
 - Ruling: **un nœud déjà ouvert** : son pop-up, épinglé ou non, passe devant là où il est, sans suivre le nouveau clic ; les autres non épinglés se ferment. Coût si faux : nul.
 - Ruling: **profondeur** : un panneau mis devant prend la profondeur au-dessus de tous (la plus haute plus un), sans compteur global. Un panneau déjà devant ne change pas, et rien n'est redessiné. Coût si faux : nul.
-- Ruling: **couche des panneaux** : `.panels`, `z-index: 15`, dans `.main`.
+- Ruling: **couche des panneaux** : `.panels`, `z-index: 15`, dans `.main`. Le menu « + » des onglets, oublié ici, passe au-dessus à la correction 1 (I2).
   - Elle passe au-dessus du graphe et de ses marques (coin de hiérarchie, infobulle, rectangle de sélection), sous les notifications (20), le fantôme d'un geste (25), le pop-up de connexion (28), les menus (30) et les questions (40).
   - Les panneaux sont en `position: fixed`, en pixels de la fenêtre (D7), et restent dans la zone sous les onglets : le rectangle de la couche.
   - `color-scheme: dark` y rend sombres la barre de défilement et les parties natives des champs.
@@ -364,10 +364,60 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
     - dater au jour seulement : varie encore d'un jour à l'autre ;
     - rendre la base de test déterministe : les identifiants viennent de `uuidv7`, dans le socle.
   - Coût si faux : une capture qui ne montre pas l'identifiant. Une capture qui fait une action, comme `import-noeud` à la tâche 4, aura « Modifié le » à l'heure de la capture : elle devra masquer ou fixer cette date à son tour.
-- Ruling (imposé par le plan): **`selection` refaite** : son premier clic, sur MDL, ouvre maintenant le pop-up du nœud ; le Ctrl+clic sur Solomonoff le laisse (premier `Ruling:` ci-dessus). L'image, regardée, ne diffère de `reference-3c` que par le pop-up, qui couvre le fantôme « Universalité algorithmique ». C'est la seule capture qui clique sur un nœud : `apercu-glissement` y appuie, mais glisse. Coût si faux : nul.
-- Ruling: **référence des captures** : `docs/captures/plan4a/` reçoit toute la suite (12 images), dont `selection` refaite et `popup-noeud`.
+- Ruling (imposé par le plan): **`selection` refaite** — **annulé à la correction 1** : le Ctrl+clic ferme désormais le pop-up, et `selection` retrouve `reference-3c` au pixel. Son premier clic, sur MDL, ouvre maintenant le pop-up du nœud ; le Ctrl+clic sur Solomonoff le laisse (premier `Ruling:` ci-dessus). L'image, regardée, ne diffère de `reference-3c` que par le pop-up, qui couvre le fantôme « Universalité algorithmique ». C'est la seule capture qui clique sur un nœud : `apercu-glissement` y appuie, mais glisse. Coût si faux : nul.
+- Ruling: **référence des captures** — **remplacé à la correction 1**, sur décision du contrôleur (ci-dessous) : `docs/captures/plan4a/` reçoit toute la suite (12 images), dont `selection` refaite et `popup-noeud`.
   - Les dix autres sont identiques au pixel à `reference-3c`, qui reste telle quelle : la référence du plan 3c.
   - Pourquoi : `compare-captures` compte une image absente d'un côté comme un échec. Une référence complète se compare donc en une fois.
   - Options : refaire `selection` sur place dans `reference-3c` et ne mettre que les nouvelles dans `plan4a`, ce qui demande deux comparaisons dont chacune signale des absentes ; la suite complète (choix).
   - Coût si faux : déplacer `selection.png` dans `reference-3c` et retirer les dix doublons (1,4 Mo).
-- Écart à la spec, imposé par le plan : un clic sur un fantôme n'ouvre aucun pop-up de nœud (« pas un fantôme »), alors que la spec 8.5 veut que le fantôme d'un nœud lointain ouvre le pop-up de ce nœud. Il suffirait d'appeler `onOpenNode(it.node, …)` pour un fantôme de genre `node`. À trancher par le contrôleur.
+- Écart à la spec, imposé par le plan : un clic sur un fantôme n'ouvre aucun pop-up de nœud (« pas un fantôme »), alors que la spec 8.5 veut que le fantôme d'un nœud lointain ouvre le pop-up de ce nœud. Il suffirait d'appeler `onOpenNode(it.node, …)` pour un fantôme de genre `node`. À trancher par le contrôleur. **Tranché à la correction 1 : la spec l'emporte** (ci-dessous).
+
+### Correction 1 (relecture de la tâche 3)
+
+#### Mesures
+
+- `panels.test.ts` : 13 tests sur 13. Les trois nouveaux (`closedIds`, `nodeOpenedBy`, `openingRect`) échouaient d'abord : les fonctions n'existaient pas.
+- Suite complète : 521 tests sur 521 (518 + 3). `tsc` : `app` et `view` sans erreur.
+- Essai dans l'app construite (même banc d'essai par CDP) : 41 vérifications sur 41, dont 7 nouvelles (I1 deux fois, I2, I3 deux fois, I4, Minor 9).
+  - Sans le départ du champ avant la fermeture, les deux vérifications I1 échouent : le résumé et le titre tapés sont perdus. Le défaut que la relecture avait lu dans le code est ainsi reproduit.
+  - Avec l'ancien `z-index: 10` du menu, la vérification I2 échoue : le point du menu est couvert par le panneau.
+- Captures d'une suite neuve :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel, `selection` comprise ; `popup-noeud`, hors de cette référence, n'est pas comparée ;
+  - contre `plan4a` : `popup-noeud` à 0 pixel, les onze autres hors de cette référence ;
+  - `popup-noeud` refaite. Elle différait de 230 pixels (0,015 %), sa seule différence, regardée : le titre long s'arrête plus tôt dans l'en-tête, devant la zone de prise (Minor 9).
+- `compare-captures` contre un dossier où manquent dix images de la référence : dix « absente », sortie 1. Le cas d'échec reste donc.
+- Essai écarté : mettre la barre des onglets au-dessus de la couche (`.tabs { position: relative; z-index: 16 }`, la première solution de la relecture). Chaque capture différait alors de 258 pixels, et de 780 avec trois onglets : le contexte d'empilement de la barre change le lissage du texte de ses onglets.
+
+#### Décisions
+
+- Ruling (I1): **un champ en cours de saisie est quitté avant que son panneau ne se ferme**.
+  - Toute fermeture passe par `apply(règle)` dans `Panels`. Si l'élément qui a le focus est dans un panneau que la règle ferme (`closedIds`, pur et testé), son `blur()` est appelé tout de suite, dans l'écouteur. Le champ s'enregistre donc comme à toute perte du focus, avant la fermeture.
+  - Cela vaut pour toute fermeture : un appui hors des panneaux (onglets, roue, réglages), Échap, un nouveau pop-up, la croix, `closeLoose`.
+  - Pourquoi : un appui natif ferme le panneau dans la micro-tâche qui suit son écouteur, avant que l'appui ne déplace le focus. Le champ disparaît alors avec le focus, et React n'envoie pas d'événement pendant un commit : `onBlur` ne venait jamais.
+  - Options :
+    - fermer sur `click` plutôt que sur `pointerdown` : le focus aurait bougé, mais l'idiome du menu changerait, et une fermeture par programme ne serait pas couverte ;
+    - différer la fermeture après le `blur` ;
+    - quitter le champ d'abord (choix, la première solution de la relecture).
+  - Coût si faux : nul. Un tag tapé mais pas validé par Entrée n'est pas une modification : il part avec le panneau.
+- Ruling (I2): **le menu « + » des onglets passe au-dessus des panneaux** : `.menu` passe de `z-index: 10` à 16, au-dessus de la couche (15). Le menu contextuel garde son 30 (`.context-menu`, déclaré après). La barre des onglets ne change pas : voir l'essai écarté ci-dessus. Coût si faux : nul.
+- Ruling (I3, décision du contrôleur): **la règle du plan tient** : tout clic hors de tout panneau ferme les non épinglés.
+  - Dans le graphe, `nodeOpenedBy` (pur et testé) dit quel pop-up un clic ouvre. Un clic qui n'en ouvre aucun appelle `onClickAway`, qui ferme les non épinglés : le fond, une connexion (qui ouvre alors son propre pop-up), une amorce, un fantôme absent ou de centre, un Ctrl+clic.
+  - Un clic qui ouvre un pop-up ferme les autres non épinglés, et garde celui du nœud s'il est ouvert (`withNode`).
+  - La prop `onBackgroundClick` du plan devient `onClickAway` : elle ne vaut plus pour le seul fond. `App` est son seul utilisateur. Coût si faux : un nom.
+  - La capture `selection` retrouve `reference-3c` au pixel : son Ctrl+clic ferme le pop-up ouvert par son premier clic. Elle n'a pas à être refaite.
+- Ruling (I4, décision du contrôleur, spec 8.5): **le fantôme d'un nœud lointain ouvre le pop-up de ce nœud**, comme l'original. Un fantôme absent garde son geste d'import, un fantôme de centre le pop-up de sa connexion (`nodeOpenedBy`). Coût si faux : une ligne.
+- Ruling (décision du contrôleur): **`docs/captures/plan4a/` ne garde que les captures nouvelles du plan 4a**, aujourd'hui `popup-noeud`. Les onze autres en sont retirées. `reference-3c` reste inchangée, puisque `selection` n'y diffère plus.
+  - `compare-captures <référence> <captures>` ne compare que les images de la référence. Une capture absente de la suite est un échec ; une capture de la suite absente de la référence est nommée, sans être comparée. Une suite complète se compare ainsi à chacun des deux dossiers.
+  - Coût si faux : nul.
+- Ruling (Minors 2, 3, 4, 5 et 9, décision du contrôleur):
+  - **taille d'ouverture** : `openingRect` (pur et testé) ouvre le pop-up à `popupWidthPx × popupHeightPx`, jamais sous `panelMinPx`, et le garde dans la fenêtre par `clampRect` ;
+  - **historique illisible** : « — » pour les deux dates et le nombre de modifications, plutôt que « … » sans fin. La cause va à la console ;
+  - **modification refusée** :
+    - `onEdit` rend une promesse, vraie quand l'action est écrite ;
+    - refusés, le titre et le résumé reprennent la valeur du nœud ;
+    - un tag refusé rend au champ le texte qui l'a demandé ;
+    - le refus atteint la notification, comme pour toute modification ;
+  - **glissement** : le rectangle où le panneau reste est lu une fois, à l'appui, et non à chaque mouvement du pointeur ;
+  - **en-tête** : une zone de prise de 40 pixels au moins (`.drag`) sépare le titre des boutons ; un titre long s'arrête avant elle.
+
+  Coût si faux : nul.

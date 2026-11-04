@@ -43,8 +43,9 @@ button, input, select { font: inherit; color: var(--ink); }
 .tab .kind { font-size: 11px; color: var(--muted); }
 .tabs .add { position: relative; }
 .tabs .add > button { border: none; background: none; padding: 4px 10px; cursor: pointer; color: var(--muted); font-size: 16px; }
+/* Above the floating panels (.panels, z-index 15): the tabs' « + » menu opens over them (I2 of the plan 4a task 3 review). */
 .menu {
-  position: absolute; top: 100%; left: 0; z-index: 10; min-width: 220px; padding: 4px;
+  position: absolute; top: 100%; left: 0; z-index: 16; min-width: 220px; padding: 4px;
   background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.3); border-radius: 8px;
   box-shadow: 0 10px 30px rgba(2, 6, 16, 0.6);
 }
@@ -145,7 +146,8 @@ button, input, select { font: inherit; color: var(--ink); }
 .popup .pick:hover { background: rgba(143, 184, 255, 0.14); }
 /*
  * Floating panels (plan 4a): node pop-ups, file previews. In window pixels (position: fixed), over the graph and its
- * hover marks, under the toasts, the graph's menus, dialogs and ghosts. `.panel > header` is HEADER_PX (geometry.ts) high.
+ * hover marks, under the tabs' menu (16), the toasts, the graph's menus, dialogs and ghosts. `.panel > header` is
+ * HEADER_PX (geometry.ts) high.
  */
 .panels { position: absolute; inset: 0; z-index: 15; pointer-events: none; }
 .panel {
@@ -161,13 +163,14 @@ button, input, select { font: inherit; color: var(--ink); }
 }
 .panel > header .grip { flex: none; padding: 0 3px; color: var(--muted); opacity: 0.6; font-size: 12px; }
 .panel > header .title {
-  flex: 0 1 auto; field-sizing: content; min-width: 3ch; max-width: 100%; margin-right: auto; box-sizing: border-box; padding: 2px 5px;
+  flex: 0 1 auto; field-sizing: content; min-width: 3ch; max-width: 100%; box-sizing: border-box; padding: 2px 5px;
   font-weight: 600; background: none; border: 1px solid transparent; border-radius: 5px; cursor: text; user-select: text;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .panel > header input.title:hover { border-color: rgba(143, 184, 255, 0.25); }
 .panel > header input.title:focus { background: var(--sky1); border-color: var(--accent); outline: none; }
 .panel > header .title.gone { color: var(--muted); cursor: move; }
+.panel > header .drag { flex: 1 0 40px; align-self: stretch; }
 .panel > header button {
   flex: none; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0;
   border: none; border-radius: 5px; background: none; color: var(--muted); cursor: pointer;
