@@ -121,7 +121,8 @@ test('critères du plan 3c : chacun avec sa mesure, tenu ou non, sur les passes 
   const all = (rows: ReturnType<typeof criteria>) => Object.fromEntries(rows.map((r) => [r.key, r]));
   const ok = all(criteria(benchRuns(edits())));
   expect(Object.keys(ok)).toEqual(['load', 'fallback', 'tab', 'lobby', 'edits', 'drag', 'rebuild', 'gpu', 'cpu4', 'interval', 'heap', 'main']);
-  for (const r of Object.values(ok)) expect(r.met, r.key).toBe(true);
+  // The fallback path is only reported: measured, without a verdict.
+  for (const r of Object.values(ok)) expect(r.met, r.key).toBe(r.key === 'fallback' ? null : true);
   expect(ok.load.measure).toBe('1400 ms');
   expect(ok.fallback.measure).toBe('9249 ms');
   expect(ok.edits.measure).toContain('20 ms au pire');
@@ -178,8 +179,9 @@ test('rapport : la vue dense, le glissement (octets, anneaux), le dépôt dans u
     'Dépôt dans un autre groupe (Alt, dans « Groupe 7 »)', '| 20 |', 'Ouverture du lobby sans cache', '| 450 |',
     '## Réécritures de l\'instantané', '| réécriture 1 | 650.0 | 62.0 |', '15000 pages libres sur 40000',
     '## Critères (plan 3c, tâche 10)', '| Ouverture du lobby sans cache | ≤ 500 ms | 450 ms | tenu |',
+    '| Chemin de secours (sans instantané) | mesuré et rapporté | 9249 ms | rapporté |',
   ]) expect(md, s).toContain(s);
   expect(JSON.parse(readFileSync(join(dir, 'essai-sections.json'), 'utf8')).snapshots).toEqual(growth);
-  // The next run starts without them (scripts/bench.mjs removes both files first).
+  // recordRun leaves the rewrites' file in place; scripts/bench.mjs removes it before a run.
   expect(existsSync(join(dir, '.app-rendu-instantanes.json'))).toBe(true);
 });

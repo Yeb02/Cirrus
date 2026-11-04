@@ -77,7 +77,10 @@ export function benchName(env: Record<string, string | undefined> = process.env)
 const f = (v: number | undefined, d = 2) => (v !== undefined && Number.isFinite(v) ? v.toFixed(d) : '—');
 const trio = (s: Stats | undefined, hi: 'p95' | 'p99', d = 2) => (s ? `${f(s.p50, d)} / ${f(s[hi], d)} / ${f(s.max, d)}` : '—');
 
-/** A criterion of plan 3c (task 10): its target, the measure, whether it is met (null: not measured by these passes). */
+/**
+ * A criterion of plan 3c (task 10): its target, the measure, whether it is met (null: no verdict, either not measured by
+ * these passes, its measure then « — », or only to be reported, as the fallback path).
+ */
 export interface Criterion { key: string; name: string; target: string; measure: string; met: boolean | null }
 
 /**
@@ -101,7 +104,7 @@ export function criteria(runs: PassRecord[]): Criterion[] {
   const interval = vsync?.intervalMs, main = vsync?.beforeEdits?.processMb.browser, empty = vide?.processMb.browser;
   return [
     row('load', 'Chargement, du démarrage du principal à la première image, avec instantané', '≤ 1,5 s', vsync?.phases.firstFrame, 1500, ms),
-    row('fallback', 'Chemin de secours (sans instantané)', 'mesuré et rapporté', secours?.phases.firstFrame, Infinity, ms),
+    { ...row('fallback', 'Chemin de secours (sans instantané)', 'mesuré et rapporté', secours?.phases.firstFrame, Infinity, ms), met: null },
     row('tab', 'Changement d’onglet vers un plan en cache', '≤ 50 ms', e?.tabBackMs, 50, ms),
     row('lobby', 'Ouverture du lobby sans cache', '≤ 500 ms', e?.lobbyColdMs, 500, ms),
     {
@@ -341,7 +344,7 @@ function report(name: string, scale: string, runs: PassRecord[], snapshots: Snap
     '',
     '| Critère | Cible | Mesure | Tenu |',
     '|---|---|---|---|',
-    ...criteria(runs).map((c) => `| ${c.name} | ${c.target} | ${c.measure} | ${c.met === null ? '—' : c.met ? 'tenu' : '**non tenu**'} |`),
+    ...criteria(runs).map((c) => `| ${c.name} | ${c.target} | ${c.measure} | ${c.met === null ? (c.measure === '—' ? '—' : 'rapporté') : c.met ? 'tenu' : '**non tenu**'} |`),
     '',
     ...(notes.length > 0 ? ['## Remarques', '', ...notes.map((n) => `- ${n}`), ''] : []),
   ];

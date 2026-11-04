@@ -111,7 +111,7 @@ Après la dernière réécriture : 14898 pages libres sur 164971 (pages de 4096 
 | Critère | Cible | Mesure | Tenu |
 |---|---|---|---|
 | Chargement, du démarrage du principal à la première image, avec instantané | ≤ 1,5 s | 2183 ms | **non tenu** |
-| Chemin de secours (sans instantané) | mesuré et rapporté | 9592 ms | tenu |
+| Chemin de secours (sans instantané) | mesuré et rapporté | 9592 ms | rapporté |
 | Changement d’onglet vers un plan en cache | ≤ 50 ms | 17 ms | tenu |
 | Ouverture du lobby sans cache | ≤ 500 ms | 469 ms | tenu |
 | Chaque édition du script, jusqu’à l’image | ≤ 30 ms | 138 ms au pire (dépôt) | **non tenu** |
@@ -130,4 +130,5 @@ Après la dernière réécriture : 14898 pages libres sur 164971 (pages de 4096 
 - **Dépôt :** première édition de la session ; les sept suivantes prennent de 9 à 29 ms. Sous Node, la première commande après le décodage paie ≈ 380 ms de tables construites à leur premier usage (registre du plan 3c, tâche 10).
 - **Vue dense :** l'écran du banc fait ≈ 1 707 × 1 029 pixels CSS (rapport 1,5) : 1 755 éléments visibles et 14 175 glyphes au plus au seuil de lisibilité, avec les titres courts de la base synthétique.
 - **Octets par maillage :** la taille d'un maillage entier compte ses tampons de sommets ou d'instances, sans les indices ; les marqueurs et les anneaux, refaits en entier à chaque image avec leurs indices, envoient donc plus que cette taille.
+- **Réécritures de l'instantané :** les tailles par étape, base ouverte, viennent de `statSync` sur des fichiers que la base tient ouverts, ce qui n'est pas fiable ici (« réécriture 1 » montre une base inchangée et un WAL quasi vide juste après 61 Mo écrits, impossible en WAL). Seules la taille de la base fermée et les comptes de pages (PRAGMA, par une seconde connexion) sont sûrs : 614,7 → 675,7 Mo, dont 61,0 Mo de pages libres. Le rapport du critère « Chemin de secours » est corrigé à la main en « rapporté » (le code du banc donne désormais ce verdict).
 - Critères, leviers suivants et comparaison à la référence : registre du plan 3c, section « Tâche 10 ».

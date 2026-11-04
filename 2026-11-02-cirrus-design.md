@@ -69,8 +69,8 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 **Pile retenue** (choisie par Claude sur délégation de l'utilisateur, qui l'a acceptée)
 - **App de bureau :** Electron et TypeScript.
   - Rendu du graphe : un moteur WebGL 2 à nous, piloté par la carte graphique. Il remplace PixiJS, sur décision de l'utilisateur du 2026-11-03 (plan 3c) :
-    - une texture des éléments (position, demi-tailles, cran, repli, style) est lue par des instances : boîtes, marqueurs, glyphes MSDF des titres, et courbes des connexions simples, calculées dans le vertex shader ;
-    - le processeur ne prépare que les faisceaux complexes et les enveloppes des groupes, sans travailleur ;
+    - une texture des éléments (position, demi-tailles, cran, repli, style) est lue par des instances : boîtes, glyphes MSDF des titres, et courbes des connexions simples, calculées dans le vertex shader ;
+    - le processeur prépare le reste, sans travailleur : les faisceaux complexes et leurs pointes, les enveloppes des groupes, les marqueurs des faisceaux, les anneaux (sélection, cible du dépôt, intrus) et le fond ;
     - un déplacement ou un aperçu réécrit quelques texels et quelques instances ;
     - la couche reste mince : un second moteur WebGPU reste possible.
   - Interface (panneaux, pop-ups, onglets) : React.
@@ -94,7 +94,7 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - L'état vit en une seule copie, dans le processus d'interface : ses connexions, leurs membres et leurs branches en colonnes, le reste en objets. Les commandes s'y appliquent sur place, avec un retour arrière exact.
 - Le principal ne garde aucun état. Il tient la base et valide chaque écriture par SQL : il relit la ligne courante et la compare à l'« avant » de chaque opération, et refuse l'action au premier écart.
 - La base garde un instantané binaire de l'état, dans sa table `snapshot`, avec le numéro du journal qu'il couvre. Au chargement, le principal envoie cet instantané en un seul `ArrayBuffer` avec la fin du journal, que l'interface décode puis rejoue.
-- Sans instantané utilisable (absent, d'une autre version, ou que l'interface ne peut ni décoder ni compléter par le journal), l'état se reconstruit depuis les tables : c'est le chemin de secours. L'instantané refait remplace alors l'ancien.
+- Sans instantané utilisable (absent, d'une autre version, ou que l'interface ne peut ni décoder ni compléter par le journal), le principal reconstruit l'état depuis les tables et l'encode, sans le garder : c'est le chemin de secours. L'instantané refait remplace alors l'ancien.
 - L'interface encode un nouvel instantané au repos, une fois un nombre d'actions atteint, et à la fermeture ; un instantané périmé au chargement est refait au repos. Elle l'envoie au principal, qui l'écrit : le cloisonnement tient.
 - Les tables restent la source de vérité, avec le journal et l'historique par objet (section 6.3) ; l'instantané n'en est qu'un cache.
 
