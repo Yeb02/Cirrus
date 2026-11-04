@@ -1,5 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, createReadStream, type Dirent, mkdirSync, readdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
+import {
+  chmodSync, copyFileSync, createReadStream, type Dirent, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { FileRef } from '@cirrus/core';
@@ -102,7 +105,9 @@ export interface ImportResult { refs: FileRef[]; refused: { name: string; reason
 /**
  * Copies files into the store (spec 5.2), each by importFile, before any action refers to them (plan 4a, D6). A
  * folder, a file over `maxBytes` and a path gone since it was dropped are refused with their reason, in French; the
- * others go in (Review Focus 2).
+ * others go in (Review Focus 2). Only local regular files are read (I1 of the review): a UNC or device path
+ * (`\\server\…`, `//…`, `\\?\…`, `\\.\…`) is refused before any access, which would open an SMB connection with the
+ * user's credentials, and a link is not followed (lstat).
  */
 export function importPaths(storeDir: string, paths: string[], maxBytes: number): ImportResult {
   const out: ImportResult = { refs: [], refused: [] };
@@ -110,8 +115,13 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
   for (const p of paths) {
     const name = basename(p);
     try {
-      const st = statSync(p);
+      if (/^[\\/]{2}/.test(p)) {
+        out.refused.push({ name, reason: 'chemin réseau ou de périphérique' });
+        continue;
+      }
+      const st = lstatSync(p);
       if (st.isDirectory()) out.refused.push({ name, reason: 'c’est un dossier' });
+      else if (!st.isFile()) out.refused.push({ name, reason: 'pas un fichier ordinaire' });
       else if (st.size > maxBytes) out.refused.push({ name, reason: `plus de ${limit} Mo` });
       else out.refs.push(importFile(storeDir, p));
     } catch (e) {
@@ -123,10 +133,23 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
   return out;
 }
 
-/** Opened by Windows, these would run (a .py by Python, a .lnk its target): the explorer shows them instead (plan 4a, D5). */
+/**
+ * Opened by Windows, these would run or load code (a .py by Python, a .lnk its target, a .chm its scripts): the explorer
+ * shows them instead (plan 4a, D5). Microsoft's list of attachments Outlook blocks (« Blocked attachments in Outlook »,
+ * table « File types blocked in Outlook », formerly Level 1, read on 2026-11-04 at
+ * https://support.microsoft.com/office/434752e1-02d3-4e90-9124-8b81e49a8519), then the plan's entries missing from it
+ * and the other application packages. A fixed security list, not a setting.
+ */
 const RUNNABLE = new Set([
-  'exe', 'com', 'bat', 'cmd', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msi', 'msp', 'msc', 'scr', 'pif', 'cpl', 'hta', 'lnk', 'url',
-  'reg', 'jar', 'py', 'pyw', 'pyz', 'appref-ms',
+  'ade', 'adp', 'apk', 'app', 'appcontent-ms', 'application', 'appref-ms', 'appx', 'asp', 'aspx', 'asx', 'bas', 'bat', 'bgi', 'cab', 'cdxml', 'cer',
+  'chm', 'cmd', 'cnt', 'com', 'cpl', 'crt', 'csh', 'der', 'diagcab', 'exe', 'fxp', 'gadget', 'grp', 'hlp', 'hpj', 'hta', 'htc', 'img', 'inf', 'ins',
+  'iso', 'isp', 'its', 'jar', 'jnlp', 'js', 'jse', 'ksh', 'library-ms', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav',
+  'maw', 'mcf', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'mht', 'mhtml', 'msh', 'msh1', 'msh2', 'mshxml', 'msh1xml', 'msh2xml', 'msi', 'msp',
+  'mst', 'msu', 'ops', 'osd', 'pcd', 'pif', 'pl', 'plg', 'prf', 'prg', 'printerexport', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'psd1',
+  'psdm1', 'pssc', 'pst', 'py', 'pyc', 'pyo', 'pyw', 'pyz', 'pyzw', 'reg', 'scf', 'scr', 'sct', 'search-ms', 'settingcontent-ms', 'shb', 'shs', 'theme',
+  'tmp', 'udl', 'url', 'vb', 'vbe', 'vbp', 'vbs', 'vhd', 'vhdx', 'vsmacros', 'vsw', 'webpnp', 'website', 'ws', 'wsb', 'wsc', 'wsf', 'wsh', 'xbap', 'xll',
+  'xnk',
+  'psm1', 'msix', 'msixbundle', 'appxbundle',
 ]);
 
 export function isRunnable(name: string): boolean {
@@ -141,10 +164,25 @@ function plainName(name: string): boolean {
 }
 
 /**
+ * The Mark-of-the-Web of the Internet zone (I2 of the review): the store keeps no file's origin, so every copy is
+ * marked as if downloaded, and SmartScreen, Office's Protected View and the zone blocks of CHM and HTA stay on.
+ */
+const ZONE_MARK = '[ZoneTransfer]\r\nZoneId=3\r\n';
+const zoneStream = (path: string) => `${path}:Zone.Identifier`;
+const marked = (path: string) => {
+  try {
+    return readFileSync(zoneStream(path), 'utf8') === ZONE_MARK;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * The copy of a blob handed to the system's application (plan 4a, D5), never the store's own file: root/<first 16 hex
- * of the hash>/<name>, read-only. Written under a temporary name then renamed, so a copy found there is whole and
- * reused; one whose size differs (its read-only flag lifted by hand, then written to) is replaced. A name or a hash that
- * would leave `root`, and a blob missing from the store, throw.
+ * of the hash>/<name>, marked from the Internet zone and read-only (a stream cannot be written to a read-only file, so
+ * the mark comes first). Written under a temporary name then renamed, so a copy found there is whole; it is reused only
+ * as it was left: read-only, the blob's size, marked. Otherwise (its flag lifted by hand, written to, its stream
+ * removed) it is made again. A name or a hash that would leave `root`, and a blob missing from the store, throw.
  */
 export function openableCopy(storeDir: string, ref: FileRef, root: string): string {
   if (!HASH.test(ref.hash) || !plainName(ref.name)) throw new Error('nom de fichier refusé');
@@ -153,7 +191,7 @@ export function openableCopy(storeDir: string, ref: FileRef, root: string): stri
   const folder = join(root, ref.hash.slice(0, 16));
   const dest = join(folder, ref.name);
   const there = statSync(dest, { throwIfNoEntry: false });
-  if (there?.size === size) return dest;
+  if (there && there.size === size && (there.mode & 0o200) === 0 && marked(dest)) return dest;
   if (there) {
     chmodSync(dest, 0o644);
     unlinkSync(dest);
@@ -162,6 +200,11 @@ export function openableCopy(storeDir: string, ref: FileRef, root: string): stri
   const tmp = join(folder, `.copie-${randomBytes(8).toString('hex')}`);
   try {
     copyFileSync(src, tmp);
+    try {
+      writeFileSync(zoneStream(tmp), ZONE_MARK);
+    } catch {
+      // not NTFS: no streams, so no mark to give (the copy is then made again at each opening)
+    }
     chmodSync(tmp, 0o444);
     renameSync(tmp, dest);
   } catch (e) {
@@ -174,6 +217,20 @@ export function openableCopy(storeDir: string, ref: FileRef, root: string): stri
     throw e;
   }
   return dest;
+}
+
+/**
+ * How a file is opened (plan 4a, D5; Review Focus 3): its read-only copy, by its application, or shown in the explorer
+ * when Windows would run it.
+ */
+export function openTarget(storeDir: string, ref: FileRef, root: string): { path: string; shown: 'app' | 'folder' } {
+  return { path: openableCopy(storeDir, ref, root), shown: isRunnable(ref.name) ? 'folder' : 'app' };
+}
+
+/** Why a file did not open, in French: Node's or Windows' own text, in English, follows the colon. */
+export function openFailure(e: unknown): string {
+  const reason = (e as NodeJS.ErrnoException | null)?.code === 'ENOENT' ? 'il manque dans la base' : e instanceof Error ? e.message : String(e);
+  return `Impossible d’ouvrir le fichier : ${reason}`;
 }
 
 /**

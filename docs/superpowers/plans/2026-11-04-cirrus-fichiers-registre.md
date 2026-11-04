@@ -57,7 +57,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Options pour `ico` : `image/vnd.microsoft.icon` (IANA) ou `image/x-icon`, celui que les navigateurs emploient (choix).
   - L'extension se lit comme Windows la lit : après le dernier point, sans les points ni les espaces finaux (voir `isRunnable`).
   - Coût si faux : nul.
-- Ruling: **quatrième raison de refus, « illisible »** : un échec qui n'est pas une absence (`ENOENT`, `ENOTDIR` : « introuvable »).
+- Ruling: **raison de refus « illisible »**, en plus des trois du plan : un échec qui n'est pas une absence (`ENOENT`, `ENOTDIR` : « introuvable »). Les raisons de la correction 1 (I1 ci-dessous) s'y ajoutent.
   - Cas visés : un fichier tenu en exclusivité par un autre programme, ou un accès refusé ; une erreur d'écriture du magasin (disque plein) se lit aussi « illisible », fichier par fichier.
   - Options :
     - relancer l'erreur, ce qui ferait échouer tout le dépôt sans importer les autres fichiers, contre le Review Focus 2 ;
@@ -74,7 +74,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Coût si faux : un test d'une tâche suivante qui comparerait la forme droite échoue visiblement ; un caractère à changer.
 - Ruling: **extension d'un exécutable**, lue comme Windows la lit.
   - Les points et les espaces finaux tombent : « a.bat. » s'ouvrirait comme « a.bat ». Un nom qui n'est qu'une extension (« .lnk ») la porte.
-  - La liste est celle du plan, mot pour mot, fixe (une liste de sécurité n'est pas un réglage).
+  - La liste est fixe : une liste de sécurité n'est pas un réglage. Celle du plan a été remplacée à la correction 1 (I3 ci-dessous).
   - Coût si faux : nul.
 - Ruling: **`openableCopy` vérifie la référence reçue par IPC**.
   - L'empreinte doit avoir 64 caractères hexadécimaux. Le nom doit être un simple nom de fichier : aucun de `<>:"/\|?*`, ni caractère de contrôle, ni point ou espace final, ni nom de périphérique réservé (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, avec ou sans extension). Sinon la fonction lève.
@@ -83,19 +83,22 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Coût si faux : nul. `checkFileName` (tâche 2) refuse les mêmes noms, donc aucun nom permis dans un nœud n'est refusé ici.
 - Ruling: **écriture et réemploi des copies**.
   - Une copie s'écrit sous un nom temporaire (`.copie-<hex>`) dans le même dossier, passe en lecture seule, puis est renommée : une copie trouvée est entière.
-  - Une copie dont la taille diffère du fichier du magasin est remplacée : on lui a retiré la lecture seule à la main, puis on a écrit dedans.
-  - Options : réemployer ce qui est là (plan) ; comparer d'abord la taille (choix).
-  - Coût si faux : un `stat` de plus par ouverture.
+  - Une copie n'est réemployée que telle qu'elle a été laissée : en lecture seule, de la taille du fichier du magasin, et marquée (I2 ci-dessous). Sinon elle est refaite. Ce cas couvre une copie dont on a retiré la lecture seule à la main, même réécrite à taille égale (Minor 3 de la relecture, correction 1).
+  - Options :
+    - réemployer ce qui est là (plan) ;
+    - comparer la taille seule (livraison) ;
+    - comparer la taille, le droit d'écriture et la marque (correction 1, choix).
+  - Coût si faux : un `stat` et la lecture d'un flux de 26 octets par ouverture.
 - Ruling: **ménage des copies**.
   - Les fichiers repassent en écriture, puis `unlinkSync` les efface ; c'est ce qui marche sous le Node d'Electron, mesuré. Les dossiers vidés s'effacent par `rmdirSync`, et un fichier qui ne s'efface pas (encore ouvert) repasse en lecture seule.
   - `cleanCopies` est appelé juste après `createWindow`, pendant que la fenêtre charge, et seulement hors banc et hors captures. Le banc de construction et le banc d'instantanés rendent la main avant. Un lancement normal sur une autre base (`CIRRUS_DATA`) fait aussi le ménage.
   - Coût si faux : deux instances sur deux bases partagent `%TEMP%\cirrus-ouverts`, et le démarrage de la seconde efface les copies fermées de la première. Une application qui a lu son fichier puis l'a fermé continue de l'afficher.
-- Ruling: **messages d'`openFile`**, en français :
-  - « « nom » ne peut pas être ouvert : il manque dans la base. » pour un fichier absent du magasin ;
-  - « … : nom de fichier refusé. » pour une référence refusée ;
-  - « Aucune application n’ouvre « nom » : <message de Windows> » quand `shell.openPath` échoue.
+- Ruling: **messages d'`openFile`** (Minor 2 de la relecture, correction 1) : toujours « Impossible d’ouvrir le fichier : <raison> », par `openFailure`.
+  - « il manque dans la base » pour un fichier absent du magasin, « nom de fichier refusé » pour une référence refusée.
+  - Sinon, le texte anglais de Node ou de `shell.openPath` suit les deux-points.
 
   Coût si faux : la formulation.
+- Ruling: **décision d'ouvrir ou de montrer** (Minor 4, correction 1) : `openTarget` dans `files.ts` rend `{ path, shown }` et se teste. Le gestionnaire IPC ne fait plus qu'appeler `shell.showItemInFolder` ou `shell.openPath`. Coût si faux : nul.
 - Ruling: **types du pont** : `env.d.ts` importe `ImportResult` et `HistorySummary` de `../main/files.ts` par `import type`, effacé à la construction.
   - Options : recopier les formes dans `env.d.ts`, comme le fait le reste du fichier ; importer le type (choix).
   - Pourquoi : le principal et le pont partagent ainsi une seule définition.
@@ -105,3 +108,32 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Mesure : 200 Mo prennent environ 0,65 s, fenêtre figée.
   - Options : un `worker_threads` qui importe, sans rien changer au pont, déjà asynchrone (reporté) ; synchrone (choix).
   - Coût si faux : un gel d'environ 0,65 s par 200 Mo importés. La correction ne touche pas l'interface.
+
+### Correction 1 (relecture de la tâche 1)
+
+- Ruling (I1): **l'import ne lit que les fichiers déposés, locaux et ordinaires**.
+  - Le preload garde, dans sa fermeture, l'ensemble des chemins que `pathForFile` a rendus dans cette page. `importFiles` ne transmet au principal que ceux-là ; les autres reviennent refusés, « non déposé ».
+  - Le principal refuse les chemins réseau et de périphérique (`\\serveur\…`, `//…`, `\\?\…`, `\\.\…`), « chemin réseau ou de périphérique », avant tout accès au disque.
+  - Il refuse aussi ce qui n'est pas un fichier ordinaire, « pas un fichier ordinaire » (Minor 1 de la relecture). Le test passe par `lstat`, donc un lien n'est jamais suivi : un lien vers un partage ouvrirait SMB comme un chemin UNC.
+  - Le gestionnaire IPC ne garde que les chaînes d'un tableau. `pickFiles` ne change pas, puisque ses chemins viennent de la boîte de dialogue du principal ; ils passent par les mêmes refus.
+  - Pourquoi : sans la porte, un script de la page faisait copier n'importe quel fichier lisible (`.ssh\id_rsa`) dans le magasin, puis le lisait par `cirrus-file:`. Un chemin UNC envoyait les identifiants NTLM de l'utilisateur.
+    - Les scripts de la page n'atteignent pas la fermeture du preload (`contextIsolation`), et `getPathForFile` rend `''` pour un `File` qu'ils fabriquent.
+    - D6 reste tel quel : l'interface calcule les actions, et aucune IPC n'est ajoutée. Il faut désormais une faille du moteur de rendu, et non un simple script.
+  - Options écartées : faire confiance aux chemins de la page (livraison) ; un import écrit par le principal sur un événement de dépôt, qu'Electron ne fournit pas.
+  - Mesures :
+    - avant la correction, le test des chemins réseau a pris 2,7 s pour `\\serveur\partage\a.txt` (tentative SMB), et `\\.\NUL` comme `\\?\<chemin>` étaient importés ;
+    - sous Electron, avec le preload construit et un vrai fichier du disque donné à un `<input type=file>` par `DOM.setFileInputFiles` (CDP), le chemin du fichier réel passe, tandis que `C:\Windows\win.ini` et `42`, nommés par la page, reviennent « non déposé » sans atteindre le principal.
+  - Coût si faux : un fichier légitime d'un partage réseau doit d'abord être copié en local. Il en va de même pour un lien symbolique, dont on dépose la cible.
+- Ruling (I2): **marque du web sur chaque copie ouvrable**.
+  - Le flux `<copie>:Zone.Identifier` reçoit `[ZoneTransfer]\r\nZoneId=3\r\n`, écrit avant le passage en lecture seule : Windows refuse d'écrire un flux d'un fichier en lecture seule (EPERM), mesuré. Le renommage garde le flux.
+  - Une copie réemployée qui l'a perdu est refaite, marquée.
+  - Sur un volume sans flux (non NTFS), l'écriture échoue sans bruit : la copie n'a pas de marque et se refait à chaque ouverture.
+  - Pourquoi : le magasin ne garde que le flux principal d'un fichier importé, et Cirrus ne doit pas blanchir la marque d'un fichier téléchargé. Sans elle, SmartScreen, le mode protégé d'Office, son blocage des macros venues d'Internet et les blocages de zone des CHM et HTA ne jouent plus.
+  - Options écartées : garder la zone d'origine de chaque fichier, ce qui demanderait un champ de `FileRef` synchronisé entre PC ; ne marquer que les exécutables.
+  - Coût si faux : les documents Office de l'utilisateur ouverts depuis Cirrus passent par le mode protégé, à un clic. Une modification d'une copie en lecture seule n'est de toute façon pas gardée.
+- Ruling (I3, imposé par le plan): **liste des exécutables**.
+  - Elle reprend la table de Microsoft « File types blocked in Outlook » (page « Blocked attachments in Outlook », support.microsoft.com/office/434752e1-02d3-4e90-9124-8b81e49a8519). La page ne parle plus de « Level 1 ». Elle a été lue le 2026-11-04 et compte 133 extensions, dont `pyc`, `pyzw`, `chm`, `application`, `scf`, `inf`, `xll`, `settingcontent-ms`, `iso` et `mht`.
+  - S'y ajoutent les entrées du plan qui n'y sont pas, `psm1`, et les autres paquets d'applications : `msix`, `msixbundle`, `appxbundle`. `appref-ms` et `appx` y sont déjà.
+  - Pourquoi : la liste du plan oubliait des types qui exécutent du code à l'ouverture. Une liste tenue par Microsoft est la référence habituelle, sans excès.
+  - Option écartée : une liste blanche de documents, qui échoue fermée, mais bloque tout format légitime non listé et demande un entretien.
+  - Coût si faux : un type de document inhabituel est montré dans l'explorateur au lieu d'être ouvert.

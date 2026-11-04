@@ -3,6 +3,11 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 // The interface's only door to the system (spec 4): a few calls, no Node access.
 const arg = process.argv.find((a) => a.startsWith('--cirrus-launch='));
 const launch = arg ? JSON.parse(arg.slice('--cirrus-launch='.length)) : {};
+// The paths of the files dropped in this page, which pathForFile gave: the only ones importFiles hands on (I1 of the
+// review). Scripts of the page cannot reach this closure (contextIsolation), and getPathForFile gives '' for any File
+// they make; so a script cannot have the main process read a file the user did not drop.
+const dropped = new Set<string>();
+const nameOf = (p: unknown) => String(p).slice(Math.max(String(p).lastIndexOf('\\'), String(p).lastIndexOf('/')) + 1);
 
 contextBridge.exposeInMainWorld('cirrus', {
   load: (fromTables: boolean) => ipcRenderer.invoke('cirrus:load', fromTables === true),
@@ -21,13 +26,21 @@ contextBridge.exposeInMainWorld('cirrus', {
   quitReady: () => ipcRenderer.send('cirrus:quit:ready'),
   // A dropped file's path (File.path is gone): '' for a file not on the disk, and for anything that is not a File.
   pathForFile: (file: File) => {
+    let path = '';
     try {
-      return webUtils.getPathForFile(file);
+      path = webUtils.getPathForFile(file);
     } catch {
-      return '';
+      // not a File
     }
+    if (path) dropped.add(path);
+    return path;
   },
-  importFiles: (paths: string[]) => ipcRenderer.invoke('cirrus:files:import', paths),
+  importFiles: async (paths: string[]) => {
+    const given: unknown[] = Array.isArray(paths) ? paths : [];
+    const r = await ipcRenderer.invoke('cirrus:files:import', given.filter((p) => dropped.has(p as string)));
+    const others = given.filter((p) => !dropped.has(p as string)).map((p) => ({ name: nameOf(p), reason: 'non déposé' }));
+    return { refs: r.refs, refused: [...r.refused, ...others] };
+  },
   pickFiles: () => ipcRenderer.invoke('cirrus:files:pick'),
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),

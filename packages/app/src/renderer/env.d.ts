@@ -21,7 +21,10 @@ export interface CirrusBridge {
   quitReady(): void;
   /** A dropped file's path on the disk; '' for a file that is not on it (made in the page, or not a File). */
   pathForFile(file: File): string;
-  /** Copies files into the store (plan 4a, D6): their references, and the refused ones with their reason in French. */
+  /**
+   * Copies files into the store (plan 4a, D6): their references, and the refused ones with their reason in French. Only
+   * the paths pathForFile gave in this page go through; any other comes back refused, « non déposé ».
+   */
   importFiles(paths: string[]): Promise<ImportResult>;
   /** The same for files chosen in the system's dialog; empty lists when nothing is chosen. */
   pickFiles(): Promise<ImportResult>;

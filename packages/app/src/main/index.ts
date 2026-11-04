@@ -8,7 +8,7 @@ import { withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
-import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, isRunnable, openableCopy } from './files.ts';
+import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, openFailure, openTarget } from './files.ts';
 import { lockBase } from './lock.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
@@ -158,7 +158,9 @@ ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) =
 /** The largest file an import takes, in bytes (setting maxImportMb). */
 const maxImportBytes = () => withOverrides(settings()).maxImportMb * 2 ** 20;
 // Files dropped on a node or chosen in the dialog, copied into the store before an action refers to them (plan 4a, D6).
-ipcMain.handle('cirrus:files:import', (_e, paths: string[]) => importPaths(dir, paths, maxImportBytes()));
+// The preload passes on only the paths of files dropped in the page (I1 of the review).
+ipcMain.handle('cirrus:files:import', (_e, paths: unknown) =>
+  importPaths(dir, Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [], maxImportBytes()));
 ipcMain.handle('cirrus:files:pick', async (e) => {
   const chosen = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile', 'multiSelections'] });
   return chosen.canceled ? { refs: [], refused: [] } : importPaths(dir, chosen.filePaths, maxImportBytes());
@@ -167,16 +169,15 @@ ipcMain.handle('cirrus:files:pick', async (e) => {
 // instead, never run (plan 4a, D5).
 ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
   try {
-    const copy = openableCopy(dir, ref, copies);
-    if (isRunnable(ref.name)) {
-      shell.showItemInFolder(copy);
-      return { ok: true, shown: 'folder' };
+    const { path, shown } = openTarget(dir, ref, copies);
+    if (shown === 'folder') shell.showItemInFolder(path);
+    else {
+      const error = await shell.openPath(path);
+      if (error) return { ok: false, message: openFailure(error) };
     }
-    const error = await shell.openPath(copy);
-    return error ? { ok: false, message: `Aucune application n’ouvre « ${ref.name} » : ${error}` } : { ok: true, shown: 'app' };
+    return { ok: true, shown };
   } catch (e) {
-    const reason = (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'il manque dans la base' : e instanceof Error ? e.message : String(e);
-    return { ok: false, message: `« ${ref?.name} » ne peut pas être ouvert : ${reason}.` };
+    return { ok: false, message: openFailure(e) };
   }
 });
 ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));
