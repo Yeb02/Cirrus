@@ -68,7 +68,11 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 
 **Pile retenue** (choisie par Claude sur délégation de l'utilisateur, qui l'a acceptée)
 - **App de bureau :** Electron et TypeScript.
-  - Rendu du graphe : PixiJS, sur WebGL ou WebGPU.
+  - Rendu du graphe : un moteur WebGL 2 à nous, piloté par la carte graphique. Il remplace PixiJS, sur décision de l'utilisateur du 2026-11-03 (plan 3c) :
+    - une texture des éléments (position, demi-tailles, cran, repli, style) est lue par des instances : boîtes, marqueurs, glyphes MSDF des titres, et courbes des connexions simples, calculées dans le vertex shader ;
+    - le processeur ne prépare que les faisceaux complexes et les enveloppes des groupes, sans travailleur ;
+    - un déplacement ou un aperçu réécrit quelques texels et quelques instances ;
+    - la couche reste mince : un second moteur WebGPU reste possible.
   - Interface (panneaux, pop-ups, onglets) : React.
   - Éditeur .tex : CodeMirror 6.
   - Lecture et annotation de PDF : PDF.js.
@@ -85,6 +89,14 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - Moteurs de jeu : faibles pour le texte et le PDF.
 
 **Cloisonnement [C] :** le processus d'interface n'a aucun accès direct au système. Seul le processus principal touche aux fichiers, à SQLite, au réseau et à pdfLaTeX.
+
+**Un seul état, avec un instantané en base (plan 3c) :**
+- L'état vit en une seule copie, dans le processus d'interface : ses connexions, leurs membres et leurs branches en colonnes, le reste en objets. Les commandes s'y appliquent sur place, avec un retour arrière exact.
+- Le principal ne garde aucun état. Il tient la base et valide chaque écriture par SQL : il relit la ligne courante et la compare à l'« avant » de chaque opération, et refuse l'action au premier écart.
+- La base garde un instantané binaire de l'état, dans sa table `snapshot`, avec le numéro du journal qu'il couvre. Au chargement, le principal envoie cet instantané en un seul `ArrayBuffer` avec la fin du journal, que l'interface décode puis rejoue.
+- Sans instantané utilisable (absent, d'une autre version, ou que l'interface ne peut ni décoder ni compléter par le journal), l'état se reconstruit depuis les tables : c'est le chemin de secours. L'instantané refait remplace alors l'ancien.
+- L'interface encode un nouvel instantané au repos, une fois un nombre d'actions atteint, et à la fermeture ; un instantané périmé au chargement est refait au repos. Elle l'envoie au principal, qui l'écrit : le cloisonnement tient.
+- Les tables restent la source de vérité, avec le journal et l'historique par objet (section 6.3) ; l'instantané n'en est qu'un cache.
 
 **Bancs de mesure en tête de plan :** voir la section 21.
 
@@ -647,6 +659,11 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
      - **Carte graphique :** le temps qu'elle consacre à une image doit rester sous environ un huitième du budget à 60 images par seconde, soit environ 2 ms en 2560×1600, car une carte intégrée est typiquement 5 à 10 fois moins puissante.
      - **Processeur :** le temps par image doit rester sous 16 ms avec le ralentissement ×4 de Chromium.
      - Ces marges sont des estimations, à revoir si le petit PC redevient disponible.
+     - **Méthode de mesure (plan 3c) :** le banc de l'application (`npm run bench -w packages/app`) lit la base de référence (50 000 nœuds, 500 000 connexions de connaissance, graine 1) sur le disque, dans une copie neuve à chaque passe. Il suit un parcours de caméra de 40 s : vue d'ensemble, descente à travers tous les niveaux de groupes, déplacement, retour. La première seconde est écartée.
+       - **Plancher et contenu :** le temps de la carte se mesure par des requêtes de chronomètre (`EXT_disjoint_timer_query_webgl2`), sur les images sans reconstruction. Une passe où toutes les couches sont masquées donne le plancher, le temps d'une image vide. Le contenu vaut le brut moins le plancher, en médiane et au p95 : c'est lui que vise le critère de la carte.
+       - **Mémoire après ramasse-miettes :** dans l'interface, deux `gc()` précèdent la lecture de `usedJSHeapSize`, en mémoire précise. Pour chaque processus, la mémoire privée vient de `app.getAppMetrics()`, le principal ayant forcé ses collections. Elle se relève après le chargement et le parcours, avant les éditions. Une passe sur une base vide donne le plancher d'Electron.
+       - **Latence d'édition :** elle va de l'appel (session, annulation, dépôt) à la fin du rendu de la première image de la nouvelle scène, par une promesse que résout la boucle de dessin. Pour un glissement, on mesure le temps du fil principal par image d'aperçu.
+       - **Autres passes :** processeur ralenti quatre fois, chemin de secours (la base sans son instantané), titres en grille au seuil de lisibilité. Les critères du plan 3c et leurs mesures sont au registre du plan.
      - **Portable principal :** viser autant que possible la fréquence de son écran, 165 Hz.
      - Si les marges ne sont pas tenues, on ajoute le mode performance (section 19) plutôt que de changer de moteur.
      - Le rendu ne doit traiter que ce qui est visible et déplié : il faut un index spatial par plan et une gestion des niveaux de détail, plutôt que de tout envoyer à la carte graphique.

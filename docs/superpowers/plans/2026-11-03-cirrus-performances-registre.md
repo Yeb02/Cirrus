@@ -438,3 +438,190 @@ Corrections de la revue finale (`final-review.md` : I1, I2, I3, le retour de `cr
 - Final: Ruling (I3): un verrou par base, `cirrus.lock` dans le dossier de la base : une base SQLite vide tenue par une transaction exclusive ouverte (`BEGIN EXCLUSIVE`, attente nulle, journal en mémoire, jamais écrite) pendant toute la vie du processus principal, relâchée après la fermeture du magasin. Une deuxième instance sur la même base la trouve prise et s'arrête (code 2) avec un message en français sur stderr. Sur la base de l'utilisateur (sans CIRRUS_DATA, hors banc et captures), `requestSingleInstanceLock` en plus : la deuxième instance montre la fenêtre de la première et s'arrête. Les captures et le banc, chacun sur sa base, tournent pendant que l'instance de l'utilisateur est ouverte. Options : (a) un fichier de verrou à PID créé en exclusif (`wx`) : un verrou laissé par un plantage se reconnaît au PID mort, mais Windows réutilise vite les PID, si bien qu'un verrou périmé peut paraître tenu et refuser la base de l'utilisateur jusqu'à un effacement à la main, et deux instances qui reprennent un verrou périmé en même temps demandent une course à régler ; (b) un `userData` dérivé de CIRRUS_DATA avec `requestSingleInstanceLock` partout : un profil Chromium par base (plusieurs Mo chacun, un par capture dans %TEMP%, sur un disque C: à 150 Mo libres), les onglets d'une copie de développement séparés de ceux de l'utilisateur, et le profil des mesures déplacé. Le verrou SQLite est un verrou du système (LockFileEx sous Windows, fcntl ailleurs) : il disparaît avec le processus, plantage compris (testé : processus fils tué), sans rien à nettoyer, et `cirrus.db` n'est pas touché (son verrouillage et son WAL restent ceux du magasin). La poignée du verrou doit rester référencée : ramassée, sa base se ferme et le verrou tombe (constaté dans le test, d'où la variable du processus principal) — coût si faux : un fichier vide de plus dans chaque base ; sur un système de fichiers sans verrous (un partage réseau), deux instances resteraient possibles.
 - Final: Ruling (F4): un plan disparu pendant que son onglet est ouvert (sa création annulée par Ctrl+Z) : `liveTabs` retire son onglet et rend l'onglet actif au lobby, appliqué pendant le rendu d'App (un état mis à jour pendant le rendu : React refait le rendu aussitôt, avant que GraphView reçoive un plan qui n'existe plus) ; une limite d'erreur (`GraphBoundary`) autour de la vue du graphe montre un message en français à la place d'une fenêtre vide, et réessaie quand un autre onglet est choisi. Options : un effet qui corrige l'onglet après coup (les effets des enfants passent avant ceux du parent : GraphView lèverait d'abord « Plan introuvable » dans son effet de scène) ; vérifier le plan dans l'effet de scène de GraphView (App garderait un onglet actif mort) — coût si faux : nul ; un rétablissement (Ctrl+Y) ne rouvre pas l'onglet, comme pour tout plan retiré.
 - Final: Ruling (M5): `ensureBenchBase` refuse, en français, tout dossier qui n'est pas nommé cirrus-bench-* sous le dossier temporaire (`os.tmpdir()`, à toute profondeur : les tests en font un sous un dossier `mkdtemp` ; le dossier temporaire est un paramètre pour eux), et n'efface jamais un dossier qui tient un `cirrus.db` sans le tampon du banc ; le processus de construction sort alors avec le code 2 au lieu de rester bloqué. Le tampon s'écrit deux fois, provisoire (`{"building":true}`) avant la base puis complet après : une construction interrompue garde un tampon qui ne correspond pas et se reconstruit, comme avant. Options : une seule des gardes de la revue (« ou ») laisserait effaçable un dossier temporaire mal nommé, ou un dossier cirrus-bench-* hors du temporaire — coût si faux : un dossier du banc hors de %TEMP% refusé, à déplacer ou garde à assouplir.
+
+## Tâche 10 : banc final, critères
+
+Banc complet du 2026-11-04 (`docs/bancs/app-rendu-apres-3c.md` et `.json`, code de 392eca6), sur la base de référence reconstruite par le banc (614,7 Mo), contre `app-rendu-3c-reference` (mesuré avant le plan). Machine laissée au repos par l'utilisateur, sur secteur : avant le banc, 1,8 % des 16 processeurs logiques pris ; pendant les sept étapes, relevé toutes les 5 s, les autres processus que le banc prenaient 3,8 % en moyenne et 12 % au plus (MsMpEng, l'antivirus, à chaque copie de la base, `system`, `dwm`), sans processus lourd ; 3 à 5 Go de mémoire engagée libres, 58 Go libres sur C:. Écran du banc : canevas de 2 561 × 1 544 pixels, soit ≈ 1 707 × 1 029 pixels CSS (rapport 1,5, déduit de la grille de la passe `dense`). Captures, la même matinée (6,1 % pris avant) : 11 comparées, 0 hors tolérance, 0 à regarder, contre `docs/captures/reference-3c` (refaite à fbfd33f, R31).
+
+### Critères
+
+| Critère | Cible | Mesure | Tenu |
+|---|---|---|---|
+| Chargement, du démarrage du principal à la première image, avec instantané | ≤ 1,5 s | **2 183 ms** (passe `vsync`) ; 1 852 et 2 187 ms aux passes `plancher` et `dense` (référence : 20 461 ms) | non |
+| Chemin de secours (sans instantané) | mesuré et rapporté | 9 592 ms jusqu'à la première image, dont 7,1 s dans le principal (tables relues, encodage) | rapporté |
+| Changement d'onglet vers un plan en cache | ≤ 50 ms | 17 ms | oui |
+| Ouverture du lobby sans cache | ≤ 500 ms | 469 ms (sa scène chassée du cache par quatre autres onglets, puis construite avec son index) | oui, de peu |
+| Chaque édition du script, jusqu'à l'image | ≤ 30 ms | **dépôt 138 ms** (la première édition de la session) ; ensuite renommage 14, création 29, connexion 9, trois Ctrl+Z 10–11, dépôt dans un autre groupe 11 ms (référence : 7,1 à 8,3 s chacune) | non (le dépôt) |
+| Image de glissement, fil principal | ≤ 1 ms au p95 | **1,6 / 2,3 / 5,7 ms** (p50 / p95 / max, 60 images ; référence : 416 / 526 ms) | non |
+| Reconstruction (visible et instances) | ≤ 4 ms au p95 sur le parcours | 1,7 / 3,4 ms (p50 / p95), 8,6 au pire, 302 reconstructions | oui |
+| Carte graphique, contenu | ≤ 1 ms en médiane et ≤ 2 ms au p95 | **1,64 / 2,39 ms** (brut 1,67 / 2,42, plancher 0,02 ; référence : 2,22 / 3,92) | non |
+| Processeur ×4 | ≤ 16 ms au p95 | 5,0 ms (max 26,3 ; référence : 6,8) | oui |
+| Intervalle entre images | p99 ≤ 1,5 fois la médiane | p99 10,2 ms pour une médiane de 10,0 (1,02 fois ; référence : p99 140,2 ms) | oui |
+| Mémoire de l'interface, après ramasse-miettes | ≤ 150 Mo | **254 Mo** de tas JS après le chargement (interface privée 339 Mo ; référence : 558 et 1 310 Mo) | non |
+| Mémoire privée du principal | ≤ celle de la base vide + 50 Mo | 38 Mo, la base vide 38 Mo (référence : 459 Mo) | oui |
+
+- Ruling (chargement) : 2 183 ms pour 1,5 s (1 852 ms à la passe suivante, la base déjà dans le cache du système). Passe `plancher` : base ouverte 137 ms, instantané lu et envoyé 266, reçu 146, décodé 342, puis 817 ms d'« état prêt » à « scène prête » et 144 ms jusqu'à la première image. Sous Node, sur l'instantané de cette base : mesure des 50 000 titres 79–114 ms, `buildScene` du lobby 578–708 ms sur l'état décodé (441–497 ms sur l'état de `buildLargeState`), `buildIndex` 113–123 ms. Levier suivant : la scène du lobby construite sur un état décodé (profiler l'écart avec l'état construit, puis le passage des branches, ≈ 200 ms à la tâche 5) ; au-delà, garder la scène du lobby avec l'instantané — coût si faux : ≈ 0,7 s de plus que la cible à chaque lancement.
+- Ruling (édition) : le dépôt, première édition de la session, prend 138 ms ; chacune des sept éditions suivantes 9 à 29 ms. Sous Node, sur l'instantané de cette base décodé, le premier `moveNodes` coûte 379 ms et le second 0,1 ms ; la table identifiant → rangée des nœuds seule coûte 18 ms, et la première recherche d'une connexion par identifiant qui suit ne coûte plus rien : la première commande paie pour l'essentiel les tables construites à leur premier usage après le décodage (`Rows.restored`, décision de la tâche 4 : « à préparer au repos si la tâche 5 le rend visible » ; 310–331 ms pour les trois tables aujourd'hui). Levier suivant : construire ces tables au repos après la première image, ou faire lire par rangées ce que les règles de la commande lisent par identifiant — coût si faux : ≈ 0,1 s sur la première édition de chaque session.
+- Ruling (glissement) : 1,6 / 2,3 ms par image d'aperçu sous Electron, pour 0,54–0,62 ms de préparation sous Node (la même image dans scale-perf.test.ts, sa cible de 0,5 ms manquée de peu, voir ci-dessous). Chaque image envoie 120 332 octets, toujours les mêmes : les pointes des faisceaux complexes (`arrow`) 65 968 octets sur les 78 508 du maillage entier (84 %), les courbes complexes 23 296 sur 28 784 (81 %), une rangée de la texture des éléments (16 384), les enveloppes de l'aperçu 7 960, les marqueurs 3 360, les titres 1 980 sur 8 040, l'anneau des intrus 1 280, le ciel 104. Au-delà de 16 plages réécrites, `coalesce` envoie une seule plage de la première à la dernière (R23 de la tâche 9) : sur ce tampon, c'est presque tout ; et les pointes ont un tampon par attribut (dix envois par plage). Les anneaux et marqueurs refaits (M1) ne prennent que 0,10 / 0,30 ms (7 % / 17 % de l'image, p50 / p95). Levier suivant : envoyer les plages réécrites telles quelles (sans la plage unique) et entrelacer les attributs du maillage des pointes dans un seul tampon, puis profiler l'image restante (dessin, poignées) — coût si faux : ≈ 1 ms de plus que la cible au p95 pendant un glissement.
+- Ruling (carte) : contenu 1,64 / 2,39 ms pour 1 / 2 ms, comme aux tâches 7 et 8 (1,49 / 2,42 puis 1,68 / 2,36) ; la vue dense des titres donne 1,22 / 2,46 ms. Depuis la tâche 8, chaque cubique s'évalue en 32 segments dans le vertex shader, chaque point avec ses deux voisins pour la normale. Levier suivant : mesurer couche par couche (`CIRRUS_BENCH_HIDE` : env, ribbon, glyph, box, text), puis une normale par la dérivée (une évaluation par sommet au lieu de trois) et un nombre de segments selon la longueur à l'écran ; sinon le mode performance (spec 19, 21) — coût si faux : sur une carte intégrée cinq à dix fois moins rapide, ≈ 12 à 24 ms au p95, au-dessus du budget de 60 images par seconde.
+- Ruling (mémoire) : 254 Mo de tas JS après le chargement, pour 150 Mo (558 Mo avant le plan) ; l'interface privée 339 Mo. Ce qui est tenu, mesuré sous Node (tas JS et tableaux typés) : l'état (158,8 Mo à la tâche 2, dont 117,6 de tas JS), la scène du lobby (78,1 Mo aujourd'hui) et son index (46,9 Mo à la tâche 6) ; et ce que la tâche 4 a laissé de côté, le tampon de l'instantané gardé vivant par les vues du décodage (≈ 31 Mo, dont 25 récupérables par une copie, +≈ 10 ms au décodage). Levier suivant : un instantané du tas pour la part de chacun, puis les 650 000 identifiants hors du tas JS (une table de chaînes en tampon) et les éléments de la scène en colonnes — coût si faux : ≈ 100 Mo de plus que la cible pour une base de 50 000 nœuds.
+
+### Mesures du banc ajoutées (R46)
+
+- **Vue dense au seuil de lisibilité (passe `dense`) :** un plan neuf de 3 102 nœuds du lobby en grille (47 × 66 cellules de 222 × 59 unités : des boîtes d'une ligne, l'écart d'une demi-marge), sans connexion, la caméra au seuil des titres (zoom 0,375 : 6 px), un écran de déplacement, puis 8 px et retour. Au plus 14 175 glyphes construits pour une image, 1 755 éléments visibles : l'estimation de 3 000 titres et 45 000 glyphes valait pour un écran de 2 560 × 1 600 pixels CSS et des titres plus longs ; cet écran en a 1 707 × 1 029. Processeur par image 0,20 / 0,90 / 9,4 ms (p50 / p95 / max) ; 16 reconstructions (`rect`), 2,5 / 9,4 ms : au-delà des 4 ms que le critère tient sur le parcours, où il y a au plus 169 glyphes ; carte, contenu 1,22 / 2,46 ms ; intervalle p99 10,2 ms ; tas JS 275 Mo (le plan dense en plus).
+- **Octets par image de glissement :** voir le Ruling du glissement. La texture des éléments n'envoie qu'une rangée par image (1 024 texels, 16 384 octets : les emplacements réécrits y tiennent). La taille d'un maillage entier compte ses tampons de sommets ou d'instances, sans les indices : les marqueurs et les anneaux, refaits en entier à chaque image avec leurs indices, envoient donc plus que cette taille.
+- **Part des anneaux et marqueurs (M1) :** 0,10 / 0,30 / 0,50 ms par image d'aperçu, 7 % / 17 % de l'image : pas la cause du dépassement ; M1 reste un mineur.
+- **Dépôt qui change de groupe :** le nœud tiré avec Alt dans un autre groupe dessiné à la caméra profonde (« Nœud 20 »), au point de l'écran le plus proche où la règle du dépôt le fait entrer : 11 ms ; aucune question (aucun autre plan ne le tient).
+- **Base au fil des réécritures de l'instantané (M3) :** cinq fois, une action écrite puis l'instantané (61,0 Mo) encodé et réécrit, sur une copie de la base. Le fichier passe de 614,7 à 675,7 Mo à la deuxième réécriture (+61,0 Mo, un instantané), puis ne bouge plus ; le WAL monte à 61,5 Mo tant que la base est ouverte et disparaît à la fermeture ; après la dernière, 14 898 pages libres de 4 096 octets (61,0 Mo). Encodage 198–387 ms ; écriture 133–168 ms, 1 313 ms pour celle qui agrandit le fichier. La base garde donc un instantané de pages libres, et le WAL un de plus pendant la session, non deux dans le fichier.
+- Ruling (M3) : la croissance est acceptée telle quelle (+10 % sur la base de référence, bornée, sans croître au fil des réécritures) ; M3 reste un mineur. Levier si la taille compte : `PRAGMA journal_size_limit` (le WAL ramené après chaque point de contrôle) et l'`auto_vacuum` incrémental (les pages libres rendues) — coût si faux : 61 Mo de fichier et 61 Mo de WAL de plus qu'il ne faut, à l'échelle de référence.
+
+### Cibles remesurées sur la machine au repos
+
+Les cibles que les tâches 3 à 9 ont gardées en plaçant le plafond de leur test à trois fois la mesure (R12, R15, R20, R24, R26), et l'image de glissement de la tâche 9, mesurées sous vitest (Node 26) avec `CIRRUS_COSTS=1`, la machine à 2–6 % de charge : deux séries par fichier seul (`core/tests/scale.test.ts` trois fois), puis une dans la suite complète (`npx vitest run --maxWorkers=1`) :
+
+| Cible | Test | Mesures | Tenue |
+|---|---|---|---|
+| `deleteEverywhere` d'un nœud à 501 connexions ≤ 10 ms (R12) | core scale.test.ts | 8,55, 7,98, 7,03 ; 7,59 dans la suite | oui |
+| `encodeState` ≤ 300 ms (R15) | core scale.test.ts | 309, 247, 258 ; 283 | oui, sauf à une série |
+| `decodeState` ≤ 250 ms (R15) | core scale.test.ts | 329, 355, 360 ; 377 | non |
+| `buildScene` du lobby ≤ 400 ms (R20) | view scale-perf.test.ts | 497, 441 ; 446 | non |
+| annulation de la suppression d'un groupe de 202 éléments ≤ 20 ms (R24) | view scale-perf.test.ts | 16,2, 16,2 ; 16,7 | oui |
+| `computeVisible` du plan plat de 20 000 nœuds ≤ 5 ms (R26) | view scale-perf.test.ts | 6,54, 5,72 ; 5,96 | non |
+| `buildIndex` du lobby ≤ 150 ms (R26) | view scale-perf.test.ts | 144,7, 144,5 ; 150,7 | oui, de peu (non dans la suite) |
+| image d'aperçu de la feuille ≤ 0,5 ms de médiane (tâche 9) | view scale-perf.test.ts | 0,543, 0,571 ; 0,618 | non, de peu |
+
+Ces mesures sont plus lentes que celles des tâches 3 à 6 au repos (`deleteEverywhere` 4,3–5,4 ms à la tâche 3, `buildScene` 394 ms au mieux à la tâche 5). L’écart n’est pas expliqué : le code a changé depuis (corrections, gardes des enregistrements), et la mémoire engagée libre n'était que de 3 à 5 Go (la compression de la mémoire tournait). Les plafonds des tests restent ceux des tâches.
+
+- Ruling (cibles remesurées) : décodage (329–377 ms pour 250), `buildScene` (441–497 pour 400), plan plat (5,7–6,5 pour 5) et image de la feuille (0,54–0,62 pour 0,5) restent non tenus au repos ; leurs plafonds à trois fois la mesure restent. Leviers suivants, ceux que leurs tâches ont relevés : créer moins d'objets au décodage (identifiants hors du tas JS, tâche 4), le passage des branches et les enveloppes de `buildScene` (tâche 5), un ensemble visible en tableaux typés (R26), et pour la feuille les 77 faisceaux complexes de ses groupes ancêtres réécrits à chaque image (tâche 9) — coût si faux : ces quatre coûts restent de 10 à 50 % environ au-dessus de leur cible.
+
+### Comparaison à la référence et à la tâche 8 (passe `vsync`)
+
+| Mesure | Référence (avant le plan) | Après la tâche 8 | Après le plan 3c |
+|---|---|---|---|
+| première image | 20 461 ms | 1 817 ms | 2 183 ms (1 852 à `plancher`) |
+| carte, contenu p50 / p95 | 2,22 / 3,92 ms | 1,68 / 2,36 ms | 1,64 / 2,39 ms |
+| processeur par image p50 / p95 / max | 0,50 / 1,60 / 15,0 ms | 0,20 / 1,60 / 8,4 ms | 0,20 / 1,60 / 8,6 ms |
+| reconstructions, fil principal p50 / p95 | (travailleur) | 1,70 / 4,30 ms | 1,70 / 3,40 ms |
+| intervalle p99 / max | 140,2 / 180,1 ms | 10,8 / 41,8 ms | 10,2 / 40,0 ms |
+| processeur sous ×4, p95 | 6,8 ms | 8,2 ms | 5,0 ms |
+| tas JS après chargement | 558 Mo | 251 Mo | 254 Mo |
+| interface (Tab, privée) après chargement | 1 310 Mo | 335 Mo | 339 Mo |
+| principal (privée) | 459 Mo | 42 Mo | 38 Mo |
+| image d'aperçu de glissement p50 / p95 | 416 / 526 ms | 113,5 / 167,2 ms | 1,6 / 2,3 ms |
+| dépôt, renommage, création, connexion | 7 360, 7 360, 7 126, 8 275 ms | 250, 16, 41, 16 ms | 138, 14, 29, 9 ms |
+| trois Ctrl+Z | 7 163–7 638 ms | 21, 10, 52 ms | 11, 10, 10 ms |
+| onglet neuf, retour au lobby | — | 18, 15 ms | 18, 17 ms |
+
+Après les éditions, le tas JS vaut 368 Mo et l'interface 541 Mo : la passe d'édition ouvre désormais cinq plans de plus et reconstruit le lobby (304 et 519 Mo après la tâche 8, sans eux).
+
+### Décisions
+
+- Task 10: Ruling (R46) : les mesures que les notes du suivi renvoyaient à cette tâche sont ajoutées au banc seul, sans rien changer au produit : la vue dense, les octets par image de glissement, la part des anneaux et marqueurs, la base au fil des réécritures de l'instantané, un dépôt qui change de groupe ; plus le lobby sans cache et le tableau des critères dans le rapport. Aucune n'a demandé de changer le produit — coût si faux : un commit du banc à défaire.
+- Task 10: Ruling : la vue dense est un plan neuf, fait dans la copie de la base par deux actions de la session (`createPlan`, puis `combine` de `placeNode`) : les premiers nœuds du lobby, une boîte d'une ligne par cellule, l'écart d'une demi-marge, sans connexion, pour isoler le coût des titres. La caméra suit son propre parcours (`denseLayout`) dans une passe à elle, pour laisser les autres passes comparables aux bancs d'avant. Options : une région dense du lobby (sa vue la plus dense ne construit que 169 glyphes), un plan plat avec ses connexions (le coût des titres mêlé à celui des connexions) — coût si faux : la vue dense ne mesure que les titres.
+- Task 10: Ruling : le lobby « sans cache » s'ouvre après que `cachedPlans` autres onglets l'ont chassé du cache (le plus ancien part le premier), par le chemin de l'utilisateur, plutôt que par un accès du banc au cache de GraphView — coût si faux : nul ; si le cache changeait de politique, la mesure deviendrait celle d'un onglet en cache, ce que son temps montrerait.
+- Task 10: Ruling : le dépôt qui change de groupe se fait avec Alt (sortir de son groupe et entrer dans celui sous le pointeur, spec 10), au point d'une grille de l'écran (24 px) le plus proche du nœud, hors d'un clic, où `dropTarget` et `dropEffects` le font entrer dans un groupe existant autre que le sien. Sans Alt, un membre ne descend que dans un sous-groupe du sien, qu'aucune caméra du banc ne garantit — coût si faux : nul.
+- Task 10: Ruling : les octets d'une image se comptent en enveloppant les appels d'envoi du contexte WebGL (`bufferData`, `bufferSubData`, `texImage2D`, `texSubImage2D`, et `bindBuffer` pour savoir quel tampon reçoit) pendant les seules images du glissement, puis les méthodes du contexte sont rendues ; les tampons sont nommés par leur maillage en lisant les maillages privés du moteur, et les anneaux et marqueurs chronométrés en enveloppant ses méthodes privées `updateMarkers` et `updateOutline`. Le moteur n'est pas touché ; un nom de méthode qui disparaît fait échouer le banc au lieu de mesurer zéro, un maillage qui change de forme ne laisse que la somme. Option : des compteurs dans `PlanRenderer` et ses tampons (du code produit pour le seul banc) — coût si faux : un wrapper de quelques microsecondes dans les images mesurées.
+- Task 10: Ruling : les réécritures de l'instantané passent par une étape sans fenêtre du banc (`CIRRUS_BENCH_SNAPSHOTS`, seulement avec `CIRRUS_BENCH` et `CIRRUS_DATA`), sur une copie neuve de la base, par le vrai chemin du magasin (`openBase`, `decodeState`, `LocalStore.commit`, `encodeState`, `writeSnapshot`) ; ses mesures attendent le rapport dans `docs/bancs/.app-rendu-instantanes.json` (ignoré par git, effacé au début du banc). Option : réécrire le blob en SQL depuis le script du banc (sans le code du magasin, qui pourrait changer seul) — coût si faux : nul.
+- Task 10: Ruling (R4) : la section 4 du design dit le moteur WebGL 2 à nous à la place de PixiJS, et la décision d'un état unique avec un instantané en base ; la section 21 dit la méthode de mesure (plancher et contenu, mémoire après ramasse-miettes, latence d'édition) — coût si faux : nul.
+
+## Mineurs reportés
+
+Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec ses fichiers et ses lignes tels qu'ils ont été relevés (les numéros de ligne sont ceux du code d'alors). « Traité » renvoie à ce qui l'a levé depuis ; les autres restent ouverts.
+
+### Tâche 1
+
+- `rmSync` récursif sur tout dossier `CIRRUS_BENCH_BUILD` sans tampon (main/bench.ts:37). Traité par M5 de la revue finale : `ensureBenchBase` refuse tout autre dossier qu'un cirrus-bench-* du dossier temporaire, et n'efface jamais une base sans le tampon du banc.
+- Pas de `.catch` sur la promesse de `runBench` (GraphView.tsx:627) : une exception attend le délai de 900 s.
+- Graine et échelle par défaut écrites deux fois (bench.mjs:17, index.ts:123-125, main/bench.ts:92).
+- `--max` de compare-captures non vérifié : un NaN n'échoue jamais.
+- Chemins `tag_keys`, `conn_layouts` et corbeille de `writeBenchBase` non testés.
+- Le tampon du banc ne couvre pas le format des rangées qu'écrit `writeBenchBase`.
+- GraphView.tsx à 1 224 lignes, le littéral `BenchView` dans la boucle de dessin.
+- `bench || capture` testé par vérité (index.ts:44), contre `!== undefined` ailleurs (index.ts:135, :28) : un `CIRRUS_CAPTURE` vide ne donne pas le même mode partout.
+- `cirrus:bench:memory` enregistré dans tous les modes (index.ts:115).
+- captures.mjs:22 : `ENOTDIR` non attrapé quand la cible est un fichier ; la construction passe avant la vérification des arguments.
+- Les modes de mesure n'ignorent les évènements réels que dans les gestionnaires du graphe (App.tsx:59-68 : Ctrl+Z, fenêtres, `:hover` des onglets restent actifs).
+
+### Tâche 2
+
+- state.ts à 511 lignes : la tenue des index pourrait aller dans indices.ts ; `writeNode` et `writePlan` sont presque jumeaux ; la remise à zéro de `writeConnection` répète `ConnTable.unref`.
+- `delete` et `clear` des façades, et `BranchSet.delete`, non testés.
+- `include` ranime la première inclusion dans l'ordre de `memberOf` (commands.ts:326) plutôt que dans l'ordre d'insertion des connexions ; rare (deux inclusions du même nœud dans le même groupe). Traité à la tâche 3 : l'inclusion ranimée est celle d'identifiant le plus petit.
+- `Pool.release` rend sans rien dire quand `owner >= cap.length` (tables.ts:214).
+- L'exclusion du test différentiel de `checkState` se décide par sujet, sur tous les plans (columns.test.ts:312-323) : un peu large.
+- La portée `touchedBy(window)` est presque toujours indéfinie dans les fenêtres de 20 opérations (columns.test.ts:340).
+
+### Tâche 3
+
+- Parcours de cycle en O(profondeur²) par `chain.includes` (invariants.ts:146).
+- `violationKey` répète le modèle de clé de `dedupe` ; `rng` est écrit dans deux fichiers de test.
+- invariants.test.ts:228 : le plancher passe de plus de 100 à plus de 50 violations comparées, sans que le rapport le dise.
+- La portée d'une opération de plan parcourt toutes les connexions de structure (invariants.ts:53-56) : O(structures), non O(plan).
+- `world()` de transact.test n'a ni tags ni connexions de structure : `image()` n'exerce pas le retour arrière de `structures` ni de `tagged`.
+- `d.parent.kept.push(...d.kept)` peut dépasser la limite d'arguments de V8 vers 100 000 étapes imbriquées (commands.ts:89).
+- `combine` se fie à `made` pour une action terminée avant son ouverture, dans la même transaction englobante : ses opérations se perdent sans bruit (sonde round2.ts : stepOps 1, combineOps 0) ; la docstring de commands.ts:529-530 en promet trop ; aucun appelant aujourd'hui. Revue finale : mineur confirmé, inatteignable (docstring commands.ts:528-532).
+
+### Tâche 4
+
+- Un caractère NUL dans un identifiant de rangée rend tout instantané illisible : 8 s de chemin de secours et 61 Mo écrits à chaque lancement (codec.ts:313) ; uuidv7 n'en produit jamais.
+- Un titre ou une relation de connexion qui n'est pas une chaîne revient `null` au lieu d'`undefined` (codec.ts:242, :558), non testé.
+- session.ts tient `EditSession`, `openState` et `SnapshotSaver` : sortir le chargement et l'instantané dans un module à eux.
+- Les fantômes irréguliers sont relus du JSON, non internés (codec.ts:588) ; les entrées `multi` ne sont pas vérifiées au décodage (codec.ts:632).
+- Le contrôle partagé garde aussi `loadState` et la fin du journal rejouée : un nœud sans `files`, ou à tag qui n'est pas un objet (toléré avant), rend une base illisible sans instantané ; la base de l'utilisateur n'a aucun nœud aujourd'hui (state.ts:296, :510). Revue finale : `loadState` devrait ramener des `files` ou des `tags` absents à `[]` plutôt que lever.
+- La liste « ce qui échappe » de R17 omet une entrée de `memberOf` sous la mauvaise connexion ou le mauvais nœud, au total inchangé (registre.md:159, aujourd'hui la décision R17 de la tâche 4, dans « Décisions »).
+- Le commentaire de scale.test.ts:154 dit 237–336 ms, le registre 237–383 ms.
+
+### Tâche 5
+
+- La politique du cache de GraphView (saut de `rev`, plan supprimé, clé changée, LRU) n'est pas testée : en sortir une fonction pure (GraphView.tsx:670-692).
+- `@cirrus/view` réexporte des internes de scene.ts (`tails`, `makeScene`, `capacityFor`, `LayeredMap`, `emitParts`…) : une écriture côté app pourrait casser la copie en écriture ; scene.ts (902 lignes) mêle modèle, dérivations, construction et aperçus (index.ts:5).
+- La liste des colonnes des parties est répétée trois fois, et `Col.copies` refait la décision de `Col.at` (sceneUpdate.ts:418-419, 428, 552, 45, 59).
+- Réunir un bras quand deux bras scindés existent prend la dernière partie lointaine ajoutée, non celle qui est cliquée (GraphView.tsx:1096) : ambiguïté antérieure, dont le résultat a changé.
+- Un identifiant de connexion libéré, référencé de nouveau puis libéré encore dans une même action : `formerConnRow` rend la rangée intermédiaire, et les parties de l'identifiant restent à la première rangée (sceneUpdate.ts:157-159, 752 ; sonde : C_updated 1 contre 0 pour la scène reconstruite). Correction : tenir pour perdu (balayé) un identifiant retiré puis rajouté dans une même action. Même famille, antérieur : un identifiant dont la rangée change dans une action et qui reste tenu (connexions en double, `itemOfNode` non déplacé, sceneUpdate.ts:630-635). Revue finale : mineur, mais à lever avant le `receive` de la synchro (plan 5).
+- Le cas du collage dans `cost()` chronomètre le lobby non touché (retour anticipé) sans seuil ; l'annulation du collage dans son plan cible n'est pas chronométrée.
+- `isLive` rend vrai pour un indice hors de la scène (scene.ts:146).
+
+### Tâche 6
+
+- Le seuil du plan plat dépend de l'ordre des tests : il passe avant `reference()` (scale-perf.test.ts:126, :140, :154). Traité à la tâche 8 : un commentaire au-dessus des tests du plan plat le dit (scale-perf.test.ts, « Keep any flat-plan test above them »).
+- `envelopeBox` refait `vertexNormals` et `offsetPolygon` (visibility.ts:295-319), et seul l'oracle probabiliste le garde : ajouter un contrôle déterministe des bornes dans `indexProblem` (helpers.ts:402).
+- `PartLists` double le `Pool` du cœur (visibility.ts:36-134 contre core/src/tables.ts:169-279) ; visibility.ts (de 215 à 822 lignes) mêle le pool de listes, la tenue de l'index et la passe du visible : sortir `PartLists` dans son fichier, ou partager `Pool`.
+- Le passage de l'index entre le moteur et GraphView n'est pas testé (GraphView.tsx:136-147, :700-720 ; PlanRenderer.ts:176-226) ; `PlanRenderer.updateScene` suppose que les changements suivent `this.real.scene` : prendre la scène d'avant et revenir à `setScene` si elle diffère.
+- Une action qui arrive pendant que l'effet [scene] tient une scène plus ancienne construit l'index de l'ancienne et l'envoie au travailleur avant l'échange (GraphView.tsx:139-146) : exact, environ une édition de la tâche 5 perdue, rare. Le travailleur est retiré depuis la tâche 8.
+- Le test des emplacements recyclés ne vérifie jamais qu'un emplacement l'a été (visibility.test.ts:252-254).
+- `topOf` arrête un cycle de parents au bout de 10 000 pas sans rien dire, là où `meet` et le chemin à deux bouts boucleraient (visibility.ts:396) : retirer la garde, ou lever.
+- Chaque index en cache porte ses propres tableaux de travail (≈ 8 Mo) : les partager au niveau du module. `workerScene` gardait les colonnes d'une ancienne scène après la première édition (PlanRenderer.ts:80, :191) : parti avec le travailleur à la tâche 8. `updateIndex` sur `changes.full` reconstruit aussitôt l'index d'un onglet caché (≈ 110 ms, visibility.ts:547 par GraphView.tsx:717) : mettre `entry.index` à null pour différer.
+- `setRoots` coûte O(anciennes et nouvelles racines) quand `scene.roots` change d'identité (visibility.ts:360, :589) : ≈ 90 000 écritures sur le lobby de référence, comme la copie des racines par `updateScene`.
+
+### Tâche 7
+
+- `Program.set` ignore sans rien dire un nom d'uniforme inconnu (program.ts:69-71) : une faute de frappe le laisse à 0 ; avertir en développement.
+- Le travail des titres dans `buildFrame` n'est pas chronométré (scale-perf.test.ts:76 construit ses images sans la fonte), et le banc n'a pas de vue de texte dense (157 glyphes au plus). Traité : les tests de coût de `buildInstances` comprennent la fonte depuis la tâche 8, et le banc a sa passe `dense` (tâche 10).
+- `Texture2D.setData` (RGBA32F) inutilisé et non testé jusqu'à la tâche 8 : traité, remplacé par `setRows`, testé sur le faux contexte (texture.test.ts). La restauration du contexte n'est vérifiée qu'une fois, à la main : une capture avec `WEBGL_lose_context` la fixerait (ouvert).
+- En mode banc, un moteur en échec attend encore son délai (`runBench` ne démarre jamais), comme une base qui ne s'ouvre pas.
+
+### Tâche 8
+
+- Les décisions de texture du moteur ne sont pas testées (texScene, partiel ou entier, croissance, déplacement de l'origine, restauration ; PlanRenderer.ts:197, 224-252, 404-412). Traité à la tâche 9 : `ItemTexture` (render/itemTexture.ts), testée sur le faux contexte. La branche de croissance d'instances.test.ts:159 ne tourne jamais (ouvert).
+- Les cœurs simples montrés pendant le tracé d'une connexion sont écartés au zoom du dernier envoi, le nuanceur les écarte à chaque image ; un index de survol fait pendant une attente laisse les faisceaux suivants insensibles au survol jusqu'à la fin (PlanRenderer.ts:342-344, 566-573 ; le second cas est tranché par la décision « budget et faisceaux en attente » de la tâche 8).
+- shaders.ts de 400 à 614 lignes, PlanRenderer.ts 643, instances.ts 423, qui mêle la texture des éléments (20-97) et les instances ; frame.ts garde un nom périmé (`groupColors`, `bundleFor`, aides des titres) ; le nom du test de scale-perf.test.ts:72 dit « cadre ». Revue finale : PlanRenderer.ts à 787 lignes et GraphView.tsx à 1 352, l'extraction d'un `PreviewOverlay` après la tâche 10.
+- L'équivalence du jumeau GLSL en float32 et du TS repose sur une émulation hors dépôt (registre, ligne 227) : la verser comme test ou script.
+- Commentaire périmé à PlanRenderer.ts:341 (« complete or not ») ; `SIMPLE_DASHED_A = 16`, littéral non lié à `SIMPLE_ROLE_BITS` (instances.ts:698) ; `SLOT_ROW_SHIFT = Math.log2(...)` sans garde d'entier (instances.ts:27) ; la correspondance des sommets de flèche de `SIMPLE_GLYPH` répète `ARROW_TRIS` en littéraux (ribbon.ts:150).
+- `forgetFrame` ne remet pas `hits` à null ; `visible` rend l'ensemble de la scène d'avant entre `updateScene` et l'image suivante (PlanRenderer.ts:146-150, 348-350) : sans effet, antérieur.
+
+### Tâche 9
+
+- Au-delà de 16 plages réécrites dans un tampon, une seule plage est envoyée, qui renvoie presque tout le tampon des courbes à chaque image d'aperçu (PlanRenderer.ts:56-67) : mesuré au banc de la tâche 10 (voir ci-dessus). Le test d'aperçu ne compare à une reconstruction, au milieu de l'aperçu, que les courbes des faisceaux tirés (glyphes, marqueurs et titres ouverts seulement par la restauration exacte) ; la table des formes de point grandit par `dotRadius` distinct (ribbon.ts:2028, négligeable).
+- Pendant le glissement d'une poignée, une image construite en entier (la première d'une connexion simple, la molette, l'origine déplacée) remet `hot` à zéro, et le `hover()` sauté ne le rend qu'au lâcher (GraphView.tsx:695, PlanRenderer.ts:687) ; une ligne de la doc de `patchEdit` fait ≈ 200 colonnes (preview.ts:218).
+
+### Revue finale
+
+- M1 : les maillages des anneaux (intrus compris) sont refaits à chaque image d'aperçu et à chaque édition en place (PlanRenderer.ts:291-292, 254-255, 319-320) : mesuré au banc de la tâche 10 (voir ci-dessus).
+- M2 : un instantané dû (230–265 ms à l'échelle de référence) peut s'encoder au milieu d'un geste : un glissement tenu immobile, ou un dialogue de répercussion ouvert, ne comptent pas comme occupés (session.ts:257-260, App.tsx:82-87).
+- M3 : les réécritures de l'instantané laissent probablement la base plus grosse d'environ deux instantanés (le WAL au plus haut et les pages libres ; localStore.ts:183, 258) : mesuré au banc de la tâche 10 (voir ci-dessus) ; leviers : `journal_size_limit`, `wal_checkpoint(TRUNCATE)`.
+- M4 : aucun contrôle de bout en bout du chemin d'édition en place du moteur (une capture « dépôt puis Ctrl+Z ») ; la politique du cache de GraphView n'est pas testée (voir la tâche 5).
+- M6 : une `OpConflictError` n'écarte pas l'instantané (main/index.ts:130-137) ; le plan 5 refait cette politique.
+- M7 : créer ou retirer un élément à la racine copie `scene.roots`, et `setRoots` réécrit les racines de l'index (O(racines), sous le seuil de 2 ms de la création).
+- Triage de la revue finale : T3, `combine` qui se fie à `made` pour une action terminée avant son ouverture (inatteignable ; la docstring de commands.ts:528-532 en promet trop) ; T4, `loadState` devrait ramener `files` et `tags` absents à `[]` plutôt que lever ; T5, un identifiant libéré deux fois dans une liste d'opérations à tenir pour perdu (`lost`), avant le `receive` du plan 5 ; T8 et T9, la taille des fichiers (PlanRenderer.ts 787 lignes, GraphView.tsx 1 352 ; l'extraction d'un `PreviewOverlay` après la tâche 10).
+- La fermeture `answer` du dépôt garde la mémoire des scènes du dépôt (toute une scène du lobby sur un défaut de cache) tant que le dialogue de répercussion est ouvert (GraphView.tsx:512-513, :529).
+- Résidu de la relecture des corrections finales, gardé comme mineur sans seconde passe : quand `lockBase` ou `openBase` lève dans `whenReady().then` (sans `catch`), le processus reste sans fenêtre en tenant le verrou d'Electron, et les lancements suivants sont écartés sans bruit par le gestionnaire `second-instance` (main/index.ts:57-63, :191, :197). Le déclencheur est une base qui ne s'ouvre pas (abîmée, disque plein). Correction : un `catch` qui montre `dialog.showErrorBox`, puis quitte. Coût si faux : sur une telle panne, Cirrus semble ne pas se lancer tant que le processus n'est pas tué.
