@@ -11,7 +11,9 @@ const KINDS = new Map<string, FileKind>([
   ...words('pdf', 'pdf'),
   ...words('tex', 'tex'),
   ...words('table', 'csv tsv'),
-  ...words('text', 'txt md bib py ipynb js mjs ts tsx jsx json yaml yml toml ini cfg c h cpp hpp cc rs go java kt jl r m sh ps1 bat lua sql html css xml log rst'),
+  // Scripts are text, shown in Cirrus and never handed to Windows, which may run them: Perl, Ruby and PHP too (ruling of
+  // the final review). Python's compiled files, which Cirrus cannot show, are in the main process's runnable list.
+  ...words('text', 'txt md bib py ipynb js mjs ts tsx jsx json yaml yml toml ini cfg c h cpp hpp cc rs go java kt jl r m sh ps1 bat lua sql html css xml log rst pl pm rb php'),
 ]);
 /** Text files known by their whole name, without an extension (in any case). */
 const BARE_TEXT = new Set(['makefile', 'dockerfile', 'license', 'readme']);

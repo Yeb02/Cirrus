@@ -135,11 +135,13 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
 
 /**
  * Opened by Windows, these would run (a .py by Python, a .lnk its target, a .sh in Git Bash): the explorer shows them
- * instead (plan 4a, D5). The plan's list, plus sh. A fixed security list, not a setting.
+ * instead (plan 4a, D5). The plan's list, plus sh, and Python's compiled files and zipped windowed applications (pyc, pyo,
+ * pyzw: the Python launcher runs them), which Cirrus does not show and a click would otherwise hand to Windows (ruling
+ * of the final review; the other scripts are text kinds, shown in Cirrus: kind.ts). A fixed security list, not a setting.
  */
 const RUNNABLE = new Set([
   'exe', 'com', 'bat', 'cmd', 'ps1', 'psm1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msi', 'msp', 'msc', 'scr', 'pif', 'cpl', 'hta', 'lnk', 'url',
-  'reg', 'jar', 'py', 'pyw', 'pyz', 'appref-ms', 'sh',
+  'reg', 'jar', 'py', 'pyw', 'pyz', 'appref-ms', 'sh', 'pyc', 'pyo', 'pyzw',
 ]);
 
 export function isRunnable(name: string): boolean {
@@ -170,12 +172,17 @@ const marked = (path: string) => {
   }
 };
 
+/** The start of a copy's temporary name, before it is renamed: what cleanCopies removes whatever its mode. */
+const TEMPORARY = '.copie-';
+
 /**
  * The copy of a blob handed to the system's application (plan 4a, D5), never the store's own file: root/<first 16 hex
  * of the hash>/<name>, marked from the Internet zone and read-only (a stream cannot be written to a read-only file, so
  * the mark comes first). Written under a temporary name then renamed, so a copy found there is whole; it is reused only
  * as it was left: read-only, the blob's size, marked. Otherwise (its flag lifted by hand, written to, its stream
- * removed) it is made again. A name or a hash that would leave `root`, and a blob missing from the store, throw.
+ * removed) it is made again. A name or a hash that would leave `root`, and a blob missing from the store, throw. An old
+ * copy that cannot be removed (still open in its application) gets its mode back, and the error is thrown: read-only,
+ * it stays one of Cirrus's copies, which cleanCopies removes later (final review).
  */
 export function openableCopy(storeDir: string, ref: FileRef, root: string): string {
   if (!HASH.test(ref.hash) || !plainName(ref.name)) throw Object.assign(new Error('nom de fichier refusé'), { code: REFUSED_NAME });
@@ -187,10 +194,19 @@ export function openableCopy(storeDir: string, ref: FileRef, root: string): stri
   if (there && there.size === size && (there.mode & 0o200) === 0 && marked(dest)) return dest;
   if (there) {
     chmodSync(dest, 0o644);
-    unlinkSync(dest);
+    try {
+      unlinkSync(dest);
+    } catch (e) {
+      try {
+        chmodSync(dest, there.mode & 0o777);
+      } catch {
+        // gone after all
+      }
+      throw e;
+    }
   }
   mkdirSync(folder, { recursive: true });
-  const tmp = join(folder, `.copie-${randomBytes(8).toString('hex')}`);
+  const tmp = join(folder, `${TEMPORARY}${randomBytes(8).toString('hex')}`);
   try {
     copyFileSync(src, tmp);
     try {
@@ -240,9 +256,12 @@ export function openFailure(name: string, e: unknown): string {
 }
 
 /**
- * Clears the copies of earlier sessions, at startup: every file it can, its write right given back first (Electron's
- * Node refuses to remove a read-only file otherwise), then the emptied folders. A copy still open in its application
- * is left, read-only again, for the next startup.
+ * Clears what Cirrus left of earlier sessions, at startup: its copies — the files still read-only, as openableCopy leaves
+ * them — and the temporaries of a copy cut short (TEMPORARY), whatever their mode, then the emptied folders. A writable
+ * file is kept, and its folder with it: an application's « Enregistrer sous » proposes the copy's folder, so it may be
+ * the user's (I3 of the final review, a plan defect: « efface ce qu'il peut »). A copy's write right is given back to
+ * remove it (Electron's Node refuses to remove a read-only file otherwise); one still open in its application gets its
+ * mode back, read-only, for the next startup.
  */
 export function cleanCopies(root: string): void {
   let entries: Dirent[];
@@ -258,16 +277,23 @@ export function cleanCopies(root: string): void {
       try {
         rmdirSync(p);
       } catch {
-        // holds a copy still open
+        // holds a copy still open, or a file of the user's
       }
       continue;
     }
+    let mode: number;
+    try {
+      mode = lstatSync(p).mode;
+    } catch {
+      continue;
+    }
+    if ((mode & 0o200) !== 0 && !e.name.startsWith(TEMPORARY)) continue;
     try {
       chmodSync(p, 0o644);
       unlinkSync(p);
     } catch {
       try {
-        chmodSync(p, 0o444);
+        chmodSync(p, mode & 0o777);
       } catch {
         // gone after all
       }

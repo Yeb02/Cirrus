@@ -7,10 +7,65 @@ export type Decoded = { text: string; encoding: Encoding } | { binary: true };
 const BINARY_PROBE = 8192;
 
 /**
+ * A text with invalid UTF-8 sequences is still read as UTF-8, each shown as U+FFFD, while its valid multi-byte
+ * sequences are at least this many times as many (ruling of the final review on its Minor 1): a UTF-8 text where a
+ * stray byte of another encoding lies (a log or a CSV two tools wrote to) keeps its accents, instead of being read
+ * whole as Windows-1252, every accent garbled. A real Windows-1252 text has almost no valid multi-byte sequence — each
+ * would need an accented letter followed by exactly the right symbols of 0x80–0xBF —, so it does not get there.
+ * Twice rather than once, a margin against those chance sequences: a mixed file is read as UTF-8 once its UTF-8 part
+ * is clearly the larger. Its cost: a short UTF-8 text with one accent and one stray byte is read as Windows-1252. A
+ * decoding threshold, not a setting.
+ */
+const UTF8_VALID_PER_INVALID = 2;
+/**
+ * The invalid sequences counted before the count may stop (performance): past them, the first time the valid ones are
+ * fewer than UTF8_VALID_PER_INVALID times as many, the text is read as Windows-1252 without counting the rest. A real
+ * Windows-1252 text gets there within its first lines, so it costs no more to read than before; only a text mostly in
+ * UTF-8 is counted to its end. A decoding threshold, not a setting.
+ */
+const UTF8_EVIDENCE = 64;
+
+/**
+ * Whether bytes that are not UTF-8 throughout are mostly UTF-8 (UTF8_VALID_PER_INVALID, UTF8_EVIDENCE): their
+ * multi-byte sequences, valid and invalid, counted as TextDecoder reads them — the Encoding standard's decoder, for
+ * which an invalid sequence is what one U+FFFD replaces —, in one pass over the bytes, without decoding them.
+ * `truncated`: a character cut at the end of a head read is left out.
+ */
+function mostlyUtf8(bytes: Uint8Array, truncated: boolean): boolean {
+  const n = bytes.length;
+  let valid = 0, invalid = 0, i = 0;
+  while (i < n) {
+    const c = bytes[i++];
+    if (c < 0x80) continue;
+    // Two bytes, as a Latin accent is, at once.
+    if (c >= 0xc2 && c <= 0xdf && i < n && (bytes[i] & 0xc0) === 0x80) {
+      i++;
+      valid++;
+      continue;
+    }
+    // The continuation bytes the lead byte needs, and the range of the first one (the standard's boundaries).
+    const needed = c >= 0xc2 && c <= 0xdf ? 1 : c >= 0xe0 && c <= 0xef ? 2 : c >= 0xf0 && c <= 0xf4 ? 3 : 0;
+    let lower = c === 0xe0 ? 0xa0 : c === 0xf0 ? 0x90 : 0x80, upper = c === 0xed ? 0x9f : c === 0xf4 ? 0x8f : 0xbf, k = 0;
+    // A byte out of range ends the sequence short: it is read again, as the start of what follows.
+    while (k < needed && i < n && bytes[i] >= lower && bytes[i] <= upper) {
+      i++;
+      k++;
+      lower = 0x80;
+      upper = 0xbf;
+    }
+    if (needed > 0 && k === needed) valid++;
+    else if (needed > 0 && i === n && truncated) break;
+    else if (++invalid > UTF8_EVIDENCE && valid < UTF8_VALID_PER_INVALID * invalid) return false;
+  }
+  return valid >= UTF8_VALID_PER_INVALID * invalid;
+}
+
+/**
  * A text file's bytes as text (Review Focus 4). The BOM decides first (UTF-16LE, UTF-16BE, UTF-8), and is left out; a
- * zero byte in the first 8 KiB, without a UTF-16 BOM, means a binary; otherwise strict UTF-8, and Windows-1252 when that
- * fails (the French Excel's CSV), which decodes any byte. `truncated`: the bytes are a longer file's head (readHead),
- * whose last character may be cut: it is left out instead of failing UTF-8.
+ * zero byte in the first 8 KiB, without a UTF-16 BOM, means a binary; otherwise strict UTF-8. When that fails, UTF-8
+ * still if its invalid sequences are rare (UTF8_VALID_PER_INVALID), each shown as U+FFFD; else Windows-1252, which
+ * decodes any byte (the French Excel's CSV). `truncated`: the bytes are a longer file's head (readHead), whose last
+ * character may be cut: it is left out instead of failing UTF-8.
  */
 export function decodeText(bytes: Uint8Array, truncated = false): Decoded {
   const decode = (encoding: Encoding, from: number, fatal = false) =>
@@ -22,6 +77,7 @@ export function decodeText(bytes: Uint8Array, truncated = false): Decoded {
   try {
     return { text: decode('utf-8', 0, true), encoding: 'utf-8' };
   } catch {
+    if (mostlyUtf8(bytes, truncated)) return { text: decode('utf-8', 0), encoding: 'utf-8' };
     return { text: decode('windows-1252', 0), encoding: 'windows-1252' };
   }
 }

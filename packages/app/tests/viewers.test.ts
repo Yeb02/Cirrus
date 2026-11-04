@@ -223,7 +223,8 @@ test('vignette : l’image elle-même jusqu’à thumbMaxMb, au-delà l’icône
   // 0: no image is read for its thumbnail.
   expect(thumbFor({ name: 'schéma.png', hash: 'a'.repeat(64), size: 517 }, 0)).toBe('icon');
   expect(thumbFor({ name: 'notes.md', hash: 'a'.repeat(64), size: 517 }, 4)).toBeNull();
-  // A PDF's first page is read by ranges (pdf.ts): cheap at any size, under any thumbMaxMb.
+  // A PDF's first page is tried at any size: pdf.ts reads it by ranges, at most thumbMaxMb of it, and shows the PDF's
+  // icon past them (with 0, at once: the reader's chunk is still loaded for it).
   expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 4)).toBe('pdf');
   expect(thumbFor({ name: 'Thèse.PDF', hash: 'a'.repeat(64), size: 150 * MB }, 4)).toBe('pdf');
   expect(thumbFor({ name: 'article.pdf', hash: 'a'.repeat(64), size: 517 }, 0)).toBe('pdf');

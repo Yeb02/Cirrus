@@ -1,19 +1,36 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, win32 } from 'node:path';
+import { basename, dirname, join, win32 } from 'node:path';
 import type { FileRef } from '@cirrus/core';
 import { type ChangeRow, filePath, importFile } from '@cirrus/store';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import {
   blobRequest, blobResponse, cleanCopies, contentTypeOf, FILE_SCHEME, historySummary, importPaths, isRunnable, openableCopy, openFailure, openTarget,
 } from '../src/main/files.ts';
+
+/**
+ * Files Windows will not let go, as a copy still open in its application: unlinkSync fails on them (EBUSY). Node opens
+ * files with FILE_SHARE_DELETE, so a test cannot hold one so itself.
+ */
+const busy = vi.hoisted(() => new Set<string>());
+vi.mock('node:fs', async (original) => {
+  const fs = await original<typeof import('node:fs')>();
+  const unlinkSync = (p: import('node:fs').PathLike) => {
+    if (busy.has(String(p))) throw Object.assign(new Error(`EBUSY: resource busy or locked, unlink '${String(p)}'`), { code: 'EBUSY' });
+    fs.unlinkSync(p);
+  };
+  return { ...fs, unlinkSync, default: { ...fs, unlinkSync } };
+});
 
 let dir: string, store: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'cirrus-app-files-'));
   store = join(dir, 'base');
 });
-afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); });
+afterEach(() => {
+  busy.clear();
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+});
 
 /** A file of `bytes` written under the temporary folder, then imported into the store. */
 function stored(name: string, bytes: Uint8Array): FileRef {
@@ -160,6 +177,8 @@ test('importPaths : un chemin réseau ou de périphérique est refusé avant tou
 test('isRunnable : scripts, exécutables et raccourcis, quelle que soit la casse (Review Focus 3)', () => {
   // .sh runs in Git Bash on this PC (Git for Windows' association).
   for (const name of ['train.sh', 'calcul.py', 'Script.PY', 'tâche.bat', 'setup.exe', 'raccourci.lnk', 'a.ps1', 'x.appref-ms']) expect(isRunnable(name), name).toBe(true);
+  // Python's compiled files and zipped applications, which the Python launcher runs (final review).
+  for (const name of ['calcul.cpython-312.pyc', 'calcul.pyo', 'outil.PYZW']) expect(isRunnable(name), name).toBe(true);
   // Windows drops trailing dots and spaces (« a.bat. » opens as « a.bat »), and « .lnk » alone has the extension .lnk.
   for (const name of ['a.bat.', 'a.cmd ', 'a.vbs. .', '.lnk', 'facture.pdf.exe']) expect(isRunnable(name), name).toBe(true);
   for (const name of ['article.pdf', 'figure.png', 'rapport.docx', 'mesures.csv', 'notes.txt', 'Makefile', 'py', 'a.python', 'a.py.txt']) {
@@ -268,6 +287,56 @@ test('cleanCopies : efface les copies en lecture seule et leurs dossiers ; un do
   expect(statSync(a).mode & 0o200).toBe(0);
   cleanCopies(root);
   expect(existsSync(a) || existsSync(b)).toBe(false);
+  expect(readdirSync(root)).toEqual([]);
+});
+
+test('cleanCopies : un fichier modifiable, que l’utilisateur a pu enregistrer là, reste avec son dossier ; les copies temporaires partent (I3 de la revue finale)', () => {
+  const root = join(dir, 'ouverts');
+  const a = openableCopy(store, stored('figure.png', counting(10)), root);
+  const b = openableCopy(store, stored('b.pdf', counting(20)), root);
+  const folder = dirname(a);
+  // « Enregistrer sous » proposes the copy's folder: a file saved there is writable, and the user's.
+  const saved = join(folder, 'figure annotée.png');
+  writeFileSync(saved, counting(30));
+  const loose = join(root, 'notes.txt');
+  writeFileSync(loose, 'à garder');
+  // A copy cut short between its writing and its renaming: Cirrus's, writable or read-only already.
+  const cut = [join(folder, '.copie-0123456789abcdef'), join(dirname(b), '.copie-fedcba9876543210')];
+  for (const p of cut) writeFileSync(p, counting(5));
+  chmodSync(cut[1], 0o444);
+  cleanCopies(root);
+  expect([a, b, ...cut].filter((p) => existsSync(p))).toEqual([]);
+  expect(readFileSync(saved)).toEqual(Buffer.from(counting(30)));
+  expect(readFileSync(loose, 'utf8')).toBe('à garder');
+  // The saved file's folder stays with it; the other copy's, emptied, goes.
+  expect(readdirSync(root).sort()).toEqual([basename(folder), 'notes.txt'].sort());
+  expect(readdirSync(folder)).toEqual(['figure annotée.png']);
+});
+
+test('une copie encore ouverte qu’on ne peut effacer repasse en lecture seule, pour rester une copie de Cirrus (revue finale)', () => {
+  const ref = stored('rapport.docx', counting(100));
+  const root = join(dir, 'ouverts');
+  const p = openableCopy(store, ref, root);
+  // Its mark removed, it must be made again; still open in its application, it cannot be removed.
+  unlinkSync(`${p}:Zone.Identifier`);
+  chmodSync(p, 0o444);
+  busy.add(p);
+  let thrown: unknown = null;
+  try {
+    openableCopy(store, ref, root);
+  } catch (e) {
+    thrown = e;
+  }
+  expect((thrown as NodeJS.ErrnoException | null)?.code).toBe('EBUSY');
+  expect(openFailure('rapport.docx', thrown)).toBe('Impossible d’ouvrir « rapport.docx » : sa copie est encore ouverte dans une autre application.');
+  expect(statSync(p).mode & 0o200).toBe(0);
+  expect(readFileSync(p)).toEqual(readFileSync(filePath(store, ref)));
+  // Still open at the next start: left, read-only again. Closed by the one after: removed, as a copy of Cirrus's.
+  cleanCopies(root);
+  expect(existsSync(p) && (statSync(p).mode & 0o200) === 0).toBe(true);
+  busy.delete(p);
+  cleanCopies(root);
+  expect(existsSync(p)).toBe(false);
   expect(readdirSync(root)).toEqual([]);
 });
 

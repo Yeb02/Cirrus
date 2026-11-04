@@ -19,8 +19,53 @@ export interface NodeFiles {
   openWithSystem(file: FileRef): Promise<void>;
 }
 
+/** What a drag event says of what it carries (a DragEvent, or what stands for one). */
+type Dragged = { dataTransfer: { readonly types: readonly string[] } | null };
+
 /** Whether a drag carries files (from the explorer): text dragged in a field is left to the field. */
-export const carriesFiles = (e: { dataTransfer: DataTransfer | null }): boolean => e.dataTransfer?.types.includes('Files') === true;
+export const carriesFiles = (e: Dragged): boolean => e.dataTransfer?.types.includes('Files') === true;
+
+/**
+ * The window's guard (Review Focus 2): files that nothing took — no node's pop-up, not the graph, their default not
+ * prevented — are refused, or Chromium would show the file in the window. Text dragged in a field is the field's.
+ */
+export const refusesStrayDrop = (e: Dragged & { defaultPrevented: boolean }): boolean => !e.defaultPrevented && carriesFiles(e);
+
+/** What takes the files let go on an element: a node's pop-up, or the graph. */
+export type DropZone = 'popup' | 'graph';
+/** What a drop lands on: an element of the page, or what stands for one (its `closest`). */
+type DropTarget = { closest?(selectors: string): unknown };
+/** What floats over the graph and refuses files (task 4): a connection's pop-up, a question. */
+const GRAPH_REFUSES = '.popup, .ask';
+
+/**
+ * What takes the files let go on `target` (Review Focus 2): a node's pop-up, anywhere on it (its list of files, its
+ * fields); the graph, but not what floats over it and refuses them (GRAPH_REFUSES); nothing elsewhere — the tabs, the
+ * settings and their fields, a file's preview, the full screen, the notifications.
+ */
+export function dropZone(target: EventTarget | DropTarget | null): DropZone | null {
+  const el = target as DropTarget | null;
+  if (!el?.closest) return null;
+  if (el.closest('.node-popup')) return 'popup';
+  return el.closest('.graph') && !el.closest(GRAPH_REFUSES) ? 'graph' : null;
+}
+
+/**
+ * Where dropped files go: into a node's files; to a notice, on the graph, where no node takes them (they are taken all
+ * the same, so nothing shows them); or refused, by the window's guard (refusesStrayDrop).
+ */
+export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'refused' };
+
+/**
+ * The route of files let go on `zone` (dropZone), `node` being the node that zone gives them to: a pop-up's own (null
+ * once it is gone: its pop-up then takes none); on the graph, the node or group under the point, the one a click there
+ * would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent or a centre phantom, none).
+ */
+export function dropRoute(zone: DropZone | null, node: Id | null): DropRoute {
+  if (zone === null) return { to: 'refused' };
+  if (node !== null) return { to: 'node', node };
+  return zone === 'graph' ? { to: 'notice' } : { to: 'refused' };
+}
 
 /** Why a dropped file that is not on the disk (one a web page made, dragged from a browser) is not imported. */
 export const NOT_ON_DISK = 'pas un fichier du disque';
@@ -90,7 +135,9 @@ export function openNotice(r: OpenResult): string | null {
 
 /**
  * The kinds handed to the system's application (controller's ruling, task 1): images, PDFs, and the kinds Cirrus cannot
- * show. Text, code, LaTeX and tables are only ever shown in Cirrus (task 5): a script is never handed to Windows.
+ * show. Text, code, LaTeX and tables are only ever shown in Cirrus (task 5): a script is never handed to Windows —
+ * scripts are text kinds (kind.ts), and of the kinds Cirrus cannot show, what Windows would run is shown in the
+ * explorer by the main process (isRunnable: executables, compiled Python).
  */
 const TO_SYSTEM: ReadonlySet<FileKind> = new Set(['image', 'pdf', 'other']);
 

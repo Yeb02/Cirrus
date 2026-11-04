@@ -3,6 +3,7 @@ import type { RenderParams } from '@cirrus/view';
 import { useEffect, useRef } from 'react';
 import { offersSystem } from '../files/nodeFiles.ts';
 import type { ViewStates } from '../files/viewState.ts';
+import { Notice } from './viewers/common.tsx';
 import { Viewer } from './viewers/Viewer.tsx';
 
 /**
@@ -68,6 +69,26 @@ export function FullScreen(props: { node: NodeRec; file: FileRef; params: Render
         <button className="close" title="Quitter le plein écran (Échap)" onClick={() => props.onClose()}>×</button>
       </header>
       <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} />
+    </div>
+  );
+}
+
+/**
+ * The full screen of a file in place of one that failed (PanelBoundary, App): still over the whole window, its × with
+ * the focus, which Escape leaves too; why, in French, in its middle.
+ */
+export function FullScreenFailed(props: { name: string; onClose(): void }) {
+  return (
+    <div
+      className="full-screen" role="dialog" aria-modal="true" aria-label={props.name}
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); props.onClose(); } }}
+    >
+      <header>
+        <span className="name" title={props.name}>{props.name}</span>
+        <span className="spacer" />
+        <button className="close" title="Quitter le plein écran (Échap)" autoFocus onClick={() => props.onClose()}>×</button>
+      </header>
+      <Notice text="Le plein écran n’a pas pu s’afficher." />
     </div>
   );
 }

@@ -8,7 +8,7 @@ import {
 import { loading } from '../../files/read.ts';
 import { keptView, Message, useKeptView, type ViewProps } from './common.tsx';
 
-/** Fitted to the width of the widest page, or at a zoom of its own (1: the pages' real size). */
+/** Fitted to the width of the first page (a wider one overflows), or at a zoom of its own (1: the pages' real size). */
 type Mode = { fit: true } | { fit: false; zoom: number };
 /** A document point to put at the view's place (vx, vy) at the next layout: where the view is, or a zoom's centre. */
 interface Target { a: Anchor; vx: number; vy: number }

@@ -137,7 +137,10 @@ export interface RenderParams {
   tableMarginPx: number;
   /** An image's zoom by the wheel, as wheelZoomSpeed, */
   imageZoomSpeed: number;
-  /** up to this many times its size; never under the fit, */
+  /**
+   * up to this many times its size (or its fit, when that is larger); never under the smaller of its fit and its own
+   * size, so that an image the fit enlarges can still be seen at 1:1,
+   */
   imageMaxZoom: number;
   /** which enlarges an image smaller than the view at most this many times (1: shown at its own size). */
   imageFitMaxZoom: number;

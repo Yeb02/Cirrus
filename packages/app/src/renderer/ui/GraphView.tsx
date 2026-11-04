@@ -24,7 +24,7 @@ import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
-import { carriesFiles, droppedPaths, type Refusal } from '../files/nodeFiles.ts';
+import { carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
 
 /** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
 export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
@@ -871,17 +871,18 @@ export function GraphView(props: {
   };
   /**
    * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
-   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); elsewhere, a notice.
+   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); elsewhere, a notice (dropRoute).
    */
   const dropFilesAt = (sx: number, sy: number, paths: string[], refused: Refusal[] = []): Promise<void> => {
     const h = hitAt(sx, sy), i = h.kind === 'item' ? sceneRef.current?.byId.get(h.id) : undefined;
-    const node = nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false);
-    if (node !== null) return props.onDropFiles(node, paths, refused);
+    const route = dropRoute('graph', nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false));
+    if (route.to === 'node') return props.onDropFiles(route.node, paths, refused);
     notify('Dépose le fichier sur un nœud pour l’y ajouter.');
     return Promise.resolve();
   };
   useImperativeHandle(props.ref, () => ({ dropFilesAt }));
-  const takesFiles = (ev: React.DragEvent) => carriesFiles(ev) && !(ev.target as Element).closest?.('.popup, .ask');
+  /** Files the graph takes: not on what floats over it and refuses them (dropZone). */
+  const takesFiles = (ev: React.DragEvent) => carriesFiles(ev) && dropZone(ev.target) === 'graph';
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
@@ -1130,8 +1131,14 @@ export function GraphView(props: {
     redraw();
   };
 
-  /** A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. */
+  /**
+   * A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. The focus comes
+   * back to the graph, as after the title editor or a question: the item pressed had it, and went with the menu. The
+   * next Escape is then the graph's, and cancels the gesture the choice started instead of closing a loose pop-up (I1
+   * of the final review); a title editor or a question opened by the choice takes it next.
+   */
   const pick = (action: MenuAction, hit: Hit, at: { x: number; y: number }) => {
+    root.current?.focus({ preventScroll: true });
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
     const p = paramsRef.current, sel = selectionRef.current;

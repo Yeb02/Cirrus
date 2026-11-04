@@ -6,7 +6,9 @@ import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
 import type { ViewStates } from '../../files/viewState.ts';
 import { NodePopup } from '../NodePopup.tsx';
+import { PanelBoundary } from '../PanelBoundary.tsx';
 import { FilePreview } from './FilePreview.tsx';
+import { FloatingPanel } from './FloatingPanel.tsx';
 import { clampRect, placeAt, placeBeside, type Rect } from './geometry.ts';
 
 /** What a floating panel shows: a node's pop-up, or a preview of one of its files (task 5), the file by its name. */
@@ -122,6 +124,8 @@ export interface PanelsHandle {
 }
 
 const NODE_GONE = 'Ce nœud n’existe plus.', FILE_GONE = 'Ce fichier n’est plus dans le nœud.';
+/** What a panel that failed says, in its body (PanelBoundary); its cause is in the console. */
+const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'Cet aperçu n’a pas pu s’afficher.';
 
 /**
  * The floating panels of the window (plan 4a, D7), over every tab: pinned, they stay from one tab to the next; loose,
@@ -129,7 +133,8 @@ const NODE_GONE = 'Ce nœud n’existe plus.', FILE_GONE = 'Ce fichier n’est p
  * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab; a node's
  * files are imported and opened by `files` (App). A file clicked in a pop-up opens its preview beside it, or its full
  * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), the panels are under it:
- * Escape and a press there are its own, and a preview of that file leaves its view to it.
+ * Escape and a press there are its own, and a preview of that file leaves its view to it. Each panel has its own
+ * PanelBoundary: one that fails says so in its frame, which still moves and closes; the others and the window stay.
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -213,23 +218,34 @@ export function Panels(props: {
           onClose: () => apply((ps) => ps.filter((x) => x.id !== p.id)),
         };
         const node = p.target.node;
+        /** The panel in place of one that failed (PanelBoundary): its frame, its title, and why. */
+        const failed = (className: string, title: string, text: string) => (
+          <FloatingPanel frame={frame} className={className} title={<span className="title gone" title={title}>{title}</span>}>
+            <p className="dim gone">{text}</p>
+          </FloatingPanel>
+        );
         if (p.target.kind === 'file') {
-          const file = resolveTarget(props.state, p.target)?.file ?? null;
+          const file = resolveTarget(props.state, p.target)?.file ?? null, name = p.target.name;
           return (
-            <FilePreview
-              key={p.id} frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
-              covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
-              onFull={() => { if (file) props.onFullScreen(node, file.name); }}
-            />
+            <PanelBoundary key={p.id} what={`Aperçu de « ${name} »`} fallback={failed('file-preview', name, PREVIEW_FAILED)}>
+              <FilePreview
+                frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
+                covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
+                onFull={() => { if (file) props.onFullScreen(node, file.name); }}
+              />
+            </PanelBoundary>
           );
         }
+        const title = props.state.nodes.get(node)?.title ?? '';
         return (
-          <NodePopup
-            key={p.id} frame={frame} id={node} found={resolveTarget(props.state, p.target)?.node ?? null}
-            state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
-            files={props.files}
-            onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
-          />
+          <PanelBoundary key={p.id} what={`Pop-up de « ${title} »`} fallback={failed('node-popup', title, POPUP_FAILED)}>
+            <NodePopup
+              frame={frame} id={node} found={resolveTarget(props.state, p.target)?.node ?? null}
+              state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
+              files={props.files}
+              onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
+            />
+          </PanelBoundary>
         );
       })}
     </div>

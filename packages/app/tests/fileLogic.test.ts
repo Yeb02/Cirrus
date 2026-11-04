@@ -38,7 +38,8 @@ test('genre d’un fichier : chaque extension des listes, en majuscules aussi, e
     ['pdf', 'pdf'],
     ['tex', 'tex'],
     ['table', 'csv tsv'],
-    ['text', 'txt md bib py ipynb js mjs ts tsx jsx json yaml yml toml ini cfg c h cpp hpp cc rs go java kt jl r m sh ps1 bat lua sql html css xml log rst'],
+    // Perl, Ruby and PHP too (final review): a script is shown in Cirrus, never handed to Windows, which may run it.
+    ['text', 'txt md bib py ipynb js mjs ts tsx jsx json yaml yml toml ini cfg c h cpp hpp cc rs go java kt jl r m sh ps1 bat lua sql html css xml log rst pl pm rb php'],
   ];
   for (const [kind, exts] of lists) {
     for (const ext of exts.split(' ')) {
@@ -222,6 +223,39 @@ test('decodeText : une lecture tronquée qui coupe un caractère reste en UTF-8,
   expect(decodeText(cut)).toEqual({ text: 'DurÃ', encoding: 'windows-1252' });
   const le = Buffer.from('Durée', 'utf16le');
   expect(decodeText(new Uint8Array([0xff, 0xfe, ...le.subarray(0, 9)]), true)).toEqual({ text: 'Duré', encoding: 'utf-16le' });
+});
+
+test('decodeText : un texte UTF-8 où traîne un octet d’un autre encodage reste en UTF-8, un U+FFFD à sa place (revue finale)', () => {
+  const utf8 = (s: string) => [...new TextEncoder().encode(s)];
+  // A « é » of Windows-1252 in the middle, as two tools writing to one log leave it.
+  const text = utf8('Durée de la séance — résumé : « déjà vu »');
+  expect(decodeText(new Uint8Array([...text.slice(0, 10), 0xe9, ...text.slice(10)])))
+    .toEqual({ text: 'Durée de �la séance — résumé : « déjà vu »', encoding: 'utf-8' });
+  // At the end of a whole file, as the review found it.
+  expect(decodeText(new Uint8Array([...utf8('Durée … résumé '), 0xe9]))).toEqual({ text: 'Durée … résumé �', encoding: 'utf-8' });
+  // A U+FFFD the text holds itself is a valid sequence, not an invalid one.
+  expect(decodeText(new Uint8Array([...utf8('��� é '), 0xe9]))).toEqual({ text: '��� é �', encoding: 'utf-8' });
+});
+
+test('decodeText : un vrai texte Windows-1252 reste en Windows-1252, même si deux de ses octets forment par hasard un caractère UTF-8 (revue finale)', () => {
+  // « voilà », a non-breaking space and « » »: E0 A0 BB, valid UTF-8 (U+083B), among six invalid sequences.
+  expect(decodeText(bytes('R\xE9sum\xE9 de la s\xE9ance \x96 d\xE9j\xE0 vu, voil\xE0\xA0\xBB')))
+    .toEqual({ text: 'Résumé de la séance – déjà vu, voilà »', encoding: 'windows-1252' });
+  // The threshold: UTF-8 while its valid multi-byte sequences are at least twice its invalid ones (UTF8_VALID_PER_INVALID).
+  const utf8 = (s: string) => [...new TextEncoder().encode(s)];
+  expect(decodeText(new Uint8Array([...utf8('éèàù'), 0xe9, 0x20, 0xe9]))).toEqual({ text: 'éèàù� �', encoding: 'utf-8' });
+  expect(decodeText(new Uint8Array([...utf8('éèà'), 0xe9, 0x20, 0xe9]))).toEqual({ text: 'Ã©Ã¨Ã é é', encoding: 'windows-1252' });
+  // Too few accents to tell: one valid sequence for one invalid is read as Windows-1252.
+  expect(decodeText(new Uint8Array([...utf8('Café'), 0xe9]))).toEqual({ text: 'CafÃ©é', encoding: 'windows-1252' });
+  // Past 64 invalid sequences (UTF8_EVIDENCE), the count stops the first time the valid ones are too few: a text that
+  // starts in Windows-1252 is read so, however much UTF-8 follows; one in UTF-8 throughout its stray bytes stays UTF-8.
+  const latin = [...bytes('caf\xE9 ')], accents = utf8('été ');
+  const start1252 = new Uint8Array([...Array.from({ length: 100 }, () => latin).flat(), ...Array.from({ length: 1000 }, () => accents).flat()]);
+  expect(decodeText(start1252)).toMatchObject({ encoding: 'windows-1252' });
+  const stray = new Uint8Array([...Array.from({ length: 1000 }, () => accents).flat(), ...Array.from({ length: 100 }, () => latin).flat()]);
+  const decoded = decodeText(stray) as { text: string; encoding: string };
+  expect(decoded.encoding).toBe('utf-8');
+  expect(decoded.text.match(/�/g)?.length).toBe(100);
 });
 
 test('le CSV de la base de test, en Windows-1252, se lit lisiblement, en colonnes (Review Focus 4)', () => {

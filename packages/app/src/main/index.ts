@@ -60,7 +60,10 @@ if (bench || capture) app.setPath('userData', join(app.getPath('temp'), 'cirrus-
 protocol.registerSchemesAsPrivileged([
   { scheme: FILE_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
-/** The read-only copies opened by the system's applications (plan 4a, D5), cleared at the next startup. */
+/**
+ * The read-only copies opened by the system's applications (plan 4a, D5), cleared at the next startup; a file saved
+ * beside them, writable, is kept (cleanCopies).
+ */
 const copies = join(tmpdir(), 'cirrus-ouverts');
 /**
  * One instance per base (I3 of the final review): every base has its lock (lockBase, taken below). On the user's own

@@ -4,14 +4,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import type { Build } from './actions.ts';
 import { mark } from './bench.ts';
-import { addImported, carriesFiles, type NodeFiles, openNotice, type Refusal } from './files/nodeFiles.ts';
+import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
-import { FullScreen } from './ui/FullScreen.tsx';
+import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
+import { PanelBoundary } from './ui/PanelBoundary.tsx';
 import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
@@ -125,11 +126,12 @@ export function App() {
   }, []);
 
   // A file let go anywhere but on a node or a pop-up opens nothing (Review Focus 2): Chromium would show it in the window.
-  // The graph and the pop-ups take theirs first (their default prevented); elsewhere — tabs, settings, a text field — the
-  // drop is refused, and the main process refuses any navigation anyway. Text dragged in a field is left to the field.
+  // The graph and the pop-ups take theirs first (their default prevented: dropZone, dropRoute); elsewhere — tabs,
+  // settings, a text field — the drop is refused (refusesStrayDrop), and the main process refuses any navigation anyway.
+  // Text dragged in a field is left to the field.
   useEffect(() => {
     const guard = (e: DragEvent) => {
-      if (e.defaultPrevented || !carriesFiles(e)) return;
+      if (!refusesStrayDrop(e)) return;
       e.preventDefault();
       e.dataTransfer!.dropEffect = 'none';
     };
@@ -304,9 +306,14 @@ export function App() {
         <Toasts toasts={toasts} />
       </div>
       {fullNow?.file && (
-        <FullScreen
-          node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
-        />
+        // A full screen that fails says so over the window, which stays (PanelBoundary); closed, it is tried again next time.
+        <PanelBoundary
+          what={`Plein écran de « ${fullNow.file.name} »`} fallback={<FullScreenFailed name={fullNow.file.name} onClose={() => setFull(null)} />}
+        >
+          <FullScreen
+            node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
+          />
+        </PanelBoundary>
       )}
     </div>
   );

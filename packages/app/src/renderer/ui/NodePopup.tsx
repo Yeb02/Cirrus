@@ -9,7 +9,9 @@ import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
 import { loading } from '../files/read.ts';
-import { droppedPaths, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor } from '../files/nodeFiles.ts';
+import {
+  droppedPaths, dropRoute, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor,
+} from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
@@ -370,10 +372,12 @@ export function NodePopup(props: {
       </>
     );
   })();
-  // Files dropped anywhere on the pop-up of a node that is there.
-  const drop = n ? (dt: DataTransfer) => {
+  // Files dropped anywhere on the pop-up go to its node, if it is there (dropRoute); else the pop-up takes none, and the
+  // window refuses them.
+  const route = dropRoute('popup', n ? id : null);
+  const drop = route.to === 'node' ? (dt: DataTransfer) => {
     const d = droppedPaths(dt.files, (f) => window.cirrus.pathForFile(f));
-    if (d.paths.length + d.refused.length > 0) void props.files.importInto(id, d.paths, d.refused);
+    if (d.paths.length + d.refused.length > 0) void props.files.importInto(route.node, d.paths, d.refused);
   } : undefined;
   return <FloatingPanel frame={props.frame} className="node-popup" title={title} onDropFiles={drop}>{body}</FloatingPanel>;
 }
