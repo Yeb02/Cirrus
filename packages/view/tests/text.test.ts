@@ -85,11 +85,12 @@ test('un titre vide donne une ligne et aucun glyphe ; « ℝ€ », absents de l
   for (const g of odd.glyphs) expect([g.u0, g.v0, g.w, g.h]).toEqual([question.u0, question.v0, question.w, question.h]);
 });
 
-test('measureLines : les lignes de layoutText à la taille de base, plus la ligne vide que comptait BitmapText', () => {
+test('measureLines : les lignes de layoutText à la taille de base, sans la ligne vide que comptait BitmapText', () => {
   const m = measureLines(font, P);
   for (const t of ['', 'Entropie de Shannon', 'Complexité de Kolmogorov', 'An Introduction to Kolmogorov Complexity and Its Applications', 'x'.repeat(60)]) {
-    expect(m(t)).toBe(node(t).lines + 1);
+    expect(m(t)).toBe(node(t).lines);
   }
+  expect(m('Entropie de Shannon')).toBe(1);
 });
 
 test('le titre d’un nœud donne une instance par glyphe visible ; un texte illisible au zoom servi n’est pas construit', () => {

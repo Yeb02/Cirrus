@@ -237,8 +237,8 @@ export function layoutText(font: FontData, text: string, size: number, wrap: num
 
 /**
  * The lines a node's box is sized for (the scene's measure): the title at base size, wrapped at the box's inner width.
- * One more than the title's lines, as BitmapText counted them (its layout listed an empty line after the last): the
- * boxes keep the height they had (Ruling of plan 3c task 7). Cached per title.
+ * Exactly the title's lines: the empty line BitmapText counted after the last is no longer added (user's decision on
+ * the Ruling of plan 3c task 7). Cached per title.
  */
 export function measureLines(font: FontData, p: RenderParams): Measure {
   const fi = indexOf(font), k = font.size / p.baseFontPx;
@@ -246,7 +246,7 @@ export function measureLines(font: FontData, p: RenderParams): Measure {
   const cache = new Map<string, number>();
   return (title) => {
     let n = cache.get(title);
-    if (n === undefined) cache.set(title, (n = layoutUnits(fi, title, wrapFU, lhFU, false).lines + 1));
+    if (n === undefined) cache.set(title, (n = layoutUnits(fi, title, wrapFU, lhFU, false).lines));
     return n;
   };
 }
