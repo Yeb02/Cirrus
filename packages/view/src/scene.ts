@@ -863,15 +863,46 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
 
 // ———— Previews
 
+/** Each preview made by withOffsets or withMoves: the scene it was made over, and the slots it wrote. */
+const previews = new WeakMap<PlanScene, { base: PlanScene; touched: number[] }>();
+
+/** The scene a preview was made over (withOffsets, withMoves); any other scene is its own base. */
+export const previewBase = (scene: PlanScene): PlanScene => previews.get(scene)?.base ?? scene;
+
+/**
+ * The items a preview of `scene` is written in (plan 3c task 9): those of `reuse`, an earlier preview of the same scene
+ * no longer drawn, its slots set back (what it wrote, not the plan); else a copy, once per gesture. `reuse` is spent.
+ */
+function previewItems(scene: PlanScene, reuse: PlanScene | undefined): SceneItem[] {
+  const r = reuse && previews.get(reuse);
+  if (!r || r.base !== scene) return scene.items.slice();
+  previews.delete(reuse!);
+  const items = reuse!.items;
+  for (const i of r.touched) items[i] = scene.items[i];
+  return items;
+}
+
+/** A preview of `scene`: its bounds hold the scene's and what moved (a preview's do not shrink: no pass over the plan). */
+function previewOf(scene: PlanScene, items: SceneItem[], touched: number[]): PlanScene {
+  let bounds = scene.bounds;
+  for (const i of touched) bounds = union(bounds, extentOf(items[i]));
+  const out = sceneWith(scene, { items, bounds });
+  previews.set(out, { base: scene, touched });
+  return out;
+}
+
 /**
  * The scene with some items moved (and their descendants), for the preview of a drag: moved items and the groups
- * above them are copied and derived again, everything else is shared. The original scene is left unchanged.
+ * above them are copied and derived again, everything else is shared — at the cost of what moves (plan 3c task 9).
+ * `reuse`: the drag's previous preview, whose storage this one takes (it is then no longer valid). The original scene
+ * is left unchanged.
  */
-export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: RenderParams): PlanScene {
-  const items = [...scene.items];
+export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: RenderParams, reuse?: PlanScene): PlanScene {
+  const items = previewItems(scene, reuse), touched: number[] = [];
   const shift = (i: number, d: Vec2) => {
     const it = items[i];
     items[i] = { ...it, x: it.x + d.x, y: it.y + d.y, ...(it.hull ? { hull: it.hull.map((q) => ({ x: q.x + d.x, y: q.y + d.y })) } : {}) };
+    touched.push(i);
     for (const c of it.children) shift(c, d);
   };
   for (const [i, d] of offsets) shift(i, d);
@@ -881,19 +912,22 @@ export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: Ren
   for (const g of [...above].sort((a, b) => items[b].depth - items[a].depth)) {
     items[g] = { ...items[g] };
     deriveGroup(items, g, p);
+    touched.push(g);
   }
-  return sceneWith(scene, { items, bounds: boundsOf(items) });
+  return previewOf(scene, items, touched);
 }
 
 /**
  * The scene with some placements changed (positions, steps), for the preview of a scale gesture (I15 of the plan 3b
  * review): changed items and the groups above them are copied and derived again, everything else is shared, and the
- * scene is not rebuilt from the state. The original scene is left unchanged.
+ * scene is not rebuilt from the state — at the cost of what changes. `reuse`: as for withOffsets. The original scene
+ * is left unchanged.
  */
 export function withMoves(
   scene: PlanScene, m: { nodes: { node: Id; x?: number; y?: number; k?: number }[]; phantoms: { id: Id; x: number; y: number; k?: number }[] }, p: RenderParams,
+  reuse?: PlanScene,
 ): PlanScene {
-  const items = [...scene.items];
+  const items = previewItems(scene, reuse);
   const touched: number[] = [];
   const update = (i: number | undefined, x: number | undefined, y: number | undefined, k: number | undefined) => {
     if (i === undefined) return;
@@ -913,6 +947,7 @@ export function withMoves(
   for (const g of [...groups].sort((a, b) => items[b].depth - items[a].depth)) {
     items[g] = { ...items[g] };
     deriveGroup(items, g, p);
+    touched.push(g);
   }
-  return sceneWith(scene, { items, bounds: boundsOf(items) });
+  return previewOf(scene, items, touched);
 }

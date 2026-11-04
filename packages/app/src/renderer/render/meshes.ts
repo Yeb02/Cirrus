@@ -10,7 +10,7 @@ export interface AttributeSpec { name: string; size: 1 | 2 | 3 | 4 }
  */
 export class Mesh {
   readonly program: Program;
-  private readonly buffers = new Map<string, DynamicBuffer>();
+  private readonly buffers = new Map<string, { buffer: DynamicBuffer; size: number }>();
   private readonly index: DynamicBuffer;
   private readonly vao: VertexArray;
   private readonly gl: WebGL2RenderingContext;
@@ -21,7 +21,7 @@ export class Mesh {
     this.program = program;
     const attributes: Attribute[] = specs.map((s) => {
       const buffer = new DynamicBuffer(gl, gl.ARRAY_BUFFER, initialVertices * s.size * 4);
-      this.buffers.set(s.name, buffer);
+      this.buffers.set(s.name, { buffer, size: s.size });
       return { name: s.name, buffer, size: s.size };
     });
     this.index = new DynamicBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, initialVertices * 3 * 4);
@@ -29,28 +29,37 @@ export class Mesh {
   }
 
   update(data: Record<string, Float32Array>, index: Uint32Array): void {
-    for (const [name, buffer] of this.buffers) buffer.upload(data[name]);
+    for (const [name, { buffer }] of this.buffers) buffer.upload(data[name]);
     this.index.upload(index);
     this.count = index.length;
+  }
+
+  /** Vertices [from, to) sent again, the indices as they are (a preview or an edit rewrites them in place). */
+  updateRange(data: Record<string, Float32Array>, from: number, to: number): void {
+    for (const [name, { buffer, size }] of this.buffers) buffer.uploadRange(data[name], from * size, to * size);
   }
 
   get empty(): boolean {
     return this.count === 0;
   }
 
-  /** Draws with the program's uniforms as they are set. */
-  draw(): void {
-    if (this.count === 0) return;
+  get length(): number {
+    return this.count;
+  }
+
+  /** Draws indices [from, to) (all of them by default) with the program's uniforms as they are set. */
+  draw(from = 0, to = this.count): void {
+    if (to <= from) return;
     const gl = this.gl;
     this.program.use();
     this.vao.bind();
-    gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_INT, 0);
+    gl.drawElements(gl.TRIANGLES, to - from, gl.UNSIGNED_INT, from * 4);
     this.vao.unbind();
   }
 
   dispose(): void {
     this.vao.dispose();
-    for (const b of this.buffers.values()) b.dispose();
+    for (const { buffer } of this.buffers.values()) buffer.dispose();
     this.index.dispose();
   }
 }
@@ -92,6 +101,11 @@ export class InstanceMesh {
   update(data: Float32Array | Int32Array): void {
     this.instances.upload(data);
     this.count = Math.floor(data.length / this.size);
+  }
+
+  /** Instances [from, to) of `data` (the storage last sent) sent again in place. */
+  updateRange(data: Float32Array | Int32Array, from: number, to: number): void {
+    this.instances.uploadRange(data, from * this.size, to * this.size);
   }
 
   get length(): number {

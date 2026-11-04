@@ -11,8 +11,10 @@ import type { Camera } from '../src/camera.ts';
 import { copyClip, pasteSteps } from '../src/clip.ts';
 import { intruders, visibleIntruders } from '../src/edit.ts';
 import { buildHitIndex } from '../src/hit.ts';
+import { type EnvelopeMeshes, newEnvelopeMeshes } from '../src/geometry/envelope.ts';
 import { buildInstances, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
-import { buildScene, isLive, type PlanScene } from '../src/scene.ts';
+import { patchEdit, patchPreview, previewEnvelopes, previewSlots, previewSplit, type PreviewSplit, type Shown } from '../src/preview.ts';
+import { buildScene, isLive, type PlanScene, withOffsets } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
 import { GLYPH_FLOATS, parseBmFont } from '../src/text.ts';
 import { buildIndex, computeVisible, updateIndex } from '../src/visibility.ts';
@@ -285,6 +287,120 @@ test('base de référence : la texture des éléments du lobby se remplit en 3 m
   show(`itemTexels complet (${scene.items.length} emplacements)`, r.ms);
   expect(out.some((v) => v !== 0)).toBe(true);
   expect(r.ms).toBeLessThanOrEqual(TEXELS_CEILING_MS);
+}, 120_000);
+
+// ———— Previews and edits through the item texture (plan 3c, task 9)
+
+/**
+ * One frame of a drag's preview as the renderer prepares it: the preview's scene (the previous one's storage taken
+ * again), its texels, its instances patched in place, its groups' envelopes apart; the split is made once per drag.
+ */
+function previewFrame(shown: Shown, split: PreviewSplit, moving: number[], d: { x: number; y: number }, previous: PlanScene | undefined, texels: Float32Array, side: EnvelopeMeshes) {
+  const base = shown.state, preview = withOffsets(base, new Map(moving.map((i) => [i, d])), P, previous);
+  itemTexels(preview, shown.inst.origin, texels, previewSlots(base, preview, split));
+  const patched = patchPreview(shown, preview, split, P);
+  if (patched) previewEnvelopes(shown, preview, split, P, side);
+  return { preview, patched };
+}
+
+/**
+ * Sixty frames of a drag (3 px then 2 px a frame on screen), three times: each frame's best of three, then their
+ * median and worst; and how many were done in place.
+ */
+function dragFrames(shown: Shown, moving: number[]): { median: number; worst: number; inPlace: number; split: PreviewSplit } {
+  const split = previewSplit(shown.state, shown.visible, moving), texels = new Float32Array(shown.state.items.length * SLOT_FLOATS), side = newEnvelopeMeshes();
+  const z = shown.cam.zoom, frames = 60, bestOf = new Array<number>(frames).fill(Infinity);
+  let previous: PlanScene | undefined, inPlace = 0;
+  for (let pass = 0; pass < 4; pass++) {
+    for (let f = 0; f < frames; f++) {
+      const t = performance.now();
+      const r = previewFrame(shown, split, moving, { x: (3 * (f + 1)) / z, y: (2 * (f + 1)) / z }, previous, texels, side);
+      const ms = performance.now() - t;
+      previous = r.preview;
+      if (pass > 0) bestOf[f] = Math.min(bestOf[f], ms);
+      if (pass === 0 && r.patched) inPlace++;
+    }
+  }
+  // Given up: back to the frame before, to the bit (Review Focus 5).
+  expect(patchPreview(shown, shown.state, split, P)).not.toBeNull();
+  const sorted = [...bestOf].sort((a, b) => a - b);
+  return { median: sorted[frames >> 1], worst: sorted[frames - 1], inPlace, split };
+}
+
+/**
+ * The plan aims at 0.5 ms for a frame of a leaf's drag and 3 ms for a group of 200 elements, at the bench's deepest
+ * camera (121 ms before at the bench, the index built and the texture written whole at each frame): 0.44–0.57 and
+ * 0.39 ms (medians) while the user's programs held about half the processors. The gates are about three times the
+ * measures (R12, R15 of the registry); the targets stay the plan's.
+ */
+const LEAF_PREVIEW_CEILING_MS = 1.5, GROUP_PREVIEW_CEILING_MS = 1.2;
+
+test('base de référence : une image d’aperçu de glissement se prépare en 0,5 ms pour une feuille, en 3 ms pour un groupe de 200 éléments, à la caméra profonde', () => {
+  const { scene } = reference(), index = buildIndex(scene, P), deep = benchPath(scene, W, H, P).deep!;
+  const shownAt = (x: number, y: number): Shown => {
+    const cam = { x, y, zoom: deep.zoom, widthPx: W, heightPx: H }, visible = computeVisible(scene, index, cam, P);
+    return { scene, base: scene, state: scene, visible, cam, inst: buildInstances(scene, visible, cam, { x, y }, P, undefined, font, new Map()) };
+  };
+  // The leaf drawn whose visible connections number nearest 20, near the deep camera.
+  const atDeep = shownAt(deep.x, deep.y), degree = new Map<number, number>();
+  for (const vc of atDeep.visible.connections) for (const e of vc.ends) degree.set(e.item, (degree.get(e.item) ?? 0) + 1);
+  const leaves = atDeep.visible.items.filter((i) => scene.items[i].kind === 'node' && scene.items[i].parent >= 0);
+  const leaf = leaves.reduce((a, b) => (Math.abs((degree.get(b) ?? 0) - 20) < Math.abs((degree.get(a) ?? 0) - 20) ? b : a));
+  const before = structuredClone([...atDeep.inst.curves.view(), ...atDeep.inst.texts.view()]);
+  const l = dragFrames(atDeep, [leaf]);
+  expect(structuredClone([...atDeep.inst.curves.view(), ...atDeep.inst.texts.view()])).toEqual(before);
+  const sizes = (x: PreviewSplit) => `${x.items.length} éléments, ${x.groups.length} groupes, ${x.complex.length} faisceaux complexes et ${x.simple.length} simples réécrits`;
+  show(`image d’aperçu, feuille de ${degree.get(leaf)} connexions visibles (${sizes(l.split)} ; médiane, ${l.inPlace} sur 60 en place)`, l.median);
+  show('  la pire', l.worst);
+  // The smallest group of at least 200 elements, the camera at the deep zoom on its deepest leaf: what it holds there is
+  // drawn (on its own centre, the deep zoom shows none of it).
+  const subtree = (i: number): number => scene.items[i].children.reduce((a, c) => a + subtree(c), 1);
+  let big = -1;
+  scene.items.forEach((it, i) => { if (isLive(scene, i) && it.kind === 'group' && subtree(i) >= 200 && (big < 0 || subtree(i) < subtree(big))) big = i; });
+  let deepest = big;
+  const descend = (i: number) => { if (scene.items[i].depth > scene.items[deepest].depth) deepest = i; for (const c of scene.items[i].children) descend(c); };
+  descend(big);
+  const atGroup = shownAt(scene.items[deepest].x, scene.items[deepest].y), g = dragFrames(atGroup, [big]);
+  const drawn = new Set([...atGroup.visible.items, ...atGroup.visible.groups]), held = g.split.items.filter((i) => drawn.has(i)).length;
+  show(`image d’aperçu, groupe de ${subtree(big)} éléments (${sizes(g.split)}, ${held} dessinés ; médiane, ${g.inPlace} sur 60 en place)`, g.median);
+  show('  la pire', g.worst);
+  expect(degree.get(leaf)).toBeGreaterThan(10);
+  expect(l.inPlace).toBe(60);
+  expect(held).toBeGreaterThan(10);
+  expect(g.inPlace).toBeGreaterThan(0);
+  expect(l.median).toBeLessThanOrEqual(LEAF_PREVIEW_CEILING_MS);
+  expect(g.median).toBeLessThanOrEqual(GROUP_PREVIEW_CEILING_MS);
+}, 300_000);
+
+test('base de référence : un dépôt et son annulation mettent ce qui est dessiné à jour en place, à la caméra profonde', () => {
+  const { s, lobby, scene } = reference(), deep = benchPath(scene, W, H, P).deep!, cam = { ...deep, widthPx: W, heightPx: H };
+  let index = buildIndex(scene, P);
+  const visible = computeVisible(scene, index, cam, P);
+  const shown: Shown = { scene, base: scene, state: scene, visible, cam, inst: buildInstances(scene, visible, cam, cam, P, undefined, font, new Map()) };
+  const leaf = visible.items.find((i) => scene.items[i].kind === 'node')!, it = scene.items[leaf];
+  const a = moveNodes(s, lobby, [{ node: it.id, x: it.x + 30 / cam.zoom, y: it.y - 20 / cam.zoom }]), undo = invertAction(a);
+  let ms = Infinity, undoMs = Infinity, sc = scene;
+  for (let i = 0; i < 5; i++) {
+    applyOps(s, a.ops);
+    const u = updateScene(sc, s, a.ops, measure, P);
+    index = updateIndex(index, u.scene, u.changes, P);
+    let t = performance.now();
+    expect(patchEdit(shown, sc, u.scene, u.changes, P, font, new Map())).not.toBeNull();
+    ms = Math.min(ms, performance.now() - t);
+    Object.assign(shown, { scene: u.scene, base: u.scene, state: u.scene });
+    applyOps(s, undo.ops);
+    const back = updateScene(u.scene, s, undo.ops, measure, P);
+    index = updateIndex(index, back.scene, back.changes, P);
+    t = performance.now();
+    expect(patchEdit(shown, u.scene, back.scene, back.changes, P, font, new Map())).not.toBeNull();
+    undoMs = Math.min(undoMs, performance.now() - t);
+    Object.assign(shown, { scene: back.scene, base: back.scene, state: back.scene });
+    sc = back.scene;
+  }
+  show('patchEdit, dépôt d’une feuille', ms);
+  show('  son annulation', undoMs);
+  expect(computeVisible(sc, index, cam, P)).toEqual(shown.visible);
+  ref!.scene = sc;
 }, 120_000);
 
 test('base de référence : updateIndex d’un déplacement en 1 ms au plus, et l’index suivi égale l’index construit', () => {

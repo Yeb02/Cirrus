@@ -1,11 +1,11 @@
-import type { Id, Vec2 } from '@cirrus/core';
+import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
 import { FloatList, IntList } from './geometry/arrays.ts';
-import type { Branch } from './geometry/bundle.ts';
+import type { Branch, BundleGeometry } from './geometry/bundle.ts';
 import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes, NO_PARENT } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
-import { appendBundleGlyphs, bezierSegments, clearGlyphMeshes, type GlyphMeshes, newGlyphMeshes, sampleBranch } from './geometry/ribbon.ts';
+import { appendBundleGlyphs, bezierSegments, bundleGlyphCount, clearGlyphMeshes, type GlyphMeshes, newGlyphMeshes, sampleBranch } from './geometry/ribbon.ts';
 import { simpleBranches, simpleMarker } from './geometry/simple.ts';
 import {
   appendConnectionTitles, appendItemTitles, bundleEnd, bundleFor, type CoreAt, groupColors, placeConnectionTitles, type PlacedTitle, titleReadableFrom,
@@ -125,6 +125,8 @@ export const CURVE_AT: Readonly<Record<CurveField, number>> = curveStarts;
 export const CURVE_FLOATS = curveFloats;
 
 export interface MarkerAt extends CoreAt { multi: boolean }
+/** A part's layout standing in for the plan's own (a handle being dragged, spec 8.5), by part slot. */
+export type LayoutOverrides = ReadonlyMap<number, Omit<ConnectionLayout, 'plan' | 'connection'>>;
 export interface StubAt { conn: number; stub: number; pos: Vec2; title: string }
 
 /**
@@ -156,15 +158,40 @@ export interface Instances {
   pending: boolean;
   /** What resumeInstances needs: null once complete. */
   work: Work | null;
+  // Where each part sits, for what rewrites it in place (plan 3c task 9: previews and edits).
+  /** BUNDLE_INTS per complex bundle, in visible order, built or left out as too thin: see BUNDLE_AT. */
+  bundles: IntList;
+  /** Per visible connection: its row in `bundles`, -1 for a simple one. */
+  bundleOf: IntList;
+  /** Per visible group, two ints: its envelope's first index and index count. */
+  envelopeAt: IntList;
+  /** Per visible group, two ints: the first glyph of its open title and their count (0: not built). */
+  groupTitles: IntList;
+  /** The floats of the items' titles in `texts`: the connections' come after. */
+  itemTexts: number;
+  /** Per placed title (`titles`), two ints: its first glyph and their count. */
+  titleGlyphs: IntList;
+  /** The simple connections with a title, by visible index, in order. */
+  titled: IntList;
 }
+
+/**
+ * A complex bundle's row in Instances.bundles: its visible index, its first curve instance and their count, its first
+ * glyph vertex and their count, its marker's index (-1: left out as too thin), its first stub and their count.
+ */
+export const BUNDLE_AT = { conn: 0, curve: 1, curves: 2, glyph: 3, glyphs: 4, marker: 5, stub: 6, stubs: 7 } as const;
+export const BUNDLE_INTS = 8;
 
 interface Work {
   scene: PlanScene;
   visible: VisibleSet;
   cam: Camera;
+  /** The instances' origin: everything is written relative to it. */
+  origin: Vec2;
   p: RenderParams;
   font?: FontData;
   sides?: Map<Id, TitleSide>;
+  layouts?: LayoutOverrides;
   /** The complex visible connections, in visible order; `next` is the first not built. */
   queue: number[];
   next: number;
@@ -172,6 +199,8 @@ interface Work {
   titled: number[];
   padded: Map<number, Vec2[]>;
   extents: Map<number, number>;
+  /** The groups' hulls relative to the origin, for the bundles that end on them (bundleEnd). */
+  hulls: Map<number, Vec2[]>;
   /** The last largest step culled against, and its visibleFrom. */
   cullK: number;
   cullFrom: number;
@@ -181,20 +210,30 @@ export function newInstances(): Instances {
   return {
     origin: { x: 0, y: 0 }, boxes: new IntList(), simple: new IntList(), curves: new FloatList(), curveKeys: [], glyphs: newGlyphMeshes(),
     envelopes: newEnvelopeMeshes(), texts: new FloatList(), markers: [], stubs: [], titles: [], revealZoom: Infinity, pending: false, work: null,
+    bundles: new IntList(), bundleOf: new IntList(), envelopeAt: new IntList(), groupTitles: new IntList(), itemTexts: 0, titleGlyphs: new IntList(),
+    titled: new IntList(),
   };
 }
 
+const newWork = (
+  scene: PlanScene, visible: VisibleSet, cam: Camera, origin: Vec2, p: RenderParams, font?: FontData, sides?: Map<Id, TitleSide>, layouts?: LayoutOverrides,
+): Work => ({
+  scene, visible, cam, origin, p, font, sides, layouts, queue: [], next: 0, titled: [], padded: new Map(), extents: new Map(), hulls: new Map(), cullK: Number.NaN,
+  cullFrom: 0,
+});
+
 /**
- * A simple connection: two ends on boxes (no group, closed or not), no stub, centre nor layout, no slide; its curves
- * are computed in the vertex shaders from its two items' texels (simpleBranches is their TS twin).
+ * A simple connection: two ends on boxes (no group, closed or not), no stub, centre nor layout (its own, or one in
+ * `layouts`), no slide; its curves are computed in the vertex shaders from its two items' texels (simpleBranches is
+ * their TS twin).
  */
-export function isSimple(scene: PlanScene, vc: VisibleConnection): boolean {
+export function isSimple(scene: PlanScene, vc: VisibleConnection, layouts?: LayoutOverrides): boolean {
   const ends = vc.ends;
   if (ends.length !== 2 || vc.fade === 'slide' || vc.stubs.length > 0 || vc.center !== undefined) return false;
   const a = ends[0], b = ends[1], conns = vc.conns;
   if (a.item === b.item || a.hollow || b.hollow || conns.length !== 1) return false;
   const items = scene.items;
-  return items[a.item].kind !== 'group' && items[b.item].kind !== 'group' && scene.layout[conns[0]] === undefined;
+  return items[a.item].kind !== 'group' && items[b.item].kind !== 'group' && scene.layout[conns[0]] === undefined && !layouts?.has(conns[0]);
 }
 
 /** The zoom under which a connection whose largest step is kTop is not drawn (ribbonCullAlpha at zoom × curveZoomHeadroom). */
@@ -205,11 +244,12 @@ export const visibleFrom = (kTop: number, p: RenderParams): number =>
  * The instances of a visible set (spec 8.2 to 8.6): envelopes (a mesh, as before), the boxes, every simple connection,
  * the items' titles, then the complex bundles in visible order until `budget.deadline` (performance.now(); at least one
  * is built), the others left pending. `font`: the titles are built with it (none without); `sides`: connection titles
- * keep the side they had; `reuse`: its storage is refilled.
+ * keep the side they had; `reuse`: its storage is refilled; `layouts`: parts drawn with another layout than their own
+ * (a handle being dragged).
  */
 export function buildInstances(
   scene: PlanScene, visible: VisibleSet, cam: Camera, origin: Vec2, p: RenderParams, budget?: { deadline: number },
-  font?: FontData, sides?: Map<Id, TitleSide>, reuse?: Instances,
+  font?: FontData, sides?: Map<Id, TitleSide>, reuse?: Instances, layouts?: LayoutOverrides,
 ): Instances {
   const inst = reuse ?? newInstances();
   inst.boxes.clear();
@@ -217,24 +257,21 @@ export function buildInstances(
   inst.curves.clear();
   inst.curveKeys.length = 0;
   clearGlyphMeshes(inst.glyphs);
-  clearEnvelopeMeshes(inst.envelopes);
   inst.texts.clear();
   inst.markers = [];
   inst.stubs = [];
   inst.titles = [];
   inst.origin = origin;
   inst.revealZoom = Infinity;
-  const items = scene.items, connections = visible.connections, n = connections.length, titles = scene.titles, none = NO_PARENT;
-  const w: Work = { scene, visible, cam, p, font, sides, queue: [], next: 0, titled: [], padded: new Map(), extents: new Map(), cullK: Number.NaN, cullFrom: 0 };
+  for (const l of [inst.bundles, inst.bundleOf, inst.groupTitles, inst.titleGlyphs, inst.titled]) l.clear();
+  const items = scene.items, connections = visible.connections, n = connections.length, titles = scene.titles;
+  const w = newWork(scene, visible, cam, origin, p, font, sides, layouts);
   inst.work = w;
   inst.pending = true;
 
-  // Envelopes, parents first so nested levels are drawn on top.
-  for (const g of visible.groups) {
-    const it = items[g];
-    appendEnvelope(inst.envelopes, it.hull!.map((q) => ({ x: q.x - origin.x, y: q.y - origin.y })), it.pad!, groupColors(scene, g, p), it.maxChildK!,
-      it.parent >= 0 ? items[it.parent].maxChildK! : none);
-  }
+  appendEnvelopes(inst, scene, visible, p);
+  const unbuilt = inst.bundleOf.extend(n);
+  inst.bundleOf.storage.fill(-1, unbuilt, unbuilt + n);
   const boxesAt = inst.boxes.extend(visible.items.length);
   inst.boxes.storage.set(visible.items, boxesAt);
   // Every simple connection at once, the complex ones queued (one pass: the visible set is read once).
@@ -242,7 +279,7 @@ export function buildInstances(
   let d = simple.storage;
   for (let ci = 0; ci < n; ci++) {
     const vc = connections[ci];
-    if (!isSimple(scene, vc)) { w.queue.push(ci); continue; }
+    if (!isSimple(scene, vc, layouts)) { w.queue.push(ci); continue; }
     const a = vc.ends[0], b = vc.ends[1];
     let fade = -1;
     if (vc.fade === 'out') {
@@ -256,11 +293,33 @@ export function buildInstances(
     d[o + 2] = ROLE_CODE[a.role] | (ROLE_CODE[b.role] << SIMPLE_ROLE_BITS) | (a.dashed ? SIMPLE_DASHED_A : 0) | (b.dashed ? SIMPLE_DASHED_B : 0) | (fade >= 0 ? SIMPLE_FADE_OUT : 0);
     d[o + 3] = ci;
     d[o + 4] = fade;
-    if (titles[vc.conns[0]] !== '') w.titled.push(ci);
+    if (titles[vc.conns[0]] !== '') { w.titled.push(ci); inst.titled.push1(ci); }
   }
-  if (font) inst.revealZoom = Math.min(inst.revealZoom, appendItemTitles(inst.texts, scene, visible, cam, p, font, (g) => paddedOf(w, g)));
+  if (font) inst.revealZoom = Math.min(inst.revealZoom, appendItemTitles(inst.texts, scene, visible, cam, p, font, (g) => paddedOf(w, g), inst.groupTitles));
+  inst.itemTexts = inst.texts.length;
   resumeInstances(inst, budget);
   return inst;
+}
+
+/**
+ * The envelopes of visible groups (all of them, or those at visible indices `groups`), parents first so nested levels
+ * are drawn on top, relative to the instances' origin, into `out` (by default the instances' own, each one's indices
+ * noted in `envelopeAt`), made anew; `each`: told each envelope's index range [from, to).
+ */
+export function appendEnvelopes(
+  inst: Instances, scene: PlanScene, visible: VisibleSet, p: RenderParams, out: EnvelopeMeshes = inst.envelopes, groups?: Iterable<number>,
+  each?: (from: number, to: number) => void,
+): void {
+  const items = scene.items, origin = inst.origin, none = NO_PARENT, at = out === inst.envelopes ? inst.envelopeAt : null;
+  clearEnvelopeMeshes(out);
+  at?.clear();
+  for (const j of groups ?? visible.groups.keys()) {
+    const g = visible.groups[j], it = items[g], start = out.index.length;
+    appendEnvelope(out, it.hull!.map((q) => ({ x: q.x - origin.x, y: q.y - origin.y })), it.pad!, groupColors(scene, g, p), it.maxChildK!,
+      it.parent >= 0 ? items[it.parent].maxChildK! : none);
+    at?.push2(start, out.index.length - start);
+    each?.(start, out.index.length);
+  }
 }
 
 /** Builds the complex bundles left pending, until `budget.deadline` (at least one); once all are, the connection titles. */
@@ -269,11 +328,74 @@ export function resumeInstances(inst: Instances, budget?: { deadline: number }):
   if (!w) return;
   for (let built = 0; w.next < w.queue.length; built++) {
     if (budget && built > 0 && performance.now() >= budget.deadline) return;
-    appendComplex(inst, w, w.queue[w.next++]);
+    appendBundle(inst, w, w.queue[w.next++]);
   }
   finishTitles(inst, w);
   inst.pending = false;
   inst.work = null;
+}
+
+/** One complex bundle appended, and its row in `bundles`. */
+function appendBundle(inst: Instances, w: Work, ci: number): void {
+  const curves = inst.curves.length, glyphs = inst.glyphs.scale.length, markers = inst.markers.length, stubs = inst.stubs.length;
+  appendComplex(inst, w, ci);
+  const row = inst.bundles.length / BUNDLE_INTS, o = inst.bundles.extend(BUNDLE_INTS), b = inst.bundles.storage;
+  b[o] = ci;
+  b[o + 1] = curves / CURVE_FLOATS;
+  b[o + 2] = (inst.curves.length - curves) / CURVE_FLOATS;
+  b[o + 3] = glyphs;
+  b[o + 4] = inst.glyphs.scale.length - glyphs;
+  b[o + 5] = inst.markers.length > markers ? markers : -1;
+  b[o + 6] = stubs;
+  b[o + 7] = inst.stubs.length - stubs;
+  inst.bundleOf.storage[ci] = row;
+}
+
+/** Ranges [from, to) of instances (or of vertices) rewritten in place: what is to be sent again. */
+export type Ranges = [number, number][];
+
+/**
+ * The complex bundles `list` (visible indices) written again for `scene`, in place (plan 3c task 9: previews and
+ * edits), with the camera and origin they were built with: their curves, glyphs, markers and stubs. Each one must keep
+ * its counts, which its ends, roles, stubs and steps give; null when one does not (or was not built as a complex
+ * bundle), and then nothing was changed. Returns the curve instances and glyph vertices rewritten.
+ */
+export function rewriteBundles(
+  inst: Instances, scene: PlanScene, visible: VisibleSet, cam: Camera, p: RenderParams, list: Iterable<number>, layouts?: LayoutOverrides,
+): { curves: Ranges; glyphs: Ranges } | null {
+  const w = newWork(scene, visible, cam, inst.origin, p, undefined, undefined, layouts), b = inst.bundles.storage;
+  // Every bundle's geometry first, its counts checked against its row: written only if all of them kept theirs.
+  const rows: number[] = [], made: (Complex | null)[] = [];
+  for (const ci of new Set(list)) {
+    const row = ci >= 0 && ci < inst.bundleOf.length ? inst.bundleOf.storage[ci] : -1;
+    if (row < 0) return null;
+    const c = complexOf(w, ci), o = row * BUNDLE_INTS;
+    if (c ? b[o + 5] < 0 || c.curves !== b[o + 2] || c.glyphs !== b[o + 4] || c.stubs !== b[o + 7] : b[o + 5] >= 0) return null;
+    rows.push(row);
+    made.push(c);
+  }
+  const curves: Ranges = [], glyphs: Ranges = [];
+  rows.forEach((row, q) => {
+    const c = made[q], o = row * BUNDLE_INTS;
+    if (!c) return;
+    writeComplex(inst, w, b[o], c, row);
+    if (b[o + 2] > 0) curves.push([b[o + 1], b[o + 1] + b[o + 2]]);
+    if (b[o + 4] > 0) glyphs.push([b[o + 3], b[o + 3] + b[o + 4]]);
+  });
+  return { curves, glyphs };
+}
+
+/**
+ * The connection titles placed anew for `scene` over the bundles drawn (an edit that moved items, plan 3c task 9), as
+ * a rebuild places them; their glyphs after the items' titles.
+ */
+export function placeTitlesAnew(inst: Instances, scene: PlanScene, visible: VisibleSet, cam: Camera, p: RenderParams, font?: FontData, sides?: Map<Id, TitleSide>): void {
+  const w = newWork(scene, visible, cam, inst.origin, p, font, sides);
+  w.titled = [...inst.titled.view()];
+  inst.texts.truncate(inst.itemTexts);
+  inst.titles = [];
+  inst.titleGlyphs.clear();
+  finishTitles(inst, w);
 }
 
 /**
@@ -328,6 +450,13 @@ export class InstanceBuffers<T extends { inst: Instances }> {
     return next.inst.pending ? false : this.swap();
   }
 
+  /** A pending rebuild given up (what it was built for changed): its storage serves the next one. */
+  cancel(): void {
+    if (!this.building) return;
+    this.spare = this.building.inst;
+    this.building = null;
+  }
+
   /** The pending rebuild built on until the deadline; returns whether it completed and is now shown. */
   resume(budget?: { deadline: number }): boolean {
     if (!this.building) return false;
@@ -360,7 +489,26 @@ function extentOf(w: Work, i: number): number {
 
 /** One complex bundle: its curves, glyphs, marker and stubs; nothing if too thin at the deepest zoom a rebuild serves. */
 function appendComplex(inst: Instances, w: Work, ci: number): void {
-  const { scene, visible, cam, p } = w, items = scene.items, o = inst.origin, vc = visible.connections[ci];
+  const c = complexOf(w, ci);
+  if (!c) { if (w.cullFrom < inst.revealZoom) inst.revealZoom = w.cullFrom; return; }
+  writeComplex(inst, w, ci, c);
+}
+
+/** A complex bundle's geometry, and what it writes: curve instances, glyph vertices, stubs. */
+interface Complex {
+  open: BundleGeometry;
+  closed: BundleGeometry | null;
+  /** The two endpoints nearest the camera (x, y, half extent), relative to the origin. */
+  e0: { x: number; y: number; e: number };
+  e1: { x: number; y: number; e: number };
+  curves: number;
+  glyphs: number;
+  stubs: number;
+}
+
+/** Visible connection ci's bundle as it is drawn, or null when too thin at the deepest zoom a rebuild serves (w.cullFrom). */
+function complexOf(w: Work, ci: number): Complex | null {
+  const { scene, visible, cam, p } = w, items = scene.items, vc = visible.connections[ci];
   const slide = vc.fade === 'slide';
   let kOpen = vc.ends.length > 0 ? -Infinity : 0, kClosed = slide && vc.ends.length === 0 ? 0 : -Infinity;
   for (const e of vc.ends) {
@@ -370,27 +518,44 @@ function appendComplex(inst: Instances, w: Work, ci: number): void {
   // Bundles mostly share their largest step: its threshold is computed again only when it changes.
   const kTop = Math.max(kOpen, kClosed);
   if (kTop !== w.cullK) { w.cullK = kTop; w.cullFrom = visibleFrom(kTop, p); }
-  const from = w.cullFrom;
-  if (cam.zoom < from) { if (from < inst.revealZoom) inst.revealZoom = from; return; }
-  const open = bundleFor(scene, vc, p, o, undefined, false), closed = slide ? bundleFor(scene, vc, p, o, undefined, true) : null;
-  // The two endpoints nearest the camera carry the off-screen fade (spec 8.5); a far part: its node and its centre.
-  const cx = cam.x - o.x, cy = cam.y - o.y;
-  const pts = [...vc.ends.map((e) => e.item), ...(vc.center !== undefined ? [vc.center] : [])]
-    .map((i) => { const x = items[i].x - o.x, y = items[i].y - o.y; return { x, y, e: extentOf(w, i), d: Math.hypot(x - cx, y - cy) }; })
-    .sort((a, b) => a.d - b.d);
-  const e0 = pts[0], e1 = pts[1] ?? pts[0];
-  const mode = slide ? 1 : vc.fade === 'out' ? 2 : 0, foldK = Number.isFinite(vc.foldK) ? vc.foldK : 0;
-  const curve = (a: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, b: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, k0: number, k1: number, dashed: boolean, key: Id | null) => {
+  if (cam.zoom < w.cullFrom) return null;
+  const o = w.origin, layout = w.layouts && vc.conns.length === 1 ? w.layouts.get(vc.conns[0]) : undefined;
+  const open = bundleFor(scene, vc, p, o, layout, false, w.hulls), closed = slide ? bundleFor(scene, vc, p, o, layout, true, w.hulls) : null;
+  // The two endpoints nearest the camera carry the off-screen fade (spec 8.5); a far part: its node and its centre. The
+  // first two of a stable sort by distance, in one scan.
+  const cx = cam.x - o.x, cy = cam.y - o.y, n = vc.ends.length + (vc.center !== undefined ? 1 : 0);
+  let i0 = -1, i1 = -1, d0 = Infinity, d1 = Infinity;
+  for (let q = 0; q < n; q++) {
+    const i = q < vc.ends.length ? vc.ends[q].item : vc.center!, d = Math.hypot(items[i].x - o.x - cx, items[i].y - o.y - cy);
+    if (i0 < 0 || d < d0) { i1 = i0; d1 = d0; i0 = i; d0 = d; } else if (i1 < 0 || d < d1) { i1 = i; d1 = d; }
+  }
+  const end = (i: number) => ({ x: items[i].x - o.x, y: items[i].y - o.y, e: extentOf(w, i) });
+  const e0 = end(i0), e1 = i1 >= 0 ? end(i1) : e0;
+  let stubs = 0;
+  for (const b of open.branches) if (b.stub) stubs++;
+  return { open, closed, e0, e1, curves: (open.trunk ? 1 : 0) + open.branches.length, glyphs: bundleGlyphCount(open, closed), stubs };
+}
+
+/**
+ * A complex bundle written: appended, or with `row` (its row in `bundles`) in its place, its counts being the same
+ * (rewriteBundles checks them).
+ */
+function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1): void {
+  const vc = w.visible.connections[ci], { open, closed, e0, e1 } = c, b = inst.bundles.storage, r = row * BUNDLE_INTS;
+  const mode = vc.fade === 'slide' ? 1 : vc.fade === 'out' ? 2 : 0, foldK = Number.isFinite(vc.foldK) ? vc.foldK : 0;
+  let at = row >= 0 ? b[r + 1] * CURVE_FLOATS : inst.curves.extend(c.curves * CURVE_FLOATS);
+  const d = inst.curves.storage;
+  const curve = (a: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, q: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, k0: number, k1: number, dashed: boolean, key: Id | null) => {
     // Written in place, field by field (CURVE_FIELDS): open0, open1, closed0, closed1, width, end0, end1, fold.
-    const at = inst.curves.extend(CURVE_FLOATS), d = inst.curves.storage;
     d[at] = a.p0.x; d[at + 1] = a.p0.y; d[at + 2] = a.b1.x; d[at + 3] = a.b1.y;
     d[at + 4] = a.b2.x; d[at + 5] = a.b2.y; d[at + 6] = a.p3.x; d[at + 7] = a.p3.y;
-    d[at + 8] = b.p0.x; d[at + 9] = b.p0.y; d[at + 10] = b.b1.x; d[at + 11] = b.b1.y;
-    d[at + 12] = b.b2.x; d[at + 13] = b.b2.y; d[at + 14] = b.p3.x; d[at + 15] = b.p3.y;
+    d[at + 8] = q.p0.x; d[at + 9] = q.p0.y; d[at + 10] = q.b1.x; d[at + 11] = q.b1.y;
+    d[at + 12] = q.b2.x; d[at + 13] = q.b2.y; d[at + 14] = q.p3.x; d[at + 15] = q.p3.y;
     d[at + 16] = k0; d[at + 17] = k1; d[at + 18] = dashed ? 1 : 0; d[at + 19] = ci;
     d[at + 20] = e0.x; d[at + 21] = e0.y; d[at + 22] = e0.e; d[at + 23] = e1.x; d[at + 24] = e1.y; d[at + 25] = e1.e;
     d[at + 26] = mode; d[at + 27] = foldK;
-    inst.curveKeys.push(key);
+    at += CURVE_FLOATS;
+    if (row < 0) inst.curveKeys.push(key);
   };
   /** A trunk as a cubic: its control points a third of the way along. */
   const straight = (t: [Vec2, Vec2]) => {
@@ -399,15 +564,23 @@ function appendComplex(inst: Instances, w: Work, ci: number): void {
   };
   if (open.trunk) curve(straight(open.trunk), straight(closed?.trunk ?? open.trunk), open.kMax, open.kMax, false, null);
   open.branches.forEach((a, i) => {
-    const b = closed?.branches[i] ?? a;
+    const q = closed?.branches[i] ?? a;
     const [k0, k1] = a.nodeEnd === 'p0' ? [a.kNode, a.kMarker] : [a.kMarker, a.kNode];
-    curve(a, b, k0, k1, a.dashed, a.key);
+    curve(a, q, k0, k1, a.dashed, a.key);
   });
-  appendBundleGlyphs(inst.glyphs, open, closed, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: vc.fade, foldK: vc.foldK, conn: ci }, p);
-  inst.markers.push({ conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi });
-  open.branches.filter((b) => b.stub).forEach((b, si) => {
-    inst.stubs.push({ conn: ci, stub: si, pos: b.nodeEnd === 'p0' ? b.p0 : b.p3, title: vc.stubs[si].title });
-  });
+  appendBundleGlyphs(inst.glyphs, open, closed, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: vc.fade, foldK: vc.foldK, conn: ci }, w.p,
+    row >= 0 ? b[r + 3] : undefined);
+  const marker = { conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi };
+  if (row >= 0) inst.markers[b[r + 5]] = marker;
+  else inst.markers.push(marker);
+  let si = 0;
+  for (const br of open.branches) {
+    if (!br.stub) continue;
+    const stub = { conn: ci, stub: si, pos: br.nodeEnd === 'p0' ? br.p0 : br.p3, title: vc.stubs[si].title };
+    if (row >= 0) inst.stubs[b[r + 6] + si] = stub;
+    else inst.stubs.push(stub);
+    si++;
+  }
 }
 
 /** A simple connection's two ends as bundle ends, relative to `origin`. */
@@ -438,7 +611,7 @@ function finishTitles(inst: Instances, w: Work): void {
     const samples = curveSamples(inst, w);
     inst.revealZoom = Math.min(inst.revealZoom, placeConnectionTitles(scene, visible, cores, cam, o, p, samples, w.sides, inst.titles));
   }
-  if (w.font) appendConnectionTitles(inst.texts, visible, inst.titles, p, w.font);
+  if (w.font) appendConnectionTitles(inst.texts, visible, inst.titles, p, w.font, inst.titleGlyphs);
 }
 
 /** The curves' samples in a rectangle (relative to the origin), from an index of their extents made at the first call. */

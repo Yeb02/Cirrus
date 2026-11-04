@@ -16,6 +16,7 @@ export * from './geometry/grid.ts';
 export * from './visibility.ts';
 export * from './frame.ts';
 export * from './instances.ts';
+export * from './preview.ts';
 export * from './hit.ts';
 export * from './titles.ts';
 export * from './text.ts';

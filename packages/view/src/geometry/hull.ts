@@ -56,9 +56,19 @@ export function solidPolygon(hull: Vec2[]): Vec2[] {
   return Array.from({ length: 8 }, (_, i) => ({ x: c.x + r * Math.cos((i * Math.PI) / 4), y: c.y + r * Math.sin((i * Math.PI) / 4) }));
 }
 
-/** Each vertex pushed by d along its averaged outward normal (the envelope's padding). */
+/** The last padded polygon made of each hull (hulls are never changed once made: a moved group has a new one). */
+const padded = new WeakMap<Vec2[], { d: number; poly: Vec2[] }>();
+
+/**
+ * Each vertex pushed by d along its averaged outward normal (the envelope's padding). Kept per hull, the last padding
+ * asked (a preview frame asks the same envelope of several passes, plan 3c task 9): read only, never changed.
+ */
 export function offsetPolygon(hull: Vec2[], d: number): Vec2[] {
+  const kept = padded.get(hull);
+  if (kept && kept.d === d) return kept.poly;
   const poly = solidPolygon(hull);
   const normals = vertexNormals(poly);
-  return poly.map((q, i) => ({ x: q.x + normals[i].x * d, y: q.y + normals[i].y * d }));
+  const out = poly.map((q, i) => ({ x: q.x + normals[i].x * d, y: q.y + normals[i].y * d }));
+  padded.set(hull, { d, poly: out });
+  return out;
 }

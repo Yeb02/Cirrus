@@ -64,6 +64,11 @@ export class FloatList {
   clear(): void {
     this.n = 0;
   }
+
+  /** Back to its first `n` floats (what was appended past them is dropped). */
+  truncate(n: number): void {
+    if (n < this.n) this.n = n;
+  }
 }
 
 /** Growable Int32Array (instances of slots and indices, plan 3c task 8): refilled in place like FloatList. */
@@ -94,6 +99,12 @@ export class IntList {
     this.data[at] = a;
   }
 
+  push2(a: number, b: number): void {
+    const at = this.extend(2);
+    this.data[at] = a;
+    this.data[at + 1] = b;
+  }
+
   /** The whole storage, valid until the list grows again. */
   get storage(): Int32Array {
     return this.data;
@@ -109,6 +120,10 @@ export class IntList {
 
   clear(): void {
     this.n = 0;
+  }
+
+  truncate(n: number): void {
+    if (n < this.n) this.n = n;
   }
 }
 
@@ -141,5 +156,9 @@ export class IndexList {
 
   clear(): void {
     this.n = 0;
+  }
+
+  truncate(n: number): void {
+    if (n < this.n) this.n = n;
   }
 }

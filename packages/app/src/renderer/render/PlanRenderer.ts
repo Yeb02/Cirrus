@@ -1,12 +1,14 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import {
-  appendTitle, buildHitIndex, buildIndex, buildInstances, type Camera, computeVisible, CURVE_FIELDS, CURVE_FLOATS, emptySelection, FloatList, type FontData,
-  foldSignature, GLYPH_FIELDS, gridLevels, type HitIndex, IndexList, InstanceBuffers, type Instances, ITEM_TEXTURE_WIDTH, itemTexels, markerCores, offsetPolygon,
-  type PlanScene, type RenderParams, rowRuns, type SceneChanges, type SceneIndex, type Selection, SIMPLE_FIELDS, starLayerAlpha, starLayers, starsInRect,
-  texelSlots, textureRows, TITLE_NODE, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet,
+  appendTitle, buildHitIndex, buildIndex, buildInstances, type Camera, computeVisible, CURVE_FIELDS, CURVE_FLOATS, emptySelection, type EnvelopeMeshes, FloatList,
+  type FontData, foldSignature, GLYPH_FIELDS, GLYPH_FLOATS, type GlyphMeshes, gridLevels, type HitIndex, IndexList, InstanceBuffers, type LayoutOverrides,
+  markerCores, newEnvelopeMeshes, offsetPolygon, type Patched, patchEdit, patchPreview, type PlanScene, previewBase, previewEnvelopes, previewSlots,
+  type PreviewSplit, type Ranges, type RenderParams, type SceneChanges, type SceneIndex, type Selection, type Shown, SIMPLE_FIELDS, starLayerAlpha, starLayers,
+  starsInRect, texelSlots, TITLE_NODE, type TitleSide, updateIndex, vertexNormals, visibleIntruders, type VisibleSet, withLayout,
 } from '@cirrus/view';
 import type { Gl } from '../gl/context.ts';
 import { Texture2D } from '../gl/texture.ts';
+import { ItemTexture } from './itemTexture.ts';
 import { type AttributeSpec, InstanceMesh, Mesh } from './meshes.ts';
 import {
   ATLAS_UNIT, connectionPrograms, createPrograms, ITEMS_UNIT, NO_GROUP, type Programs, setOutlineColor, setParamUniforms, setView, SIMPLE_GLYPH_VERTICES,
@@ -36,9 +38,33 @@ const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
 const QUAD_INDEX = new Uint32Array([0, 1, 2, 0, 2, 3]);
 
 interface Meshes {
-  envelope: Mesh; arrow: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; stars: Mesh[]; sky: Mesh;
+  envelope: Mesh; previewEnvelope: Mesh; arrow: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; stars: Mesh[]; sky: Mesh;
   box: InstanceMesh; simple: InstanceMesh; curve: InstanceMesh; text: InstanceMesh;
 }
+
+const envelopeAttributes = (e: EnvelopeMeshes): Record<string, Float32Array> => ({
+  aPosition: e.position.view(), aNormal: e.normal.view(), aAlpha: e.alpha.view(), aOpen: e.open.view(), aClosed: e.closed.view(), aFoldK: e.foldK.view(),
+  aParentK: e.parentK.view(),
+});
+const glyphAttributes = (g: GlyphMeshes): Record<string, Float32Array> => ({
+  aPosition: g.position.view(), aPosition2: g.position2.view(), aOffset: g.offset.view(), aOffset2: g.offset2.view(), aScale: g.scale.view(),
+  aFill: g.fill.view(), aEnd0: g.end0.view(), aEnd1: g.end1.view(), aFold: g.fold.view(), aConn: g.conn.view(),
+});
+/** Past this many ranges rewritten in a buffer, one range from the first to the last is sent (Ruling R23: one call each). */
+const RANGES_MAX = 16;
+/** The ranges in order, those that touch merged; one range over all of them past RANGES_MAX. */
+function coalesce(ranges: Ranges): Ranges {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]), out: Ranges = [];
+  for (const [a, b] of sorted) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out.length > RANGES_MAX ? [[out[0][0], Math.max(...out.map((r) => r[1]))]] : out;
+}
+/** Whether two sets of layouts stand in for the same parts. */
+const sameParts = (a: LayoutOverrides | undefined, b: LayoutOverrides | undefined) =>
+  (a?.size ?? 0) === (b?.size ?? 0) && [...(a?.keys() ?? [])].every((k) => b?.has(k));
 
 /**
  * Draws a plan scene (spec 8) with our own WebGL 2 engine (plan 3c task 7, gl/), driven by the item texture (plan 3c
@@ -49,8 +75,11 @@ interface Meshes {
  * Geometry is rebuilt when the view leaves the prepared rectangle, a group level changes state, zooming out far, or
  * zooming in to where a title or a thin connection left out becomes visible; the item texture is written whole for a
  * new scene and when the camera goes originShiftPx from the origin, and only the rows of the slots an action changed
- * otherwise. Draw order: sky, stars, envelopes, simple ribbons, complex ribbons, simple glyphs, complex glyphs, boxes,
- * rings, markers, titles. A lost context draws nothing; once restored, everything is made and built again.
+ * otherwise. Previews and edits go through the texture (plan 3c task 9): a drag, a scale gesture or a layout handle
+ * rewrites the texels of what moves and, in place in what is drawn, the complex bundles and titles that touch it, its
+ * groups' envelopes drawn apart; an action that cannot have changed the visible set does the same. Draw order: sky,
+ * stars, envelopes, simple ribbons, complex ribbons, simple glyphs, complex glyphs, boxes, rings, markers, titles. A
+ * lost context draws nothing; once restored, everything is made and built again.
  */
 export class PlanRenderer {
   /** Called when something must be drawn again without an input: complex bundles left pending, a context restored. */
@@ -62,11 +91,8 @@ export class PlanRenderer {
   /** The atlas as decoded, kept to make its texture again after a context loss. */
   private readonly atlasImage: ImageBitmap;
   private atlas!: Texture2D;
-  private items!: Texture2D;
-  /** The item texture's rows on the CPU (SLOT_FLOATS per slot), what partial writes start from. */
-  private texels = new Float32Array(ITEM_TEXTURE_WIDTH * 4);
-  /** The scene whose items the texture holds, relative to `origin` (null: to be written whole). */
-  private texScene: PlanScene | null = null;
+  /** The items of the scene drawn, by slot (a preview's written over the state's). */
+  private tex!: ItemTexture;
   private programs!: Programs;
   private meshes!: Meshes;
   private starsShown = false;
@@ -77,12 +103,22 @@ export class PlanRenderer {
   private transient = false;
   /** The state's scene and its index, kept through a preview: an action updates them, a preview given up comes back to them. */
   private real: { scene: PlanScene; index: SceneIndex } | null = null;
+  /**
+   * A preview over the state's scene (plan 3c task 9): its scene, split and layouts, the slots its texels hold. Drawn in
+   * place when it can be (patchPreview), else built whole, its index then following it for that build only.
+   */
+  private overlay: { scene: PlanScene; split: PreviewSplit; layouts?: LayoutOverrides; slots: number[] } | null = null;
+  /** The preview's envelopes, and where they are drawn among the instances' (previewEnvelopes), null when none. */
+  private readonly sideEnvelopes = newEnvelopeMeshes();
+  private envelopeDraws: number[] | null = null;
   /** The intruders among what is drawn (visibleIntruders), with their group: the ring and the tooltip (spec 10). */
   private intruderMap = new Map<number, number>();
   /** What is drawn and hit-tested (complete), and the rebuild in progress (pending complex bundles). */
-  private readonly frames = new InstanceBuffers<{ scene: PlanScene; visible: VisibleSet; inst: Instances }>();
+  private readonly frames = new InstanceBuffers<Shown>();
   private hits: HitIndex | null = null;
   private titleSides = new Map<Id, TitleSide>();
+  /** The sides the titles had when a preview began: a preview given up that had to be built whole places them so again. */
+  private sidesBefore: Map<Id, TitleSide> | null = null;
   private cam: Camera = { x: 0, y: 0, zoom: 1, widthPx: 1, heightPx: 1 };
   private origin: Vec2 = { x: 0, y: 0 };
   private lastRect: Rect | null = null;
@@ -99,6 +135,8 @@ export class PlanRenderer {
   private stale = true;
   /** The rebuild asked for is the origin's move (bench report: 'origin', not 'stale'). */
   private shifted = false;
+  /** What is drawn was patched in place since the last frame (a preview, an action): it changed as a rebuild would. */
+  private patchedSince = false;
 
   /** `font`: the titles' (parsed before the first scene: the boxes are measured with it); `atlas`: its MSDF image. */
   constructor(g: Gl, p: RenderParams, font: FontData, atlas: ImageBitmap) {
@@ -121,7 +159,8 @@ export class PlanRenderer {
     const pr = (this.programs = createPrograms(gl));
     setParamUniforms(pr, this.p, this.font);
     this.meshes = {
-      envelope: new Mesh(gl, pr.envelope, ENVELOPE, 1024), arrow: new Mesh(gl, pr.arrow, ARROW, 2048), marker: new Mesh(gl, pr.marker, MARKER, 256),
+      envelope: new Mesh(gl, pr.envelope, ENVELOPE, 1024), previewEnvelope: new Mesh(gl, pr.envelope, ENVELOPE, 256), arrow: new Mesh(gl, pr.arrow, ARROW, 2048),
+      marker: new Mesh(gl, pr.marker, MARKER, 256),
       outline: new Mesh(gl, pr.outline, OUTLINE, 64), drop: new Mesh(gl, pr.outline, OUTLINE, 64), intruder: new Mesh(gl, pr.outline, OUTLINE, 64),
       stars: [0, 1, 2].map(() => new Mesh(gl, pr.star, STAR, 4096)), sky: new Mesh(gl, pr.sky, SKY, 4),
       box: new InstanceMesh(gl, [pr.box], BOX, 1024, true), simple: new InstanceMesh(gl, [pr.simpleRibbon, pr.simpleGlyph], SIMPLE, 4096, true),
@@ -129,17 +168,17 @@ export class PlanRenderer {
     };
     this.atlas = new Texture2D(gl, 'linear');
     this.atlas.setImage(this.atlasImage);
-    this.items = new Texture2D(gl, 'nearest');
-    this.items.allocate(ITEM_TEXTURE_WIDTH, 1);
-    this.texScene = null;
+    this.tex = new ItemTexture(gl);
   }
 
   private destroyGpu(): void {
     const m = this.meshes;
-    for (const mesh of [m.envelope, m.arrow, m.marker, m.outline, m.drop, m.intruder, m.sky, m.box, m.simple, m.curve, m.text, ...m.stars]) mesh.dispose();
+    for (const mesh of [m.envelope, m.previewEnvelope, m.arrow, m.marker, m.outline, m.drop, m.intruder, m.sky, m.box, m.simple, m.curve, m.text, ...m.stars]) {
+      mesh.dispose();
+    }
     for (const pr of Object.values(this.programs)) pr.dispose();
     this.atlas.dispose();
-    this.items.dispose();
+    this.tex.dispose();
   }
 
   /** Nothing drawn is kept: the next frame is built at once, the stars too. */
@@ -157,12 +196,14 @@ export class PlanRenderer {
   }
 
   /**
-   * `transient`: a preview (a drag in progress), drawn without forgetting where the connection titles sit; the real
-   * scene follows once the action is written, and the state's scene given again (a preview given up) comes back with
-   * its index, not built again. `index`: the scene's index kept from before (a tab shown again), not built again. The
-   * item texture is written whole for the scene at the next frame.
+   * `transient`: a preview of another scene than the state's (an action came during the gesture), built whole with its
+   * own index, as every preview was before plan 3c task 9, drawn without forgetting where the connection titles sit; the
+   * real scene follows once the action is written, and the state's scene given again (a preview given up) comes back
+   * with its index, not built again. `index`: the scene's index kept from before (a tab shown again), not built again.
+   * The item texture is written whole for the scene at the next frame.
    */
   setScene(scene: PlanScene, transient = false, index?: SceneIndex): void {
+    this.dropPreview();
     if (transient) {
       this.scene = scene;
       this.index = buildIndex(scene, this.p);
@@ -183,20 +224,142 @@ export class PlanRenderer {
   /**
    * The state's scene after an action (plan 3c, task 6): `scene` follows the scene last given (setScene or updateScene)
    * by `changes`; its index follows them too (updateIndex) instead of being built again, and the item texture's rows
-   * of the slots they changed are written again (texelSlots), the texture holding that scene; its first frame is built
-   * at once. A preview in progress is dropped (the texture held it: written whole).
+   * of the slots they changed are written again (texelSlots), with those of a preview in progress (a drop), the texture
+   * holding that scene. What is drawn is patched in place when the visible set cannot have changed (patchEdit: what
+   * the action moved, plan 3c task 9), else its first frame is built at once — before anything is drawn, so that no
+   * instance citing a freed or recycled slot meets the new texels.
    */
   updateScene(scene: PlanScene, changes: SceneChanges): void {
     if (!this.real) { this.setScene(scene); return; }
-    const prev = this.real.scene;
+    const prev = this.real.scene, split = this.overlay?.split;
+    this.overlay = null;
+    this.envelopeDraws = null;
     this.real = { scene, index: updateIndex(this.real.index, scene, changes, this.p) };
     this.scene = scene;
     this.index = this.real.index;
     this.transient = false;
-    if (!changes.full && this.texScene === prev) this.writeTexels(scene, texelSlots(prev, scene, changes));
+    if (changes.full) this.tex.scene = null;
+    else this.tex.update(prev, scene, texelSlots(prev, scene, changes));
     // The titles are placed anew, as for any scene of the state given before (a preview only keeps them).
     this.titleSides.clear();
-    this.restart(true);
+    const front = this.frames.front;
+    const patched = front && !this.frames.building && !this.stale && this.hasFrame && !front.layouts && front.base === prev && this.tex.scene === scene
+      ? patchEdit(front, prev, scene, changes, this.p, this.font, this.titleSides, split) : null;
+    if (!front || !patched) { this.restart(true); return; }
+    Object.assign(front, { scene, base: scene, state: scene });
+    this.send(patched);
+    this.hits = null;
+    this.intruderMap = visibleIntruders(scene, front.visible);
+    this.intruderItems = [...this.intruderMap.keys()];
+    for (const t of front.inst.titles) this.titleSides.set(t.id, t.side);
+    this.updateMarkers();
+    this.updateOutline();
+  }
+
+  /**
+   * A preview over the state's scene (plan 3c task 9): `scene` made from it at the cost of what moves (withOffsets,
+   * withMoves; the state's scene itself for a layout handle, `layouts` then standing in for its parts' own), `split`
+   * what it changes in the visible set drawn (previewSplit, layoutSplit). Its texels are written; what is drawn is
+   * patched in place (patchPreview), its groups' envelopes drawn apart, the rest following by the texture — or, when
+   * that cannot be done, built whole at the next frame, its index following it for that build. A preview of another
+   * scene than the state's is built whole, as before (setScene, transient).
+   */
+  preview(scene: PlanScene, split: PreviewSplit, layouts?: LayoutOverrides): void {
+    const real = this.real;
+    if (!real || previewBase(scene) !== real.scene) {
+      let other = scene;
+      for (const [part, layout] of layouts ?? []) other = withLayout(other, part, layout);
+      this.setScene(other, true);
+      return;
+    }
+    // From a preview of another scene: back to the state's index; the texture holds that other scene (written whole).
+    if (this.transient && !this.overlay) this.index = real.index;
+    const slots = previewSlots(real.scene, scene, split);
+    if (this.tex.scene === real.scene) this.tex.preview(scene, slots);
+    if (!this.overlay) this.sidesBefore = new Map(this.titleSides);
+    this.overlay = { scene, split, layouts, slots };
+    this.scene = scene;
+    this.transient = true;
+    this.hits = null;
+    const front = this.frames.front;
+    const patched = front && !this.frames.building && !this.stale && this.hasFrame && front.state === real.scene && this.tex.scene === real.scene
+      && (!front.layouts || sameParts(front.layouts, layouts)) ? patchPreview(front, scene, split, this.p, layouts) : null;
+    if (!front || !patched) { this.buildWhole(); return; }
+    front.scene = scene;
+    this.send(patched);
+    this.envelopeDraws = previewEnvelopes(front, scene, split, this.p, this.sideEnvelopes);
+    this.meshes.previewEnvelope.update(envelopeAttributes(this.sideEnvelopes), this.sideEnvelopes.index.view());
+    this.updateMarkers();
+    this.updateOutline();
+  }
+
+  /**
+   * The preview given up (Escape, a lost focus, a right click, a refusal): the same texels and instances written again
+   * from the state's scene (patchPreview), back to the frame before to the bit (Review Focus 5); built whole if the
+   * preview had to be. A preview of another scene: the state's scene given again.
+   */
+  endPreview(): void {
+    const real = this.real;
+    if (!real || !this.transient) return;
+    if (!this.overlay) { this.setScene(real.scene); return; }
+    const { split } = this.overlay;
+    this.dropPreview();
+    this.scene = real.scene;
+    this.transient = false;
+    this.hits = null;
+    const front = this.frames.front;
+    const patched = front && !this.frames.building && !this.stale && this.hasFrame && front.base === real.scene && !front.layouts && this.tex.scene === real.scene
+      ? patchPreview(front, real.scene, split, this.p) : null;
+    if (!front || !patched) {
+      this.frames.cancel();
+      this.titleSides = this.sidesBefore ?? new Map();
+      this.restart(true);
+      return;
+    }
+    front.scene = real.scene;
+    this.send(patched);
+    this.updateMarkers();
+    this.updateOutline();
+  }
+
+  /** An in-place preview dropped: its texels written back from the state's scene, its envelopes no longer drawn. */
+  private dropPreview(): void {
+    if (!this.overlay) return;
+    this.tex.restore();
+    this.overlay = null;
+    this.envelopeDraws = null;
+  }
+
+  /** What is drawn is built whole at the next frame (a preview that cannot be drawn in place): a pending build given up. */
+  private buildWhole(): void {
+    this.frames.cancel();
+    this.stale = true;
+    this.hasFrame = false;
+    this.envelopeDraws = null;
+  }
+
+  /** The parts of the instances drawn that a patch rewrote, sent again (each run of instances or vertices once). */
+  private send(x: Patched): void {
+    const inst = this.frames.front!.inst, m = this.meshes;
+    this.patchedSince = true;
+    for (const [a, b] of coalesce(x.curves)) m.curve.updateRange(inst.curves.view(), a, b);
+    if (x.glyphs.length > 0) {
+      const g = glyphAttributes(inst.glyphs);
+      for (const [a, b] of coalesce(x.glyphs)) m.arrow.updateRange(g, a, b);
+    }
+    if (inst.texts.length / GLYPH_FLOATS !== m.text.length) m.text.update(inst.texts.view());
+    else for (const [a, b] of coalesce(x.texts)) m.text.updateRange(inst.texts.view(), a, b);
+    if (x.envelopes) m.envelope.update(envelopeAttributes(inst.envelopes), inst.envelopes.index.view());
+  }
+
+  /**
+   * The state's index made to hold the preview's items (`preview` false: the state's own again), for one build of the
+   * preview whole: what it moves into view is then drawn, a step it changes folds what it does. O(what moves).
+   */
+  private indexHolds(preview: boolean): void {
+    const o = this.overlay, real = this.real;
+    if (!o || !real || this.index !== real.index) return;
+    updateIndex(real.index, preview ? o.scene : real.scene, { items: o.slots, parts: [], hierarchy: false, full: false }, this.p);
   }
 
   /** The state's scene and its index, as kept here: a tab left takes its index along (GraphView's cache). */
@@ -215,39 +378,6 @@ export class PlanRenderer {
     if (!state) return;
     this.intruderMap = new Map();
     this.intruderItems = [];
-  }
-
-  // ———— The item texture
-
-  /** The CPU rows hold `slots` slots; grown by doubling (Ruling R23 of the registry); returns whether they grew. */
-  private reserveTexels(slots: number): boolean {
-    const rows = Math.max(1, textureRows(slots)), need = rows * ITEM_TEXTURE_WIDTH * 4;
-    if (need <= this.texels.length) return false;
-    let size = this.texels.length * 2;
-    while (size < need) size *= 2;
-    const next = new Float32Array(size);
-    next.set(this.texels);
-    this.texels = next;
-    return true;
-  }
-
-  /** The whole scene in the texture, relative to the current origin. */
-  private writeAllTexels(scene: PlanScene): void {
-    this.reserveTexels(scene.items.length);
-    itemTexels(scene, this.origin, this.texels);
-    const rows = Math.max(1, textureRows(scene.items.length));
-    this.items.allocate(ITEM_TEXTURE_WIDTH, this.texels.length / (ITEM_TEXTURE_WIDTH * 4));
-    this.items.setRows(this.texels, 0, rows);
-    this.texScene = scene;
-  }
-
-  /** Only these slots, and the rows they are in (texSubImage2D per run of rows); the whole texture if it must grow. */
-  private writeTexels(scene: PlanScene, slots: number[]): void {
-    if (this.g.lost) { this.texScene = null; return; }
-    if (this.reserveTexels(scene.items.length)) { this.writeAllTexels(scene); return; }
-    itemTexels(scene, this.origin, this.texels, slots);
-    for (const [from, to] of rowRuns(slots)) this.items.setRows(this.texels, from, to);
-    this.texScene = scene;
   }
 
   setCamera(c: Camera): void {
@@ -400,7 +530,8 @@ export class PlanRenderer {
 
   /**
    * Draws one frame (nothing while the context is lost); returns whether it did rebuild work (a rebuild started or
-   * resumed: what is drawn changes when one completes).
+   * resumed: what is drawn changes when one completes) or what is drawn was patched since the last one (a preview, an
+   * action done in place: what is under a resting pointer may have changed).
    */
   renderFrame(): boolean {
     if (this.g.lost) return false;
@@ -409,11 +540,14 @@ export class PlanRenderer {
     const scene = this.scene;
     if (scene) {
       const c = this.cam, far = Math.hypot(c.x - this.origin.x, c.y - this.origin.y) * c.zoom > this.p.originShiftPx;
-      if (this.texScene !== scene || far) {
+      // Under a preview drawn over the state's scene, the texture holds the state's, the preview's slots written over.
+      const held = this.overlay ? this.real!.scene : scene;
+      if (this.tex.scene !== held || far) {
         // A scene of the state: the origin comes to the camera (a preview keeps the origin of what it covers).
         if (far || !this.transient) this.origin = { x: c.x, y: c.y };
-        this.shifted = far && this.texScene === scene && !this.stale;
-        this.writeAllTexels(scene);
+        this.shifted = far && this.tex.scene === held && !this.stale;
+        this.tex.writeAll(held, this.origin);
+        if (this.overlay) this.tex.preview(this.overlay.scene, this.overlay.slots);
         this.stale = true;
       }
       // One rebuild at a time: complex bundles pending are built at the next frames, in order, before the camera is
@@ -427,8 +561,8 @@ export class PlanRenderer {
         if (reason) {
           this.reasons[reason] = (this.reasons[reason] ?? 0) + 1;
           // A new scene, an edit, new settings, a moved origin: its first frame whole, as before; the camera's rebuilds
-          // within the budget.
-          this.rebuild(reason === 'stale' || reason === 'origin' ? undefined : budget);
+          // within the budget — but during a preview, whose patches rewrite what is shown (never a pending build).
+          this.rebuild(reason === 'stale' || reason === 'origin' || this.transient ? undefined : budget);
           this.shifted = false;
           rebuilt = true;
         }
@@ -438,7 +572,9 @@ export class PlanRenderer {
     }
     this.updateBackground(swapped);
     this.draw();
-    return rebuilt;
+    const patched = this.patchedSince;
+    this.patchedSince = false;
+    return rebuilt || patched;
   }
 
   /** The camera's uniforms, then every layer in order, cleared to the sky first (one draw call per mesh or program). */
@@ -461,7 +597,7 @@ export class PlanRenderer {
     gl.clearColor(p.skyColor[0], p.skyColor[1], p.skyColor[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.atlas.bind(ATLAS_UNIT);
-    this.items.bind(ITEMS_UNIT);
+    this.tex.bind(ITEMS_UNIT);
     // Layers left out for cost diagnosis (bench: CIRRUS_BENCH_HIDE=sky,stars,env,ribbon,glyph,box,marker,text,outline;
     // "all" for the floor pass, an empty frame).
     const off = (layer: string) => this.hidden.has('all') || this.hidden.has(layer);
@@ -474,7 +610,13 @@ export class PlanRenderer {
       });
     }
     const strip = 2 * (p.curveSegments + 1);
-    if (!off('env')) m.envelope.draw();
+    if (!off('env')) {
+      // A preview's groups: each envelope drawn from its own mesh in place of the instances' one (the order is kept).
+      const d = this.envelopeDraws;
+      let at = 0;
+      if (d) for (let q = 0; q < d.length; q += 4) { m.envelope.draw(at, d[q]); m.previewEnvelope.draw(d[q + 2], d[q + 3]); at = d[q + 1]; }
+      m.envelope.draw(at);
+    }
     if (!off('ribbon')) {
       m.simple.draw(0, 2 * strip + 2);
       m.curve.draw(0, strip);
@@ -515,9 +657,13 @@ export class PlanRenderer {
    */
   private rebuild(budget: { deadline: number } | undefined): void {
     this.prepare();
-    const scene = this.scene!, visible = computeVisible(scene, this.index!, this.cam, this.p);
-    const inst = buildInstances(scene, visible, this.cam, this.origin, this.p, budget, this.font, this.titleSides, this.frames.storage());
-    if (this.frames.start({ scene, visible, inst })) this.show();
+    const scene = this.scene!, layouts = this.overlay?.layouts;
+    this.indexHolds(true);
+    const visible = computeVisible(scene, this.index!, this.cam, this.p);
+    this.indexHolds(false);
+    const inst = buildInstances(scene, visible, this.cam, this.origin, this.p, budget, this.font, this.titleSides, this.frames.storage(), layouts);
+    const state = this.overlay ? this.real!.scene : scene;
+    if (this.frames.start({ scene, base: scene, state, visible, inst, cam: this.cam, layouts })) this.show();
   }
 
   /**
@@ -528,6 +674,7 @@ export class PlanRenderer {
   private show(): void {
     const { scene, visible, inst } = this.frames.front!, m = this.meshes;
     this.hasFrame = true;
+    this.envelopeDraws = null;
     // The hovered index belonged to the previous visible set (I1 of the review); hover() sets it again.
     this.hot = -1;
     // Built on the first hover query: navigation does not wait for it.
@@ -536,18 +683,11 @@ export class PlanRenderer {
       this.intruderMap = visibleIntruders(scene, visible);
       this.intruderItems = [...this.intruderMap.keys()];
     }
-    m.envelope.update({
-      aPosition: inst.envelopes.position.view(), aNormal: inst.envelopes.normal.view(), aAlpha: inst.envelopes.alpha.view(), aOpen: inst.envelopes.open.view(),
-      aClosed: inst.envelopes.closed.view(), aFoldK: inst.envelopes.foldK.view(), aParentK: inst.envelopes.parentK.view(),
-    }, inst.envelopes.index.view());
+    m.envelope.update(envelopeAttributes(inst.envelopes), inst.envelopes.index.view());
     m.box.update(inst.boxes.view());
     m.simple.update(inst.simple.view());
     m.curve.update(inst.curves.view());
-    const gm = inst.glyphs;
-    m.arrow.update({
-      aPosition: gm.position.view(), aPosition2: gm.position2.view(), aOffset: gm.offset.view(), aOffset2: gm.offset2.view(), aScale: gm.scale.view(),
-      aFill: gm.fill.view(), aEnd0: gm.end0.view(), aEnd1: gm.end1.view(), aFold: gm.fold.view(), aConn: gm.conn.view(),
-    }, gm.index.view());
+    m.arrow.update(glyphAttributes(inst.glyphs), inst.glyphs.index.view());
     m.text.update(inst.texts.view());
     this.updateMarkers();
     this.updateOutline();

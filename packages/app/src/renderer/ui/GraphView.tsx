@@ -4,8 +4,9 @@ import {
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, withLayout, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
-  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines,
+  type LayoutHandle, layoutHandles, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
+  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines, layoutSplit, previewSplit,
+  type PreviewSplit, type VisibleSet,
 } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
@@ -41,6 +42,8 @@ function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: R
 }
 
 type Tip = { x: number; y: number; text: string } | null;
+/** The visible set of a renderer that has drawn nothing yet: a preview's split made for it is built whole. */
+const NOTHING_SHOWN: VisibleSet = { items: [], groups: [], connections: [], signature: '' };
 type Chain = { item: number; title: string }[];
 /** What a gesture without a held button will do once placed (spec 9.1). */
 type Placing =
@@ -97,8 +100,13 @@ export function GraphView(props: {
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const [rect, setRect] = useState<Bounds | null>(null);
-  /** A drag in progress: the moved items (top-most), the scene it started from, the world offset so far. */
-  const dragging = useRef<{ items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean } | null>(null);
+  /**
+   * A drag in progress: the moved items (top-most), the scene it started from, the world offset so far; its last
+   * preview (whose storage the next one takes) and its split for the visible set drawn (plan 3c task 9).
+   */
+  const dragging = useRef<{
+    items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean; preview?: PlanScene; split?: PreviewSplit;
+  } | null>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
@@ -120,6 +128,8 @@ export function GraphView(props: {
     handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene;
     /** Where it was pressed; the drag begins beyond clickSlopPx, short of it the press is a plain click (I10 of the review). */
     from: { x: number; y: number }; armed: boolean;
+    /** Its split for the visible set drawn (plan 3c task 9). */
+    split?: PreviewSplit;
   } | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
@@ -145,13 +155,24 @@ export function GraphView(props: {
     if (entry && entry.scene === scene) entry.index = null;
   };
   /**
-   * Back to the scene of the state, after a preview given up or refused: the current plan's, never one kept from
-   * before a change of tab (I7 of the plan 3b review).
+   * Back to the scene of the state, after a preview given up or refused (Escape, a lost focus, a right click, a
+   * refusal: Review Focus 5): the renderer's preview ended, its texels and instances written back from the state's
+   * scene — the current plan's, never one kept from before a change of tab (I7 of the plan 3b review).
    */
   const restoreScene = () => {
     const e = engine.current, sc = sceneRef.current;
-    if (e && sc) e.renderer.setScene(sc);
+    if (e && sc) { if (e.renderer.held?.scene === sc) e.renderer.endPreview(); else e.renderer.setScene(sc); }
     redraw();
+  };
+  /**
+   * The preview of the drag at this offset (plan 3c task 9): its scene at the cost of what moves (the previous
+   * preview's storage taken again), its split made once for the visible set drawn.
+   */
+  const previewDrag = (r: PlanRenderer, d: NonNullable<typeof dragging.current>, dx: number, dy: number) => {
+    const visible = r.visible ?? NOTHING_SHOWN;
+    if (d.split?.visible !== visible) d.split = previewSplit(d.base, visible, d.items);
+    d.preview = withOffsets(d.base, new Map(d.items.map((i) => [i, { x: dx, y: dy }])), paramsRef.current, d.preview);
+    r.preview(d.preview, d.split);
   };
   /**
    * Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. `extend`: the
@@ -443,7 +464,10 @@ export function GraphView(props: {
     if (!d.armed && Math.hypot(sx - d.from.x, sy - d.from.y) <= paramsRef.current.clickSlopPx) return;
     d.armed = true;
     d.layout = applyHandle(d.base, d.g, d.handle, screenToWorld(e.renderer.camera, sx, sy));
-    e.renderer.setScene(withLayout(d.scene, d.conn, d.layout), true);
+    // The layout stands in for the part's own (an override): the scene is not copied (plan 3c task 9).
+    const visible = e.renderer.visible ?? NOTHING_SHOWN;
+    if (d.split?.visible !== visible) d.split = layoutSplit(visible, d.conn);
+    e.renderer.preview(d.scene, d.split, new Map([[d.conn, d.layout]]));
     redraw();
   };
   /** Released: the layout is written for this plan (one step); Escape or a refusal brings the old one back. */
@@ -653,7 +677,7 @@ export function GraphView(props: {
           const preview = d !== null && d.dirty;
           if (d && d.dirty) {
             d.dirty = false;
-            e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: d.dx, y: d.dy }])), paramsRef.current), true);
+            previewDrag(e.renderer, d, d.dx, d.dy);
             // The group that would receive the drop lights up (spec 10), only if the drop would enter it.
             const at = screenToWorld(e.renderer.camera, d.sx, d.sy);
             const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current);
@@ -913,7 +937,7 @@ export function GraphView(props: {
         if (!d) break;
         e.renderer.setDropTarget(null);
         // The preview stays exactly where it was dropped while a question may be asked.
-        e.renderer.setScene(withOffsets(d.base, new Map(d.items.map((i) => [i, { x: intent.dx, y: intent.dy }])), paramsRef.current), true);
+        previewDrag(e.renderer, d, intent.dx, intent.dy);
         // One action for the whole drop (spec 6.4): the moves, then the groups left and entered; refused or given up,
         // back to where it was; written, the scene follows the state.
         dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, restoreScene);
@@ -1044,9 +1068,11 @@ export function GraphView(props: {
     // A new gesture starts from what the screen shows: after the one just written, its preview (I6 of the review).
     const base = !prev ? sc : steps.flush ? prev.preview : prev.base;
     const items = ids.flatMap((x) => { const i = base.byId.get(x); return i === undefined ? [] : [i]; });
-    // Preview: the placements as the action would leave them, without rebuilding the scene (I15 of the review).
-    const preview = steps.delta === 0 ? base : withMoves(base, scaleMoves(base, items, steps.delta, paramsRef.current), paramsRef.current);
-    e.renderer.setScene(preview, true);
+    // Preview: the placements as the action would leave them, without rebuilding the scene (I15 of the review), the
+    // gesture's previous preview's storage taken again (plan 3c task 9).
+    const reuse = prev && !steps.flush ? prev.preview : undefined;
+    const preview = steps.delta === 0 ? base : withMoves(base, scaleMoves(base, items, steps.delta, paramsRef.current), paramsRef.current, reuse);
+    e.renderer.preview(preview, previewSplit(base, e.renderer.visible ?? NOTHING_SHOWN, items));
     const gesture = { steps, base, preview, items, timer: 0 };
     gesture.timer = window.setTimeout(() => { wheelGesture.current = null; commitScale(gesture); }, paramsRef.current.scaleGesturePauseMs);
     wheelGesture.current = gesture;

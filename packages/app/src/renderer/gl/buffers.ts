@@ -40,6 +40,18 @@ export class DynamicBuffer {
     gl.bufferSubData(this.target, 0, data);
   }
 
+  /**
+   * Elements [from, to) of `data` sent again to the same place, within what the last upload sent (plan 3c task 9: a
+   * preview or an edit rewrites a few instances in place).
+   */
+  uploadRange(data: Float32Array | Int32Array | Uint32Array, from: number, to: number): void {
+    if (to <= from) return;
+    const bytes = data.BYTES_PER_ELEMENT;
+    if (to * bytes > this.used) throw new Error(`Envoi partiel au-delà du dernier envoi : ${to * bytes} octets sur ${this.used}`);
+    this.gl.bindBuffer(this.target, this.buffer);
+    this.gl.bufferSubData(this.target, from * bytes, data, from, to - from);
+  }
+
   dispose(): void {
     this.gl.deleteBuffer(this.buffer);
   }

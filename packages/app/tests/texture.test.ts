@@ -3,9 +3,14 @@ import { LocalStore } from '@cirrus/store';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildScene, DEFAULT_PARAMS, ITEM_TEXTURE_WIDTH, itemTexels, rowRuns, SLOT_FLOATS, textureRows } from '@cirrus/view';
+import { applyOps, combine, createNode, invertAction, moveNodes, type State } from '@cirrus/core';
+import {
+  buildIndex, buildScene, computeVisible, DEFAULT_PARAMS, ITEM_TEXTURE_WIDTH, itemTexels, type PlanScene, previewSlots, previewSplit, rowRuns, SLOT_FLOATS, texelSlots,
+  textureRows, updateScene, withOffsets,
+} from '@cirrus/view';
 import { expect, test } from 'vitest';
 import { type TextureGl, Texture2D } from '../src/renderer/gl/texture.ts';
+import { ItemTexture } from '../src/renderer/render/itemTexture.ts';
 
 /** The calls a Texture2D makes, recorded with the data they would send (no WebGL under Node). */
 function recorder() {
@@ -80,4 +85,91 @@ test('une action ne renvoie que les rangées de ses emplacements : deux texels p
   for (const [from, to] of rowRuns([i, 1500])) t.setRows(texels, from, to);
   const sub = calls.filter((x) => x.fn === 'texSubImage2D').map((x) => [x.args[3], x.args[5], x.args[9]]);
   expect(sub).toEqual([[0, 1, 0], [2, 1, 2 * ITEM_TEXTURE_WIDTH * 4]]);
+});
+
+// ———— The item texture as the renderer keeps it (plan 3c task 9)
+
+function lobbyState() {
+  const dir = mkdtempSync(join(tmpdir(), 'cirrus-texture-'));
+  const store = LocalStore.open(dir, { pc: 'test' }), ids = buildFixture(store, dir), s = store.loadState();
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+  return { s, ids };
+}
+const measure = (x: string) => Math.max(1, Math.ceil(x.length / 23));
+/** The texture's rows as bytes (equal to the bit, NaN and −0 included). */
+const bytes = (t: Float32Array) => new Uint8Array(t.buffer.slice(0));
+const whole = (scene: PlanScene, origin: { x: number; y: number }, length: number) => { const out = new Float32Array(length); itemTexels(scene, origin, out); return out; };
+
+test('ItemTexture : un aperçu réécrit ses emplacements, rangée par rangée ; sa fin rend la texture à l’octet près, décalage nul ou non (Review Focus 5)', () => {
+  const { s, ids } = lobbyState(), scene = buildScene(s, ids.plans.lobby, measure, DEFAULT_PARAMS), origin = { x: 120.5, y: -40.25 };
+  const { gl, calls } = recorder(), tex = new ItemTexture(gl);
+  tex.writeAll(scene, origin);
+  expect(tex.scene).toBe(scene);
+  const before = bytes(tex.texels);
+  const cam = { x: 0, y: 0, zoom: 0.5, widthPx: 2560, heightPx: 1600 }, visible = computeVisible(scene, buildIndex(scene, DEFAULT_PARAMS), cam, DEFAULT_PARAMS);
+  let previous: PlanScene | undefined;
+  for (const [id, d] of [[ids.nodes.groupeComplexite, { x: 0, y: 0 }], [ids.nodes.groupeComplexite, { x: 35, y: -12 }], [ids.nodes.mdl, { x: -8, y: 3 }]] as const) {
+    const moving = [scene.byId.get(id)!], split = previewSplit(scene, visible, moving);
+    const preview = withOffsets(scene, new Map(moving.map((i) => [i, d])), DEFAULT_PARAMS, previous), slots = previewSlots(scene, preview, split);
+    previous = preview;
+    calls.length = 0;
+    tex.preview(preview, slots);
+    // Only texSubImage2D, on the rows of the slots it writes (and those an earlier preview wrote, set back).
+    expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
+    const sent = calls.filter((c) => c.fn === 'texSubImage2D').map((c) => c.args[3] as number);
+    for (const [from] of rowRuns(slots)) expect(sent).toContain(from);
+    // The preview's slots hold the preview, every other slot the scene.
+    expect(bytes(tex.texels)).toEqual(bytes(whole(preview, origin, tex.texels.length)));
+    if (d.x === 0) expect(bytes(tex.texels)).toEqual(before);
+    expect(new Set(tex.previewed)).toEqual(new Set(slots));
+  }
+  tex.restore();
+  expect(bytes(tex.texels)).toEqual(before);
+  expect(tex.previewed).toEqual([]);
+  expect(tex.scene).toBe(scene);
+});
+
+test('ItemTexture : une action puis son annulation, un dépôt d’aperçu compris, en partiel, égalent le remplissage complet (Review Focus 1) ; croissance, autre scène, origine', () => {
+  const { s, ids } = lobbyState(), lobby = ids.plans.lobby, scene0 = buildScene(s, lobby, measure, DEFAULT_PARAMS), origin = { x: -3.5, y: 77 };
+  const { gl, calls } = recorder(), tex = new ItemTexture(gl);
+  tex.writeAll(scene0, origin);
+  const before = bytes(tex.texels), mdl = scene0.byId.get(ids.nodes.mdl)!, it = scene0.items[mdl];
+  // Previewed, then dropped where previewed: the action's slots and the preview's, from the new scene.
+  const visible = computeVisible(scene0, buildIndex(scene0, DEFAULT_PARAMS), { x: it.x, y: it.y, zoom: 1, widthPx: 1600, heightPx: 900 }, DEFAULT_PARAMS);
+  const split = previewSplit(scene0, visible, [mdl]), preview = withOffsets(scene0, new Map([[mdl, { x: 30, y: 20 }]]), DEFAULT_PARAMS);
+  tex.preview(preview, previewSlots(scene0, preview, split));
+  const a = moveNodes(s, lobby, [{ node: ids.nodes.mdl, x: it.x + 30, y: it.y + 20 }]);
+  applyOps(s, a.ops);
+  const u = updateScene(scene0, s, a.ops, measure, DEFAULT_PARAMS);
+  calls.length = 0;
+  expect(tex.update(scene0, u.scene, texelSlots(scene0, u.scene, u.changes))).toBe(true);
+  expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
+  expect(bytes(tex.texels)).toEqual(bytes(whole(u.scene, origin, tex.texels.length)));
+  expect(tex.previewed).toEqual([]);
+  const undo = invertAction(a);
+  applyOps(s, undo.ops);
+  const back = updateScene(u.scene, s, undo.ops, measure, DEFAULT_PARAMS);
+  expect(tex.update(u.scene, back.scene, texelSlots(u.scene, back.scene, back.changes))).toBe(true);
+  expect(bytes(tex.texels)).toEqual(bytes(whole(back.scene, origin, tex.texels.length)));
+  expect(bytes(tex.texels)).toEqual(before);
+  // A scene it does not hold: nothing written, to be written whole.
+  expect(tex.update(u.scene, back.scene, [mdl])).toBe(false);
+  expect(tex.scene).toBeNull();
+  tex.writeAll(back.scene, origin);
+  // Six hundred nodes more: past the rows held, the texture grows and is written whole.
+  const many = combine(s, 'Créer', Array.from({ length: 600 }, (_, i) => (x: State) => createNode(x, { plan: lobby, title: `N${i}`, x: i * 10, y: 0, k: 0 })));
+  applyOps(s, many.ops);
+  const grown = updateScene(back.scene, s, many.ops, measure, DEFAULT_PARAMS);
+  expect(grown.scene.items.length).toBeGreaterThan(512);
+  calls.length = 0;
+  expect(tex.update(back.scene, grown.scene, texelSlots(back.scene, grown.scene, grown.changes))).toBe(true);
+  expect(calls.filter((c) => c.fn === 'texImage2D')).toHaveLength(1);
+  expect(tex.texels.length).toBeGreaterThanOrEqual(textureRows(grown.scene.items.length) * ITEM_TEXTURE_WIDTH * 4);
+  expect(bytes(tex.texels)).toEqual(bytes(whole(grown.scene, origin, tex.texels.length)));
+  // The origin moved: everything again from the new one, at the same size.
+  calls.length = 0;
+  tex.writeAll(grown.scene, { x: 5e5, y: -2e5 });
+  expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
+  expect(bytes(tex.texels)).toEqual(bytes(whole(grown.scene, { x: 5e5, y: -2e5 }, tex.texels.length)));
 });

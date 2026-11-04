@@ -52,3 +52,19 @@ test('DynamicBuffer : seule la partie utilisée est envoyée, la capacité doubl
   expect(calls).toEqual([]);
   expect(b.used).toBe(0);
 });
+
+test('DynamicBuffer : un envoi partiel renvoie ses éléments à leur place, dans ce que le dernier envoi a couvert', () => {
+  const sent: { offset: number; src: number; length: number; data: ArrayBufferView }[] = [];
+  const gl = {
+    DYNAMIC_DRAW: 0x88e8, createBuffer: () => ({}) as WebGLBuffer, deleteBuffer: () => {}, bindBuffer: () => {}, bufferData: () => {},
+    bufferSubData: (_t: number, offset: number, data: ArrayBufferView, src = 0, length = 0) => { sent.push({ offset, src, length, data }); },
+  } as unknown as BufferGl;
+  const b = new DynamicBuffer(gl, ARRAY_BUFFER, 64), data = new Float32Array(40);
+  b.upload(data.subarray(0, 30));
+  sent.length = 0;
+  b.uploadRange(data, 8, 12);
+  expect(sent).toEqual([{ offset: 32, src: 8, length: 4, data }]);
+  b.uploadRange(new Int32Array(30), 3, 3);
+  expect(sent).toHaveLength(1);
+  expect(() => b.uploadRange(data, 28, 31)).toThrow();
+});

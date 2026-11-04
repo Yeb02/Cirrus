@@ -1,7 +1,7 @@
 import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { buildScene, type PlanScene, withOffsets } from '../src/scene.ts';
+import { buildScene, type PlanScene, previewBase, withMoves, withOffsets } from '../src/scene.ts';
 import { fixture, measure, P } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
@@ -32,4 +32,23 @@ test('déplacer un groupe déplace tous ses descendants, fantômes compris', () 
   }
   expect(at(moved, ids.nodes.groupeComplexite).x).toBeCloseTo(at(sc, ids.nodes.groupeComplexite).x - 50, 9);
   expect(moved.bounds!.minX).toBeLessThanOrEqual(sc.bounds!.minX);
+});
+
+test('aperçu suivant : il reprend le stockage du précédent, ne réécrit que ce qui bouge, et égale un aperçu neuf ; la scène de base ne change pas', () => {
+  const g = sc.byId.get(ids.nodes.groupeComplexite)!, sol = sc.byId.get(ids.nodes.solomonoff)!, base = [...sc.items];
+  const first = withOffsets(sc, new Map([[g, { x: 10, y: 5 }]]), P);
+  expect(previewBase(first)).toBe(sc);
+  expect(first.items).not.toBe(sc.items);
+  const second = withOffsets(sc, new Map([[sol, { x: -40, y: 12 }]]), P, first);
+  // The same storage, set back where the first preview wrote and written where this one moves.
+  expect(second.items).toBe(first.items);
+  const fresh = withOffsets(sc, new Map([[sol, { x: -40, y: 12 }]]), P);
+  expect(second.items).toEqual(fresh.items);
+  second.items.forEach((it, i) => { if (it !== fresh.items[i]) expect(it).toEqual(fresh.items[i]); });
+  expect(at(second, ids.nodes.mdl)).toBe(at(sc, ids.nodes.mdl)); // set back: shared again
+  expect(sc.items).toEqual(base);
+  // A spent preview, or one of another scene, is not taken again: a copy is made.
+  expect(withOffsets(sc, new Map([[sol, { x: 1, y: 1 }]]), P, first).items).not.toBe(first.items);
+  expect(withMoves(sc, { nodes: [{ node: ids.nodes.mdl, k: 1 }], phantoms: [] }, P, second).items).toBe(second.items);
+  expect(previewBase(sc)).toBe(sc);
 });
