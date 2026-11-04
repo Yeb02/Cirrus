@@ -450,49 +450,57 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - le serveur récupère le PDF quand il est en accès libre, sinon l'utilisateur le dépose [C] ;
   - l'import d'un fichier .bib, qui servira à charger la bibliographie actuelle et à tester l'ergonomie de l'import, arrive comme un bloc compact qui suit le curseur [C].
 
-**Fixé par le plan 4a** (approuvé par l'utilisateur le 2026-11-04). Ici, [C] marque une décision du contrôleur prise pendant l'exécution. Le registre du plan (`docs/superpowers/plans/2026-11-04-cirrus-fichiers-registre.md`) donne la raison et le coût de chacune.
+**Fixé par le plan 4a** (approuvé par l'utilisateur le 2026-11-04). Ici comme ailleurs, [C] marque un choix de Claude, fait pendant l'exécution. Le registre du plan (`docs/superpowers/plans/2026-11-04-cirrus-fichiers-registre.md`) donne la raison et le coût de chacun.
 
 - **Genres de fichiers et vues :** l'extension donne le genre d'un fichier. Chaque genre a sa vue, la même dans l'aperçu et en plein écran.
   - **Image** (`png`, `jpg`, `gif`, `webp`, `svg`, `avif`…) : ajustée à la vue, et agrandie au plus quatre fois [C]. La molette zoome autour du curseur, le glissement la déplace, et un double-clic passe de l'ajustement au 1:1.
   - **PDF :** les pages sont virtualisées, ajustées à la largeur de la première page [C]. Le texte se sélectionne et se copie. Un lien interne mène à sa destination. Un lien `http`, `https` ou `mailto` s'ouvre par le système, et tout autre lien est ignoré.
-  - **Texte et code** (`txt`, `md`, `py`, `json`, `bib`, `ipynb`…, et `Makefile`, `README`) : CodeMirror 6 en lecture seule, coloré selon le langage, avec la recherche par Ctrl+F. Les lignes longues du texte se replient, pas celles du code.
+  - **Texte et code** (`txt`, `md`, `py`, `json`, `bib`, `ipynb`…, les scripts Perl, Ruby et PHP [C], et `Makefile`, `README`) : CodeMirror 6 en lecture seule, coloré selon le langage, avec la recherche par Ctrl+F. Les lignes longues du texte se replient, pas celles du code.
   - **LaTeX** (`tex`) : le source s'affiche, coloré. L'éditeur et l'aperçu compilé côte à côte viennent au plan 4b. Le résumé du pop-up s'affiche aussi en source jusque-là.
   - **Tableau** (`csv`, `tsv`) : les lignes et les colonnes sont virtualisées, et la première ligne sert d'en-tête.
-  - **Tout le reste** n'a pas de vue dans Cirrus : un clic l'ouvre avec l'application du système.
-- **Encodages :** un texte en UTF-8, en UTF-16 ou en Windows-1252, comme le CSV de l'Excel français, s'affiche lisiblement. Un fichier binaire qui porte une extension de texte affiche « Fichier binaire : Cirrus ne peut pas l'afficher. » [C].
+  - **Tout le reste** n'a pas de vue dans Cirrus : un simple clic l'ouvre avec l'application du système, sans passer par un menu. Ce que Windows lancerait est montré dans l'explorateur (« Ouverture par le système », ci-dessous).
+- **Encodages :** un texte en UTF-8, en UTF-16 avec BOM ou en Windows-1252, comme le CSV de l'Excel français, s'affiche lisiblement. Un UTF-16 sans BOM est pris pour un binaire. Un fichier binaire qui porte une extension de texte affiche « Fichier binaire : Cirrus ne peut pas l'afficher. » [C].
+  - Un texte surtout en UTF-8, où traînent quelques octets d'un autre encodage, reste en UTF-8 : chacun de ces octets s'affiche « � », et les accents restent lisibles. Il ne se lit en Windows-1252 que si ces octets sont nombreux, c'est-à-dire si les caractères UTF-8 valides ne sont pas au moins deux fois plus nombreux qu'eux [C].
 - **Au même endroit :** chaque vue se rouvre à sa place, retrouvée par l'empreinte du fichier. C'est la ligne du texte, le défilement du tableau, le zoom de l'image, ou la page et le zoom du PDF. Une nouvelle version s'ouvre au début.
 - **Tableurs :** le CSV et le TSV s'affichent dans l'app. Les `.xlsx` et `.ods` s'ouvrent avec l'application du système, faute d'une bibliothèque sobre pour les lire. C'est à revoir si l'usage le demande.
 - **Ouverture par le système** (décision de l'utilisateur, 2026-11-04) :
   - « Ouvrir avec l'application du système » n'est offert que pour les images, les PDF et les formats que Cirrus ne sait pas afficher ;
-  - le texte, le code, les `.tex` et les tableaux ne s'affichent que dans Cirrus. Un script n'est donc jamais remis à Windows ;
-  - une courte liste d'exécutables, `.sh` compris, est montrée dans l'explorateur, jamais lancée ;
+  - le texte, le code (les scripts Perl, Ruby et PHP compris [C]), les `.tex` et les tableaux ne s'affichent que dans Cirrus ;
+  - une courte liste d'exécutables, `.sh` et les fichiers compilés de Python (`.pyc`, `.pyo`, `.pyzw`) [C] compris, est montrée dans l'explorateur, jamais lancée ;
+  - un script n'est donc jamais remis à Windows, ni par un clic ni par le menu ;
+  - le coût accepté : un fichier que Cirrus n'affiche pas s'ouvre par le système d'un simple clic, et un exécutable d'un type absent de la liste serait lancé ainsi ;
   - l'utilisateur a jugé excessives des protections plus larges (« Ça m'a l'air overkill »).
 - **Copies remises au système** [C] : elles sont en lecture seule et portent la marque du web (zone Internet, `ZoneId=3`). Windows les traite donc comme des fichiers téléchargés, et Office les ouvre en mode protégé.
+  - Elles sont temporaires. Au démarrage suivant, Cirrus efface celles qui sont restées en lecture seule.
+  - Un fichier enregistré à côté d'une copie (« Enregistrer sous » propose son dossier) est gardé. Mais rien n'en revient dans la base : on le réimporte en le déposant sur le nœud.
 - **Import :**
   - on importe en déposant des fichiers sur un nœud du graphe ou sur son pop-up, ou par « Ajouter des fichiers… » ;
   - seuls les fichiers réellement déposés, ou choisis dans la boîte de dialogue, sont importés [C]. Le principal refuse aussi les chemins réseau, ce qui n'est pas un fichier ordinaire, et un fichier de plus de `maxImportMb` (200 Mo par défaut) ;
-  - un fichier refusé l'est avec sa raison en français, et les autres sont importés ;
-  - un fichier lâché ailleurs (onglets, réglages, fond du graphe) n'est pas importé, et la fenêtre ne navigue jamais vers lui.
+  - un fichier refusé l'est avec sa raison en français, et les autres sont importés. De même, chaque échec d'une ouverture par le système est dit en français, et nomme le fichier [C] ;
+  - sur un pop-up, un fichier est pris n'importe où, sur sa liste de fichiers comme sur ses champs ;
+  - un fichier lâché ailleurs (onglets, réglages, champ de texte, fond du graphe) n'est pas importé, et la fenêtre ne navigue jamais vers lui.
 - **Fusion par nom au réimport :**
   - un fichier déposé remplace celui du même nom, à sa place. La casse et la forme Unicode ne comptent pas : « rapport.pdf » remplace « Rapport.pdf » ;
   - il prend la nouvelle orthographe, et l'ancienne version reste dans l'historique ;
-  - un fichier identique, de même empreinte, ne change rien : « Déjà à jour. » ;
+  - un fichier identique, de même empreinte, ne change rien. Quand tout un dépôt est ainsi inchangé, la notification dit « Déjà à jour. » ; dans un dépôt mêlé, le fichier identique n'est simplement pas nommé ;
   - deux fichiers du même nom dans un même dépôt deviennent « a.txt » et « a (2).txt » ;
   - un dépôt de plusieurs fichiers forme une seule action, donc un seul Ctrl+Z.
-- **Fichiers du pop-up :** chaque fichier montre son nom, son genre et sa taille, et une vignette pour une image ou un PDF. Un clic sur un fichier que Cirrus affiche ouvre son aperçu à côté du pop-up, et un double-clic son plein écran. Un clic droit propose, selon le genre, le plein écran et l'application du système, puis le renommage et le retrait. Un fichier retiré se remet par Ctrl+Z, et sa copie reste au magasin.
+- **Fichiers du pop-up :** chaque fichier montre son nom, son genre et sa taille, et une vignette pour une image ou un PDF. Un clic sur un fichier que Cirrus affiche ouvre son aperçu à côté du pop-up, et un double-clic son plein écran. Un clic droit propose, selon le genre, le plein écran et l'application du système, puis le renommage et le retrait. Un fichier retiré se remet par Ctrl+Z, et sa copie reste au magasin. Le clic qui ferme un menu contextuel n'agit pas sur ce qu'il touche, où que ce soit dans l'app ; son appui ferme encore les pop-ups non épinglés [C].
 - **Métadonnées du pop-up :** la date de création, celle de la dernière modification, le nombre de modifications, les plans où le nœud figure, le nombre de ses connexions de connaissance et son identifiant.
 - **Pop-ups épinglés et non épinglés :**
   - un clic sur un nœud, sur un groupe ou sur le fantôme d'un nœud lointain ouvre son pop-up près du clic. Pour le fantôme, c'est la règle de la section 8.5 ;
   - un nœud n'a qu'un pop-up : un second clic le fait passer devant ;
-  - un pop-up non épinglé se ferme quand un autre s'ouvre, à tout clic hors de tout panneau, ou par Échap ;
+  - un pop-up non épinglé se ferme quand un autre s'ouvre, à tout clic hors de tout panneau, ou par Échap. Échap annule d'abord un geste du graphe en cours, même lancé depuis le menu contextuel, et le pop-up reste ;
+  - exception connue, reportée : un clic sur ce qui flotte au-dessus du graphe (le coin de la hiérarchie, le pop-up d'une connexion, le menu, une question) laisse ouvert le pop-up non épinglé ;
   - un pop-up épinglé reste d'un onglet à l'autre, mais pas d'une session à l'autre ;
   - l'aperçu d'un fichier suit les mêmes règles. Un seul aperçu non épinglé est ouvert à la fois ;
   - le pop-up d'un nœud supprimé dit « Ce nœud n'existe plus. », et son contenu revient si la suppression est annulée.
 - **Une vue suit son fichier par son nom** [C] : un fichier retiré ferme son plein écran, et son aperçu dit qu'il n'est plus dans le nœud. Il en va de même d'un fichier renommé.
 - **Plein écran** [C] : il couvre toute la fenêtre, onglets compris, et il est modal. Le focus y reste, et les raccourcis de l'app (Ctrl+Z, Ctrl+Y, Suppr…) n'agissent pas sous lui.
+- **Erreurs** [C] : une erreur dans un pop-up, un aperçu ou le plein écran se dit en français à sa place. Le pop-up ou l'aperçu se déplace et se ferme encore ; le plein écran se quitte par son × ou par Échap. La fenêtre, le graphe et les autres panneaux restent, et un panneau rouvert réessaie.
 - **Lectures bornées :**
   - une vue de texte ou de tableau ne lit jamais plus que son plafond (`textViewMaxMb`, `tableViewMaxMb`). Un bandeau dit alors ce qui est affiché ;
-  - un PDF se lit par plages, à la demande de pdf.js [C]. Un PDF dont toutes les pages pendent de la racine (LibreOffice, Ghostscript, scanners) est lu en entier à l'ouverture : 1,3 s pour 78,5 Mo, mesuré. Ce coût est accepté sur le jugement de l'utilisateur du 2026-11-04 : les performances sont correctes pour l'instant, et on y reviendra si sa vraie base grandit ;
+  - un PDF se lit par plages, à la demande de pdf.js [C]. Un PDF dont toutes les pages pendent de la racine (LibreOffice, Ghostscript, scanners) est lu en entier à l'ouverture : 1,3 s pour 78,5 Mo, mesuré. Ce coût est accepté sur le jugement de l'utilisateur du 2026-11-04, à la clôture du plan 3c : les performances sont correctes pour l'instant, et on y reviendra si sa vraie base grandit ;
   - une vignette ne lit une image ou un PDF que jusqu'à `thumbMaxMb` (4 Mo par défaut) [C]. Une image plus grande n'est pas lue, et la lecture d'un PDF s'arrête à ce plafond. La ligne montre alors l'icône du genre ;
   - ouvrir un pop-up ne lit donc aucun fichier au-delà de `thumbMaxMb`.
 

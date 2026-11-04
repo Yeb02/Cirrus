@@ -74,7 +74,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Coût si faux : un test d'une tâche suivante qui comparerait la forme droite échoue visiblement ; un caractère à changer.
 - Ruling: **extension d'un fichier ouvert par le système**, lue comme Windows la lit.
   - Les points et les espaces finaux tombent : « a.bat. » s'ouvrirait comme « a.bat ». Un nom qui n'est qu'une extension (« .lnk ») la porte.
-  - La liste est fixe : une liste de sécurité n'est pas un réglage. C'est celle du plan, plus `sh`, depuis la correction 2 (ci-dessous).
+  - La liste est fixe : une liste de sécurité n'est pas un réglage. C'est celle du plan, plus `sh`, depuis la correction 2 (ci-dessous), et les fichiers compilés de Python (`pyc`, `pyo`, `pyzw`) depuis la revue finale (R26).
   - Coût si faux : nul.
 - Ruling: **`openableCopy` vérifie la référence reçue par IPC**.
   - L'empreinte doit avoir 64 caractères hexadécimaux. Le nom doit être un simple nom de fichier : aucun de `<>:"/\|?*`, ni caractère de contrôle, ni point ou espace final, ni nom de périphérique réservé (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`, avec ou sans extension). Sinon la fonction lève.
@@ -93,6 +93,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Les fichiers repassent en écriture, puis `unlinkSync` les efface ; c'est ce qui marche sous le Node d'Electron, mesuré. Les dossiers vidés s'effacent par `rmdirSync`, et un fichier qui ne s'efface pas (encore ouvert) repasse en lecture seule.
   - `cleanCopies` est appelé juste après `createWindow`, pendant que la fenêtre charge, et seulement hors banc et hors captures. Le banc de construction et le banc d'instantanés rendent la main avant. Un lancement normal sur une autre base (`CIRRUS_DATA`) fait aussi le ménage.
   - Coût si faux : deux instances sur deux bases partagent `%TEMP%\cirrus-ouverts`, et le démarrage de la seconde efface les copies fermées de la première. Une application qui a lu son fichier puis l'a fermé continue de l'afficher.
+  - **Remplacé à la revue finale** (I3, un défaut du plan) : seules partent les copies de Cirrus, encore en lecture seule, et les temporaires `.copie-*`. Un fichier modifiable, que l'utilisateur a pu enregistrer là, reste avec son dossier (« Revue finale », plus bas).
 - Ruling: **messages d'`openFile`** : remplacé à la correction 2 (ci-dessous). La correction 1 laissait passer le texte anglais de Node et de `shell.openPath` après un cadre français.
 - Ruling: **décision d'ouvrir ou de montrer** (Minor 4, correction 1) : `openTarget` dans `files.ts` rend `{ path, shown }` et se teste. Le gestionnaire IPC ne fait plus qu'appeler `shell.showItemInFolder` ou `shell.openPath`. Coût si faux : nul.
 - Ruling: **types du pont** : `env.d.ts` importe `ImportResult` et `HistorySummary` de `../main/files.ts` par `import type`, effacé à la construction.
@@ -138,7 +139,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 ### Correction 2 (relecture 1 de la correction)
 
 - Ruling (abandonne la liste d'Outlook, I3) : **liste courte des exécutables : celle du plan, plus `sh`**, à la demande de l'utilisateur.
-  - `isRunnable` garde son nom et son sens : vrai veut dire « montré dans l'explorateur, jamais ouvert ». Sa liste redevient celle du plan (`exe com bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp msc scr pif cpl hta lnk url reg jar py pyw pyz appref-ms`), plus `sh`.
+  - `isRunnable` garde son nom et son sens : vrai veut dire « montré dans l'explorateur, jamais ouvert ». Sa liste redevient celle du plan (`exe com bat cmd ps1 psm1 vbs vbe js jse wsf wsh msi msp msc scr pif cpl hta lnk url reg jar py pyw pyz appref-ms`), plus `sh`. La revue finale y ajoute `pyc`, `pyo` et `pyzw` (R26).
   - Pourquoi `sh` : sur ce PC, `.sh` (`sh_auto_file`, Git for Windows) s'ouvre dans `git-bash.exe` et s'exécute (relecture 1 de la correction).
   - Pourquoi pas plus : l'utilisateur a jugé excessives la liste d'Outlook et la liste blanche que le contrôleur avait décidée ensuite, après la relecture 1 de la correction (R8 des décisions du contrôleur, en fin de registre). Celle-ci a été écrite puis retirée avant tout commit. La relecture 1 demandait seulement d'ajouter `sh` et quelques types de second rang (corrigé à la tâche 7 : cette ligne attribuait la liste blanche à la relecture).
   - Ce qui limite l'exposition : à partir de la tâche 4, « ouvrir avec l'application du système » n'est proposé que pour les images, les PDF et les formats que Cirrus ne sait pas afficher. Le texte, le code et les tableaux ne s'affichent jamais qu'à l'intérieur de Cirrus. Toute copie ouverte porte en outre la marque du web (I2).
@@ -146,7 +147,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
     - la liste d'Outlook (correction 1) ;
     - une liste blanche de documents ;
     - la liste du plan plus `sh` (choix, décision de l'utilisateur).
-  - Coût si faux : un type qui s'exécute à l'ouverture et manque à la liste (relevés par la relecture : `.pyc`, `.chm`, `.application`, `.vsto`, `.xaml`…) serait ouvert par son application, sur une copie marquée de la zone Internet.
+  - Coût si faux : un type qui s'exécute à l'ouverture et manque à la liste (relevés par la relecture : `.pyc`, `.chm`, `.application`, `.vsto`, `.xaml`…) serait ouvert par son application, sur une copie marquée de la zone Internet. Il le serait d'un simple clic : un fichier d'un genre que Cirrus n'affiche pas s'ouvre par le système dès le clic (tâche 4), sans passer par le menu (précisé à la revue finale). Pour les scripts, la revue finale a fermé ce chemin (R26).
 - Ruling (Minor 2, prolongé) : **chaque échec d'`openFile` atteint l'utilisateur en français et nomme le fichier**, par `openFailure(name, e)`.
   - Une phrase par cause connue :
     - « Impossible d’ouvrir « nom » : le fichier manque dans la base. » (`ENOENT`) ;
@@ -222,6 +223,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
     - le paramètre (choix) ;
     - toujours tolérer une fin coupée, ce qui ferait perdre son dernier caractère à un fichier Windows-1252 entier dont le seul octet accentué est le dernier (« Café »), lu comme UTF-8.
   - Coût si faux : la tâche 5 passe le `truncated` de `readHead`.
+  - Depuis la revue finale (R27), un échec de l'UTF-8 strict ne mène plus droit au Windows-1252 : un texte surtout en UTF-8, où traînent quelques octets invalides, reste en UTF-8 (« Revue finale », plus bas).
 - Ruling: **BOM et binaires**.
   - Un BOM UTF-8 suivi d'un octet nul dans les 8 premiers Ko donne un binaire : seul un BOM UTF-16 exempte de ce test, dans l'ordre du plan.
   - Après un BOM, le décodage n'est pas strict : le BOM décide, et une séquence invalide y devient U+FFFD.
@@ -492,7 +494,7 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Coût si faux : nul.
 - Ruling (décision du contrôleur): **« Ouvrir avec l’application du système »**.
   - Le menu ne l'offre que pour les genres image, PDF et autre (`fileMenu`). Le texte, le code, le LaTeX et les tableaux ne sont jamais confiés au système : Cirrus les affiche (tâche 5), et un script n'est donc jamais remis à Windows.
-  - Un clic sur un fichier de genre autre l'ouvre ; un double-clic ne l'ouvre qu'une fois (son second clic, `detail` 2, est ignoré).
+  - Un clic sur un fichier de genre autre l'ouvre ; un double-clic ne l'ouvre qu'une fois (son second clic, `detail` 2, est ignoré). C'est l'exposition qu'accepte R10 : un simple clic, et non un choix au menu (précisé à la revue finale).
   - Le principal garde sa liste courte et montre un exécutable dans l'explorateur, avec la notification du plan.
   - Coût si faux : un genre de plus dans `TO_SYSTEM`.
 - Ruling: **renommer**.
@@ -919,6 +921,108 @@ Relecture : `task-6-review.md`, 0 Critique, 1 Important, 8 Mineurs. L'Important 
 - Ruling: **deux lignes du registre sont corrigées**, comme le demandaient deux mineurs reportés : l'attribution de la liste blanche (tâche 1, correction 2) et les bornes du zoom d'une image (tâche 5). Coût si faux : nul.
 - Ruling: **trois relevés des relectures, hors de leur périmètre et absents du suivi, rejoignent les mineurs reportés**, marqués comme tels. Ils se perdraient sinon avec l'espace de travail. Coût si faux : trois lignes à retirer.
 
+## Revue finale
+
+Relecture de toute la branche (63a9818..8d409a7, douze commits) : `final-review.md`, 0 Critique, 3 Importants, 5 Mineurs, « prêt, après corrections ». Le contrôleur a fait d'un écarté un constat (R26), relevé deux Mineurs à Importants par leur effet (R27, R28), et fait entrer les autres Mineurs à corriger et trois lignes reportées dans la correction (R29). Le tri des mineurs reportés par la relecture est repris dans « Mineurs reportés », ligne par ligne.
+
+### Constats et ce qui a été fait
+
+- **I1 : après un geste lancé depuis le menu contextuel du graphe, Échap fermait le pop-up non épinglé au lieu d'annuler le geste.**
+  - Cause : l'appui sur une entrée du menu donnait le focus à son bouton, puis le menu disparaissait, et le focus tombait sur `body`. L'Échap suivant n'atteignait plus le graphe, qui l'aurait pris pour son geste. `Panels`, qui ferme le pop-up non épinglé le plus haut sur un Échap que rien n'a pris, le fermait donc, tandis que le geste (« Nouveau nœud », « Ajouter une connexion »…) suivait toujours le curseur. C'était contre la règle de la tâche 3 : Échap ferme ce pop-up « quand aucun geste du graphe n'est en cours ».
+  - Fait : `pick` (GraphView.tsx) rend le focus au graphe avant tout, comme l'éditeur de titre et la question. L'éditeur ou la question qu'ouvre le choix le prend ensuite.
+  - Vérifié dans l'app construite, par un pilote CDP hors du dépôt, sur une base de test. Avant : le focus sur `body`, Échap ferme le pop-up et le nœud à poser reste. Après : « Nouveau nœud » et « Ajouter une connexion » s'annulent par Échap, le pop-up reste ; « Renommer » garde son focus dans l'éditeur ; un Échap sans geste ferme toujours le pop-up.
+  - Ferme le mineur reporté de la tâche 3 (« l'Échap dépend du focus dans le graphe »).
+- **I2 : le côté page du Review Focus 2 n'avait aucun test du dépôt.** La garde de la fenêtre et le routage des dépôts n'étaient vérifiés que par un pilote hors du dépôt.
+  - Fait : trois fonctions pures dans `files/nodeFiles.ts`, que les composants appellent :
+    - `refusesStrayDrop`, la décision de la garde de la fenêtre (`App`) : un glissement de fichiers que rien n'a pris est refusé ;
+    - `dropZone`, ce qui prend les fichiers lâchés sur un élément : le pop-up d'un nœud, n'importe où sur lui ; le graphe, sauf ce qui flotte au-dessus et les refuse (le pop-up d'une connexion, une question) ; rien ailleurs (`takesFiles` de `GraphView`) ;
+    - `dropRoute`, leur destination : le nœud du pop-up, ou le nœud ou le groupe sous le point, celui qu'un clic y ouvrirait (`nodeOpenedBy`) ; une notification sur le graphe ; le refus ailleurs (`dropFilesAt` de `GraphView`, `NodePopup`).
+  - Testés (nodeFiles.test.ts) : un dépôt sur les onglets, les réglages, un champ de texte des réglages, le fond du graphe, le fantôme d'un nœud lointain, un fantôme absent, un nœud, un groupe, la liste des fichiers et le titre d'un pop-up, le pop-up d'un nœud supprimé, le pop-up d'une connexion, une question, un aperçu, le plein écran et une notification. Pour chacun, le test vérifie aussi que la fenêtre ne montre jamais le fichier : il est pris, ou la garde le refuse.
+  - Le comportement ne change pas. De vrais dépôts dans l'app construite le confirment : sur un nœud, sur le fond, sur la liste et sur le titre d'un pop-up, sur les onglets et sur un champ des réglages.
+- **I3 (défaut du plan) : `cleanCopies` effaçait tout `%TEMP%\cirrus-ouverts`, y compris un fichier que l'utilisateur y avait enregistré.** « Enregistrer sous » propose le dossier de la copie (Word, Paint, LibreOffice), et le démarrage suivant de Cirrus effaçait le fichier sans un mot. Le plan disait « efface ce qu'il peut ».
+  - Fait : ne partent que les copies de Cirrus, c'est-à-dire les fichiers encore en lecture seule comme `openableCopy` les laisse, et les temporaires `.copie-*` d'une copie interrompue, quel que soit leur mode. Un fichier modifiable reste, et son dossier avec lui.
+  - Avec lui (R29, la première moitié de la ligne 59 du suivi) : une ancienne copie qu'`openableCopy` ne peut effacer, parce qu'elle est encore ouverte, reprend son mode. Laissée modifiable, la nouvelle règle la garderait pour toujours, comme un fichier de l'utilisateur.
+  - Testés (files.test.ts) : un fichier enregistré à côté d'une copie, et un autre à la racine, restent avec leur dossier ; les copies et les temporaires, modifiables ou non, partent. Une copie encore ouverte reprend sa lecture seule, et le message dit « sa copie est encore ouverte dans une autre application » ; le démarrage suivant la laisse, celui d'après l'efface.
+- **Mineur 1, relevé Important (R27) : un texte surtout en UTF-8 où traîne un octet d'un autre encodage s'affichait tout entier en Windows-1252.** Exemple de la relecture : « Durée … résumé » suivi d'un `0xE9` se lisait « DurÃ©e … â€” rÃ©sumÃ© é ».
+  - Fait : `decodeText` essaie toujours l'UTF-8 strict d'abord. S'il échoue, il compte les séquences UTF-8 valides et invalides, comme `TextDecoder` les lit, en un passage sur les octets, sans décoder. Le texte reste en UTF-8, chaque séquence invalide montrée par U+FFFD, tant que les valides sont au moins deux fois plus nombreuses ; sinon il se lit en Windows-1252.
+  - Les seuils sont des constantes du code (décision ci-dessous) : `UTF8_VALID_PER_INVALID` = 2, `UTF8_EVIDENCE` = 64.
+  - Testés : tous les tests d'avant passent, le CSV Windows-1252 de la base de test compris (15 séquences invalides, aucune valide). Nouveaux : un texte d'accents avec un octet égaré, au milieu ou à la fin, reste en UTF-8 avec un seul U+FFFD ; un vrai texte Windows-1252 reste en Windows-1252, même avec une séquence UTF-8 valide par hasard (« voilà » suivi d'une espace insécable et de « » ») ; les deux côtés du seuil ; un U+FFFD que le texte contient lui-même ; l'arrêt du compte.
+- **Mineur 2, relevé Important (R28) : aucune frontière d'erreur autour des panneaux flottants.** Une erreur dans le rendu d'un pop-up démontait toute la racine : la fenêtre blanche que la frontière du graphe (plan 3c) devait empêcher.
+  - Fait : `PanelBoundary` (ui/PanelBoundary.tsx) entoure chaque panneau, pop-up de nœud ou aperçu, et le plein écran, qui n'en avait pas : seule sa vue en avait une.
+  - Une erreur montre, dans le cadre du panneau, qui se déplace et se ferme encore, « Ce pop-up n’a pas pu s’afficher. » ou « Cet aperçu n’a pas pu s’afficher. ». Le plein écran dit « Le plein écran n’a pas pu s’afficher. » ; son × a le focus, et Échap le quitte aussi. La cause va à la console. La fenêtre, le graphe et les autres panneaux restent.
+  - Vérifié dans l'app construite (pilote CDP) : une erreur provoquée dans le rendu d'un pop-up (`Intl.DateTimeFormat` qui lève), puis dans l'effet du plein écran (`focus` qui lève). Avant : la fenêtre devient blanche. Après : chaque panneau le dit en français, la fenêtre reste, et le panneau rouvert s'affiche.
+- **Mineur 3** (`tableMaxRows` × `tableRowPx` au-delà de la hauteur de mise en page de Chromium) : reporté (« Mineurs reportés », revue finale).
+- **Mineur 4 :** les deux commentaires qui contredisaient le code sont réécrits : `imageMaxZoom` (params.ts), dont le plancher est le plus petit de l'ajustement et du 1:1, et le mode d'ajustement du lecteur de PDF (PdfViewer.tsx), à la largeur de la première page. Celui du test des vignettes (« cheap at any size »), de la même ligne reportée de la tâche 6, aussi.
+- **Mineur 5 :** le coût de R10 dit désormais le simple clic, et la spec dit « UTF-16 avec BOM ». Les sept précisions de la relecture de la tâche 7 sont faites :
+  - au registre : les règles CSS dupliquées appariées comme la relecture les donnait, les deux causes du clic sur les surcouches et sa correction proposée, la ligne de `thumbFor` ;
+  - à la spec §12 : [C] défini comme partout ailleurs, l'exception connue du clic hors des panneaux, R20 et R9 écrits, « à la clôture du plan 3c », et « Déjà à jour. » réservé au dépôt où tout est inchangé.
+
+### Décisions du contrôleur
+
+Les lignes `Final: Ruling` du suivi, R26 à R30 de la liste des décisions du contrôleur (en fin de registre).
+
+- Ruling (l'écarté 1 devient un constat) : **un script n'est jamais remis à Windows, ni par un clic ni par le menu.**
+  - Le constat : un simple clic sur un `.pyc`, un `.pyo` ou un `.pyzw` le remettait à Windows, qui le lance par le lanceur de Python ; un `.pl` ou un `.rb` de même, là où leur interprète est installé. Or le contrôleur avait dit à l'utilisateur, quand il a choisi la conception simple (R10), qu'« un script n'est jamais remis à Windows » : la conception doit tenir.
+  - Fait : `.pl`, `.rb`, `.php` et `.pm` rejoignent les genres de texte (kind.ts), affichés dans Cirrus et colorés. `.pyc`, `.pyo` et `.pyzw` rejoignent la liste courte des exécutables (`isRunnable`), montrés dans l'explorateur.
+  - Testés : `fileKind` des quatre extensions de texte, `isRunnable` des trois nouvelles, `systemOnClick` faux pour `.pl` (et `.pm`, `.rb`, `.php`), et leur menu sans « Ouvrir avec l’application du système ».
+  - Coût si faux : nul.
+- Ruling (le Mineur 1 relevé Important par son effet) : **un texte surtout en UTF-8 avec un octet égaré reste en UTF-8.**
+  - Pourquoi : il s'affichait tout entier en Windows-1252, chaque accent illisible, contre le Review Focus 4 (« jamais de caractères illisibles »). Les journaux et les CSV qu'écrivent deux outils mêlent les encodages.
+  - La règle : décoder en UTF-8, avec des caractères de remplacement, quand les séquences invalides sont rares ; en Windows-1252 seulement quand elles sont nombreuses. Le seuil est choisi à la correction (ci-dessous).
+  - Coût si faux : un vrai texte Windows-1252 avec très peu d'accents montre un caractère de remplacement par accent.
+- Ruling (le Mineur 2 relevé Important par son effet) : **une frontière d'erreur autour de chaque panneau flottant**, et du plein écran, qui n'en avait pas. Pourquoi : une erreur dans un pop-up rendait toute la fenêtre blanche, contre « rien ne plante ». Coût si faux : nul.
+- Ruling : **les Mineurs 4 et 5, et les lignes reportées marquées à corriger, entrent dans la correction** : la première moitié de la ligne 59 du suivi (remettre la lecture seule quand l'effacement d'une ancienne copie échoue, nécessaire avec I3), la ligne 132 (les commentaires périmés), la ligne 139 (les sept précisions de la relecture de la tâche 7). Pourquoi : bon marché, et les documents sont la trace durable. Coût si faux : nul.
+- Ruling : **les écartés 2 à 13 restent écartés** (ci-dessous). Coût si faux : chacun est consigné ici.
+
+### Écartés par la relecture
+
+La relecture n'a pas tranché ces points ; le contrôleur les a réglés.
+
+1. Un simple clic sur un fichier de genre autre, hors de la liste courte, le lance par son association : `.pyc`, `.pyo` et `.pyzw` par le lanceur de Python, `.pl` et `.rb` là où leur interprète est installé. La relecture le tenait pour réglé par R10, dont la ligne de coût disait « depuis le menu ». **Devenu un constat** (R26) : corrigé.
+2. Rien n'éclaire le nœud qui recevra un fichier glissé sur le graphe. Écarté : ni le plan ni la spec ne le demandent, et la notification du dépôt nomme le nœud.
+3. Un clic du milieu sur un lien de PDF ne fait rien, la nouvelle fenêtre étant refusée. Écarté : la spec n'en dit rien, et le clic, Ctrl ou Maj+clic et Entrée passent par `openUrl`.
+4. La vue d'une image la lit entière, quelle que soit sa taille. Écarté : une image ne se montre pas en partie, le plan ne fixe pas de plafond aux images, et `maxImportMb` les borne.
+5. Un texte dans une page de code OEM (cp850, venu de redirections de `cmd`) montre de faux accents. Écarté : les encodages du plan sont l'UTF-8, l'UTF-16 avec BOM et le Windows-1252.
+6. Un PDF dont la hauteur totale dépasse la limite de mise en page de Chromium (10 000 pages A4 à 500 %). Écarté : ce n'est pas un document réaliste.
+7. Changer `viewStatesKept`, des vues étant ouvertes, peut oublier leurs dernières places. Écarté : un cas limite des réglages, qui ne perd qu'une commodité.
+8. `importFile` (le magasin, plan 2) laisse ouvert le descripteur de la source quand son fichier temporaire ne peut être créé. Écarté de la correction, hors du diff du plan 4a : consigné comme mineur reporté.
+9. Pas de `session.setPermissionRequestHandler`. Écarté de la correction : antérieur, et aucun contenu du plan 4a ne demande de permission. Consigné comme mineur reporté, pour le durcissement du plan 9.
+10. Le menu d'un fichier garde la `FileRef` du clic droit : une nouvelle version déposée pendant qu'il est ouvert remettrait l'ancien blob au système. Écarté : un cas de minutage, et l'ancien blob est le fichier de l'utilisateur.
+11. Des liens ou des jonctions posés dans `%TEMP%\cirrus-ouverts` par le même utilisateur. Écarté : aucune frontière de privilège à défendre.
+12. L'intervalle entre le contrôle de taille de `lstat` et la copie (un fichier qui grandit entre-temps). Écarté : local et sans danger.
+13. Une image dont le blob manque au magasin montre une boîte de vignette vide. Écarté : les blobs ne manquent qu'avec la synchronisation (plan 5).
+
+### Décisions de la correction
+
+- Ruling: **le seuil de l'UTF-8 : deux séquences valides par séquence invalide, comptées sur tout le texte, avec un arrêt anticipé.**
+  - Pourquoi deux : un vrai texte Windows-1252 n'a presque aucune séquence UTF-8 valide, car chacune demanderait une lettre accentuée suivie exactement des bons symboles de 0x80 à 0xBF. Il n'atteint donc jamais le seuil. Deux plutôt qu'une, c'est une marge contre ces séquences de hasard : un fichier mêlé passe en UTF-8 quand sa part UTF-8 est nettement la plus grande.
+  - Le compte suit le décodeur du standard Encoding, celui de `TextDecoder`, pour qui une séquence invalide est ce qu'un U+FFFD remplace. Un U+FFFD que le texte contient lui-même (`EF BF BD`) est une séquence valide.
+  - L'arrêt (`UTF8_EVIDENCE` = 64) : passé 64 séquences invalides, la première fois que les valides ne sont plus deux fois plus nombreuses, le texte se lit en Windows-1252 sans compter la suite. Un vrai texte Windows-1252 y arrive dès ses premières lignes.
+  - Options :
+    - un nombre fixe et petit d'octets invalides : simple, mais un journal mêlé avec plus de ce nombre d'accents en Windows-1252 se lirait encore tout entier en Windows-1252 ;
+    - une part des séquences multi-octets, sur tout le texte : mesuré trop lent (ci-dessous) ;
+    - la même part, avec l'arrêt anticipé (choix).
+  - Ce que l'arrêt change : un texte qui commence par plus de 64 accents en Windows-1252 se lit en Windows-1252, quelle que soit la quantité d'UTF-8 qui suit. Un texte en UTF-8 dont les octets égarés viennent après est compté jusqu'au bout et reste en UTF-8. Les deux cas sont testés.
+  - Coût si faux : un texte court en UTF-8, avec un seul accent et un octet égaré, se lit en Windows-1252 (testé : « Café » suivi d'un `0xE9`).
+- Ruling: **le mode d'une copie qu'on ne peut effacer est remis tel qu'il était** (`there.mode`), et non forcé à la lecture seule. Une copie de Cirrus était en lecture seule, elle le redevient. Une copie rendue modifiable à la main, que R7 refait, le reste. Coût si faux : nul.
+- Ruling: **`cleanCopies` lit le mode de chaque fichier par `lstat`** avant de décider. Un temporaire `.copie-*` part même modifiable, puisqu'il n'est écrit en lecture seule qu'à la fin de la copie. Coût si faux : un fichier de l'utilisateur nommé `.copie-…` dans ce dossier serait effacé.
+- Ruling: **un `unlinkSync` simulé dans files.test.ts** (`vi.mock('node:fs')`, qui laisse passer tout le reste) pour la copie encore ouverte. Node ouvre les fichiers avec `FILE_SHARE_DELETE`, si bien qu'un test ne peut pas en tenir un ouvert lui-même. Coût si faux : nul.
+- Ruling: **`dropRoute(zone, node)` reçoit le nœud déjà trouvé** par le composant : le pop-up donne le sien, le graphe celui de `nodeOpenedBy`, qui reste dans Panels.tsx. Le faire importer par nodeFiles.ts créerait un cycle de modules (nodeFiles, Panels, NodePopup, nodeFiles). Le test compose les trois fonctions comme le font les composants. Coût si faux : nul.
+- Ruling: **le panneau d'une erreur garde le cadre du panneau** (`FloatingPanel`, son en-tête, son épingle, son ×), avec le titre du nœud ou le nom du fichier. Fermé puis rouvert, c'est un nouveau panneau, qui réessaie. La frontière du plein écran n'a pas de clé : elle part avec lui, et il réessaie à la prochaine ouverture. Coût si faux : nul.
+
+### Mesures
+
+- Suite complète (`npx vitest run --maxWorkers=1`) : 75 fichiers, 566 tests sur 566, en 114 s. Six tests de plus qu'à la tâche 7 : deux dans nodeFiles.test.ts, deux dans fileLogic.test.ts, deux dans files.test.ts.
+- Avant la correction, les tests nouveaux ou étendus échouaient : 9 sur 54 dans les trois fichiers.
+- `tsc --noEmit` : `core`, `store`, `view`, `fixtures` et `app` sans erreur.
+- Captures, une suite neuve de 19 images : 11 sur 11 à 0 pixel contre `reference-3c`, 8 sur 8 à 0 pixel contre `plan4a`. Aucune référence n'est refaite.
+- Pilote CDP hors du dépôt, sur l'app construite et une base de test : 30 vérifications sur 30 (Échap après un geste du menu, les frontières d'erreur, de vrais dépôts). Sur l'app d'avant la correction, les vérifications d'Échap et des frontières échouaient.
+- `decodeText`, sous Node 26, médianes de cinq passes :
+  - 16 Mo du CSV Windows-1252 de la base de test : 37 à 41 ms avant, 37 à 38 ms après ;
+  - 32 Mo d'UTF-8 : 27 à 30 ms avant comme après ;
+  - 32 Mo d'UTF-8 riche en accents, avec un octet égaré : 60 à 70 ms avant, illisible en Windows-1252 ; 129 à 148 ms après, en UTF-8. C'est le seul cas qui compte tout le texte ;
+  - essais écartés : un décodage tolérant suivi d'un compte des U+FFFD dans la chaîne portait le CSV de 16 Mo à 148 ms, et le compte des octets sans arrêt anticipé à 132 ms.
+
 ## Mesures du plan 4a (résumé)
 
 Les mesures que les tâches ont consignées, regroupées ici. Leur méthode et leurs variantes sont sous chaque tâche.
@@ -943,7 +1047,8 @@ Les mesures que les tâches ont consignées, regroupées ici. Leur méthode et l
   - pdf.js a son morceau, 802 969 octets, et son travailleur, 1 271 915 octets. Ses données (cartes de caractères, polices, décodeurs, profils) pèsent 2 891 755 octets ;
   - le paquet de départ ne contient ni l'un ni l'autre. Il passe de 1 199 805 octets avant la tâche 5 à 1 258 388 après la tâche 6 ;
   - `out/renderer` gagne 4,77 Mo à la tâche 6.
-- **Tests et captures :** la suite passe de 463 tests au départ du plan à 560. `reference-3c` est restée à 0 pixel après chaque tâche. `plan4a` reçoit 8 captures nouvelles, qui se répètent au pixel.
+- **Décodage d'un texte qui n'est pas tout entier en UTF-8** (revue finale) : un vrai Windows-1252 de 16 Mo se lit en 37 à 38 ms, comme avant ; 32 Mo d'UTF-8 avec un octet égaré, en 129 à 148 ms au lieu de 60 à 70, mais lisibles.
+- **Tests et captures :** la suite passe de 463 tests au départ du plan à 560 à la tâche 7, puis à 566 après la revue finale. `reference-3c` est restée à 0 pixel après chaque tâche. `plan4a` reçoit 8 captures nouvelles, qui se répètent au pixel.
 
 ## Mineurs reportés
 
@@ -955,13 +1060,13 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - Le plafond vaut par fichier, donc le total d'un dépôt n'a pas de borne. Dix fichiers de 150 Mo figent le principal environ 5 s, au-delà du « Ne répond pas » de Windows. À régler avec le point précédent.
 - Trous des tests :
   - la branche « illisible » n'est pas couverte (files.ts:121) ;
-  - le test de `cleanCopies` ne peut pas voir un `chmod` manquant sous le Node de vitest, et la branche « encore ouvert » n'est pas couverte (files.test.ts:179-188) ;
+  - le test de `cleanCopies` ne peut pas voir un `chmod` manquant sous le Node de vitest, et la branche « encore ouvert » n'est pas couverte (files.test.ts:179-188). Traité en partie à la revue finale : la branche « encore ouvert » est couverte, par un `unlinkSync` simulé qui échoue (`EBUSY`) ;
   - le constructeur `row()` force son type par `as unknown as ChangeRow` (files.test.ts:194).
 - (Imposé par le plan) `historyOf` analyse le JSON de chaque opération pour trois agrégats (index.ts:182, localStore.ts:235). Un `MIN`, `MAX` et `COUNT(DISTINCT …)` en SQL suffirait, sur l'index `changes_subject` existant (schema.ts:25).
 - Un fichier déposé plus tôt dans la même page peut être réimporté par un script de la page.
 - Un lecteur réseau monté (`Z:\`) ne se distingue pas d'un disque local.
 - Dans un dossier temporaire hors NTFS, les copies n'ont pas de marque du web et se refont à chaque ouverture.
-- Une copie encore ouverte qui doit être refaite reste modifiable si son effacement échoue (files.ts:194-198).
+- Une copie encore ouverte qui doit être refaite reste modifiable si son effacement échoue (files.ts:194-198). Traité à la revue finale, avec I3 : elle reprend son mode, donc sa lecture seule, et reste une copie de Cirrus.
 - La vérification des chemins du principal bloque des formes connues, au lieu de n'accepter que les chemins à lettre de lecteur (files.ts:118).
 - Une référence malformée donne un nom vide dans la phrase d'`openFile` (index.ts:171). « ce fichier » se lirait mieux.
 - Le registre disait que la relecture 1 avait proposé la liste blanche (registre:143), alors qu'elle venait du contrôleur. Traité à la tâche 7 : la ligne est corrigée.
@@ -978,8 +1083,8 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 
 ### Tâche 3
 
-- L'Échap dépend du focus dans le graphe (GraphView.tsx:1335-1339, Panels.tsx:101). Un mode du graphe lancé depuis le menu contextuel (« Nouveau nœud », « Sortir du groupe ») laisse le focus sur `body`, et l'Échap suivant ferme le pop-up non épinglé au lieu du mode. La tâche 4 a réglé l'Échap du menu lui-même, écouté en capture. À b29a29e, le choix d'une entrée du menu ne rend toujours pas le focus au graphe (`pick`, GraphView.tsx:1134 ; lu dans le code, non essayé).
-- CSS dupliqué : `.panel h4` (styles.css:183) et `.popup h4` (:130), `.panel textarea` (:187) et `.node-popup .pick` (:201). `HEADER_PX` est écrit trois fois (geometry.ts:8, styles.css:159, :180).
+- L'Échap dépend du focus dans le graphe (GraphView.tsx:1335-1339, Panels.tsx:101). Un mode du graphe lancé depuis le menu contextuel (« Nouveau nœud », « Sortir du groupe ») laisse le focus sur `body`, et l'Échap suivant ferme le pop-up non épinglé au lieu du mode. La tâche 4 a réglé l'Échap du menu lui-même, écouté en capture. À b29a29e, le choix d'une entrée du menu ne rend toujours pas le focus au graphe (`pick`, GraphView.tsx:1134 ; lu dans le code, non essayé). Traité à la revue finale (I1) : `pick` rend le focus au graphe, essayé dans l'app.
+- CSS dupliqué : `.panel h4` (styles.css:183) répète presque `.popup h4` (:130), et `.panel textarea` (:187) et `.node-popup .pick` (:201) répètent presque `.popup textarea` et `.popup .pick` (corrigé à la revue finale : la ligne semblait apparier les deux derniers entre eux). `HEADER_PX` est écrit trois fois (geometry.ts:8, styles.css:159, :180).
 - La casse des clés libres (tags.ts:19) : « Pertinence:central » crée une clé libre « Pertinence », à côté de la clé `pertinence` du registre.
 - Sans test : la règle de saut de `useHistory` (NodePopup.tsx:27-30), et la logique des écouteurs d'Échap et du clic hors des panneaux. Elles s'extrairaient en fonctions pures.
 - Un titre ou un résumé refusé peut écraser un texte retapé entre-temps dans le même champ (NodePopup.tsx:147).
@@ -989,7 +1094,7 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - L'extraction d'un dépôt est écrite deux fois (GraphView.tsx:1329-1330, NodePopup.tsx:285-286). Le panneau générique importe le module des fichiers du nœud pour le seul `carriesFiles` (FloatingPanel.tsx:2). `files` est refait à chaque rendu d'`App` (App.tsx:223-235).
 - `CIRRUS_IMPORT` est lu deux fois, avec des règles différentes (preload/index.ts:12, App.tsx:170).
 - `addImported` décrit le dépôt en refaisant la fusion après `build(st)` (nodeFiles.ts:74-78).
-- Aucun test du dépôt côté page (Review Focus 2) ni de son routage : la garde de la fenêtre (App.tsx:103-112), `carriesFiles` (nodeFiles.ts:23), `takesFiles` et `dropFilesAt` (GraphView.tsx:876-884), le compte des entrées et des sorties de `FloatingPanel` (FloatingPanel.tsx:37-49), la borne du menu (ContextMenu.tsx:12-16).
+- Aucun test du dépôt côté page (Review Focus 2) ni de son routage : la garde de la fenêtre (App.tsx:103-112), `carriesFiles` (nodeFiles.ts:23), `takesFiles` et `dropFilesAt` (GraphView.tsx:876-884), le compte des entrées et des sorties de `FloatingPanel` (FloatingPanel.tsx:37-49), la borne du menu (ContextMenu.tsx:12-16). Traité en partie à la revue finale (I2) : la décision de la garde (`refusesStrayDrop`), ce qui prend un dépôt (`dropZone`) et sa destination (`dropRoute`) sont des fonctions pures de nodeFiles.ts, testées. Le compte de `FloatingPanel` et la borne du menu restent sans test.
 - `takesFiles` n'exclut que `.popup, .ask` (GraphView.tsx:884) : un fichier lâché sur le menu contextuel du graphe ou sur l'éditeur de titre va au nœud dessous.
 - La borne de `ContextMenu` ne déplace le menu que vers le haut et la gauche (ContextMenu.tsx:12-16) : un menu plus haut que la fenêtre aurait un `top` négatif.
 - (Reporté à la tâche 5) Un clic gauche qui ferme le menu d'un fichier ouvre aussi un fichier de genre autre (ContextMenu.tsx:19, NodePopup.tsx:169). Traité à la tâche 5 : le clic qui ferme un menu est avalé dans toute l'app (R20).
@@ -1010,18 +1115,25 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - Le cache des vignettes ne rétrécit jamais, et garde les échecs pour la séance, même un `ReadError` passager (pdf.ts:242-261). Changer `thumbPx` pas à pas, pop-up ouvert, met en file un dessin par valeur et par PDF (NodePopup.tsx:174).
 - Les vignettes des PDF se dessinent tout de suite, et non quand elles entrent en vue comme les images (NodePopup.tsx:159-175, :244).
 - Pas de test dans le dépôt pour la logique de ressources et de sûreté de `pdf.ts` : les règles du cache, le budget de `StoreRanges` et son échec unique, la course de `failure`, `destination()` (pdf.ts:222-239), le filtre des schémas de `linksOf` (PdfViewer.tsx:413).
-- Commentaires périmés : « Fitted to the width of the widest page » (PdfViewer.tsx:11) ; « cheap at any size, under any thumbMaxMb », dans le test des vignettes de `viewers.test.ts`. Avec `thumbMaxMb` à 0, `thumbFor` rend encore `'pdf'` (nodeFiles.ts:138-141) : le morceau de pdf.js se charge pour échouer aussitôt.
+- Commentaires périmés : « Fitted to the width of the widest page » (PdfViewer.tsx:11) ; « cheap at any size, under any thumbMaxMb », dans le test des vignettes de `viewers.test.ts`. Traité à la revue finale : les deux sont réécrits. Reste ouvert : avec `thumbMaxMb` à 0, `thumbFor` rend encore `'pdf'` (nodeFiles.ts:133-138 à b29a29e, le `'pdf'` à la ligne 135 ; corrigé à la revue finale, la ligne citait 138-141) : le morceau de pdf.js se charge pour échouer aussitôt.
 - Le message de `BudgetError` est construit deux fois (pdf.ts:85, :178), et un échec de plage s'écrit deux fois à la console (pdf.ts:190-191, :204).
 - Le travailleur partagé n'a pas de contrôle de vie (pdf.ts:32-35), et la file des vignettes pas de délai (:244-258). Un travailleur mort laisserait tout document à « Lecture… ».
 - Le travailleur de pdf.js tourne sans CSP : le fil qui lit des PDF non sûrs a un `fetch` sans restriction. « Rien n'est chargé du réseau » tient par ce que fait pdf.js, non par une règle.
 - Le focus se perd quand la page du lien qui l'a cesse d'être dessinée (PdfViewer.tsx:386-404).
 
+### Revue finale
+
+Les deux lignes `Final: minor (deferred)` du suivi, avec les fichiers et les lignes de la relecture (`final-review.md`, à 8d409a7).
+
+- `tableMaxRows` × `tableRowPx` peut dépasser la hauteur maximale d'une mise en page de Chromium (environ 33,5 millions de pixels) en haut des plages des réglages (TableViewer.tsx:114, :121 ; params.ts:466-469). Au-delà d'environ 1,4 million de lignes à 24 pixels, le dimensionneur et le `top` des lignes saturent : les dernières lignes ne s'atteignent plus, alors que le bandeau les dit affichées. Il faut relever à la fois `tableMaxRows` et `tableViewMaxMb` ; les valeurs par défaut (100 000 lignes de 24 pixels) en sont loin. Correction proposée : borner les lignes dessinées à `floor(33 000 000 / tableRowPx) − 1`, avec le bandeau des lignes, ou ramener le maximum du réglage à 1 000 000.
+- `importFile` (le magasin, plan 2) laisse ouvert le descripteur de la source quand son fichier temporaire ne peut pas être créé (hors du diff du plan 4a). Pas de `session.setPermissionRequestHandler`, ce qui précède le plan 4a, dont aucun contenu ne demande de permission : pour le durcissement du plan 9.
+
 ### Relevés hors du périmètre des relectures, absents du suivi
 
 Non tranchés par le contrôleur ; ajoutés à la tâche 7 pour ne pas se perdre.
 
-- Tâche 1, relecture 2 : un échec côté interface (une IPC qui rejette, un argument qu'on ne peut pas cloner) peut encore montrer un texte anglais, avant que `openFailure` n'intervienne.
-- Tâche 3, relecture 1 : un clic sur les surcouches du graphe (coin de hiérarchie, Overlays.tsx:8 ; pop-up de connexion, ConnectionPopup.tsx:90 ; menu, ContextMenu.tsx:17 ; question, Dialogs.tsx:25) laisse ouvert un pop-up non épinglé, car elles arrêtent la propagation de l'appui (Panels.tsx:143). C'est moins que « tout clic hors de tout panneau » (R14).
+- Tâche 1, relecture 2 : un échec côté interface (une IPC qui rejette, un argument qu'on ne peut pas cloner) peut encore montrer un texte anglais, avant que `openFailure` n'intervienne. La revue finale le juge traité : un `openFile` qui rejette donne « Impossible d’ouvrir « nom ». » (App.tsx:266-270), et `addFiles` rattrape en français un import qui rejette.
+- Tâche 3, relecture 1 : un clic sur les surcouches du graphe (coin de hiérarchie, Overlays.tsx:8 ; pop-up de connexion, ConnectionPopup.tsx:90 ; menu, ContextMenu.tsx:17 ; question, Dialogs.tsx:25) laisse ouvert un pop-up non épinglé. C'est moins que « tout clic hors de tout panneau » (R14). Deux causes ensemble (précisé à la revue finale) : ces surcouches arrêtent la propagation de l'appui, donc le graphe ne le voit pas ; et l'écouteur des appuis hors des panneaux saute tout ce qui est dans `.graph` (Panels.tsx:143, aujourd'hui `away`, Panels.tsx:185). Correction proposée par la relecture : appeler `closeLoose` depuis le `onPick` du coin, ou réduire l'exclusion à l'hôte du canevas. La revue finale le laisse reporté ; la spec §12 dit désormais cette exception.
 - Tâche 3, relecture 1 : une promesse de modification rejetée n'est pas traitée (NodePopup.tsx:61, :147).
 
 ## Décisions du contrôleur (plan 4a)
@@ -1042,7 +1154,7 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - R7 : les Mineurs 2 (le texte anglais d'`openFile`, à remplacer par un message français), 3 (une copie réemployée sur sa seule taille : seulement si elle est encore en lecture seule et de même taille, sinon refaite) et 4 (la décision d'ouvrir ou de montrer, à extraire et tester) entrent dans la correction 1 — bon marché, locaux, sur le chemin du Review Focus 3 — coût si faux : rien au-delà du tour (détail : tâche 1, correction 1).
 - R8 (remplace R3) : « ouvrir avec l'application du système » devient une liste blanche : seuls les types connus de documents, de médias, de données et d'archives vont à `shell.openPath`, tout autre est montré dans l'explorateur — une liste noire a toujours une association de retard (le `.sh` de git-bash l'a montré sur ce PC même), et une liste blanche échoue fermée ; le coût pesé à R3 (un format légitime non listé montré dans l'explorateur, à un double-clic, avec `ZoneId=3` sur la copie) est accepté ; l'intention de D5, ne jamais lancer un exécutable ou un script, est gardée, et sa « liste fixe » devient celle de ce qui peut s'ouvrir — coût si faux : un type de document inhabituel demande un double-clic de plus. **Remplacée** par R10 avant tout commit : l'utilisateur l'a jugée excessive.
 - R9 : le Mineur 2 reste dans la boucle, puisqu'il a été repris à la correction 1 : chaque échec d'`openFile` atteint l'utilisateur en français et nomme le fichier ; les causes connues (`ENOENT`, `EBUSY`, `EACCES`, `EPERM`, `ENOSPC`) et l'échec « aucune application » de `shell.openPath` ont chacune leur phrase, toute autre une phrase générale — c'est désormais une exigence — coût si faux : nul (détail : tâche 1, correction 2).
-- R10 (remplace R3, R6 et R8 ; décision de l'utilisateur du 2026-11-04 : « Ça m'a l'air overkill, je n'ouvrirai rien d'autre que des images, des pdfs, des .md et des fichiers textes type un script python, mais rarement. ») : `isRunnable` revient à la liste courte du plan, plus `sh` ; « ouvrir avec l'application du système » n'est offert, au menu de la tâche 4, que pour les images, les PDF et les genres que Cirrus ne sait pas afficher ; le texte, le code, le `.tex` et les tableaux ne s'affichent que dans Cirrus, si bien qu'un script n'est jamais remis à Windows, par construction et non par une liste ; la porte du preload et la marque du web, déjà écrites et invisibles dans l'usage de l'utilisateur, restent — les fichiers de l'utilisateur sont des images, des PDF, des `.md` et des scripts, tous affichés dans l'app — coût si faux : un exécutable d'un type absent de la liste, joint à un nœud et ouvert depuis le menu, serait lancé ; l'utilisateur ne joint pas de tels fichiers (détail : tâche 1, correction 2 ; tâche 4, « Ouvrir avec l'application du système »).
+- R10 (remplace R3, R6 et R8 ; décision de l'utilisateur du 2026-11-04 : « Ça m'a l'air overkill, je n'ouvrirai rien d'autre que des images, des pdfs, des .md et des fichiers textes type un script python, mais rarement. ») : `isRunnable` revient à la liste courte du plan, plus `sh` ; « ouvrir avec l'application du système » n'est offert, au menu de la tâche 4, que pour les images, les PDF et les genres que Cirrus ne sait pas afficher ; le texte, le code, le `.tex` et les tableaux ne s'affichent que dans Cirrus, si bien qu'un script n'est jamais remis à Windows, par construction et non par une liste ; la porte du preload et la marque du web, déjà écrites et invisibles dans l'usage de l'utilisateur, restent — les fichiers de l'utilisateur sont des images, des PDF, des `.md` et des scripts, tous affichés dans l'app — coût si faux : un exécutable d'un type absent de la liste, joint à un nœud, serait lancé d'un simple clic, puisqu'un fichier de genre autre s'ouvre par le système dès le clic, sans passer par le menu (précisé à la revue finale : la ligne disait « ouvert depuis le menu ») ; l'utilisateur ne joint pas de tels fichiers. La revue finale a fermé ce chemin pour les scripts qui y passaient encore (R26) (détail : tâche 1, correction 2 ; tâche 4, « Ouvrir avec l'application du système »).
 
 ### Tâche 2
 
@@ -1073,3 +1185,11 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 
 - R24 : le `PDFDataRangeTransport` est accepté, au lieu du `getDocument({ url })` du plan — l'appel du plan lit tout le fichier sur un schéma propre à l'app, alors que le transport garde le « chargé par plages » de D1 : 440 Ko mesurés pour la page 1000 d'un PDF de 78,5 Mo — coût si faux : une classe de transport à tenir au pas de pdf.js (détail : tâche 6, « les plages par un transport à nous »).
 - R25 (I1) : un PDF échappe au plafond de lecture des vues : il se lit par plages, à la demande de pdf.js, et un arbre de pages à plat se lit en entier à l'ouverture (1,3 s pour 78,5 Mo, mesuré) ; la contrainte du plan se lit désormais « une vue de texte ou de tableau ne lit jamais plus que son plafond ; un PDF se lit par plages, à la demande de pdf.js » — le plafond a été écrit pour le texte et les tableaux, un lecteur de PDF qui cesse de lire ne peut pas montrer les pages vers lesquelles on défile, et l'utilisateur a jugé le 2026-11-04 que les performances sont correctes pour l'instant, à revoir si sa vraie base grandit ; ses PDF sont des articles écrits par TeX, aux arbres équilibrés ; un `rangeChunkSize` plus petit est un levier, s'il le faut un jour — coût si faux : un grand PDF à plat met environ une seconde à s'ouvrir (détail : tâche 6, « après la relecture de la tâche 6 »).
+
+### Revue finale
+
+- R26 (l'écarté 1 de la relecture devient un constat) : un simple clic sur un `.pyc`, `.pyo`, `.pyzw`, `.pl` ou `.rb` le remettait à Windows, qui peut le lancer ; or le contrôleur avait dit à l'utilisateur, quand il a choisi la conception simple, qu'« un script n'est jamais remis à Windows » : la conception doit tenir. `.pl`, `.rb` (et `.php`, `.pm`) rejoignent les genres de texte, affichés dans Cirrus ; `.pyc`, `.pyo` et `.pyzw` rejoignent la liste courte des exécutables, montrés dans l'explorateur — coût si faux : nul (détail : revue finale).
+- R27 (le Mineur 1 relevé Important par son effet) : un texte surtout en UTF-8 où traîne un octet invalide s'affichait tout entier en Windows-1252, chaque accent illisible, contre le Review Focus 4 (« jamais de caractères illisibles ») ; il se décode en UTF-8, avec des caractères de remplacement, quand les séquences invalides sont rares, et en Windows-1252 seulement quand elles sont nombreuses — coût si faux : un vrai texte Windows-1252 avec très peu d'accents montre un caractère de remplacement par accent (détail : revue finale).
+- R28 (le Mineur 2 relevé Important par son effet) : aucune frontière d'erreur n'entourait les panneaux flottants, si bien qu'une erreur dans un pop-up rendait toute la fenêtre blanche, contre « rien ne plante » ; une frontière entoure chaque panneau — coût si faux : nul (détail : revue finale).
+- R29 : les Mineurs 4 (deux commentaires qui contredisent le code, params.ts:140, PdfViewer.tsx:11) et 5 (précisions des documents : le coût de R10, « UTF-16 avec BOM »), et les lignes reportées que la relecture marque à corriger (la première moitié de la ligne 59 du suivi : remettre la lecture seule quand l'effacement d'une ancienne copie échoue, nécessaire avec I3 ; la ligne 132, les commentaires périmés ; la ligne 139, les sept précisions de la relecture de la tâche 7) entrent dans la correction — bon marché, et les documents sont la trace durable — coût si faux : nul (détail : revue finale).
+- R30 : les écartés 2 à 13 de la relecture le restent — 2, rien n'éclaire le nœud qui recevra un fichier glissé (non demandé ; la notification nomme le nœud) ; 3, un clic du milieu sur un lien de PDF ne fait rien (le clic, Ctrl ou Maj+clic et Entrée marchent) ; 4, la vue d'une image la lit entière (une image ne se montre pas en partie ; `maxImportMb` la borne) ; 5, les pages de code OEM (cp850) ne sont pas reconnues (les encodages du plan) ; 6, un PDF au-delà de la hauteur de mise en page de Chromium (irréaliste) ; 7, changer `viewStatesKept`, des vues ouvertes, oublie leurs places (une commodité) ; 8, `importFile` laisse ouvert le descripteur de la source quand son fichier temporaire ne peut être créé (code du plan 2, consigné comme mineur reporté) ; 9, pas de `setPermissionRequestHandler` (antérieur, aucun contenu ne demande de permission ; consigné comme mineur reporté, pour le durcissement du plan 9) ; 10, le menu d'un fichier garde la `FileRef` du clic droit (un cas de minutage ; l'ancien blob est le fichier de l'utilisateur) ; 11, des liens posés dans `%TEMP%\cirrus-ouverts` par le même utilisateur (aucune frontière de privilège) ; 12, l'intervalle entre le contrôle de taille et la copie (local, sans danger) ; 13, la vignette d'un blob absent montre une boîte vide (les blobs ne manquent qu'avec la synchronisation, plan 5) — coût si faux : chacun est consigné au registre (détail : revue finale, « Écartés par la relecture »).
