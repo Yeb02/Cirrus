@@ -57,7 +57,20 @@ const SCENES = [
     name: 'import-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 },
     import: { at: '967,461', name: 'données_importées.txt', text: 'Longueur de description : 42 bits.\n' },
   },
+  // Plan 4a, task 5: a click on a file of the pop-up (CIRRUS_CLICK) opens its preview beside it, its ⤢ the full screen.
+  // MDL's script, coloured as Python; its CSV, in Windows-1252 with semicolons; the image of « Compression sans perte »
+  // (175, −140 in the world: 967, 181 on screen).
+  { name: 'plein-ecran-code', view: '0,140,1', pointer: 'down 967 461; up 967 461', click: fileThenFull('calcul_mdl_séquence_aléatoire.py') },
+  { name: 'plein-ecran-tableau', view: '0,140,1', pointer: 'down 967 461; up 967 461', click: fileThenFull('mesures_compression.csv') },
+  { name: 'plein-ecran-image', view: '0,140,1', pointer: 'down 967 181; up 967 181', click: fileThenFull('schéma_compression.png') },
+  // The pop-up tall enough to show its files, the preview of the Markdown notes beside it (on its left: no room on its right).
+  { name: 'apercu-fichier', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 }, click: '.file[data-name="notes_lecture.md"]' },
 ];
+
+/** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
+function fileThenFull(name) {
+  return `.file[data-name="${name}"],.file-preview .expand`;
+}
 
 /**
  * The test base's history at fixed times, one action a minute from 2026-01-05 09:00 UTC in the order they were written,

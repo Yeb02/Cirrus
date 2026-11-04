@@ -1,14 +1,18 @@
 import { type Action, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import type { Build } from './actions.ts';
 import { mark } from './bench.ts';
 import { addImported, carriesFiles, type NodeFiles, openNotice, type Refusal } from './files/nodeFiles.ts';
+import { viewsSettled } from './files/read.ts';
+import { ViewStates } from './files/viewState.ts';
 import { liveTabs } from './tabs.ts';
+import { FullScreen } from './ui/FullScreen.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
-import { Panels, type PanelsHandle } from './ui/panels/Panels.tsx';
+import { followTarget, type PanelTarget, Panels, type PanelsHandle } from './ui/panels/Panels.tsx';
+import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, Toasts } from './ui/Toasts.tsx';
@@ -32,6 +36,18 @@ function loadTabs(): Id[] {
 }
 function saveTabs(tabs: Id[]): void {
   try { localStorage.setItem(TABS_KEY, JSON.stringify(tabs)); } catch { /* not kept */ }
+}
+/**
+ * Where the files' views were left (« au même endroit »): a per-PC convenience, in localStorage, which may be
+ * unavailable. Bench and captures keep none: a capture shows a view as it opens, whatever an earlier run left.
+ */
+function viewStorage(): Storage | null {
+  if (measuring) return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -60,6 +76,10 @@ export function App() {
   paramsRef.current = params;
   const panels = useRef<PanelsHandle>(null);
   const graph = useRef<GraphHandle>(null);
+  /** The file in full screen, if any: followed as its preview is (followTarget), closed once it is gone. */
+  const [full, setFull] = useState<PanelTarget | null>(null);
+  /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
+  const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -112,7 +132,9 @@ export function App() {
   }, []);
 
   // Closing: the last snapshot, if anything changed since the one before, then the main process may close the window.
+  // The views still open keep their place too.
   useEffect(() => window.cirrus.onQuit(() => {
+    keepOpenViews();
     void (saver.current?.flush() ?? Promise.resolve()).finally(() => window.cirrus.quitReady());
   }), []);
 
@@ -166,7 +188,8 @@ export function App() {
     readySent.current = true;
     saver.current?.start();
     // Visual checks: CIRRUS_IMPORT="sx,sy|path" drops that file at that point of the graph, by the drop's own path
-    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys.
+    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys;
+    // the capture waits for the files' views they opened to settle (their file read, their code and language loaded).
     const [at, ...dropped] = (window.cirrus.launch.import ?? '').split('|').filter(Boolean);
     const clicks = (window.cirrus.launch.click ?? '').split(',').filter(Boolean);
     const keys = (window.cirrus.launch.keys ?? '').split(',').filter(Boolean);
@@ -185,6 +208,7 @@ export function App() {
         window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: parts.includes('ctrl'), shiftKey: parts.includes('shift'), altKey: parts.includes('alt') }));
         await new Promise((r) => setTimeout(r, 150));
       }
+      await viewsSettled();
       window.cirrus.ready();
     })();
   };
@@ -198,6 +222,12 @@ export function App() {
   if (live.open !== tabs || live.active !== active) {
     setTabs(live.open);
     setActive(live.active);
+    return null;
+  }
+  // The file in full screen, followed: renamed or in a new version, it stays; gone, the full screen closes (Review Focus 5).
+  const fullNow = full && followTarget(state, full);
+  if (full && fullNow?.target !== full) {
+    setFull(fullNow?.target ?? null);
     return null;
   }
   // The lobby has its own tab, always there: only another plan is added to the open ones.
@@ -257,9 +287,17 @@ export function App() {
           />
         </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
-        <Panels ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files} />
+        <Panels
+          ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
+          views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })}
+        />
         <Toasts toasts={toasts} />
       </div>
+      {fullNow?.file && (
+        <FullScreen
+          node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
+        />
+      )}
     </div>
   );
 }

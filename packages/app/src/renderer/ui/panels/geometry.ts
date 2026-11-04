@@ -25,6 +25,18 @@ export function placeAt(at: { x: number; y: number }, size: { w: number; h: numb
 }
 
 /**
+ * A panel opened beside another, `near` (a file's preview beside its node's pop-up, plan 4a, task 5): placeAt's rule
+ * along x, for the whole width of `near` — right of it by `gap`, else left of it, else against the edge of the roomier
+ * side (it then covers the least of `near`) — level with its top, whole in `bounds`.
+ */
+export function placeBeside(near: Rect, size: { w: number; h: number }, bounds: Rect, gap: number): Rect {
+  const w = Math.min(size.w, bounds.w), h = Math.min(size.h, bounds.h);
+  const lo = bounds.x, hi = bounds.x + bounds.w, after = near.x + near.w + gap, before = near.x - gap;
+  const x = after + w <= hi ? Math.max(lo, after) : before - w >= lo ? before - w : hi - after >= before - lo ? Math.max(lo, hi - w) : lo;
+  return { x, y: clamp(near.y, bounds.y, bounds.y + bounds.h - h), w, h };
+}
+
+/**
  * A panel kept usable: at least `min` on each side and no larger than `bounds` (min first, for a tiny window), its
  * header whole in `bounds` (its width inside, its first HEADER_PX pixels from the top) — the rest may go below the edge.
  */

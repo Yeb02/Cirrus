@@ -96,7 +96,7 @@ button, input, select { font: inherit; color: var(--ink); }
 .settings .toggle { width: 100%; text-align: left; }
 
 .main { position: relative; }
-.toasts { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 20; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.toasts { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .toast {
   padding: 7px 14px; border-radius: 8px; font-size: 13px; color: var(--ink);
   background: rgba(19, 31, 55, 0.96); border: 1px solid rgba(143, 184, 255, 0.4); box-shadow: 0 8px 24px rgba(2, 6, 16, 0.55);
@@ -215,8 +215,11 @@ button, input, select { font: inherit; color: var(--ink); }
 .node-popup .file { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 12.5px; }
 .node-popup .file .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-popup .file .kind, .node-popup .file .size { flex: none; color: var(--muted); white-space: nowrap; }
-/* A file Cirrus has no view for: a click opens it with the system's application. */
-.node-popup .file.system { cursor: pointer; }
+/* A click on a file opens its preview, or, for a file Cirrus has no view for (`.system`), the system's application. */
+.node-popup .file { cursor: pointer; }
+/* An image's thumbnail (thumbPx, its size set on the element): the image whole in its square. */
+.node-popup .file.with-thumb { align-items: center; }
+.node-popup .file .thumb { flex: none; object-fit: contain; border-radius: 4px; background: rgba(143, 184, 255, 0.06); }
 .node-popup .file .rename { padding: 0 4px; font: inherit; }
 .node-popup .add-files { margin-top: 6px; padding: 2px 0; border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
 /* Files dragged over a pop-up that takes them. */
@@ -227,3 +230,74 @@ button, input, select { font: inherit; color: var(--ink); }
 .handles { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .handles line { stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
 .handles circle { stroke-width: 1; }
+
+/*
+ * Files' views (plan 4a, task 5), the same in a preview (a floating panel's body) and in full screen. A table's cells
+ * have 8 px of padding on each side: CELL_PAD_PX (TableViewer.tsx) counts them in a column's width.
+ */
+.file-preview > .body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.file-preview > .body > .gone { padding: 8px 12px; }
+.viewer { flex: 1; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; outline: none; }
+.viewer-message {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 16px;
+  color: var(--muted); text-align: center; pointer-events: none;
+}
+.viewer-banner {
+  flex: none; margin: 0; padding: 4px 12px; font-size: 12.5px; color: var(--warn);
+  background: rgba(255, 181, 154, 0.08); border-bottom: 1px solid rgba(255, 181, 154, 0.2);
+}
+.viewer-text .text-host { flex: 1; min-height: 0; }
+.viewer-image { overflow: hidden; cursor: grab; user-select: none; touch-action: none; }
+.viewer-image.dragging { cursor: grabbing; }
+.viewer-image img { position: absolute; left: 0; top: 0; max-width: none; max-height: none; }
+.viewer-table .table-scroll {
+  flex: 1; min-height: 0; overflow: auto; position: relative; outline: none; user-select: text;
+  font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.viewer-table .sizer { position: relative; }
+.viewer-table .thead, .viewer-table .tr { display: flex; white-space: nowrap; }
+.viewer-table .thead { position: sticky; top: 0; z-index: 2; font-weight: 600; background: #16233d; box-shadow: inset 0 -1px rgba(143, 184, 255, 0.25); }
+.viewer-table .tr { position: absolute; left: 0; }
+.viewer-table .tr.odd { background: rgba(143, 184, 255, 0.035); }
+.viewer-table .gap { flex: none; }
+.viewer-table .cell, .viewer-table .num { flex: none; box-sizing: border-box; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; }
+.viewer-table .cell { box-shadow: inset -1px 0 rgba(143, 184, 255, 0.08); }
+.viewer-table .num { position: sticky; left: 0; z-index: 1; text-align: right; color: var(--muted); background: #0e1729; box-shadow: inset -1px 0 rgba(143, 184, 255, 0.2); }
+.viewer-table .thead .num { z-index: 3; background: #16233d; }
+/* Tokens of the text view (CodeMirror's classHighlighter), in the palette's cool tones. */
+.tok-keyword, .tok-tagName { color: #c3a6ff; }
+.tok-string, .tok-inserted { color: #a8d8a0; }
+.tok-string2, .tok-escape { color: #8fd6c8; }
+.tok-number, .tok-bool, .tok-atom, .tok-literal { color: #ffcf8a; }
+.tok-comment { color: #7f8fa9; font-style: italic; }
+.tok-variableName.tok-definition, .tok-propertyName.tok-definition { color: #8fb8ff; }
+.tok-typeName, .tok-className, .tok-namespace { color: #7fd3e6; }
+.tok-propertyName { color: #b9d3ff; }
+.tok-macroName, .tok-meta, .tok-variableName2 { color: #f2a7c8; }
+.tok-operator, .tok-punctuation { color: #9fb1cf; }
+.tok-heading { color: #8fb8ff; font-weight: 600; }
+.tok-emphasis { font-style: italic; }
+.tok-strong { font-weight: 600; }
+.tok-link, .tok-url { color: #8fb8ff; text-decoration: underline; }
+.tok-labelName { color: #ffcf8a; }
+.tok-deleted, .tok-invalid { color: #ff9a8a; }
+/* A file in full screen: over the whole window, tabs included (above the dialogs, under the toasts). */
+.full-screen {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; outline: none; user-select: text;
+  background: var(--sky0); color-scheme: dark;
+}
+.full-screen > header {
+  flex: none; display: flex; align-items: center; gap: 10px; height: 40px; box-sizing: border-box; padding: 0 8px 0 16px;
+  background: linear-gradient(180deg, #0d1628, var(--sky0)); border-bottom: 1px solid rgba(143, 184, 255, 0.18); user-select: none;
+}
+.full-screen > header .name, .full-screen > header .node { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.full-screen > header .name { font-weight: 600; }
+.full-screen > header .node { color: var(--muted); }
+.full-screen > header .node::before { content: '— '; }
+.full-screen > header .spacer { flex: 1; }
+.full-screen > header .system { flex: none; padding: 4px 12px; border-radius: 6px; background: var(--sky2); border: 1px solid var(--edge); cursor: pointer; white-space: nowrap; }
+.full-screen > header .system:hover { border-color: var(--accent); }
+.full-screen > header .close {
+  flex: none; width: 32px; height: 32px; padding: 0; border: none; border-radius: 6px; background: none; color: var(--muted); font-size: 20px; cursor: pointer;
+}
+.full-screen > header .close:hover { color: var(--ink); background: rgba(143, 184, 255, 0.14); }

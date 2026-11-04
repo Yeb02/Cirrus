@@ -94,11 +94,18 @@ export function openNotice(r: OpenResult): string | null {
  */
 const TO_SYSTEM: ReadonlySet<FileKind> = new Set(['image', 'pdf', 'other']);
 
-export type FileAction = 'system' | 'rename' | 'remove';
-/** A file's menu (right click, spec 12): open it with the system (TO_SYSTEM kinds only), rename it, take it out of the node. */
+/** Whether « Ouvrir avec l’application du système » is offered for the file: in its menu, in its full screen's header. */
+export const offersSystem = (name: string): boolean => TO_SYSTEM.has(fileKind(name));
+
+export type FileAction = 'full' | 'system' | 'rename' | 'remove';
+/**
+ * A file's menu (right click, spec 12): show it in full screen (the kinds Cirrus shows, task 5), open it with the system
+ * (TO_SYSTEM kinds only), rename it, take it out of the node.
+ */
 export function fileMenu(name: string): { action: FileAction; label: string }[] {
   return [
-    ...(TO_SYSTEM.has(fileKind(name)) ? [{ action: 'system' as const, label: 'Ouvrir avec l’application du système' }] : []),
+    ...(systemOnClick(name) ? [] : [{ action: 'full' as const, label: 'Ouvrir en plein écran' }]),
+    ...(offersSystem(name) ? [{ action: 'system' as const, label: 'Ouvrir avec l’application du système' }] : []),
     { action: 'rename', label: 'Renommer' },
     { action: 'remove', label: 'Retirer du nœud' },
   ];
@@ -106,3 +113,17 @@ export function fileMenu(name: string): { action: FileAction; label: string }[] 
 
 /** A click on a file Cirrus has no view for opens it with the system's application. */
 export const systemOnClick = (name: string): boolean => fileKind(name) === 'other';
+
+/**
+ * What a click on a file of a pop-up does: its preview, or, for a kind Cirrus has no view for, its system's application.
+ * Once: a double-click's second click (`detail` 2) does nothing more (HTMLElement.click(), as the captures click, counts
+ * 0). Nothing when its press closed the file's menu (`dismissed`, Minor 5 of the task 4 review): that click only meant
+ * to close it.
+ */
+export function fileClick(name: string, detail: number, dismissed: boolean): 'preview' | 'system' | null {
+  if (dismissed || detail > 1) return null;
+  return systemOnClick(name) ? 'system' : 'preview';
+}
+
+/** A double-click on a file Cirrus shows: its full screen (its first click opened the preview). */
+export const fileDoubleClick = (name: string): 'full' | null => (systemOnClick(name) ? null : 'full');

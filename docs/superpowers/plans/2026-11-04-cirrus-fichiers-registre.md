@@ -516,3 +516,141 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
 - Ruling: **`popup-noeud` refaite** : elle différait de 132 pixels (0,009 %, sous la tolérance). Seule différence, regardée : le pouce de la barre de défilement du pop-up est plus court, car le corps tient désormais le bouton « Ajouter des fichiers… ». Refaite pour que la référence reste au pixel. Coût si faux : nul.
 - Ruling: **`OpenResult`**, la réponse de `cirrus:files:open`, est déclarée dans `main/files.ts`, et `env.d.ts` comme `nodeFiles.ts` la reprennent. Coût si faux : nul.
 - Hors de la liste des fichiers du plan : `files/nodeFiles.ts` et son test, `nodeFiles.test.ts`, la logique pure du dépôt et du menu ; `actions.ts` (la constante `UP_TO_DATE`) ; `FloatingPanel.tsx`, `Panels.tsx` et `styles.css` ; `main/files.ts` (`OpenResult`) ; le preload et `env.d.ts`.
+
+## Tâche 5 : vues des fichiers — images, texte et code, tableaux ; aperçus et plein écran
+
+### Mesures
+
+- Suite complète : 545 tests sur 545 (532 + 13 : 12 dans `viewers.test.ts`, 1 dans `params.test.ts`). Le test du menu de `nodeFiles.test.ts` suit « Ouvrir en plein écran ». `tsc` : `app` et `view` sans erreur.
+  - Avant le code, `viewers.test.ts` échouait au chargement, faute de `files/read.ts`, et le test des réglages faute de `textViewMaxMb` (`undefined` au lieu de 32).
+- CodeMirror 6, installé le 2026-11-04 par `npm install -w packages/app`, aux dernières versions stables, figées exactement dans `package.json` et par `package-lock.json` :
+  - `@codemirror/state` 6.7.6, `view` 6.43.15, `language` 6.13.1, `language-data` 6.5.2, `search` 6.7.2, `commands` 6.11.1 ;
+  - `@lezer/highlight` 1.2.5, pour `classHighlighter` (voir les couleurs ci-dessous).
+  - 52 paquets ajoutés à `node_modules`, 9,1 Mo sur le disque, dont les langages de `language-data`. `npm audit` donne les 30 alertes d'avant, toutes de `msdf-bmfont-xml` (jimp, zod), un outil de développement ; aucune ne vient des nouveaux paquets.
+- Ce que CodeMirror ajoute à l'interface construite (`out/renderer/assets`, code non minifié, comme toute la construction) :
+  - le paquet de départ passe de 1 199 805 à 1 249 253 octets (+49 448). C'est le code des vues, des aperçus et du plein écran ; CodeMirror n'y est pas ;
+  - CodeMirror a son propre morceau, `TextViewer-*.js` : 732 098 octets, lu au premier texte affiché ;
+  - les langages forment 118 morceaux, 1 684 238 octets en tout, chacun lu à la demande : Python 54 932 octets, Markdown 85 692, LaTeX 5 633 ;
+  - la feuille de style passe de 15 212 à 20 457 octets.
+- Le travail d'une vue à son plafond par défaut, mesuré sous Node avec le même code, en trois passes. Il se fait une fois, à l'ouverture, sur le fil de l'interface :
+  - un CSV de 16 Mo en Windows-1252 : décodé en 31 à 36 ms, analysé sur 100 000 lignes en 43 à 107 ms, largeurs des colonnes en 3 à 4 ms ;
+  - un texte de 32 Mo en UTF-8 : décodé en 7 ms, `EditorState.create` en 41 à 47 ms, pour 383 826 lignes.
+- Captures, trois suites neuves (A, B et C) :
+  - contre `reference-3c` : 11 sur 11 à 0 pixel, à chaque suite ;
+  - contre `plan4a` : `popup-noeud` et `import-noeud` à 0 pixel, à chaque suite ;
+  - quatre nouvelles, prises de la suite B : `plein-ecran-code`, `plein-ecran-tableau`, `plein-ecran-image` et `apercu-fichier`. Les suites A et B sont identiques au pixel, 17 images sur 17, et C est à 0 pixel contre `plan4a`, 6 sur 6.
+  - Regardées :
+    - `plein-ecran-code` : le script coloré comme du Python, ses lignes numérotées, sans le bouton du système ;
+    - `plein-ecran-tableau` : le CSV lisible (« Éléments », « Coût (€) », « l’œuvre d’une nuit »), en six colonnes ; la valeur entre guillemets « fenêtre de 32 Ko; dictionnaire figé » tient dans une seule cellule ;
+    - `plein-ecran-image` : l'image de 32 × 32 pixels à sa taille, au centre, et le bouton du système dans l'en-tête ;
+    - `apercu-fichier` : le pop-up de MDL et l'aperçu des notes à sa gauche, aligné sur son haut, le Markdown coloré, les lignes longues repliées.
+- Essai de l'app construite par CDP. Le pilote, comme à la tâche 4, est hors dépôt, sur une base de test, un profil et un TEMP temporaires. Il envoie de vrais clics, double-clics, glissements, molettes et touches, et de vrais dépôts de fichiers. 43 vérifications sur 43 passent sur le code final :
+  - vignette : l'image seule, `loading="lazy"`, `decoding="async"`, 64 pixels ;
+  - un clic ouvre l'aperçu, à gauche du pop-up faute de place à droite, aligné sur son haut ; un autre fichier remplace l'aperçu non épinglé ;
+  - un `.md` est replié, un `.py` ne l'est pas. Un script de 3 Mo, sous un plafond de 1 Mo pour l'essai, est lu par une seule requête `Range: bytes=0-1048575`, avec le bandeau « Seul le premier Mo est affiché. ». Moins de 300 lignes sont dans le DOM ;
+  - un double-clic ouvre le plein écran. Il couvre toute la fenêtre, onglets compris, et donne le focus au texte. Ctrl+F ouvre la recherche en français, sans les champs de remplacement, et Entrée mène à l'occurrence. Le premier Échap ferme la recherche, le second le plein écran ;
+  - en quittant le plein écran, le pop-up et l'aperçu non épinglés restent, et l'aperçu reprend la première ligne vue en plein écran. Le plein écran rouvert la reprend aussi ;
+  - le menu d'un tableau n'offre pas le système. Un clic qui ferme le menu n'ouvre aucun aperçu, et le clic suivant si ;
+  - un `.tex` est coloré ; « Ouvrir en plein écran » du menu montre le CSV de la base de test, accents lisibles ;
+  - un grand tableau, sous des plafonds de 1 Mo et 1 000 lignes pour l'essai, montre les deux bandeaux. Moins de 60 lignes sont dans le DOM, et au défilement, celles de la vue ;
+  - un binaire nommé `.txt` donne son message, sans bouton ;
+  - une image de 2000 × 1000 pixels :
+    - elle s'ajuste à 1584 × 792 ;
+    - la molette zoome autour du curseur, le point visé restant sous lui au pixel près, et le glissement la déplace ;
+    - le double-clic revient à l'ajustement, puis passe au 1:1 ;
+    - les appuis dans le plein écran ne ferment pas le pop-up, et l'image se rouvre au 1:1 ;
+  - un fichier renommé pendant son aperçu est suivi. Retiré, l'aperçu dit « Ce fichier n’est plus dans le nœud. », et Ctrl+Z le remet ;
+  - une image déposée puis montrée en plein écran : Ctrl+Z défait son ajout, et le plein écran se ferme (Review Focus 5) ;
+  - aucune requête ne part vers le réseau ;
+  - la fenêtre est fermée pendant qu'un texte est en plein écran, puis l'app est relancée : le texte se rouvre à la première ligne vue en quittant.
+  - Le défaut relevé à la relecture de la tâche 4 (Minor 5) est reproduit : sans la comparaison de l'appui, la vérification du clic qui ferme le menu échoue, l'aperçu s'ouvre.
+  - Essai écarté : fermer la fenêtre par `window.close()` depuis la page. Le principal ne reçoit pas son événement `close` : ni l'instantané ni les vues ne sont enregistrés, et le pilote l'a d'abord pris pour un défaut. La croix de la fenêtre passe par `close` ; le pilote la reproduit par `BrowserWindow.close()`.
+
+### Décisions
+
+- Ruling: **CodeMirror dans un morceau à part, chargé au premier texte.**
+  - `Viewer` charge `TextViewer.tsx` par `lazy(import())`, et `language.ts`, qui importe `@codemirror/language-data`, n'est importé que par lui. Le paquet de départ ne contient donc aucun code de CodeMirror. Chaque langage est un morceau de l'app, lu sur le disque par `file:`. Rien ne vient du réseau (vérifié ci-dessus), et la CSP ne change pas.
+  - Options : CodeMirror dans le paquet de départ (environ 730 Ko de plus à lire au démarrage de chaque session) ; un morceau à part (choix).
+  - Coût si faux : la première ouverture d'un texte attend le morceau, lu sur le disque local.
+- Ruling (décision du contrôleur): **un binaire n'offre pas le système.**
+  - Le plan demandait « Fichier binaire : ouvre-le avec l’application du système. », avec le bouton. Or un binaire ne s'affiche que pour un genre texte, code, LaTeX ou tableau, que la décision du contrôleur ne confie jamais au système. Le message devient « Fichier binaire : Cirrus ne peut pas l’afficher. », sans bouton.
+  - Options : le bouton du plan, contre la décision ; le message du plan sans le bouton, qui dirait une chose impossible ; un message sans le bouton (choix).
+  - Coût si faux : un bouton et une phrase.
+- Ruling: **les bandeaux d'une lecture tronquée.**
+  - « Seuls les N premiers Mo sont affichés. », N au format français ; pour 1 Mo, « Seul le premier Mo est affiché. ».
+  - Un tableau coupé par `tableMaxRows` dit aussi « Seules les N premières lignes sont affichées. ». Sans ce bandeau, la coupure d'un CSV de 150 000 petites lignes resterait muette.
+  - Un tableau lu jusqu'au plafond d'octets perd sa dernière ligne, probablement coupée, sauf si le plafond de lignes est venu avant.
+  - Coût si faux : une phrase.
+- Ruling: **une image ajustée n'est pas agrandie.**
+  - L'ajustement fait tenir l'image entière dans la vue, sans la grandir au-delà de sa taille : c'est l'usage des navigateurs et des visionneuses. Une image plus petite que la vue s'affiche donc à sa taille, et le double-clic n'y change rien.
+  - Le zoom reste entre l'ajustement et `imageMaxZoom`. Le glissement garde l'image dans la vue : un axe que la vue contient en entier reste centré.
+  - L'image est dessinée à sa taille zoomée, et non agrandie par une transformation, pour qu'un SVG reste net.
+  - Options : agrandir toujours, ce qui rendrait floue une figure de 640 × 480 en plein écran ; jamais (choix par défaut) ; un réglage (`imageFitMaxZoom`, 1 par défaut).
+  - Coût si faux : une valeur de réglage. La capture `plein-ecran-image` montre l'image de 32 pixels de la base de test à sa taille.
+- Ruling: **six réglages de plus que le plan**, chaque constante étant un réglage :
+  - groupe « Fichiers » :
+    - `imageMaxZoom` : 32, entre 1 et 256, le zoom maximal d'une image ;
+    - `imageFitMaxZoom` : 1, entre 1 et 32, l'agrandissement maximal de l'ajustement ;
+    - `tableColumnMaxPx` : 320, entre 60 et 2000, la largeur maximale d'une colonne ;
+    - `tableMarginPx` : 240, entre 0 et 2000, la marge préparée autour de la vue d'un tableau, pour qu'un défilement ne montre pas d'abord des lignes vides ;
+  - groupe « Pop-ups », à côté de la taille du pop-up :
+    - `previewWidthPx` : 560, entre 200 et 1600 ;
+    - `previewHeightPx` : 460, entre 160 et 1400. C'est la hauteur du pop-up, pour que les deux s'alignent.
+  - Les sept réglages du plan prennent ses valeurs exactes.
+  - Coût si faux : un réglage chacun.
+- Ruling: **l'aperçu s'ouvre à côté du pop-up** (`placeBeside`, dans `geometry.ts`).
+  - Il suit la règle de `placeAt`, mais pour toute la largeur du pop-up : à sa droite de `panelGapPx`, sinon à sa gauche. Faute de place des deux côtés, il va contre le bord du côté le plus large, et couvre ainsi le moins du pop-up. Il s'aligne sur le haut du pop-up et reste entier dans la fenêtre.
+  - `placeAt` appliqué au coin du pop-up, la lettre du plan, mettrait l'aperçu sur le pop-up dès qu'il se retourne.
+  - Coût si faux : nul.
+- Ruling: **un aperçu non épinglé à la fois** (`withFile`). Un clic sur un autre fichier remplace l'aperçu non épinglé. Le pop-up et les panneaux épinglés restent. Un fichier déjà en aperçu passe devant, et n'en ouvre pas un second. Coût si faux : une règle.
+- Ruling: **un aperçu et le plein écran suivent leur fichier** (`followTarget`, `followPanels`).
+  - La cible d'un fichier garde son nom et, une fois trouvée, son empreinte (`PanelTarget.hash`, facultatif). `resolveTarget` cherche par le nom, puis par l'empreinte : un renommage est suivi, une nouvelle version aussi, et l'annulation de l'un ou de l'autre. La cible est ensuite ancrée sur le fichier trouvé.
+  - Sans cela, renommer un fichier depuis son pop-up ferait dire à son aperçu que le fichier n'est plus là.
+  - Le plein écran se ferme quand `followTarget` devient null (Review Focus 5) : fichier retiré, son ajout annulé, nœud supprimé. C'est la fonction pure testée, bâtie sur `resolveTarget`.
+  - Limite : un fichier retiré dont le nœud garde un jumeau de même contenu, sous un autre nom, passe au jumeau, au lieu de se fermer. La vue montre alors le même contenu.
+  - Coût si faux : la recherche par l'empreinte, une ligne.
+- Ruling: **une seule vue par fichier, et le plein écran au-dessus de tout.**
+  - Tant qu'un fichier est en plein écran, son aperçu laisse sa vue (`covered`). La vue du plein écran reprend donc là où l'aperçu en était, et l'aperçu là où le plein écran en est, sans deux vues qui écriraient chacune sa place.
+  - Sous le plein écran, `Panels` ignore Échap et les appuis : ils sont au plein écran.
+  - Le plein écran est au `z-index` 50, au-dessus des dialogues (40). Les notifications passent de 20 à 60, au-dessus de lui : un échec de « Ouvrir avec l’application du système » s'y lit. Elles ne recouvrent rien dans les captures (0 pixel).
+  - Le plein écran prend le focus, pour que les touches ne passent pas au graphe, et le rend en se fermant.
+  - Coût si faux : nul.
+- Ruling: **Échap, Ctrl+F et Ctrl+Z dans un texte.**
+  - Le raccourci Échap de CodeMirror (réduire la sélection) est retiré de son clavier par défaut : Échap ferme le plein écran ou l'aperçu non épinglé, même avec du texte choisi. Seule la recherche le garde pour se fermer, et le plein écran ne se ferme qu'au second Échap.
+  - Le texte est un champ modifiable en lecture seule (`EditorState.readOnly`), comme le veut la recherche au clavier. Ctrl+Z et Ctrl+Y y restent donc au champ, comme dans tout champ (spec 6.4) : ils n'y font rien. Dans un tableau ou une image, ils défont et refont les actions de l'app.
+  - Les textes de CodeMirror sont en français (`EditorState.phrases`) : la recherche, « aller à la ligne », le titre d'un caractère de contrôle.
+  - Coût si faux : un raccourci.
+- Ruling: **le double-clic.** Son premier clic ouvre l'aperçu, son double-clic le plein écran. En sortant du plein écran, on retrouve donc l'aperçu de ce fichier. Le double-clic ne choisit pas le nom au passage. Options : attendre le délai du double-clic avant d'ouvrir l'aperçu, ce qui retarderait chaque clic. Coût si faux : nul.
+- Ruling (Minor 5 de la relecture de la tâche 4): **le clic qui ferme le menu ne fait rien d'autre.**
+  - `ContextMenu` passe à `onClose` l'appui qui l'a fermé. Le fichier compare cet appui à celui qu'il reçoit, le même événement natif, et ignore le clic qui suit (`fileClick`, testé). Le clic suivant agit.
+  - Options : avaler le prochain clic de la fenêtre, qui risquait d'avaler un clic sans rapport après un glissement ; comparer l'événement (choix).
+  - Le menu du graphe ne change pas.
+  - Coût si faux : nul.
+- Ruling: **« au même endroit ».**
+  - Une instance de `ViewStates` pour l'app (`localStorage`, clé `cirrus.fileViews`, `max = viewStatesKept`), refaite seulement si ce réglage change.
+  - Chaque vue garde sa place dans une référence à chaque défilement ou zoom. La place est écrite quand la vue est quittée, ou quand la fenêtre se ferme (`keepOpenViews`, dans `onQuit`), jamais à chaque défilement.
+  - On garde, par empreinte : la première ligne vue du texte, le défilement du tableau, et pour l'image `{ fit: 1 }` ou son zoom et son centre. Une image ajustée s'ajuste de nouveau à la vue où elle se rouvre.
+  - Une nouvelle version, d'une autre empreinte, s'ouvre au début.
+  - Banc et captures ne gardent rien : une capture montre une vue comme elle s'ouvre, quoi qu'ait laissé une suite précédente dans leur profil.
+  - Coût si faux : nul.
+- Ruling: **les captures attendent les vues.**
+  - `CIRRUS_CLICK` ouvre l'aperçu par `.file[data-name="…"]`, puis le plein écran par son ⤢ (`.file-preview .expand`) : un double-clic ne se simule pas par `.click()`.
+  - `App` attend ensuite `viewsSettled()` avant `ready()`. Elle compte ce que les vues lisent ou chargent : le fichier, le morceau de CodeMirror, le langage, l'image.
+  - Les quatre captures se répètent au pixel.
+  - Coût si faux : nul.
+- Ruling: **le tableau.**
+  - Les lignes et les colonnes sont virtualisées, avec `tableMarginPx` de marge. L'en-tête et les numéros de ligne restent en vue (`position: sticky`). Les lignes de données sont numérotées à partir de 1.
+  - Une colonne est aussi large que sa plus longue valeur, comptée en caractères puis mesurée par un canevas dans la police de la vue, l'en-tête en gras, plus le remplissage des cellules (`CELL_PAD_PX`, une dimension de la feuille de style), au plus `tableColumnMaxPx`. Le reste se coupe en « … ».
+  - Une valeur sur plusieurs lignes s'affiche sur une seule.
+  - Coût si faux : nul.
+- Ruling: **les couleurs du texte** sont des classes (`classHighlighter` de `@lezer/highlight`, `.tok-*`), colorées dans `styles.css` aux tons de la palette, comme toutes les couleurs de l'interface. Elles ne sont pas des réglages : seules les couleurs du graphe le sont. Le thème de l'éditeur reprend les variables de la feuille de style. Coût si faux : un thème.
+- Ruling: **le langage**, par `LanguageDescription.matchFilename`, l'extension lue sans la casse (« LISEZ-MOI.TXT »). Un carnet `.ipynb` est lu comme du JSON, que `language-data` ne relie pas à cette extension. Un `.tex` est coloré comme du LaTeX (`stex`). Le retour à la ligne vaut pour `txt`, `md` et `log`, comme le dit le plan : pas pour le `.tex`, que le plan 4b éditera. Coût si faux : une ligne.
+- Ruling: **les vignettes** sont des `<img loading="lazy" decoding="async">` du fichier, comme le dit le plan. Une image visible dans la liste est donc lue en entier. La règle « ouvrir un pop-up ne lit aucun fichier entier » vaut pour les textes, les tableaux et les PDF, que le pop-up ne lit pas. Coût si faux : des vignettes faites par le principal.
+- Ruling: **le PDF, en attendant la tâche 6** : son aperçu et son plein écran disent « Aperçu du PDF : à venir ». `Viewer` choisit la vue par genre ; la tâche 6 n'y remplace qu'une branche. Le plein écran d'un PDF offre déjà le système. Coût si faux : nul.
+- Ruling: **`readHead`** lit le corps en flux et le lâche au plafond : même un serveur qui ignorerait la plage n'est pas lu au-delà. Un fichier absent du magasin (404) ou une réponse en erreur lève une `ReadError` en français, que la vue affiche. Coût si faux : nul.
+- Hors de la liste des fichiers du plan :
+  - `ui/viewers/views.ts` (la logique pure des vues), `ui/viewers/language.ts` (le langage, les textes français de CodeMirror) et `ui/viewers/common.tsx` (la place gardée, les messages) ;
+  - `ui/ContextMenu.tsx` (l'appui qui ferme le menu) ;
+  - `ui/panels/FloatingPanel.tsx` (`tools`, les boutons propres d'un panneau : le ⤢) et `ui/panels/geometry.ts` (`placeBeside`) ;
+  - `files/nodeFiles.ts` (`offersSystem`, `fileClick`, `fileDoubleClick`, l'action `full`) et son test ;
+  - `packages/view/tests/params.test.ts`.

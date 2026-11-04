@@ -73,6 +73,34 @@ test('pop-ups : taille d’ouverture, taille minimale, écart au clic et suggest
   }
 });
 
+test('vues des fichiers : plafonds de lecture, tableaux, images, vignettes, vues gardées, réglages avancés du groupe « Fichiers » (plan 4a, tâche 5)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['textViewMaxMb', 32, 'Taille lue d’un fichier texte ou de code (Mo)', 1, 512, 1],
+    ['tableViewMaxMb', 16, 'Taille lue d’un tableau CSV ou TSV (Mo)', 1, 512, 1],
+    ['tableMaxRows', 100_000, 'Lignes lues d’un tableau', 1000, 2_000_000, 1000],
+    ['tableRowPx', 24, 'Hauteur d’une ligne de tableau (px)', 16, 48, 1],
+    ['tableColumnMaxPx', 320, 'Largeur maximale d’une colonne de tableau (px)', 60, 2000, 10],
+    ['tableMarginPx', 240, 'Marge préparée autour de la vue d’un tableau (px)', 0, 2000, 10],
+    ['imageZoomSpeed', 0.0015, 'Vitesse du zoom d’une image à la molette', 0.0002, 0.01, 0.0001],
+    ['imageMaxZoom', 32, 'Zoom maximal d’une image (× sa taille réelle)', 1, 256, 1],
+    ['imageFitMaxZoom', 1, 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', 1, 32, 0.5],
+    ['thumbPx', 64, 'Taille des vignettes d’images (px)', 24, 256, 1],
+    ['viewStatesKept', 200, 'Fichiers dont la vue est gardée (au même endroit)', 10, 5000, 10],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Fichiers', kind: 'number', min, max, step });
+  }
+  // A file's preview opens beside its node's pop-up, at its own size (group « Pop-ups », with the pop-up's).
+  expect(PARAM_SPECS.find((s) => s.key === 'previewWidthPx')).toEqual({
+    key: 'previewWidthPx', label: 'Largeur d’un aperçu de fichier à son ouverture (px)', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 200, max: 1600, step: 1,
+  });
+  expect(PARAM_SPECS.find((s) => s.key === 'previewHeightPx')).toEqual({
+    key: 'previewHeightPx', label: 'Hauteur d’un aperçu de fichier à son ouverture (px)', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 160, max: 1400, step: 1,
+  });
+  expect([DEFAULT_PARAMS.previewWidthPx, DEFAULT_PARAMS.previewHeightPx]).toEqual([560, 460]);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

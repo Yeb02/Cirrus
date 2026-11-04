@@ -35,13 +35,15 @@ test('openNotice : l’exécutable montré dans l’explorateur, l’échec dit 
 });
 
 test('fileMenu : « Ouvrir avec l’application du système » pour les images, les PDF et les autres genres seulement (décision du contrôleur)', () => {
-  const all = [
-    { action: 'system', label: 'Ouvrir avec l’application du système' }, { action: 'rename', label: 'Renommer' }, { action: 'remove', label: 'Retirer du nœud' },
-  ];
-  for (const name of ['figure.PNG', 'article.pdf', 'présentation.pptx', 'données.xlsx', 'outil.exe', 'raccourci.lnk']) expect(fileMenu(name), name).toEqual(all);
+  const full = { action: 'full', label: 'Ouvrir en plein écran' }, system = { action: 'system', label: 'Ouvrir avec l’application du système' };
+  const rest = [{ action: 'rename', label: 'Renommer' }, { action: 'remove', label: 'Retirer du nœud' }];
+  // Shown in Cirrus (task 5), and handed to the system on request.
+  for (const name of ['figure.PNG', 'article.pdf']) expect(fileMenu(name), name).toEqual([full, system, ...rest]);
+  // Not shown in Cirrus: handed to the system.
+  for (const name of ['présentation.pptx', 'données.xlsx', 'outil.exe', 'raccourci.lnk']) expect(fileMenu(name), name).toEqual([system, ...rest]);
   // Text, code, LaTeX and tables are only shown in Cirrus (task 5): never handed to the system, scripts included.
   for (const name of ['notes_lecture.md', 'calcul.py', 'Énoncé.tex', 'mesures.csv', 'lancer.ps1', 'build.bat', 'Makefile']) {
-    expect(fileMenu(name), name).toEqual(all.slice(1));
+    expect(fileMenu(name), name).toEqual([full, ...rest]);
   }
 });
 

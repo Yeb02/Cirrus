@@ -6,9 +6,9 @@ import type { RenderParams } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
-import { type FileKind, fileKind, formatSize } from '../files/kind.ts';
+import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
-import { droppedPaths, type FileAction, fileMenu, type NodeFiles, systemOnClick } from '../files/nodeFiles.ts';
+import { droppedPaths, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick } from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
@@ -132,21 +132,33 @@ function Tags(props: { s: State; id: Id; tags: TagValue[]; suggested: number; on
   );
 }
 
+/** How a file of the pop-up is opened: its preview beside the pop-up, or its full screen (Panels). */
+export type OpenFile = (name: string, how: 'preview' | 'full') => void;
+
 /**
- * The node's files (spec 12; plan 4a, task 4): name, kind, size. A right click opens the file's menu (fileMenu): open it
- * with the system's application, rename it in place, take it out of the node (its copy stays in the store). A click on
- * a file Cirrus has no view for opens it with the system. « Ajouter des fichiers… » takes files chosen in the system's
- * dialog; files dropped on the pop-up come in too (NodePopup). A new name is checked on Enter (checkFileName), its
- * refusal said under the list; leaving the field keeps it, a refusal then in a toast; Escape gives it up.
+ * The node's files (spec 12; plan 4a, tasks 4 and 5): name, kind, size, an image's thumbnail (thumbPx, read only once
+ * in view). A click on a file opens its preview, a double-click its full screen (`onOpen`); a click on a file Cirrus has
+ * no view for opens it with the system (fileClick). A right click opens the file's menu (fileMenu): full screen, open
+ * it with the system's application, rename it in place, take it out of the node (its copy stays in the store). The
+ * press that closes the menu does nothing else: the click it ends is not one on the file (Minor 5 of the task 4
+ * review). « Ajouter des fichiers… » takes files chosen in the system's dialog; files dropped on the pop-up come in too
+ * (NodePopup). A new name is checked on Enter (checkFileName), its refusal said under the list; leaving the field keeps
+ * it, a refusal then in a toast; Escape gives it up.
  */
-function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(build: Build): Promise<boolean> }) {
+function Files(props: { id: Id; files: FileRef[]; thumbPx: number; actions: NodeFiles; onOpen: OpenFile; onEdit(build: Build): Promise<boolean> }) {
   const [menu, setMenu] = useState<{ x: number; y: number; file: FileRef } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** The rename given up by Escape: leaving the field then keeps the old name. */
   const givenUp = useRef(false);
+  /**
+   * The press that closed the menu (ContextMenu hands it over), and whether the last press on a file was it: the menu
+   * closes in the press's capture, before the file sees the same event.
+   */
+  const closedBy = useRef<Event | null>(null), dismissing = useRef(false);
   const pick = (action: FileAction, f: FileRef) => {
-    if (action === 'system') void props.actions.openWithSystem(f);
+    if (action === 'full') props.onOpen(f.name, 'full');
+    else if (action === 'system') void props.actions.openWithSystem(f);
     else if (action === 'rename') { givenUp.current = false; setError(null); setRenaming(f.name); }
     else void props.onEdit(removeFileBuild(props.id, f.name));
   };
@@ -161,14 +173,29 @@ function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(bui
       {props.files.length === 0 ? <p className="dim">Aucun fichier.</p> : (
         <ul className="files">
           {props.files.map((f) => {
-            const system = systemOnClick(f.name);
+            const system = systemOnClick(f.name), image = fileKind(f.name) === 'image';
             return (
               <li
-                key={f.name} className={system ? 'file system' : 'file'} data-name={f.name}
+                key={f.name} className={`file${system ? ' system' : ''}${image ? ' with-thumb' : ''}`} data-name={f.name}
+                onPointerDown={(e) => { dismissing.current = e.nativeEvent === closedBy.current; }}
+                // A double-click opens the full screen, without selecting the name on the way.
+                onMouseDown={(e) => { if (e.detail > 1 && renaming !== f.name) e.preventDefault(); }}
                 // Once, a double-click's second click aside (it would open a second copy of the application).
-                onClick={(e) => { if (system && e.detail <= 1 && renaming !== f.name) void props.actions.openWithSystem(f); }}
+                onClick={(e) => {
+                  if (renaming === f.name) return;
+                  const act = fileClick(f.name, e.detail, dismissing.current);
+                  if (act === 'system') void props.actions.openWithSystem(f);
+                  else if (act === 'preview') props.onOpen(f.name, 'preview');
+                }}
+                onDoubleClick={() => { if (renaming !== f.name && fileDoubleClick(f.name)) props.onOpen(f.name, 'full'); }}
                 onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, file: f }); }}
               >
+                {image && (
+                  <img
+                    className="thumb" src={fileUrl(f)} alt="" loading="lazy" decoding="async" draggable={false}
+                    width={props.thumbPx} height={props.thumbPx}
+                  />
+                )}
                 {renaming === f.name ? (
                   <input
                     className="name rename" autoFocus defaultValue={f.name} spellCheck={false} aria-label="Nouveau nom du fichier"
@@ -189,7 +216,14 @@ function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(bui
                     }}
                     onBlur={(e) => renamed(f, e.target.value)}
                   />
-                ) : <span className="name" title={system ? `${f.name}\nUn clic l’ouvre avec l’application du système.` : f.name}>{f.name}</span>}
+                ) : (
+                  <span
+                    className="name"
+                    title={`${f.name}\n${system ? 'Un clic l’ouvre avec l’application du système.' : 'Un clic montre son aperçu, un double-clic le plein écran.'}`}
+                  >
+                    {f.name}
+                  </span>
+                )}
                 <span className="kind">{KIND[fileKind(f.name)]}</span>
                 <span className="size">{formatSize(f.size)}</span>
               </li>
@@ -199,7 +233,12 @@ function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(bui
       )}
       {error && <p className="error">{error}</p>}
       <button className="add-files" onClick={() => void props.actions.pickInto(props.id)}>Ajouter des fichiers…</button>
-      {menu && <ContextMenu x={menu.x} y={menu.y} items={fileMenu(menu.file.name)} onClose={() => setMenu(null)} onPick={(a) => pick(a, menu.file)} />}
+      {menu && (
+        <ContextMenu
+          x={menu.x} y={menu.y} items={fileMenu(menu.file.name)} onPick={(a) => pick(a, menu.file)}
+          onClose={(press) => { closedBy.current = press ?? null; setMenu(null); }}
+        />
+      )}
     </>
   );
 }
@@ -207,13 +246,14 @@ function Files(props: { id: Id; files: FileRef[]; actions: NodeFiles; onEdit(bui
 /**
  * A node's pop-up (spec 12), in a floating panel: its title in the header, typed in place (Enter or leaving the field
  * keeps it, Escape gives it up); its summary as LaTeX source, kept on leaving the field; its tags; its metadata (history,
- * plans, knowledge connections, identifier); its files (Files; their previews come with tasks 5 and 6), which files
- * dropped anywhere on the pop-up join (importInto). `found`: the node as resolveTarget finds it, null once it is gone
- * (Review Focus 5). An edit the session refuses (in a toast) puts its field back to the node's value.
+ * plans, knowledge connections, identifier); its files (Files), each opened in a preview or in full screen
+ * (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). `found`: the node as resolveTarget finds
+ * it, null once it is gone (Review Focus 5). An edit the session refuses (in a toast) puts its field back to the node's
+ * value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
+  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile;
 }) {
   const { id, found: n, state: s } = props;
   const history = useHistory(id, props.rev, props.action);
@@ -277,7 +317,7 @@ export function NodePopup(props: {
           <dt>Identifiant</dt><dd className="id volatile">{id}</dd>
         </dl>
         <h4>Fichiers</h4>
-        <Files id={id} files={n.files} actions={props.files} onEdit={props.onEdit} />
+        <Files id={id} files={n.files} thumbPx={props.params.thumbPx} actions={props.files} onOpen={props.onOpenFile} onEdit={props.onEdit} />
       </>
     );
   })();

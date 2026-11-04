@@ -4,11 +4,16 @@ import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'reac
 import type { Build } from '../../actions.ts';
 import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
+import type { ViewStates } from '../../files/viewState.ts';
 import { NodePopup } from '../NodePopup.tsx';
-import { clampRect, placeAt, type Rect } from './geometry.ts';
+import { FilePreview } from './FilePreview.tsx';
+import { clampRect, placeAt, placeBeside, type Rect } from './geometry.ts';
 
-/** What a floating panel shows: a node's pop-up, or a preview of one of its files (task 5). */
-export type PanelTarget = { kind: 'node'; node: Id } | { kind: 'file'; node: Id; name: string };
+/**
+ * What a floating panel shows: a node's pop-up, or a preview of one of its files (task 5) — the file by its name, and by
+ * its content (`hash`) once found, so that a renamed file is followed (followTarget).
+ */
+export type PanelTarget = { kind: 'node'; node: Id } | { kind: 'file'; node: Id; name: string; hash?: string };
 
 /** `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. */
 export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number }
@@ -16,14 +21,39 @@ export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: bo
 /**
  * What a panel's target is now, or null when it is gone (Review Focus 5): a node absent or in the trash, a file no longer
  * in its node — deleted, removed, or its addition undone. A file is found by sameName, so a new version dropped in
- * another case keeps its preview.
+ * another case keeps its preview; else by its content, when the target knows it, so a renamed file keeps it too.
  */
 export function resolveTarget(s: State, t: PanelTarget): { node: NodeRec; file?: FileRef } | null {
   const node = s.nodes.get(t.node);
   if (!node || node.trashedAt !== undefined) return null;
   if (t.kind === 'node') return { node };
-  const file = node.files.find((f) => sameName(f.name, t.name));
+  const file = node.files.find((f) => sameName(f.name, t.name)) ?? (t.hash === undefined ? undefined : node.files.find((f) => f.hash === t.hash));
   return file ? { node, file } : null;
+}
+
+/**
+ * What a file's preview or its full screen shows now (resolveTarget), with its target anchored again on the file found
+ * — its name and content as they are now —, the same target when they have not changed; null once it is gone, which
+ * closes the full screen (App) and makes a preview say so (Review Focus 5). Anchored, the target follows a rename (by
+ * its content) and a new version (by its name), and an undo of either.
+ */
+export function followTarget(s: State, t: PanelTarget): { target: PanelTarget; node: NodeRec; file?: FileRef } | null {
+  const r = resolveTarget(s, t);
+  if (!r) return null;
+  if (t.kind === 'node' || !r.file || (r.file.name === t.name && r.file.hash === t.hash)) return { target: t, ...r };
+  return { target: { kind: 'file', node: t.node, name: r.file.name, hash: r.file.hash }, ...r };
+}
+
+/** The file panels anchored again after an action (followTarget); the same list when none moved. */
+export function followPanels(panels: Panel[], s: State): Panel[] {
+  let changed = false;
+  const out = panels.map((p) => {
+    const f = p.target.kind === 'file' ? followTarget(s, p.target) : null;
+    if (!f || f.target === p.target) return p;
+    changed = true;
+    return { ...p, target: f.target };
+  });
+  return changed ? out : panels;
 }
 
 /** The depth above every panel. */
@@ -38,6 +68,20 @@ export function withNode(panels: Panel[], node: Id, rect: Rect, id: number): Pan
   const z = front(panels), own = panels.find((p) => isNode(p, node));
   const kept = panels.filter((p) => p.pinned || p === own);
   return own ? kept.map((p) => (p === own ? { ...p, z } : p)) : [...kept, { id, target: { kind: 'node', node }, rect, pinned: false, z }];
+}
+
+const isFile = (p: Panel, node: Id, name: string) => p.target.kind === 'file' && p.target.node === node && sameName(p.target.name, name);
+
+/**
+ * A file's preview opened (plan 4a, task 5): the other loose previews close — clicking file after file shows one at a
+ * time —, the pop-ups and the pinned ones stay. A file already previewed gets no second one: that one comes in front,
+ * where it is; else a new loose one opens at `rect`, in front.
+ */
+export function withFile(panels: Panel[], node: Id, name: string, hash: string | undefined, rect: Rect, id: number): Panel[] {
+  const z = front(panels), own = panels.find((p) => isFile(p, node, name));
+  const kept = panels.filter((p) => p === own || p.pinned || p.target.kind !== 'file');
+  if (own) return kept.map((p) => (p === own ? { ...p, z } : p));
+  return [...kept, { id, target: { kind: 'file', node, name, ...(hash === undefined ? {} : { hash }) }, rect, pinned: false, z }];
 }
 
 /** A panel clicked comes in front; already there, the same list. */
@@ -86,25 +130,40 @@ export function openingRect(
   return clampRect(placeAt(at, size, bounds, p.panelGapPx), bounds, p.panelMinPx);
 }
 
-/** What App asks of the panels; task 5 adds openFile(node, name, near). */
+/** Where a file's preview opens (placeBeside): beside the panel `near`, at its settings' size, never under panelMinPx. */
+export function previewRect(
+  near: Rect, p: Pick<RenderParams, 'previewWidthPx' | 'previewHeightPx' | 'panelMinPx' | 'panelGapPx'>, bounds: Rect,
+): Rect {
+  const size = { w: Math.max(p.panelMinPx, p.previewWidthPx), h: Math.max(p.panelMinPx, p.previewHeightPx) };
+  return clampRect(placeBeside(near, size, bounds, p.panelGapPx), bounds, p.panelMinPx);
+}
+
+/** What App asks of the panels. */
 export interface PanelsHandle {
   /** A click on a node (GraphView), at this point of the window. */
   openNode(node: Id, client: { x: number; y: number }): void;
+  /** A file's preview, beside the panel `near` (its node's pop-up). */
+  openFile(node: Id, name: string, near: Rect): void;
   /** Any other click in the graph. */
   closeLoose(): void;
 }
+
+const NODE_GONE = 'Ce nœud n’existe plus.', FILE_GONE = 'Ce fichier n’est plus dans le nœud.';
 
 /**
  * The floating panels of the window (plan 4a, D7), over every tab: pinned, they stay from one tab to the next; loose,
  * a click outside every panel or Escape closes them. A click on a panel brings it in front. Edits go through `onEdit`
  * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab; a node's
- * files are imported and opened by `files` (App).
+ * files are imported and opened by `files` (App). A file clicked in a pop-up opens its preview beside it, or its full
+ * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), the panels are under it:
+ * Escape and a press there are its own, and a preview of that file leaves its view to it.
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
   /** The state, changed in place: `rev` counts the actions, `action` is the last one (App's Shown). */
   state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
+  views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -113,6 +172,10 @@ export function Panels(props: {
   const nextId = useRef(1);
   const paramsRef = useRef(props.params);
   paramsRef.current = props.params;
+  const stateRef = useRef(props.state);
+  stateRef.current = props.state;
+  const covered = useRef(false);
+  covered.current = props.fullHash !== null;
   /** Where panels may be: the window under the tabs (the layer covers it). */
   const bounds = (): Rect => {
     const r = layer.current?.getBoundingClientRect();
@@ -130,19 +193,28 @@ export function Panels(props: {
     if (focused && host && closing.includes(Number(host.dataset.panel))) focused.blur();
     setPanels(rule);
   };
+  const openFile = (node: Id, name: string, near: Rect) => {
+    const id = nextId.current++, rect = previewRect(near, paramsRef.current, bounds());
+    const hash = resolveTarget(stateRef.current, { kind: 'file', node, name })?.file?.hash;
+    apply((ps) => withFile(ps, node, name, hash, rect, id));
+  };
   useImperativeHandle(props.ref, () => ({
     openNode: (node, client) => {
       const id = nextId.current++, rect = openingRect(client, paramsRef.current, bounds());
       apply((ps) => withNode(ps, node, rect, id));
     },
+    openFile,
     closeLoose: () => apply(withoutLoose),
   }), []);
+  // After an action, the previews follow their file: renamed, or a new version of it (followTarget).
+  useEffect(() => setPanels((ps) => followPanels(ps, props.state)), [props.rev]);
   useEffect(() => {
-    // Escape that nothing took (a gesture of the graph, a menu, a field of a panel prevent its default) closes the top-most loose panel.
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) apply(withoutTopLoose); };
+    // Escape that nothing took (a gesture of the graph, a menu, a field of a panel prevent its default) closes the top-most
+    // loose panel; not under a full screen, whose Escape it is.
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !covered.current) apply(withoutTopLoose); };
     // A press outside the panels closes the loose ones, outside the graph: there, a press may begin a drag, and the graph
-    // reports its clicks itself (openNode, closeLoose).
-    const away = (e: PointerEvent) => { if (!(e.target as Element | null)?.closest?.('.panel, .graph')) apply(withoutLoose); };
+    // reports its clicks itself (openNode, closeLoose). A press in a full screen is its own.
+    const away = (e: PointerEvent) => { if (!covered.current && !(e.target as Element | null)?.closest?.('.panel, .graph')) apply(withoutLoose); };
     // A smaller window: each panel kept usable in it.
     const resize = () => {
       const b = bounds(), min = paramsRef.current.panelMinPx;
@@ -172,12 +244,23 @@ export function Panels(props: {
           onPin: () => change(p.id, (x) => ({ ...x, pinned: !x.pinned })),
           onClose: () => apply((ps) => ps.filter((x) => x.id !== p.id)),
         };
-        if (p.target.kind !== 'node') return null;
+        const node = p.target.node;
+        if (p.target.kind === 'file') {
+          const file = followTarget(props.state, p.target)?.file ?? null;
+          return (
+            <FilePreview
+              key={p.id} frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
+              covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
+              onFull={() => { if (file) props.onFullScreen(node, file.name); }}
+            />
+          );
+        }
         return (
           <NodePopup
-            key={p.id} frame={frame} id={p.target.node} found={resolveTarget(props.state, p.target)?.node ?? null}
+            key={p.id} frame={frame} id={node} found={resolveTarget(props.state, p.target)?.node ?? null}
             state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
             files={props.files}
+            onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
           />
         );
       })}

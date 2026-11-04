@@ -26,8 +26,11 @@ const PinIcon = () => (
  * pinned or closed by the header's buttons; a press anywhere on it brings it in front. While a gesture goes on, only
  * the frame follows the pointer (its content is not drawn again); the panel's place is written once released. With
  * `onDropFiles`, files dragged over it are taken anywhere on it (a node's pop-up: plan 4a, task 4), the panel lit meanwhile.
+ * `tools`: the panel's own buttons, before « épingler » (a file's preview: its full screen, task 5).
  */
-export function FloatingPanel(props: { frame: Frame; title: ReactNode; className?: string; onDropFiles?(dt: DataTransfer): void; children: ReactNode }) {
+export function FloatingPanel(props: {
+  frame: Frame; title: ReactNode; tools?: ReactNode; className?: string; onDropFiles?(dt: DataTransfer): void; children: ReactNode;
+}) {
   const f = props.frame;
   const [live, setLive] = useState<Rect | null>(null);
   // Files dragged over it: enter and leave come for each element crossed inside, counted.
@@ -83,6 +86,7 @@ export function FloatingPanel(props: { frame: Frame; title: ReactNode; className
         {props.title}
         {/* Room to take the panel by, however long the title (it shrinks first). */}
         <span className="drag" aria-hidden="true" />
+        {props.tools}
         <button className={`pin${f.pinned ? ' on' : ''}`} title={f.pinned ? 'Détacher' : 'Épingler'} aria-pressed={f.pinned} onClick={() => f.onPin()}>
           <PinIcon />
         </button>

@@ -122,10 +122,36 @@ export interface RenderParams {
   // Files (plan 4a)
   /** A larger file is refused at import (the main process reads it through withOverrides, as snapshotQuitMs). */
   maxImportMb: number;
+  // Views of the files (plan 4a, task 5): what a view reads at most (HTTP ranges), and how it is drawn
+  /** The head of a text or code file shown; past it, a banner says so. */
+  textViewMaxMb: number;
+  /** The head of a CSV or TSV table read, */
+  tableViewMaxMb: number;
+  /** and at most this many of its rows. */
+  tableMaxRows: number;
+  /** A table's rows (virtualised: only those in view, and its margin, are drawn), */
+  tableRowPx: number;
+  /** its columns, as wide as their longest value up to this, */
+  tableColumnMaxPx: number;
+  /** and the margin drawn around the view, so that a scroll does not show blank rows first. */
+  tableMarginPx: number;
+  /** An image's zoom by the wheel, as wheelZoomSpeed, */
+  imageZoomSpeed: number;
+  /** up to this many times its size; never under the fit, */
+  imageMaxZoom: number;
+  /** which enlarges an image smaller than the view at most this many times (1: shown at its own size). */
+  imageFitMaxZoom: number;
+  /** An image's thumbnail in its node's pop-up. */
+  thumbPx: number;
+  /** The files whose view is kept (« au même endroit »), the one left longest ago forgotten first. */
+  viewStatesKept: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
   popupHeightPx: number;
+  /** a file's preview as it opens, beside it, */
+  previewWidthPx: number;
+  previewHeightPx: number;
   /** the smallest side a panel is resized to, */
   panelMinPx: number;
   /** and how far from the click it opens. */
@@ -250,8 +276,21 @@ export const DEFAULT_PARAMS: RenderParams = {
   snapshotIdleMs: 2000,
   snapshotQuitMs: 2000,
   maxImportMb: 200,
+  textViewMaxMb: 32,
+  tableViewMaxMb: 16,
+  tableMaxRows: 100_000,
+  tableRowPx: 24,
+  tableColumnMaxPx: 320,
+  tableMarginPx: 240,
+  imageZoomSpeed: 0.0015,
+  imageMaxZoom: 32,
+  imageFitMaxZoom: 1,
+  thumbPx: 64,
+  viewStatesKept: 200,
   popupWidthPx: 380,
   popupHeightPx: 460,
+  previewWidthPx: 560,
+  previewHeightPx: 460,
   panelMinPx: 200,
   panelGapPx: 12,
   tagSuggestions: 8,
@@ -398,8 +437,21 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('snapshotIdleMs', 'Repos avant de refaire l’instantané de la base (ms)', A, 'Base', 200, 60000, 100),
   num('snapshotQuitMs', 'Attente de l’instantané à la fermeture (ms)', A, 'Base', 0, 30000, 100),
   num('maxImportMb', 'Taille maximale d’un fichier importé (Mo)', A, 'Fichiers', 1, 4096, 1),
+  num('textViewMaxMb', 'Taille lue d’un fichier texte ou de code (Mo)', A, 'Fichiers', 1, 512, 1),
+  num('tableViewMaxMb', 'Taille lue d’un tableau CSV ou TSV (Mo)', A, 'Fichiers', 1, 512, 1),
+  num('tableMaxRows', 'Lignes lues d’un tableau', A, 'Fichiers', 1000, 2_000_000, 1000),
+  num('tableRowPx', 'Hauteur d’une ligne de tableau (px)', A, 'Fichiers', 16, 48, 1),
+  num('tableColumnMaxPx', 'Largeur maximale d’une colonne de tableau (px)', A, 'Fichiers', 60, 2000, 10),
+  num('tableMarginPx', 'Marge préparée autour de la vue d’un tableau (px)', A, 'Fichiers', 0, 2000, 10),
+  num('imageZoomSpeed', 'Vitesse du zoom d’une image à la molette', A, 'Fichiers', 0.0002, 0.01, 0.0001),
+  num('imageMaxZoom', 'Zoom maximal d’une image (× sa taille réelle)', A, 'Fichiers', 1, 256, 1),
+  num('imageFitMaxZoom', 'Agrandissement maximal d’une image ajustée à la vue (× sa taille réelle)', A, 'Fichiers', 1, 32, 0.5),
+  num('thumbPx', 'Taille des vignettes d’images (px)', A, 'Fichiers', 24, 256, 1),
+  num('viewStatesKept', 'Fichiers dont la vue est gardée (au même endroit)', A, 'Fichiers', 10, 5000, 10),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
+  num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
+  num('previewHeightPx', 'Hauteur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('panelMinPx', 'Côté minimal d’un panneau flottant (px)', A, 'Pop-ups', 120, 600, 1),
   num('panelGapPx', 'Écart entre le clic et le pop-up qu’il ouvre (px)', A, 'Pop-ups', 0, 60, 1),
   num('tagSuggestions', 'Suggestions montrées pendant la saisie d’un tag', A, 'Pop-ups', 1, 50, 1),
