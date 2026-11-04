@@ -87,7 +87,8 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
       word('théorie de l’information'), word('algorithmie'), word('axiome'), kv('provenance', 'externe'),
     ],
   });
-  attach(mdl, 'Enoncé_détaillé.tex', 'calcul_mdl_séquence_aléatoire.py');
+  // The CSV is in Windows-1252 bytes, with semicolons and decimal commas, as the French Excel writes it (plan 4a).
+  attach(mdl, 'Enoncé_détaillé.tex', 'calcul_mdl_séquence_aléatoire.py', 'mesures_compression.csv', 'notes_lecture.md');
   const solomonoff = node(lobby, 'Induction de Solomonoff', -175, 140, { tags: [kv('statut_epistémique', 5), kv('pertinence', 'important')] });
   const priore = node(lobby, 'Priore universelle', -175, 260, { tags: [kv('nature', 'définition')] });
   const kolmogorov = node(lobby, 'Complexité de Kolmogorov', -175, -140, { tags: [kv('nature', 'définition')] });
@@ -148,6 +149,7 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
 
   // "Thèse": another group for MDL, a node found only here, a stub.
   const theseOnly = node(these, 'Chapitre 2 : compression et généralisation', 0, 0, { k: 1 });
+  attach(theseOnly, 'présentation.pptx'); // a format the app does not show: opened by the system's application
   for (const [n, x, y] of [[mdl, -150, 0], [compression, 150, 0], [kolmogorov, -150, -200], [generalisation, 400, 300]] as const) {
     run(placeNode(s, these, n, x, y, 0));
   }

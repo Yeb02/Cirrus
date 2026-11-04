@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ancestors, canonical, checkState, groupOf, placementKey, type State } from '@cirrus/core';
@@ -44,7 +44,7 @@ test('chaque fonctionnalité est présente', () => {
   const mdl = s.nodes.get(ids.nodes.mdl)!;
   expect(mdl.title).toBe('Minimum Description Length Principle (MDL)');
   expect(mdl.tags).toContainEqual({ key: 'statut_epistémique', value: 'consensus_scientifique' });
-  expect(mdl.files.map((f) => f.name)).toEqual(['Enoncé_détaillé.tex', 'calcul_mdl_séquence_aléatoire.py']);
+  expect(mdl.files.map((f) => f.name)).toEqual(['Enoncé_détaillé.tex', 'calcul_mdl_séquence_aléatoire.py', 'mesures_compression.csv', 'notes_lecture.md']);
   for (const f of mdl.files) expect(existsSync(filePath(dir, f))).toBe(true);
   for (const k of ['solomonoff', 'universalite', 'monde'] as const) expect(s.nodes.has(ids.nodes[k])).toBe(true);
   expect(s.nodes.size).toBeGreaterThanOrEqual(24);
@@ -87,10 +87,34 @@ test('chaque fonctionnalité est présente', () => {
   expect(pub.tags.some((t) => t.key === 'date_de_publication')).toBe(true);
   expect(pub.files.some((f) => f.name.endsWith('.pdf'))).toBe(true);
   expect([...s.nodes.values()].some((n) => n.files.some((f) => f.name.endsWith('.png')))).toBe(true);
+  // A format the app does not show (plan 4a): opened by the system's application.
+  expect(s.nodes.get(ids.nodes.theseOnly)!.files.map((f) => f.name)).toEqual(['présentation.pptx']);
 
   // Trash and history.
   expect(store.trash().map((n) => n.id)).toEqual([ids.nodes.trashed]);
   expect(store.changesSince(0).some((r) => r.label.startsWith('Annuler : '))).toBe(true);
+  store.close();
+});
+
+test('le CSV est en octets Windows-1252, à points-virgules et virgules décimales, comme l’écrit l’Excel français ; les notes en UTF-8', () => {
+  const store = LocalStore.open(dir, { pc: 'fixture' });
+  const ids = buildFixture(store, dir);
+  const files = store.loadState().nodes.get(ids.nodes.mdl)!.files;
+  const blob = (name: string) => readFileSync(filePath(dir, files.find((f) => f.name === name)!));
+  const csv = blob('mesures_compression.csv');
+  // « Éléments;Durée », one byte per accented letter.
+  expect([...csv.subarray(0, 14)]).toEqual([0xc9, 0x6c, 0xe9, 0x6d, 0x65, 0x6e, 0x74, 0x73, 0x3b, 0x44, 0x75, 0x72, 0xe9, 0x65]);
+  // €, ’ and œ: bytes Windows-1252 has and Latin-1 has not.
+  for (const b of [0x80, 0x92, 0x9c]) expect(csv.includes(b), b.toString(16)).toBe(true);
+  expect(csv.includes(0xc3)).toBe(false); // no UTF-8 « é » (C3 A9) nor « É » (C3 89)
+  expect(() => new TextDecoder('utf-8', { fatal: true }).decode(csv)).toThrow();
+  const lines = new TextDecoder('windows-1252').decode(csv).split('\r\n');
+  expect(lines.at(-1)).toBe('');
+  expect(lines[0]).toBe('Éléments;Durée (s);Taux de compression;Méthode;Coût (€);Remarque');
+  expect(lines[1]).toMatch(/^\d+;\d+,\d+;\d+,\d+;/);
+  const md = blob('notes_lecture.md');
+  expect([...md.subarray(0, 3)]).not.toEqual([0xef, 0xbb, 0xbf]);
+  expect(new TextDecoder('utf-8', { fatal: true }).decode(md)).toMatch(/^# Notes de lecture/);
   store.close();
 });
 

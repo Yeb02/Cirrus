@@ -1,12 +1,13 @@
 import {
-  type Action, addMember, combine, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, groupOf, type Id, include, joinArm, moveNodes, movePhantom, phantomsOf, placeAbsent, placeNode, removeFromPlan, removeMember, type Role, setBranches,
-  setLayout, setRole, splitArm, type State, type Vec2,
+  type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
+  exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placeNode, removeFromPlan,
+  removeMember, type Role, setBranches, setLayout, setRole, splitArm, type State, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
   scaleMoves, type SceneIndex,
 } from '@cirrus/view';
+import { checkFileName, type Merge, mergeFiles } from './files/merge.ts';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -279,6 +280,55 @@ export function absentBuild(scene: PlanScene, connection: Id, node: Id, at: Vec2
 export function renameBuild(id: Id, title: string): Build {
   const name = title.trim();
   return name ? (st) => editNode(st, id, { title: name }) : null;
+}
+
+/** The node, or the core's refusal when it is gone. */
+const nodeRec = (s: State, node: Id): NodeRec => {
+  const n = s.nodes.get(node);
+  if (!n) throw new CommandError('Nœud introuvable.');
+  return n;
+};
+/** Where the file `name` is among `files`, by its exact name; gone since the gesture began, refused. */
+const fileAt = (files: FileRef[], name: string): number => {
+  const i = files.findIndex((f) => f.name === name);
+  if (i < 0) throw new CommandError(`« ${name} » n’est plus dans ce nœud.`);
+  return i;
+};
+const changes = (m: Merge) => m.added.length + m.replaced.length > 0;
+
+/**
+ * Files dropped on a node, already copied into the store (spec 5.2; plan 4a, D6), merged by mergeFiles as one action:
+ * one undo step (spec 6.4). Null when every file is there already, unchanged (Review Focus 1), as `s` has them; the merge
+ * is made again on the state the action is computed on, where the same drop applied in between is refused « Déjà à jour. ».
+ */
+export function filesBuild(s: State, node: Id, incoming: FileRef[]): Build {
+  const n = s.nodes.get(node);
+  if (n && !changes(mergeFiles(n.files, incoming))) return null;
+  return (st) => {
+    const now = nodeRec(st, node), m = mergeFiles(now.files, incoming);
+    if (!changes(m)) throw new CommandError('Déjà à jour.');
+    const label = m.added.length === 0 && m.replaced.length === 1 ? `Remplacer « ${m.replaced[0]} »` : `Ajouter des fichiers à « ${now.title} »`;
+    return combine(st, label, [(x) => editNode(x, node, { files: m.files })]);
+  };
+}
+
+/** A node's file renamed in its place, its content kept; a name checkFileName refuses is refused when the action is computed. */
+export function renameFileBuild(node: Id, name: string, newName: string): Build {
+  if (newName === name) return null;
+  return (st) => {
+    const files = nodeRec(st, node).files, i = fileAt(files, name);
+    const why = checkFileName(newName, files, name);
+    if (why) throw new CommandError(why);
+    return combine(st, `Renommer « ${name} »`, [(x) => editNode(x, node, { files: files.map((f, j) => (j === i ? { ...f, name: newName } : f)) })]);
+  };
+}
+
+/** A file taken out of a node; its copy stays in the store, where the history refers to it (spec 5.2). */
+export function removeFileBuild(node: Id, name: string): Build {
+  return (st) => {
+    const n = nodeRec(st, node), i = fileAt(n.files, name);
+    return combine(st, `Retirer « ${name} » de « ${n.title} »`, [(x) => editNode(x, node, { files: n.files.filter((_, j) => j !== i) })]);
+  };
 }
 
 /** A connection's layout in this plan (spec 8.5): set by its handles, or null for the automatic one. */

@@ -1,0 +1,6 @@
+Éléments;Durée (s);Taux de compression;Méthode;Coût (€);Remarque
+1000;0,012;2,31;Huffman;0,10;référence
+10000;0,118;2,47;Huffman;0,95;
+100000;1,204;2,52;LZ77;9,80;"fenêtre de 32 Ko; dictionnaire figé"
+1000000;12,870;2,58;LZ77;98,00;très lent
+10000000;131,400;2,61;arithmétique;1012,50;l’œuvre d’une nuit

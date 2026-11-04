@@ -158,3 +158,103 @@ Plan : `docs/superpowers/plans/2026-11-04-cirrus-fichiers-popups.md`. Départ : 
   - Toute autre erreur, y compris une référence malformée : « … : une erreur inattendue s’est produite. »
   - Aucun texte anglais n'atteint l'utilisateur : le gestionnaire IPC écrit la cause à la console.
   - Coût si faux : la formulation.
+
+## Tâche 2 : logique des fichiers dans l'interface, base de test
+
+### Mesures
+
+- **Coût de `parseDelimited`** : 100 000 lignes de 8 colonnes, dont un champ entre guillemets avec point-virgule par ligne (5,3 millions de caractères), séparateur détecté. Meilleur de sept passes après deux d'échauffement, Node 26.13 de vitest : 45,5, 48,7 et 48,5 ms en trois lancements. **Plafond du test : 150 ms**, environ trois fois la mesure.
+  - Variantes essayées sur le même texte, hors dépôt :
+    - la prochaine occurrence du séparateur, de LF et de CR cherchée par `indexOf` et gardée : 59 ms ;
+    - un simple `split('\r\n')` puis `split(';')`, sans guillemets : 55 ms ;
+    - le seul balayage des caractères, sans rien allouer : 14 ms.
+  - L'allocation des 800 000 chaînes et 100 000 tableaux domine. Le balayage caractère par caractère (`charCodeAt`) est gardé.
+- Suite complète : 507 tests sur 507 (481 + 25 dans `fileLogic.test.ts` + 1 dans `build.test.ts`). `tsc` : `app` et `fixtures` sans erreur. Captures : 11 sur 11 à 0,000 % de `reference-3c` ; les fichiers ne se voient pas dans le graphe.
+
+### Décisions
+
+- Ruling: **`filesBuild` reçoit l'état** : `filesBuild(s: State, node: Id, incoming: FileRef[]): Build`, au lieu de `filesBuild(node, incoming)`.
+  - Pourquoi : « null si tout est `unchanged` » demande les fichiers actuels du nœud, que la signature du plan ne donne pas. C'est l'usage de `pasteBuild(s, …)`, `lastPlanNodes(s, …)` et `dropMemberships(s, …)`.
+  - La fusion est refaite sur l'état où l'action se calcule, car la session met les actions en file. Le même dépôt appliqué entre-temps, deux dépôts rapides du même fichier par exemple, y est refusé par `CommandError('Déjà à jour.')` : la session rend `{ ok: false, message: 'Déjà à jour.' }` et n'écrit rien.
+  - Un nœud absent à la création ne donne pas null : l'action est refusée à son calcul, « Nœud introuvable. », comme `editNode` le fait.
+  - Options :
+    - l'état en premier (choix) ;
+    - les fichiers actuels en troisième argument ;
+    - la signature du plan, sans null, ce qui écrirait une action vide.
+  - Coût si faux : la tâche 4 appelle `filesBuild(session.state, node, refs)`.
+- Ruling: **libellé « Remplacer « nom » »** quand le seul changement du dépôt est un remplacement : rien d'ajouté, un seul remplacé, quel que soit le nombre de fichiers `unchanged` du même dépôt. Sinon « Ajouter des fichiers à « titre » », au pluriel, même pour un seul fichier ajouté (libellé du plan). Le nom est celui du fichier après le dépôt, dans la nouvelle orthographe.
+  - Options : seulement pour un dépôt d'un seul fichier ; dès que le seul changement est un remplacement (choix).
+  - Coût si faux : un libellé de l'historique.
+- Ruling: **numéro d'un doublon du dépôt** : le second « a.txt » prend le premier « (n) », à partir de 2, qu'aucun fichier du dépôt ne porte, ni par son nom d'origine ni par un numéro déjà donné. Il fusionne ensuite comme les autres.
+  - Exemple : [a.txt, A.txt, a (2).txt] donne « a.txt », « A (3).txt » (dans sa propre orthographe) et « a (2).txt ».
+  - Le numéro va avant la dernière extension (« archive.tar (2).gz »). Un nom dont le seul point est en tête n'a pas d'extension (« .env (2) »).
+  - Options :
+    - sauter aussi les noms du nœud : rien n'est jamais remplacé, mais le même dépôt refait ajoute « (3) », « (4) »… ;
+    - ne sauter que ceux du dépôt (choix) : le même dépôt refait ne change rien (testé).
+  - Coût si faux : un « a (2).txt » sans rapport, déjà dans le nœud, serait remplacé par le second « a.txt » d'un dépôt. La notification dit « remplacé », Ctrl+Z le rend, et l'ancienne copie reste au magasin.
+- Ruling: **`renameFileBuild` et `removeFileBuild` vérifient à l'exécution**.
+  - Un fichier qui n'est plus là (exactement ce nom) est refusé : « « nom » n’est plus dans ce nœud. ».
+  - Le renommage repasse par `checkFileName` sur l'état du moment ; un refus devient une `CommandError` avec le même message.
+  - Renommer en exactement le même nom donne null. Changer la seule casse est permis.
+  - Coût si faux : nul.
+- Ruling: **`checkFileName`** refuse exactement ce que refuse `plainName` du principal (tâche 1), puis un nom déjà pris. Un nom permis ici se copie donc toujours pour l'application du système.
+  - Messages, avec l'apostrophe typographique (tâche 1) :
+    - « Le nom ne peut pas être vide. » ;
+    - « Le caractère « : » n’est pas permis dans un nom de fichier. » : le caractère fautif est nommé ;
+    - « Le nom ne peut pas contenir de caractère de contrôle. » ;
+    - « Le nom ne peut pas finir par un point ou un espace. » ;
+    - « « CON » est un nom réservé par Windows. » : le nom donné, extension comprise ;
+    - « Ce nœud a déjà un fichier « Rapport.pdf ». » : le fichier qui gêne, dans son orthographe.
+  - `except` désigne le fichier renommé par son nom exact, et non par `sameName`. Ainsi, dans un nœud qui aurait deux noms égaux au sens de `sameName` (données anciennes ou synchronisées), on ne peut pas renommer l'un en l'autre.
+  - Coût si faux : la formulation.
+- Ruling: **`formatSize`** :
+  - une espace simple entre le nombre et l'unité, comme dans les exemples du plan ; l'interface y mettra `white-space: nowrap` ;
+  - un arrondi qui atteint 1024 passe à l'unité suivante (1 048 575 o donne « 1,0 Mo ») ;
+  - « To » est la dernière unité.
+  - Coût si faux : nul.
+- Ruling: **lecture de l'extension** dans l'interface : la même que celle du principal (après le dernier point, sans les points ni les espaces finaux), pour que le genre d'un fichier et le type sous lequel il est servi s'accordent. Les noms sans extension du plan se comparent sans la casse (`makefile` est du texte). Coût si faux : nul.
+- Ruling: **`fileUrl` répète `cirrus-file`** au lieu d'importer `FILE_SCHEME`, car `main/files.ts` importe `node:fs` et n'entre pas dans l'interface. Le format est tenu par un test : `blobRequest` relit `fileUrl` d'un fichier de la base de test jusqu'à son chemin dans le magasin. Coût si faux : nul.
+- Ruling: **`decodeText(bytes, truncated = false)`** : un second paramètre facultatif.
+  - Pourquoi : `readHead` (tâche 5) coupe un fichier à son plafond, souvent au milieu d'un caractère UTF-8. L'UTF-8 strict échouerait alors, et tout le fichier s'afficherait en Windows-1252, illisible, contre le Review Focus 4.
+  - Avec `truncated`, le décodage se fait en flux (`stream: true`) : le caractère coupé à la fin est laissé de côté, en UTF-8 comme en UTF-16.
+  - Options :
+    - rien, ce qui casse les lectures tronquées ;
+    - le paramètre (choix) ;
+    - toujours tolérer une fin coupée, ce qui ferait perdre son dernier caractère à un fichier Windows-1252 entier dont le seul octet accentué est le dernier (« Café »), lu comme UTF-8.
+  - Coût si faux : la tâche 5 passe le `truncated` de `readHead`.
+- Ruling: **BOM et binaires**.
+  - Un BOM UTF-8 suivi d'un octet nul dans les 8 premiers Ko donne un binaire : seul un BOM UTF-16 exempte de ce test, dans l'ordre du plan.
+  - Après un BOM, le décodage n'est pas strict : le BOM décide, et une séquence invalide y devient U+FFFD.
+  - Coût si faux : nul.
+- Ruling: **détection du séparateur**.
+  - Chaque candidat (tabulation, point-virgule, virgule) est appliqué aux 20 premiers enregistrements avec ses propres règles de guillemets : un séparateur entre guillemets ne compte pas.
+  - Son score est la part des enregistrements non vides qui ont son nombre le plus fréquent, si ce nombre n'est pas nul.
+  - À égalité, l'ordre tabulation, point-virgule, virgule départage : une tabulation ou un point-virgule apparaît rarement dans une valeur, une virgule souvent (décimales françaises). Sans aucun candidat, la virgule.
+  - `delimiterFor(name)` rend la tabulation pour un `.tsv`, et sinon `undefined` (séparateur détecté). La tâche 5 le passe à `parseDelimited`.
+  - Coût si faux : un fichier sans en-tête qui aurait, sur chaque ligne, autant de points-virgules dans des valeurs que de virgules séparatrices serait lu au point-virgule.
+- Ruling: **tolérance de `parseDelimited`**, pour qu'un fichier mal formé s'affiche au lieu d'échouer :
+  - un guillemet jamais refermé prend tout le reste du texte ;
+  - ce qui suit un guillemet fermant, jusqu'au séparateur, s'ajoute au champ ;
+  - un guillemet au milieu d'un champ sans guillemets est un caractère ordinaire ;
+  - un CR seul termine aussi un enregistrement (ancien Excel pour Mac) ;
+  - une ligne vide est une ligne d'un champ vide, et le dernier saut de ligne n'en crée pas ;
+  - `maxRows` compte la ligne d'en-tête ;
+  - les sauts de ligne d'un champ restent tels quels.
+
+  Coût si faux : nul.
+- Ruling: **`ViewStates`**.
+  - L'ancienneté est celle du dernier `set` : `get` ne rajeunit pas une entrée.
+  - Le stockage reçoit un tableau JSON de paires `[empreinte, vue]`, la plus ancienne d'abord, réécrit en entier à chaque `set`. Les vues s'enregistrent donc quand on quitte une vue, pas à chaque défilement.
+  - À la lecture, une entrée mal formée (pas un objet de nombres) est écartée, et un `max` plus petit qu'avant retire les plus anciennes.
+  - Il faut une seule instance pour l'app : chacune lit le stockage une fois, à sa construction.
+  - Coût si faux : au réglage maximal (5 000 entrées), environ 0,5 Mo de JSON écrit par `set`.
+- Ruling: **base de test**.
+  - `présentation.pptx` va au nœud « Chapitre 2 : compression et généralisation » (`theseOnly`, plan « Thèse »), qui reçoit ainsi une action de plus dans le journal de la base de test. Ses 22 octets forment une archive ZIP vide (le seul enregistrement de fin de répertoire central).
+  - Le nœud MDL a quatre fichiers, et non six, sur décision du contrôleur : le plan comptait mal. Ce sont ses deux fichiers d'avant, plus le CSV et le `.md`.
+  - `mesures_compression.csv` :
+    - six colonnes et six lignes, CRLF, en octets Windows-1252 ;
+    - en-tête « Éléments;Durée (s);Taux de compression;Méthode;Coût (€);Remarque » ;
+    - virgules décimales, un champ entre guillemets qui contient un point-virgule, et `€`, `’` et `œ` (0x80, 0x92, 0x9C), des octets que Latin-1 n'a pas.
+    - Il a été écrit par un script hors dépôt, dont le source n'est qu'ASCII : chaque octet est un échappement `\xNN`, passé par `Buffer.from(…, 'latin1')`. Le test des fixtures vérifie ses octets.
+  - `notes_lecture.md` est en UTF-8 sans BOM, avec des fins de ligne LF.
+  - Coût si faux : nul.
