@@ -7,6 +7,7 @@ import { withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun } from './bench.ts';
+import { lockBase } from './lock.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
@@ -45,6 +46,23 @@ if (bench) {
 }
 // Bench and captures keep their own profile: the tabs they open (localStorage) never replace the user's.
 if (bench || capture) app.setPath('userData', join(app.getPath('temp'), 'cirrus-mesure'));
+/**
+ * One instance per base (I3 of the final review): every base has its lock (lockBase, taken below). On the user's own
+ * base (no CIRRUS_DATA, neither bench nor capture), Electron's lock too, which is per profile: a second launch shows the
+ * first one's window and quits.
+ */
+const ownBase = !bench && !capture && !benchBuild && !process.env.CIRRUS_DATA;
+const first = !ownBase || app.requestSingleInstanceLock();
+if (!first) app.quit();
+app.on('second-instance', () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+/** The base's lock, held (referenced) until the store is closed. */
+let lock: { release(): void } | null = null;
 
 function createWindow(): void {
   const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
@@ -147,12 +165,19 @@ ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'proce
 });
 
 void app.whenReady().then(() => {
+  if (!first) return;
   if (benchBuild) {
     // The bench's base (scripts/bench.mjs): built once per generator version and scale, then copied for each pass.
     const [nodes, connections] = (bench ?? '50000,500000').split(',').map(Number);
     const t0 = performance.now();
-    const built = ensureBenchBase(benchBuild, { seed: 1, nodes, connections });
-    console.log(built ? `Base du banc écrite en ${((performance.now() - t0) / 1000).toFixed(1)} s : ${benchBuild}` : `Base du banc à jour : ${benchBuild}`);
+    try {
+      const built = ensureBenchBase(benchBuild, { seed: 1, nodes, connections });
+      console.log(built ? `Base du banc écrite en ${((performance.now() - t0) / 1000).toFixed(1)} s : ${benchBuild}` : `Base du banc à jour : ${benchBuild}`);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      app.exit(2);
+      return;
+    }
     app.exit(0);
     return;
   }
@@ -163,11 +188,18 @@ void app.whenReady().then(() => {
     app.exit(2);
     return;
   }
+  lock = lockBase(dir);
+  if (!lock) {
+    console.error(`Base déjà ouverte par une autre instance de Cirrus (une capture, le banc ou une autre fenêtre) : ${dir}. Cette instance s’arrête.`);
+    app.exit(2);
+    return;
+  }
   store = openBase(dir);
   markNow('baseOpened');
   createWindow();
 });
 app.on('window-all-closed', () => {
   store?.close();
+  lock?.release();
   app.quit();
 });

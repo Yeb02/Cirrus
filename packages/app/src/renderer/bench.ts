@@ -154,8 +154,9 @@ async function editPass(v: BenchView, deep: Camera): Promise<EditMeasures | null
   const renameMs = await timed('Renommage', () => v.edit(renameBuild(node, `${it.title} (renommé)`)));
   const created: { id: Id | null } = { id: null };
   const createMs = await timed('Création', async () => {
-    const c = v.renderer.camera;
-    const r = await v.edit(createBuild(v.scene(), 'Nœud du banc', { x: c.x, y: c.y }, c.zoom, p));
+    // As GraphView puts a node down: the group under it found by the engine's index (I2 of the final review).
+    const c = v.renderer.camera, sc = v.scene(), held = v.renderer.held;
+    const r = await v.edit(createBuild(sc, 'Nœud du banc', { x: c.x, y: c.y }, c.zoom, p, held?.scene === sc ? held.index : undefined));
     if (r?.ok) created.id = (r.action.ops.find((o) => o.t === 'node' && o.before === null) as { after: { id: Id } }).after.id;
     return r;
   });

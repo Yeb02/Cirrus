@@ -4,7 +4,7 @@ import {
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
+  type LayoutHandle, layoutHandles, dropScenes, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
   PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines, layoutSplit, previewSplit,
   type PreviewSplit, type VisibleSet,
 } from '@cirrus/view';
@@ -173,6 +173,14 @@ export function GraphView(props: {
     if (d.split?.visible !== visible) d.split = previewSplit(d.base, visible, d.items);
     d.preview = withOffsets(d.base, new Map(d.items.map((i) => [i, { x: dx, y: dy }])), paramsRef.current, d.preview);
     r.preview(d.preview, d.split);
+  };
+  /**
+   * The visibility index of this scene when it is the state's scene the engine holds, by which what lies under a point
+   * is found without reading the whole plan (a drop's target, a node put down: plan 3c task 9, I2 of the final review).
+   */
+  const indexOf = (scene: PlanScene): SceneIndex | undefined => {
+    const held = engine.current?.renderer.held;
+    return held?.scene === scene ? held.index : undefined;
   };
   /**
    * Runs an edit; a refusal is reported (toast) and `onRefused` restores what the preview had changed. `extend`: the
@@ -492,13 +500,17 @@ export function GraphView(props: {
    */
   const dropAsking = (base: PlanScene, items: number[], dx: number, dy: number, at: Vec2, alt: boolean, restore: () => void) => {
     const p = paramsRef.current, zoom = engine.current?.renderer.camera.zoom ?? 1, s = stateRef.current;
-    const build = dropBuild(base, items, dx, dy, at, alt, zoom, p);
+    // Where the drop enters, found once for the action and the question (I2 of the final review).
+    const target = dropTarget(base, at, items, zoom, p, indexOf(base));
+    const build = dropBuild(base, items, dx, dy, target, alt, p);
     if (!build) { restore(); return; }
     const plan = base.plan.id;
-    // The other plans' scenes are measured as the cached ones, with their measure's titles already laid out.
-    const cache = scenes.current;
-    const measure = cache.measure && cache.key === sceneParamsKey(p) ? cache.measure : measureLines(engine.current!.font, p);
-    const reps = dropMemberships(s, base, items, at, alt, zoom, p).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, measure, p) }));
+    // The other plans' scenes, for the whole drop: the cached ones when they are at the state's revision, else built
+    // once, measured as the cached ones, with their measure's titles already laid out (I1 of the final review).
+    const cache = scenes.current, key = sceneParamsKey(p), current = cache.key === key && cache.rev === sessionRef.current?.rev;
+    const measure = cache.measure && cache.key === key ? cache.measure : measureLines(engine.current!.font, p);
+    const sceneOf = dropScenes(s, measure, p, (q) => (current ? cache.byPlan.get(q)?.scene : undefined));
+    const reps = dropMemberships(s, base, items, target, alt).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
     const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
     if (changed.length === 0) { void edit(build, restore); return; }
     const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
@@ -680,8 +692,8 @@ export function GraphView(props: {
             previewDrag(e.renderer, d, d.dx, d.dy);
             // The group that would receive the drop lights up (spec 10), only if the drop would enter it; found by the
             // state's index when it is the drag's scene's (what is under the point only, not the plan: plan 3c task 9).
-            const at = screenToWorld(e.renderer.camera, d.sx, d.sy), held = e.renderer.held;
-            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current, held?.scene === d.base ? held.index : undefined);
+            const at = screenToWorld(e.renderer.camera, d.sx, d.sy);
+            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current, indexOf(d.base));
             e.renderer.setDropTarget(t !== null && dropEffects(d.base, d.items, t, d.alt).some((f) => f.enter === t) ? t : null);
             dirty.current = true;
           }
@@ -991,13 +1003,13 @@ export function GraphView(props: {
         }
         placing.current = null;
         setGhost(null);
-        if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label));
+        if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label, indexOf(sc)));
         else if (what.kind === 'repercussion') {
           // Put down here, it takes its new group in this plan; the whole stays one undo step.
           void edit(placeInPlanBuild(sc, what.node, intent.at, what.to), undefined, what.extend).then(() => nextRepercussion());
         }
         else if (what.kind === 'paste' && clip.current) {
-          const r = pasteBuild(stateRef.current, clip.current, sc, intent.at, zoom, p);
+          const r = pasteBuild(stateRef.current, clip.current, sc, intent.at, zoom, p, indexOf(sc));
           edit(r.build);
           // Nodes already here keep their place and group; selected, they are ready to be moved (spec 7).
           if (r.present.length > 0) {
@@ -1007,9 +1019,10 @@ export function GraphView(props: {
           }
         }
         else if (what.kind === 'newNode') {
-          // The node is placed, then named in place (spec 12); the creation is written with its title, as one step.
+          // The node is placed, then named in place (spec 12); the creation is written with its title, as one step. The
+          // index is asked for once named: an action in between would have moved it on to another scene.
           const width = Math.max(140, (p.boxWidth - 2 * p.boxPadX) * p.textScale * zoom * p.factor ** Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor)));
-          setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p)); } });
+          setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p, indexOf(sc))); } });
         } else if (what.kind === 'exclude') {
           // Out of its group, put down where clicked; entering the group under the cursor if it is another (spec 10).
           dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, restoreScene);

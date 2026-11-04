@@ -2,6 +2,8 @@ import { type Action, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { mark } from './bench.ts';
+import { liveTabs } from './tabs.ts';
+import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { GraphView } from './ui/GraphView.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
@@ -161,6 +163,14 @@ export function App() {
 
   if (error) return <div className="app"><div className="placeholder">Impossible d’ouvrir la base : {error}</div></div>;
   if (!shown || !state || !active) return <div className="app"><div className="placeholder">Ouverture de la base…</div></div>;
+  // A plan gone while its tab is open (its creation undone): the tab goes, the lobby shows. Rendered again at once with
+  // them, before the graph view is given a plan that no longer exists (F4 of the final review).
+  const live = liveTabs(state.plans, tabs, active);
+  if (live.open !== tabs || live.active !== active) {
+    setTabs(live.open);
+    setActive(live.active);
+    return null;
+  }
   return (
     <div className="app">
       <Tabs
@@ -177,12 +187,14 @@ export function App() {
         onSettings={() => setPanel((o) => !o)}
       />
       <div className="main">
-        <GraphView
-          state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
-          onResult={(r) => report(r)}
-          // The lobby has its own tab, always there: only another plan is added to the open ones.
-          onOpenPlan={(id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); }}
-        />
+        <GraphBoundary plan={active}>
+          <GraphView
+            state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
+            onResult={(r) => report(r)}
+            // The lobby has its own tab, always there: only another plan is added to the open ones.
+            onOpenPlan={(id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); }}
+          />
+        </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
         <Toasts toasts={toasts} />
       </div>

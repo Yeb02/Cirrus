@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
@@ -58,7 +58,7 @@ test('nom du rapport par défaut : app-rendu-<date>', () => {
 });
 
 test('base du banc : construite une fois, reconstruite quand son tampon ne correspond plus', () => {
-  const base = join(dir, 'base');
+  const base = join(dir, 'cirrus-bench-essai');
   const spec = { seed: 1, nodes: 200, connections: 1000 };
   expect(ensureBenchBase(base, spec)).toBe(true);
   expect(existsSync(join(base, 'cirrus.db'))).toBe(true);
@@ -66,4 +66,26 @@ test('base du banc : construite une fois, reconstruite quand son tampon ne corre
   writeFileSync(join(base, BENCH_STAMP), '{"generator":0}', 'utf8');
   expect(ensureBenchBase(base, spec)).toBe(true);
   expect(ensureBenchBase(base, { ...spec, nodes: 300 })).toBe(true);
+}, 60_000);
+
+test('base du banc : un autre dossier qu’un cirrus-bench-* du dossier temporaire est refusé, une base sans tampon du banc jamais effacée (M5)', () => {
+  const spec = { seed: 1, nodes: 20, connections: 20 }, temp = join(dir, 'temp');
+  mkdirSync(temp);
+  // Not named cirrus-bench-*, or outside the temporary folder: refused, nothing written.
+  for (const other of [join(temp, 'base'), join(dir, 'cirrus-bench-hors-temp')]) {
+    expect(() => ensureBenchBase(other, spec, temp), other).toThrow(/Dossier du banc refusé/);
+    expect(existsSync(other), other).toBe(false);
+  }
+  // A base without the bench's stamp (the user's, a copy of it): kept as it is.
+  const user = join(temp, 'cirrus-bench-utilisateur');
+  mkdirSync(user);
+  writeFileSync(join(user, 'cirrus.db'), 'base de l’utilisateur', 'utf8');
+  expect(() => ensureBenchBase(user, spec, temp)).toThrow(/sans le tampon du banc/);
+  expect(readFileSync(join(user, 'cirrus.db'), 'utf8')).toBe('base de l’utilisateur');
+  // A build interrupted halfway keeps a stamp (the provisional one): it is built again.
+  const bench = join(temp, 'cirrus-bench-1-20-20');
+  expect(ensureBenchBase(bench, spec, temp)).toBe(true);
+  writeFileSync(join(bench, BENCH_STAMP), JSON.stringify({ building: true }), 'utf8');
+  expect(ensureBenchBase(bench, spec, temp)).toBe(true);
+  expect(ensureBenchBase(bench, spec, temp)).toBe(false);
 }, 60_000);

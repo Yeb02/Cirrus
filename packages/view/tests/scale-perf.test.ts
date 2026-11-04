@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import {
   type Action, applyOp, applyOps, combine, CommandError, connect, connId, connKind, createNode, createPlan, deleteEverywhere, directGroup, editNode, emptyState,
-  exclude, fromSnapshot, groupMembers, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, planRow, removeFromPlan, setLayout, splitArm,
-  type State, toSnapshot,
+  exclude, fromSnapshot, groupMembers, groupOf, type Id, include, invertAction, KNOWLEDGE, memberOf, moveNodes, nodeId, nodeRow, placeNode, planRow, removeFromPlan,
+  setLayout, splitArm, type State, toSnapshot,
 } from '@cirrus/core';
 import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
@@ -14,6 +14,7 @@ import { buildHitIndex } from '../src/hit.ts';
 import { type EnvelopeMeshes, newEnvelopeMeshes } from '../src/geometry/envelope.ts';
 import { buildInstances, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
 import { patchEdit, patchPreview, previewEnvelopes, previewSlots, previewSplit, type PreviewSplit, type Shown } from '../src/preview.ts';
+import { dropScenes, repercussion } from '../src/repercussion.ts';
 import { buildScene, isLive, type PlanScene, withOffsets } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
 import { GLYPH_FLOATS, parseBmFont } from '../src/text.ts';
@@ -575,4 +576,62 @@ test('base de référence : après 30 actions, la scène mise à jour égale la 
   }
   expect(applied).toBe(30);
   expect(canonicalScene(scene)).toEqual(canonicalScene(buildScene(s, lobby, measure, P)));
+}, 600_000);
+
+// ———— A drop that changes groups in a secondary plan (I1 of the final review)
+
+/**
+ * What GraphView prepares before it asks « partout ou ici seulement » (dropAsking), for 8 nodes: 4 122 ms before, each
+ * node's repercussion building the lobby's scene; 0.06–0.15 ms with the lobby's scene from the tabs' cache (560–660 ms
+ * when it is not there: built once for the drop). The gate is about three times the measure (R12, R15 of the registry).
+ */
+const REPERCUSSION_CEILING_MS = 0.4;
+
+test('base de référence : un dépôt qui change de groupe 8 nœuds d’un plan secondaire, présents aussi dans le lobby, prépare sa question sans construire le lobby', () => {
+  const { s, lobby } = reference();
+  // The lobby's scene as the tabs' cache keeps it: current, updated by every action.
+  let lobbyScene = buildScene(s, lobby, measure, P);
+  const act = (a: Action) => { applyOps(s, a.ops); lobbyScene = updateScene(lobbyScene, s, a.ops, measure, P).scene; return a; };
+  // In the lobby, the group with the most simple members (8 of them moved, one left), and a root group elsewhere.
+  const leavesOf = (g: number) => lobbyScene.items[g].children.filter((c) => lobbyScene.items[c].kind === 'node');
+  let from = -1;
+  lobbyScene.items.forEach((it, i) => { if (isLive(lobbyScene, i) && it.kind === 'group' && (from < 0 || leavesOf(i).length > leavesOf(from).length)) from = i; });
+  const leaves = leavesOf(from).slice(0, 8).map((i) => lobbyScene.items[i].id), fromId = lobbyScene.items[from].id;
+  const above = new Set<number>();
+  for (let a = from; a >= 0; a = lobbyScene.items[a].parent) above.add(a);
+  const into = lobbyScene.items.findIndex((it, i) => isLive(lobbyScene, i) && it.kind === 'group' && it.parent < 0 && !above.has(i)), intoId = lobbyScene.items[into].id;
+  expect(leaves).toHaveLength(8);
+  expect(leavesOf(from).length).toBeGreaterThan(8);
+  // The secondary plan: that group with these 8 members, the other group apart.
+  const made = act(createPlan(s, 'Répercussion', 'plan')), second = (made.ops[0] as { after: { id: Id } }).after.id;
+  const setup = act(combine(s, 'Préparer', [
+    (x: State) => placeNode(x, second, fromId, 0, 0, 1),
+    ...leaves.map((id, k) => (x: State) => placeNode(x, second, id, (k % 4) * 300, Math.floor(k / 4) * 200, 0)),
+    (x: State) => placeNode(x, second, intoId, 50_000, 0, 1),
+    ...leaves.map((id) => (x: State) => include(x, second, id, fromId)),
+  ]));
+  const scene = buildScene(s, second, measure, P), index = buildIndex(scene, P);
+  const items = leaves.map((id) => scene.byId.get(id)!), target = scene.byId.get(intoId)!, at = { x: scene.items[target].x, y: scene.items[target].y };
+  /**
+   * The target found by the index, the memberships the drop changes (with Alt: out of their group, into the other), and
+   * their repercussions, the scenes they read given for the whole drop by `cached` (the tabs' cache) or built.
+   */
+  const prepare = (cached?: (plan: Id) => PlanScene | undefined) => {
+    const t = dropTarget(scene, at, items, 1, P, index), sceneOf = dropScenes(s, measure, P, cached);
+    return dropEffects(scene, items, t, true).filter((f) => f.leave || f.enter !== null).map((f) => {
+      const node = scene.items[f.item].id;
+      return repercussion(s, second, node, groupOf(s, second, node) ?? null, f.enter !== null ? scene.items[f.enter].id : null, sceneOf);
+    });
+  };
+  const r = best(() => prepare((q) => (q === lobby ? lobbyScene : undefined)), 10, 15);
+  show(`dépôt de ${items.length} nœuds changeant de groupe dans un plan secondaire, répercussions comprises`, r.ms);
+  expect(r.out).toHaveLength(8);
+  for (const x of r.out) expect(x.changed.map((c) => [c.plan, c.to])).toEqual([[lobby, intoId]]);
+  // What the drop reports is what it reported with the lobby's scene built (once for the drop, no longer once a node).
+  const built = performance.now(), byBuild = prepare();
+  show('  le même, la scène du lobby construite', performance.now() - built);
+  expect(r.out).toEqual(byBuild);
+  applyOps(s, invertAction(setup).ops);
+  applyOps(s, invertAction(made).ops);
+  expect(r.ms).toBeLessThanOrEqual(REPERCUSSION_CEILING_MS);
 }, 600_000);

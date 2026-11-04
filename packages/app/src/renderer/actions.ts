@@ -5,7 +5,7 @@ import {
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
-  scaleMoves,
+  scaleMoves, type SceneIndex,
 } from '@cirrus/view';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
@@ -42,12 +42,12 @@ function layoutsFollowing(s: State, scene: PlanScene, moved: Set<number>, map: (
 }
 
 /**
- * Moving items by (dx, dy) and dropping them at `at` (spec 10): one action for the moves, then the groups left and
- * entered (with Alt, leaving the group); a simple node receiving its first members becomes a group, groupOffsetSteps
- * above its largest member (spec 8.1).
+ * Moving items by (dx, dy) and dropping them onto `target` (spec 10): one action for the moves, then the groups left
+ * and entered (with Alt, leaving the group); a simple node receiving its first members becomes a group,
+ * groupOffsetSteps above its largest member (spec 8.1). `target`: where the drop enters (dropTarget), found once by the
+ * caller for this and dropMemberships (I2 of the final review).
  */
-export function dropBuild(base: PlanScene, items: number[], dx: number, dy: number, at: Vec2, alt: boolean, zoom: number, p: RenderParams): Build {
-  const target = dropTarget(base, at, items, zoom, p);
+export function dropBuild(base: PlanScene, items: number[], dx: number, dy: number, target: number | null, alt: boolean, p: RenderParams): Build {
   const effects = dropEffects(base, items, target, alt);
   if (dx === 0 && dy === 0 && effects.every((f) => !f.leave && f.enter === null)) return null;
   const effectOf = new Map(effects.map((f) => [f.item, f]));
@@ -155,10 +155,13 @@ export function lobbyConnectionBuild(lobby: Id, connection: Id): Build {
   ]);
 }
 
-/** Pasting a clip at `at` (spec 7) as one action; `present`: the nodes that were already there and kept their place. */
-export function pasteBuild(s: State, clip: Clip, scene: PlanScene, at: Vec2, zoom: number, p: RenderParams): { build: Build; present: Id[] } {
+/**
+ * Pasting a clip at `at` (spec 7) as one action; `present`: the nodes that were already there and kept their place.
+ * `index`: the scene's visibility index, if at hand (groupAt).
+ */
+export function pasteBuild(s: State, clip: Clip, scene: PlanScene, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): { build: Build; present: Id[] } {
   const drawn = (id: Id) => { const i = scene.byId.get(id); return i === undefined ? undefined : { x: scene.items[i].x, y: scene.items[i].y }; };
-  const r = pasteSteps(s, clip, scene.plan.id, at, zoom, groupAt(scene, at, zoom, p), p, drawn);
+  const r = pasteSteps(s, clip, scene.plan.id, at, zoom, groupAt(scene, at, zoom, p, index), p, drawn);
   const n = clip.nodes.length;
   return { build: r.steps.length === 0 ? null : (st) => combine(st, n === 1 ? 'Coller un nœud' : `Coller ${n} nœuds`, r.steps), present: r.present };
 }
@@ -166,21 +169,24 @@ export function pasteBuild(s: State, clip: Clip, scene: PlanScene, at: Vec2, zoo
 /** The step whose text reads at the base size at this zoom (a node created or brought in from elsewhere). */
 export const readableStep = (zoom: number, p: RenderParams): number => Math.round(Math.log(1 / (zoom * p.textScale)) / Math.log(p.factor));
 
-/** The group whose envelope receives a node put down at `at`, if any (spec 10). */
-const groupAt = (scene: PlanScene, at: Vec2, zoom: number, p: RenderParams): Id | null => {
-  const target = dropTarget(scene, at, [], zoom, p);
+/**
+ * The group whose envelope receives a node put down at `at`, if any (spec 10). `index`: the scene's visibility index,
+ * by which only what lies under the point is read instead of the whole plan, the same answer (I2 of the final review).
+ */
+export const groupAt = (scene: PlanScene, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Id | null => {
+  const target = dropTarget(scene, at, [], zoom, p, index);
   return target !== null && scene.items[target].kind === 'group' ? scene.items[target].id : null;
 };
 
 /**
  * A new node placed at `at` (spec 12), at the step whose text reads at the base size at this zoom; dropped inside an
- * envelope, it enters that group like any free node (spec 10).
+ * envelope, it enters that group like any free node (spec 10). `index`: the scene's visibility index, if at hand (groupAt).
  */
-export function createBuild(scene: PlanScene, title: string, at: Vec2, zoom: number, p: RenderParams): Build {
+export function createBuild(scene: PlanScene, title: string, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
   const name = title.trim();
   if (!name) return null;
   const k = readableStep(zoom, p);
-  const group = groupAt(scene, at, zoom, p);
+  const group = groupAt(scene, at, zoom, p, index);
   const plan = scene.plan.id;
   return (st) => {
     let id = '';
@@ -250,11 +256,13 @@ export function joinBuild(plan: Id, connection: Id, node: Id): Build {
 
 /**
  * A node brought into the plan from a stub or an absent phantom (spec 11.3), at the step readable at this zoom;
- * inside an envelope, it enters that group.
+ * inside an envelope, it enters that group. `index`: the scene's visibility index, if at hand (groupAt).
  */
-export function importBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, label = 'Importer un nœud dans ce plan'): Build {
+export function importBuild(
+  scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, label = 'Importer un nœud dans ce plan', index?: SceneIndex,
+): Build {
   const plan = scene.plan.id;
-  const group = groupAt(scene, at, zoom, p);
+  const group = groupAt(scene, at, zoom, p, index);
   return (st) => combine(st, label, [
     (x) => placeNode(x, plan, node, at.x, at.y, readableStep(zoom, p)),
     ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
@@ -278,9 +286,11 @@ export function layoutBuild(plan: Id, connection: Id, layout: Layout | null): Bu
   return (st) => setLayout(st, plan, connection, layout);
 }
 
-/** The nodes whose group a drop changes in its plan (spec 10), for the « partout » question; phantoms' groups are their plan's only. */
-export function dropMemberships(s: State, base: PlanScene, items: number[], at: Vec2, alt: boolean, zoom: number, p: RenderParams): { node: Id; from: Id | null; to: Id | null }[] {
-  const target = dropTarget(base, at, items, zoom, p);
+/**
+ * The nodes whose group a drop onto `target` changes in its plan (spec 10), for the « partout » question; phantoms'
+ * groups are their plan's only. `target`: the one dropBuild is given (I2 of the final review).
+ */
+export function dropMemberships(s: State, base: PlanScene, items: number[], target: number | null, alt: boolean): { node: Id; from: Id | null; to: Id | null }[] {
   const plan = base.plan.id;
   return dropEffects(base, items, target, alt)
     .filter((f) => (f.leave || f.enter !== null) && base.items[f.item].kind !== 'phantom')

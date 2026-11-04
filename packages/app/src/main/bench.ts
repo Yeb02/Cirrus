@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { SNAPSHOT_VERSION } from '@cirrus/core';
 import { buildLargeState, LARGE_GENERATOR_VERSION, type LargeSpec } from '@cirrus/fixtures';
 import { SCHEMA_VERSION, writeBenchBase } from '@cirrus/store';
@@ -25,21 +26,30 @@ export const BENCH_STAMP = 'bench-base.json';
 
 /**
  * Builds the bench's base in `dir` (buildLargeState written by writeBenchBase), unless its stamp shows it is already
- * this generator's at this scale. The stamp is written last: a base interrupted halfway is rebuilt. Returns whether it
- * was built.
+ * this generator's at this scale. A provisional stamp is written before the base and the real one last: a base
+ * interrupted halfway keeps a stamp that does not match, and is rebuilt. Returns whether it was built.
+ * The folder is emptied first, so it must be a cirrus-bench-* folder inside the temporary folder `temp`, and a base
+ * without the bench's stamp (the user's own, a copy of it) is never deleted (M5 of the final review).
  */
-export function ensureBenchBase(dir: string, spec: LargeSpec): boolean {
+export function ensureBenchBase(dir: string, spec: LargeSpec, temp = tmpdir()): boolean {
+  const at = resolve(dir), inTemp = relative(resolve(temp), at);
+  if (!basename(at).startsWith('cirrus-bench-') || inTemp === '' || inTemp.startsWith('..') || isAbsolute(inTemp)) {
+    throw new Error(`Dossier du banc refusé : ${at} n’est pas un dossier cirrus-bench-* du dossier temporaire (${resolve(temp)}).`);
+  }
   const stamp = JSON.stringify({
     generator: LARGE_GENERATOR_VERSION, schema: SCHEMA_VERSION, snapshot: SNAPSHOT_VERSION, seed: spec.seed, nodes: spec.nodes, connections: spec.connections,
   });
-  try {
-    if (readFileSync(join(dir, BENCH_STAMP), 'utf8') === stamp) return false;
-  } catch {
-    // no stamp: built below
+  const stampFile = join(at, BENCH_STAMP);
+  if (existsSync(stampFile)) {
+    if (readFileSync(stampFile, 'utf8') === stamp) return false;
+  } else if (existsSync(join(at, 'cirrus.db'))) {
+    throw new Error(`Dossier du banc refusé : ${at} tient une base (cirrus.db) sans le tampon du banc ; elle n’est pas effacée.`);
   }
-  rmSync(dir, { recursive: true, force: true });
-  writeBenchBase(dir, buildLargeState(spec).state);
-  writeFileSync(join(dir, BENCH_STAMP), stamp, 'utf8');
+  rmSync(at, { recursive: true, force: true });
+  mkdirSync(at, { recursive: true });
+  writeFileSync(stampFile, JSON.stringify({ building: true }), 'utf8');
+  writeBenchBase(at, buildLargeState(spec).state);
+  writeFileSync(stampFile, stamp, 'utf8');
   return true;
 }
 

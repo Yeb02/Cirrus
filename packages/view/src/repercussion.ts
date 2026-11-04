@@ -23,14 +23,35 @@ const envelopeOf = (sc: PlanScene, kids: number[], pad: number): Vec2[] => {
   return offsetPolygon(convexHull(corners), pad);
 };
 
+/** The current scene of a plan, for the repercussions of one drop. */
+export type SceneOf = (plan: Id) => PlanScene;
+
+/**
+ * The scenes one drop's repercussions read (I1 of the final review): the scene `cached` gives, current at the state's
+ * revision (GraphView's cache of the tabs), else the plan's scene built — each plan's once for the whole drop, however
+ * many of its nodes change group.
+ */
+export function dropScenes(s: State, measure: Measure, p: RenderParams, cached: (plan: Id) => PlanScene | undefined = () => undefined): SceneOf {
+  const seen = new Map<Id, PlanScene>();
+  return (plan) => {
+    let scene = seen.get(plan);
+    if (scene === undefined) {
+      scene = cached(plan) ?? buildScene(s, plan, measure, p);
+      seen.set(plan, scene);
+    }
+    return scene;
+  };
+}
+
 /**
  * The node `node` left `from` and entered `to` in `plan` (either may be null). « Partout » (spec 10) changes only the
  * other plans, documents aside, where it was in `from` or in no group: it joins `to` there, or the lowest group of its
  * new chain of ancestors present there, or with none it only leaves `from`. A plan where it is in a third group is
  * reported and left alone, as is one where the change would make a loop. A plan is to be placed by hand when the node
- * would sit outside the group it joins, or still inside the envelope of the group it leaves.
+ * would sit outside the group it joins, or still inside the envelope of the group it leaves: read in its scene, which
+ * `sceneOf` gives (dropScenes) only for a plan the change reaches.
  */
-export function repercussion(s: State, plan: Id, node: Id, from: Id | null, to: Id | null, measure: Measure, p: RenderParams): Repercussion {
+export function repercussion(s: State, plan: Id, node: Id, from: Id | null, to: Id | null, sceneOf: SceneOf): Repercussion {
   const chain = to === null ? [] : [to, ...ancestors(s, plan, to)];
   const out: Repercussion = { changed: [], third: [], loops: [] };
   // The plans where the node is placed (placedIn), in row order as the plans' own.
@@ -47,7 +68,7 @@ export function repercussion(s: State, plan: Id, node: Id, from: Id | null, to: 
     if (target === current) continue;
     const above = target === null ? [] : ancestors(s, q.id, target);
     if (target === node || above.includes(node)) { out.loops.push(q.id); continue; }
-    out.changed.push({ plan: q.id, to: target, manual: misplaced(buildScene(s, q.id, measure, p), node, target, current, above) });
+    out.changed.push({ plan: q.id, to: target, manual: misplaced(sceneOf(q.id), node, target, current, above) });
   }
   return out;
 }

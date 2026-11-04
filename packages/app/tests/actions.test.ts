@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, groupOf, layoutKey, placementKey, setLayout, type State } from '@cirrus/core';
-import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
+import { applyOp, groupOf, layoutKey, placementKey, setLayout, type State, type Vec2 } from '@cirrus/core';
+import { buildFixture, buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
-import { buildScene, copyClip, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene } from '@cirrus/view';
+import {
+  buildIndex, buildScene, copyClip, DEFAULT_PARAMS as P, dropTarget, isLive, offsetPolygon, type PlanScene, type SceneItem, sceneWith,
+} from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
 import {
-  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
+  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, groupAt, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
   dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, roleBuild, scaleBuild, splitBuild,
   withRepercussion,
 } from '../src/renderer/actions.ts';
@@ -24,6 +26,8 @@ beforeEach(() => {
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
 const run = (build: ((st: State) => import('@cirrus/core').Action) | null) => { const a = build!(s); for (const op of a.ops) applyOp(s, op); return a; };
+/** Where a drop of these items at `at` enters, found once by the caller (GraphView: by the engine's index). */
+const target = (scene: PlanScene, items: number[], at: Vec2, zoom = 1) => dropTarget(scene, at, items, zoom, P);
 
 test('créer un nœud dans l’enveloppe d’un groupe : il y entre, au cran lisible à ce zoom', () => {
   const g = sc.items[sc.byId.get(ids.nodes.groupeML)!];
@@ -161,16 +165,16 @@ test('un dépôt dit quels nœuds changent de groupe, d’où et vers où ; les 
   const poly = offsetPolygon(g.hull!, g.pad! * 0.4);
   const at = poly.reduce((b, q) => (q.y > b.y ? q : b), poly[0]);
   const monde = sc.byId.get(nodes.monde)!;
-  expect(dropMemberships(s, sc, [monde], at, false, 1, P)).toEqual([{ node: nodes.monde, from: null, to: nodes.groupeML }]);
-  const mdl = sc.byId.get(nodes.mdl)!;
-  expect(dropMemberships(s, sc, [mdl], { x: 5000, y: 5000 }, true, 1, P)).toEqual([{ node: nodes.mdl, from: nodes.groupeComplexite, to: null }]);
-  expect(dropMemberships(s, sc, [sc.byId.get(ids.phantoms.node)!], { x: 5000, y: 5000 }, true, 1, P)).toEqual([]);
+  expect(dropMemberships(s, sc, [monde], target(sc, [monde], at), false)).toEqual([{ node: nodes.monde, from: null, to: nodes.groupeML }]);
+  const mdl = sc.byId.get(nodes.mdl)!, far = { x: 5000, y: 5000 }, phantom = sc.byId.get(ids.phantoms.node)!;
+  expect(dropMemberships(s, sc, [mdl], target(sc, [mdl], far), true)).toEqual([{ node: nodes.mdl, from: nodes.groupeComplexite, to: null }]);
+  expect(dropMemberships(s, sc, [phantom], target(sc, [phantom], far), true)).toEqual([]);
 });
 
 test('répercussion : le dépôt et les plans automatiques en une action ; un plan à corriger se pose d’un bloc avec son appartenance', () => {
   const { nodes, plans } = ids;
   const mdl = sc.byId.get(nodes.mdl)!;
-  const drop = dropBuild(sc, [mdl], 4000, 0, { x: 4175, y: 140 }, true, 1, P);
+  const drop = dropBuild(sc, [mdl], 4000, 0, target(sc, [mdl], { x: 4175, y: 140 }), true, P);
   const a = run(withRepercussion(drop, [{ plan: plans.these, node: nodes.mdl, to: null }]));
   expect(groupOf(s, plans.lobby, nodes.mdl)).toBeUndefined();
   expect(groupOf(s, plans.these, nodes.mdl)).toBeUndefined();
@@ -192,7 +196,7 @@ test('un groupe déplacé emporte aussi sa position propre : vidé ensuite, il r
   const { nodes, plans } = ids;
   const g = sc.byId.get(nodes.groupeInduction)!;
   const drawn = { x: sc.items[g].x, y: sc.items[g].y };
-  run(dropBuild(sc, [g], 300, 40, { x: 9000, y: 9000 }, false, 1, P));
+  run(dropBuild(sc, [g], 300, 40, target(sc, [g], { x: 9000, y: 9000 }), false, P));
   expect(s.placements.get(placementKey(plans.lobby, nodes.groupeInduction))).toMatchObject({ x: drawn.x + 300, y: drawn.y + 40 });
   const lobby = buildScene(s, plans.lobby, measure, P);
   const gi = lobby.items[lobby.byId.get(nodes.groupeInduction)!];
@@ -206,7 +210,8 @@ test('la disposition d’une connexion suit quand toutes ses extrémités bougen
     && c.members.some((m) => m.node === nodes.solomonoff && m.role === 'target') && !c.members.some((m) => m.node === nodes.mdl))!;
   run((st: State) => setLayout(st, plans.lobby, inner.id, { marker: { x: 10, y: 20 }, handles: { [nodes.solomonoff]: { b1: { x: 1, y: 2 }, b2: { x: 3, y: 4 } } } }));
   let scene = buildScene(s, plans.lobby, measure, P);
-  run(dropBuild(scene, [scene.byId.get(nodes.groupeInduction)!], 100, 50, { x: 9000, y: 9000 }, false, 1, P));
+  const induction = scene.byId.get(nodes.groupeInduction)!;
+  run(dropBuild(scene, [induction], 100, 50, target(scene, [induction], { x: 9000, y: 9000 }), false, P));
   expect(s.connLayouts.get(layoutKey(plans.lobby, inner.id))!.marker).toEqual({ x: 110, y: 70 });
   scene = buildScene(s, plans.lobby, measure, P);
   const g = scene.items[scene.byId.get(nodes.groupeInduction)!];
@@ -227,4 +232,62 @@ test('cacher ou supprimer un groupe ici : l’avertissement du dernier plan comp
   run(deleteBuild(sc, [nodes.groupeInduction], false, true));
   expect(s.placements.has(placementKey(plans.lobby, nodes.solomonoff))).toBe(false);
   expect(s.placements.has(placementKey(plans.article, nodes.solomonoff))).toBe(true);
+});
+
+/** A point inside a group's padded envelope but on none of its boxes: halfway into the padding ring, at its top. */
+const inPadding = (g: SceneItem): Vec2 => {
+  const outer = offsetPolygon(g.hull!, g.pad!), inner = offsetPolygon(g.hull!, g.pad! * 0.4);
+  return inner[outer.reduce((best, v, j) => (v.y > outer[best].y ? j : best), 0)];
+};
+
+test('création, importation, collage : le groupe d’accueil trouvé par l’index de la vue est celui du balayage du plan (I2 de la revue finale)', () => {
+  let compared = 0, found = 0;
+  for (const plan of Object.values(ids.plans)) {
+    const scene = buildScene(s, plan, measure, P), index = buildIndex(scene, P);
+    // Every item's centre, its box's corners and edges, its envelope's rings.
+    const points: Vec2[] = [];
+    scene.items.forEach((it, i) => {
+      if (!isLive(scene, i)) return;
+      points.push({ x: it.x, y: it.y });
+      for (const f of [-1, -0.999, 0.999, 1]) points.push({ x: it.x + f * it.halfW, y: it.y + f * it.halfH }, { x: it.x + f * it.halfW, y: it.y }, { x: it.x, y: it.y - f * it.halfH });
+      if (it.kind === 'group') for (const d of [1, 0.999, 0.4]) points.push(...offsetPolygon(it.hull!, it.pad! * d));
+    });
+    for (const zoom of [0.005, 0.03, 0.25, 1, 3]) {
+      for (const at of points) {
+        const group = groupAt(scene, at, zoom, P, index);
+        expect(group, `${plan} ${JSON.stringify(at)} ${zoom}`).toBe(groupAt(scene, at, zoom, P));
+        compared++;
+        if (group !== null) found++;
+      }
+    }
+  }
+  expect(compared).toBeGreaterThan(2_000);
+  expect(found).toBeGreaterThan(200);
+});
+
+test('création, importation, collage : avec l’index, seuls les éléments sous le point sont lus, jamais tout le plan (I2 de la revue finale)', () => {
+  const { state, lobby } = buildLargeState({ seed: 2, nodes: 5_000, connections: 2_000 });
+  const scene = buildScene(state, lobby, measure, P), index = buildIndex(scene, P);
+  let reads = 0;
+  const counted = sceneWith(scene, {
+    items: new Proxy(scene.items, { get: (t, k, rc) => { if (typeof k === 'string' && k.charCodeAt(0) <= 57) reads++; return Reflect.get(t, k, rc); } }),
+  });
+  const g = scene.items.findIndex((it, i) => isLive(scene, i) && it.kind === 'group' && it.depth >= 1), at = inPadding(scene.items[g]);
+  const group = groupAt(scene, at, 1, P);
+  expect(group).not.toBeNull();
+  const leaf = scene.items.findIndex((it, i) => isLive(scene, i) && it.kind === 'node');
+  const clip = copyClip(state, scene, [leaf], 1)!;
+  const builds: [string, () => unknown][] = [
+    ['création', () => createBuild(counted, 'Nouveau', at, 1, P, index)],
+    ['importation', () => importBuild(counted, scene.items[leaf].id, at, 1, P, undefined, index)],
+    ['collage', () => pasteBuild(state, clip, counted, at, 1, P, index)],
+  ];
+  for (const [what, build] of builds) {
+    reads = 0;
+    build();
+    expect(reads, what).toBeLessThan(scene.items.length / 20);
+  }
+  // The node created there enters that group, as with the scan.
+  const a = createBuild(counted, 'Nouveau', at, 1, P, index)!(state);
+  expect(a.ops.some((o) => o.t === 'branch' && o.key.plan === lobby && o.key.node === group && o.after)).toBe(true);
 });
