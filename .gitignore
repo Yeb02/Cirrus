@@ -7,3 +7,4 @@ bench/rendu/scripts/fonts/
 docs/bancs/.rendu-runs.json
 packages/app/scripts/fonts/
 docs/bancs/.app-rendu-runs.json
+docs/bancs/.app-rendu-instantanes.json

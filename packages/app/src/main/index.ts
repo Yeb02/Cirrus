@@ -6,7 +6,7 @@ import type { LocalStore } from '@cirrus/store';
 import { withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
-import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun } from './bench.ts';
+import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { lockBase } from './lock.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
@@ -16,13 +16,15 @@ import { readSettings, writeSettings } from './settings.ts';
  * snapshotQuitMs, for the interface's last snapshot. CIRRUS_CAPTURE=<png> captures the window once the first frame is
  * drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
- * CIRRUS_BENCH_BUILD=<dir> builds beforehand.
+ * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
+ * times instead, without a window, and the file's size recorded.
  */
 let store: LocalStore | null = null;
 let dir = '';
 const capture = process.env.CIRRUS_CAPTURE;
 const bench = process.env.CIRRUS_BENCH;
 const benchBuild = process.env.CIRRUS_BENCH_BUILD;
+const benchSnapshots = bench ? process.env.CIRRUS_BENCH_SNAPSHOTS : undefined;
 const launch = {
   plan: process.env.CIRRUS_PLAN,
   view: process.env.CIRRUS_VIEW,
@@ -192,6 +194,21 @@ void app.whenReady().then(() => {
   if (!lock) {
     console.error(`Base déjà ouverte par une autre instance de Cirrus (une capture, le banc ou une autre fenêtre) : ${dir}. Cette instance s’arrête.`);
     app.exit(2);
+    return;
+  }
+  if (benchSnapshots) {
+    // The base file over snapshot rewrites (plan 3c task 10, M3 of the final review), on the bench's copy of its base.
+    try {
+      const growth = snapshotRewrites(dir, Number(benchSnapshots));
+      recordSnapshots(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), growth);
+      console.log(`Réécritures de l’instantané : ${growth.sizes.map((x) => `${x.step} ${x.dbMb.toFixed(1)} + ${x.walMb.toFixed(1)} Mo`).join(' ; ')}`);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      app.exit(2);
+      return;
+    }
+    lock.release();
+    app.exit(0);
     return;
   }
   store = openBase(dir);
