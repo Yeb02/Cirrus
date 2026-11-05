@@ -100,7 +100,11 @@ Fixées par le contrôleur avant la tâche :
   | Passe | Total | Téléchargement | Extraction | `tlmgr` (mise à jour, 9 paquets) et renommage | Taille installée |
   | --- | --- | --- | --- | --- | --- |
   | 1 | 75,7 s | 17,9 s | 36,5 s | 21,3 s | 313,5 Mo |
-  | 2 (code final) | 73,0 s | 18,8 s | 34,1 s | 20,2 s | 313,5 Mo |
+  | 2 | 73,0 s | 18,8 s | 34,1 s | 20,2 s | 313,5 Mo |
+  | 3 (après la revue : dépôt de CTAN, 8 paquets de base) | 86,7 s | 20,6 s | 34,6 s | 31,5 s | 313,5 Mo |
+
+  - Les passes 1 et 2 installaient aussi `tikz-cd` par `provision`, depuis `tlnet.yihui.org`.
+  - La passe 3 suit les décisions R2.2 et R2.4 (plus bas) : `tlmgr option repository ctan`, puis `update --self` et `BASE_PACKAGES`, depuis les miroirs de CTAN. Les paquets de l'utilisateur sont venus ensuite, par `ensure`.
 
   - `pdflatex --version` : « pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026) », la version du banc. Il ne reste que `<root>`, ni `.partial` ni `.download` ;
   - sur cette installation, avec le vrai `tlmgr` :
@@ -108,13 +112,13 @@ Fixées par le contrôleur avant la tâche :
     - la sortie de `tlmgr search --global --file /siunitx.sty` a la forme que `packageOf` lit (`siunitx:` puis le chemin, après une tabulation). `installFor('siunitx.sty')` rend `siunitx`, en 10,4 s puis en 9,2 s ;
     - `installFor` d'un fichier qu'aucun paquet ne contient rend null, et `ensure(['siunitx', 'tikz-cd'])` rend `[]` ;
   - `DEFAULT_PREAMBLE` compile sur l'installation neuve, sous `texEnv`, avec les seuls paquets de `BASE_PACKAGES` (PDF de 50 627 octets) ;
-  - dépôt : TinyTeX règle `tlmgr` sur `https://tlnet.yihui.org`, un miroir de tlnet. `tlmgr` en vérifie la signature (« verified ») ;
+  - dépôt : TinyTeX règle `tlmgr` sur `https://tlnet.yihui.org`, un miroir de tlnet. `tlmgr` affichait « verified », grâce au gpg de Git présent dans le PATH de Git Bash. Avec le PATH de Windows, c'est « not verified » (constat sous la décision R2.4). Depuis cette décision, `provision` passe au dépôt de CTAN ;
   - les deux dossiers temporaires sont effacés. `%LOCALAPPDATA%\Cirrus` n'a jamais été créé.
 - **Défaut trouvé à la première passe, et corrigé** : un `tlmgr install` d'un paquet inconnu rendait le code 0.
   - Cause : `tlmgr.bat` finit par `goto :eof` après `tlmgr.pl`. Lancé seul par `cmd /c`, un tel fichier perd son code de sortie. `perl tlmgr.pl` rend 25, par `call` 1, et sans `call` 0.
   - Correction : `runFile` passe par `cmd /d /s /c "call "<bat>" <args>"`. Un test refait la fin de `tlmgr.bat` : il échouait avant la correction et passe depuis.
   - À la seconde passe, le même `tlmgr install` rend 1.
-- Suite : 601 tests sur 601 (581 avant la tâche) : 19 dans `tinytex.test.ts`, et un de plus dans `params.test.ts`. `tsc` : `app` et `view` sans erreur. Les deux tests qui ont besoin de la TinyTeX du banc sont sautés, avec leur raison, si elle manque (vérifié avec `CIRRUS_TINYTEX=C:\nulle-part`).
+- Suite : 601 tests sur 601 (581 avant la tâche) : 19 dans `tinytex.test.ts`, et un de plus dans `params.test.ts`. Après les correctifs de la revue : 604 sur 604, dont 22 dans `tinytex.test.ts`. `tsc` : `app` et `view` sans erreur. Les deux tests qui ont besoin de la TinyTeX du banc sont sautés, avec leur raison, si elle manque (vérifié avec `CIRRUS_TINYTEX=C:\nulle-part`).
 
 ### Décisions
 
@@ -149,8 +153,8 @@ Fixées par le contrôleur avant la tâche :
   - Pourquoi : TeX Live met à jour `tlmgr` lui-même en cours d'année. Un `tlmgr` plus ancien refuse alors toute installation (`tlmgr.pl`, `check_for_critical_updates`). Sans cela, les paquets à la demande cesseraient de s'installer quelques semaines après l'installation.
   - Coût si faux : une dizaine de lignes.
 - Ruling: **`ensure` est un seul tour de la file** : la liste des paquets installés, puis leur installation, sans autre appel entre les deux. Coût si faux : nul.
-- Ruling: **la sortie de `run` (`out`) est la sortie standard, suivie de la sortie d'erreur.** `tlmgr` écrit ses erreurs dans la seconde, et un échec rend sa dernière ligne non vide : « tlmgr install a échoué (code 1) : … ». `installed()` ne garde que les lignes sans espace. Coût si faux : nul.
-- Ruling: **l'étape `packages` est annoncée avant `tlmgr update --self`**, avec la liste qui sera installée : `BASE_PACKAGES`, puis `packages`, sans doublon. Coût si faux : nul.
+- Ruling: **la sortie de `run` (`out`) est la sortie standard, suivie de la sortie d'erreur.** `tlmgr` écrit ses erreurs dans la seconde. Un échec rend sa cause : « tlmgr install a échoué (code 1) : … », selon la décision R2.1 du contrôleur, qui remplace « sa dernière ligne ». `installed()` ne garde que les lignes sans espace. Coût si faux : nul.
+- Ruling: **l'étape `packages` est annoncée avant le premier appel à `tlmgr`** (`option repository ctan`), avec la liste qui sera installée, `BASE_PACKAGES` seuls (décision R2.2). Coût si faux : nul.
 - Ruling: **le renommage final est réessayé** sur EPERM, EACCES et EBUSY : jusqu'à vingt fois, toutes les 250 ms.
   - Pourquoi : un antivirus qui lit encore les binaires frais empêche Windows de déplacer le dossier.
   - Le nettoyage (`rmSync`, `maxRetries: 10`) ne masque jamais l'erreur qui l'a causé. Ce qui reste, la passe suivante l'efface d'abord.
@@ -159,7 +163,7 @@ Fixées par le contrôleur avant la tâche :
   - Pourquoi : `latexPackages` est le seul réglage de cette sorte.
   - Le champ du panneau sépare les mots par des espaces et retire les doublons. Un mot invalide y remet le texte précédent, comme le champ des listes.
   - Coût si faux : un champ `pattern` dans `ParamSpec`.
-- Ruling: **le dépôt de TinyTeX est gardé** (`tlnet.yihui.org`, un miroir de tlnet signé par TeX Live). D1 dit « le dépôt de TeX Live » : c'en est un miroir, dont `tlmgr` vérifie la signature. Coût si faux : un `tlmgr option repository ctan` dans `provision`.
+- ~~Ruling: le dépôt de TinyTeX est gardé (`tlnet.yihui.org`).~~ Remplacée par la décision R2.4 du contrôleur : `provision` passe au dépôt de CTAN. La signature « verified » que cette décision invoquait venait du gpg de Git, et non de TinyTeX (constat sous R2.4).
 
 ## Tâche 3 : principal — compilation préchauffée, cloisonnée, en cache
 
@@ -178,7 +182,9 @@ Fixées par le contrôleur avant la tâche :
 | Mesure | Tâche | Valeur | Conditions |
 | --- | --- | --- | --- |
 | Téléchargement de TinyTeX v2026.11 (TinyTeX-1, Windows) | 2 | 73,7 Mo ; 17,9 s puis 18,8 s | `fetch` de Node, réseau de la machine de développement |
-| Installation complète par `provision` | 2 | 75,7 s puis 73,0 s ; 313,5 Mo installés | téléchargement, extraction (34 à 37 s), `tlmgr update --self`, 9 paquets, renommage |
+| Installation complète par `provision` | 2 | 75,7 s puis 73,0 s ; 313,5 Mo installés | téléchargement, extraction (34 à 37 s), `tlmgr update --self`, 9 paquets, renommage, depuis `tlnet.yihui.org` |
+| Installation complète par `provision`, après la revue | 2 | 86,7 s ; 313,5 Mo installés | dépôt de CTAN (`option repository ctan`), `update --self`, 8 paquets de base, renommage |
+| `Packages.ensure` de 3 noms, dont un inconnu | 2 | 17,2 s | un lot `tlmgr install`, puis la liste relue ; miroirs de CTAN |
 | `installFor` d'un paquet absent (`siunitx`) | 2 | 10,4 s puis 9,2 s | `search --global`, puis `install`, depuis `tlnet.yihui.org` |
 | `Packages.installed()` (`tlmgr info --list --only-installed`) | 2 | 1,6 s | TinyTeX du banc, sans réseau |
 
@@ -210,3 +216,36 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - Ruling P1: T2 exports the base package list as `BASE_PACKAGES` (the list provision installs); T7's withPackage reads it — cost if wrong: a rename.
 - Ruling P2: T6 drops the « Titre court » relabel of the connection title (never asked, would change the frozen reference-3c capture fenetre-connexion) — cost if wrong: one label.
 - Ruling P3: T6 keeps the relation's empty-field look as today (placeholder « Relation (LaTeX) », same box) so reference-3c fenetre-connexion stays within tolerance — cost if wrong: one placeholder text.
+
+### Tâche 2, revue (correctifs, tour 1)
+
+- Ruling R2.1 : **une installation qui échoue dit sa cause, et non la ligne de clôture de `tlmgr`.**
+  - Le constat : `tlmgr` finit toujours un échec par « …: An error has occurred. See above messages. Exiting. » (`tlmgr.pl`, l. 750). La cause, par exemple « package x not present in repository. » (l. 4033), vient avant.
+  - La règle : le message garde la dernière ligne qui nomme une cause. Il saute la ligne de clôture, « action … returned an error », « please see warning above », la ligne du dépôt et les cadres de `=`.
+  - Les tests : les faux `tlmgr` écrivent la vraie ligne de clôture après la cause. L'ancien code échouait à ces tests.
+  - Coût si faux : une expression régulière.
+- Ruling R2.2 : **un mot inconnu dans `latexPackages` ne rend jamais LaTeX impossible à installer.**
+  - `provision(root, deps, onProgress, release?)` n'installe que `BASE_PACKAGES`, et un échec à cette étape fait toujours échouer l'installation.
+  - Les paquets de l'utilisateur passent par `Packages.ensure(names)`, au mieux. Il rend `{ installed, failed: { name, reason }[] }` et ne lève jamais parce que `tlmgr` ne connaît pas un nom.
+  - Le mécanisme : un seul appel `tlmgr install` pour le lot, puis la liste relue. `tlmgr` installe ce qu'il connaît et nomme le reste (`$F_WARNING`, puis `next`, l. 4033). La raison d'un nom est la dernière ligne de `tlmgr` qui le cite, sinon la cause de l'échec (hors ligne : chaque nom porte la même). `ensure` ne lève que si la liste locale est illisible.
+  - La tâche 7 appelle `ensure(latexPackages)` après `provision`, puis à chaque démarrage.
+  - Vérifié sur une installation neuve : `ensure(['tikz-cd', 'paquet-faute-xyz', '-a', 'siunitx'])` installe `tikz-cd` et `siunitx` en 17,2 s. `paquet-faute-xyz` échoue avec « tlmgr.pl install: package paquet-faute-xyz not present in repository. », et `-a` avec « nom de paquet invalide ».
+  - Coût si faux : un paramètre et une forme de retour.
+- Ruling R2.3 : **un mot qui commence par `-` atteindrait `tlmgr` comme une option** (`--repository=…`, `--reinstall`). Or `latexPackages` sera synchronisé depuis le serveur (plan 5).
+  - Un mot doit donc vérifier `^[A-Za-z0-9][A-Za-z0-9._-]*$`, à deux endroits :
+    - dans la validation du réglage (`WORD`, `params.ts`) ;
+    - dans `Packages`, avant tout appel à `tlmgr` (`PACKAGE_NAME`). Un nom refusé va dans `failed`, avec « nom de paquet invalide ». Un paquet que rendrait `search` sous cette forme n'est pas installé : `installFor` rend null.
+  - Les deux expressions sont les mêmes. `tinytex.ts` garde la sienne, sans importer `@cirrus/view`, pour que la frontière de `tlmgr` ne dépende pas d'un réglage.
+  - Testé avec `--repository=x`, `-a` et `.x` des deux côtés.
+  - Coût si faux : nul.
+- Ruling R2.4 : **les paquets viennent du dépôt de TeX Live** (D1 et la contrainte « Réseau »), et non de `tlnet.yihui.org`, le miroir de TinyTeX, qui est un tiers.
+  - Pendant `provision`, après l'extraction et avant `tlmgr update --self`, l'app lance `tlmgr option repository ctan`. Le dépôt devient `https://mirror.ctan.org/systems/texlive/tlnet`, que le réseau de miroirs de CTAN redirige à chaque appel (vu : ircam.fr, tetaneutral.net, ibcp.fr, dauphine.fr).
+  - Cette décision remplace la décision « le dépôt de TinyTeX est gardé » de la tâche 2.
+  - Coût si faux : un appel.
+  - **Constat sur la vérification des signatures** : sur une installation neuve, `tlmgr` dit « (verified) » sous Git Bash, et « (not verified: gpg unavailable) » avec le PATH de Windows. Ce second cas est celui de l'app lancée normalement.
+    - Pourquoi : `tlmgr` cherche `TL_GNUPG`, puis `gpg` et `gpg2` dans le PATH, puis `tlpkg/installer/gpg/gpg.exe` (`TLCrypto.pm`, `setup_gpg`). TinyTeX ne livre pas ce dernier.
+    - Les « (verified) » des passes manuelles venaient du gpg de Git pour Windows (`/usr/bin/gpg`), présent dans le PATH de Git Bash.
+    - Le PATH de Windows de cette machine ne contient que `C:\Program Files\Git\cmd`, sans gpg. Mesuré sur la même installation, par `tlmgr update --list`, avec les deux PATH.
+    - Sans gpg, `tlmgr` télécharge tout de même par HTTPS et contrôle chaque archive par l'empreinte SHA-512 de la base `texlive.tlpdb`. Seule l'authenticité de cette base, signée par TeX Live, n'est pas vérifiée.
+    - Le dépôt ne contient pas de paquet `tlgpg` (`tlmgr info tlgpg` ne trouve rien).
+    - Rien n'a été changé pour cela. C'est une décision à prendre : fixer `TL_GNUPG` vers un gpg, en livrer un, ou accepter HTTPS et les empreintes.

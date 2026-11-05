@@ -145,14 +145,37 @@ function cleanUp(...paths: string[]): void {
   }
 }
 
-/** The last non-empty line of a tool's output: its reason, most often. */
-const lastLine = (out: string) => out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).at(-1) ?? '';
+/**
+ * tlmgr's lines that name no cause (tlmgr.pl): the closing line of any failed run, after its cause; an action's own;
+ * the repository it used; a warning's frame.
+ */
+const GENERIC = /An error has occurred\. See above messages\. Exiting\.|action \S+ returned an error|please see warning above|: package repository |^=+$/;
+const linesOf = (out: string) => out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+/** Why a tlmgr run failed: its last line that names a cause, else its last line. */
+function reasonOf(out: string): string {
+  const lines = linesOf(out);
+  return lines.filter((l) => !GENERIC.test(l)).at(-1) ?? lines.at(-1) ?? '';
+}
+
+/** tlmgr's last line about `name` (« package x not present in repository. »), if any. */
+function reasonFor(out: string, name: string): string | undefined {
+  return linesOf(out).filter((l) => !GENERIC.test(l) && l.split(/\s+/).some((w) => w.replace(/[.,:;]+$/, '') === name)).at(-1);
+}
+
+const tlmgrError = (args: string[], r: { code: number; out: string }) => new Error(`tlmgr ${args[0]} a échoué (code ${r.code}) : ${reasonOf(r.out)}`);
 
 async function tlmgr(run: Deps['run'], bin: string, args: string[]): Promise<string> {
   const r = await run(bin, args);
-  if (r.code !== 0) throw new Error(`tlmgr ${args[0]} a échoué (code ${r.code}) : ${lastLine(r.out)}`);
+  if (r.code !== 0) throw tlmgrError(args, r);
   return r.out;
 }
+
+/**
+ * The package names tlmgr may receive: a letter or a digit first, so that none reads as one of its options
+ * (`--repository=…`); `latexPackages` holds the same words (WORD, @cirrus/view), and will be synced (plan 5).
+ */
+const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Windows will not move a folder while a file in it is open: a scanner may still be reading the fresh binaries. */
 async function renameRetrying(from: string, to: string): Promise<void> {
@@ -170,12 +193,14 @@ async function renameRetrying(from: string, to: string): Promise<void> {
 
 /**
  * Installs TinyTeX into `root` (D1): the pinned release downloaded into <root>.download and checked, extracted into
- * <root>.partial, its tlmgr updated (the bundled one refuses a newer repository) and the packages installed, then
- * renamed into place. Any failure leaves neither <root> nor .partial nor .download: a half-done installation never
- * counts as installed. An existing <root> is taken only if empty: another one is the user's, never removed.
+ * <root>.partial, set on TeX Live's own repository (CTAN's mirrors, rather than TinyTeX's), its tlmgr updated (the
+ * bundled one refuses a newer repository) and BASE_PACKAGES installed, then renamed into place. Any failure leaves
+ * neither <root> nor .partial nor .download: a half-done installation never counts as installed. An existing <root>
+ * is taken only if empty: another one is the user's, never removed. The user's packages come after, by
+ * Packages.ensure: a name tlmgr does not know never makes LaTeX uninstallable.
  */
 export async function provision(
-  root: string, deps: Deps, packages: string[], onProgress: (p: Progress) => void, release: TinyTexRelease = TINYTEX_RELEASE,
+  root: string, deps: Deps, onProgress: (p: Progress) => void, release: TinyTexRelease = TINYTEX_RELEASE,
 ): Promise<TexBinaries> {
   if (process.platform !== 'win32') throw new Error('LaTeX ne s’installe automatiquement que sous Windows : indique une TinyTeX par CIRRUS_TINYTEX.');
   root = resolve(root);
@@ -186,7 +211,6 @@ export async function provision(
     rmdirSync(root); // empty, or it fails
   }
   const downloads = `${root}.download`, partial = `${root}.partial`, staged = join(partial, 'TinyTeX');
-  const names = [...new Set([...BASE_PACKAGES, ...packages])];
   try {
     remove(downloads);
     remove(partial);
@@ -200,10 +224,11 @@ export async function provision(
     onProgress({ step: 'extract' });
     const x = await deps.run(exe, ['-y', `-o${partial}`]);
     if (x.code !== 0) throw new Error(`La décompression de TinyTeX a échoué (code ${x.code}).`);
-    onProgress({ step: 'packages', names });
+    onProgress({ step: 'packages', names: [...BASE_PACKAGES] });
     const tl = join(binDir(staged), 'tlmgr.bat');
+    await tlmgr(deps.run, tl, ['option', 'repository', 'ctan']);
     await tlmgr(deps.run, tl, ['update', '--self']);
-    await tlmgr(deps.run, tl, ['install', ...names]);
+    await tlmgr(deps.run, tl, ['install', ...BASE_PACKAGES]);
     const bins = await findBinaries(staged, deps.run);
     if (!bins) throw new Error('L’installation de TinyTeX est incomplète : pdfLaTeX ne répond pas.');
     // The last step, and atomic: <root> appears whole or not at all.
@@ -251,21 +276,44 @@ export class Packages {
     return this.turn(() => this.list());
   }
 
-  /** Installs those of `names` not installed yet; returns them. */
-  ensure(names: string[]): Promise<string[]> {
+  /**
+   * Installs those of `names` not installed yet, at best: the user's packages (`latexPackages`), after `provision` and
+   * at each start. A name tlmgr does not know, or that it may not receive, fails alone, with its reason; a tlmgr
+   * that fails altogether (offline) fails every name with its cause. It throws only if the local list is unreadable.
+   */
+  ensure(names: string[]): Promise<{ installed: string[]; failed: { name: string; reason: string }[] }> {
     return this.turn(async () => {
+      const unique = [...new Set(names)];
+      const failed = unique.filter((n) => !PACKAGE_NAME.test(n)).map((name) => ({ name, reason: 'nom de paquet invalide' }));
+      const valid = unique.filter((n) => PACKAGE_NAME.test(n));
+      if (valid.length === 0) return { installed: [], failed };
       const have = await this.list();
-      const missing = [...new Set(names)].filter((n) => !have.has(n));
-      if (missing.length > 0) await this.install(missing);
-      return missing;
+      const missing = valid.filter((n) => !have.has(n));
+      if (missing.length === 0) return { installed: [], failed };
+      // One batch: tlmgr installs what it knows and names the rest. The list read again tells which went in.
+      let r: { code: number; out: string };
+      try {
+        r = await this.install(missing);
+      } catch (e) {
+        r = { code: -1, out: (e as Error).message };
+      }
+      if (r.code === 0) return { installed: missing, failed };
+      const now = await this.list().catch(() => have);
+      for (const name of missing.filter((n) => !now.has(n))) failed.push({ name, reason: reasonFor(r.out, name) ?? reasonOf(r.out) });
+      return { installed: missing.filter((n) => now.has(n)), failed };
     });
   }
 
-  /** Installs the package holding `file` (from missingFile); returns it, or null if no package holds that file. */
+  /**
+   * Installs the package holding `file` (from missingFile); returns it, or null if no package holds that file (nor
+   * one whose name tlmgr may receive). A failure of tlmgr throws, with its cause.
+   */
   installFor(file: string): Promise<string | null> {
     return this.turn(async () => {
       const pkg = packageOf(await tlmgr(this.run, this.bins.tlmgr, ['search', '--global', '--file', `/${file}`]), file);
-      if (pkg !== null) await this.install([pkg]);
+      if (pkg === null || !PACKAGE_NAME.test(pkg)) return null;
+      const r = await this.install([pkg]);
+      if (r.code !== 0) throw tlmgrError(['install'], r);
       return pkg;
     });
   }
@@ -282,14 +330,13 @@ export class Packages {
   }
 
   /**
-   * TeX Live updates tlmgr itself during the year, and an older one then refuses to install anything: it is updated,
-   * and the installation tried once more.
+   * `tlmgr install`, its result returned. TeX Live updates tlmgr itself during the year, and an older one then refuses
+   * to install anything: it is updated (a failure there throws), and the installation tried once more.
    */
-  private async install(names: string[]): Promise<void> {
+  private async install(names: string[]): Promise<{ code: number; out: string }> {
     const r = await this.run(this.bins.tlmgr, ['install', ...names]);
-    if (r.code === 0) return;
-    if (!r.out.includes('tlmgr itself needs to be updated')) throw new Error(`tlmgr install a échoué (code ${r.code}) : ${lastLine(r.out)}`);
+    if (r.code === 0 || !r.out.includes('tlmgr itself needs to be updated')) return r;
     await tlmgr(this.run, this.bins.tlmgr, ['update', '--self']);
-    await tlmgr(this.run, this.bins.tlmgr, ['install', ...names]);
+    return this.run(this.bins.tlmgr, ['install', ...names]);
   }
 }

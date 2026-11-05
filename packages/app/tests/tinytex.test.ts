@@ -98,9 +98,13 @@ const RELEASE = {
   sha256: createHash('sha256').update(CONTENT).digest('hex'), bytes: CONTENT.length,
 };
 const VERSION_OUT = 'pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026)\nkpathsea version 6.4.2\n';
+// tlmgr's real lines (tlmgr.pl): the repository it uses, and the closing line of any failed action, after its cause.
+const REPO = 'tlmgr.pl: package repository https://mirrors.ctan.org/systems/texlive/tlnet (verified)';
+const TRAILER = 'tlmgr.pl: An error has occurred. See above messages. Exiting.';
+const failure = (cause: string) => ({ code: 1, out: `${REPO}\n${cause}\ntlmgr.pl: action install returned an error; continuing.\n${TRAILER}\n` });
 
 /** Fake deps: the extractor writes <o>/TinyTeX/bin/windows/{pdflatex.exe,tlmgr.bat}; `fail` makes one step fail. */
-function fakeDeps(root: string, fail?: 'download' | 'extract' | 'update' | 'install' | 'throw') {
+function fakeDeps(root: string, fail?: 'download' | 'extract' | 'option' | 'update' | 'install' | 'throw') {
   const calls: [string, string[]][] = [];
   const deps: Deps = {
     async download(url, dest, onBytes) {
@@ -125,7 +129,7 @@ function fakeDeps(root: string, fail?: 'download' | 'extract' | 'update' | 'inst
       expect(existsSync(root)).toBe(false);
       if (file.endsWith('tlmgr.bat')) {
         if (fail === 'throw') throw new Error('spawn EPERM');
-        return args[0] === fail ? { code: 1, out: 'tlmgr install: package nulpart not present in repository.\n' } : { code: 0, out: '' };
+        return args[0] === fail ? failure(`tlmgr.pl ${fail}: cause simulée de l’échec`) : { code: 0, out: `${REPO}\n` };
       }
       if (file.endsWith('pdflatex.exe') && args[0] === '--version') return { code: 0, out: VERSION_OUT };
       throw new Error(`appel inattendu : ${file} ${args.join(' ')}`);
@@ -135,7 +139,7 @@ function fakeDeps(root: string, fail?: 'download' | 'extract' | 'update' | 'inst
 }
 const leftovers = (root: string) => [root, `${root}.partial`, `${root}.download`].filter((p) => existsSync(p));
 
-test('provision : télécharge, vérifie, extrait, installe les paquets, puis renomme (dans cet ordre)', async () => {
+test('provision : télécharge, vérifie, extrait, prend le dépôt de TeX Live, installe les paquets de base, puis renomme (dans cet ordre)', async () => {
   const root = join(parent, 'TinyTeX');
   // A folder created in advance, empty, and the leftovers of an earlier failed run.
   mkdirSync(root);
@@ -144,19 +148,19 @@ test('provision : télécharge, vérifie, extrait, installe les paquets, puis re
   writeFileSync(join(`${root}.download`, RELEASE.asset), 'moitié');
   const { calls, deps } = fakeDeps(root);
   const progress: Progress[] = [];
-  const bins = await provision(root, deps, ['tikz-cd', 'hyperref'], (p) => progress.push(p), RELEASE);
+  const bins = await provision(root, deps, (p) => progress.push(p), RELEASE);
   const exe = join(`${root}.download`, RELEASE.asset), staged = join(`${root}.partial`, 'TinyTeX', 'bin', 'windows');
-  const names = [...BASE_PACKAGES, 'tikz-cd'];
   expect(calls).toEqual([
     ['download', [RELEASE.url, exe]],
     [exe, ['-y', `-o${root}.partial`]],
+    [join(staged, 'tlmgr.bat'), ['option', 'repository', 'ctan']],
     [join(staged, 'tlmgr.bat'), ['update', '--self']],
-    [join(staged, 'tlmgr.bat'), ['install', ...names]],
+    [join(staged, 'tlmgr.bat'), ['install', ...BASE_PACKAGES]],
     [join(staged, 'pdflatex.exe'), ['--version']],
   ]);
   expect(progress).toEqual([
     { step: 'download', done: 10, total: RELEASE.bytes }, { step: 'download', done: CONTENT.length, total: RELEASE.bytes },
-    { step: 'extract' }, { step: 'packages', names },
+    { step: 'extract' }, { step: 'packages', names: [...BASE_PACKAGES] },
   ]);
   const bin = join(root, 'bin', 'windows');
   expect(bins).toEqual({ root, pdflatex: join(bin, 'pdflatex.exe'), tlmgr: join(bin, 'tlmgr.bat'), version: VERSION_OUT.split('\n')[0] });
@@ -168,22 +172,24 @@ test('provision : une empreinte ou une taille fausse lève le message, n’extra
   const root = join(parent, 'TinyTeX');
   for (const release of [{ ...RELEASE, sha256: '0'.repeat(64) }, { ...RELEASE, bytes: RELEASE.bytes + 1 }]) {
     const { calls, deps } = fakeDeps(root);
-    await expect(provision(root, deps, [], () => {}, release)).rejects.toThrow('Le téléchargement de TinyTeX est corrompu (empreinte inattendue).');
+    await expect(provision(root, deps, () => {}, release)).rejects.toThrow('Le téléchargement de TinyTeX est corrompu (empreinte inattendue).');
     expect(calls.map((c) => c[0])).toEqual(['download']);
     expect(leftovers(root)).toEqual([]);
   }
 });
 
-test('provision : un échec du téléchargement, de l’extraction ou de tlmgr ne laisse rien', async () => {
+test('provision : un échec du téléchargement, de l’extraction ou de tlmgr ne laisse rien, et l’erreur de tlmgr en dit la cause', async () => {
   const root = join(parent, 'TinyTeX');
   const cases = [
     ['download', /réseau coupé/], ['extract', /décompression de TinyTeX a échoué \(code 2\)/],
-    ['update', /tlmgr update a échoué \(code 1\)/], ['install', /tlmgr install a échoué \(code 1\) : tlmgr install: package nulpart not present/],
+    ['option', /^tlmgr option a échoué \(code 1\) : tlmgr\.pl option: cause simulée de l’échec$/],
+    ['update', /^tlmgr update a échoué \(code 1\) : tlmgr\.pl update: cause simulée de l’échec$/],
+    ['install', /^tlmgr install a échoué \(code 1\) : tlmgr\.pl install: cause simulée de l’échec$/],
     ['throw', /spawn EPERM/],
   ] as const;
   for (const [fail, message] of cases) {
     const { deps } = fakeDeps(root, fail);
-    await expect(provision(root, deps, [], () => {}, RELEASE), fail).rejects.toThrow(message);
+    await expect(provision(root, deps, () => {}, RELEASE), fail).rejects.toThrow(message);
     expect(leftovers(root), fail).toEqual([]);
   }
 });
@@ -193,7 +199,7 @@ test('provision : un dossier déjà là et non vide est refusé avant tout tél�
   mkdirSync(root);
   writeFileSync(join(root, 'à moi.txt'), 'garde-moi');
   const { calls, deps } = fakeDeps(root);
-  await expect(provision(root, deps, [], () => {}, RELEASE)).rejects.toThrow(/existe déjà/);
+  await expect(provision(root, deps, () => {}, RELEASE)).rejects.toThrow(/existe déjà/);
   expect(calls).toEqual([]);
   expect(readdirSync(root)).toEqual(['à moi.txt']);
 });
@@ -203,7 +209,7 @@ test('provision : hors de Windows, rien n’est téléchargé', async () => {
   Object.defineProperty(process, 'platform', { value: 'linux' });
   try {
     const { calls, deps } = fakeDeps(join(parent, 'TinyTeX'));
-    await expect(provision(join(parent, 'TinyTeX'), deps, [], () => {}, RELEASE))
+    await expect(provision(join(parent, 'TinyTeX'), deps, () => {}, RELEASE))
       .rejects.toThrow('LaTeX ne s’installe automatiquement que sous Windows : indique une TinyTeX par CIRRUS_TINYTEX.');
     expect(calls).toEqual([]);
   } finally {
@@ -285,10 +291,16 @@ test('packageOf : le premier paquet dont un fichier finit exactement par /<fichi
 // --- Packages, with a fake tlmgr ---
 
 const BINS: TexBinaries = { root: 'C:\\TinyTeX', pdflatex: 'C:\\TinyTeX\\bin\\windows\\pdflatex.exe', tlmgr: 'C:\\TinyTeX\\bin\\windows\\tlmgr.bat', version: 'pdfTeX' };
+const LIST = 'début info --list --only-installed --data name';
 
-/** A tlmgr that knows amsmath and hyperref installed, finds tikz-cd.sty in tikz-cd, and takes 10 ms per call. */
+/**
+ * A tlmgr with amsmath and hyperref installed, whose repository knows tikz-cd, siunitx, foo and xfoo, and which takes
+ * 10 ms per call. Like the real one, it installs what it knows of a batch, says which names it does not know, and
+ * then fails with its closing line. `answer` overrides a call.
+ */
 function fakeTlmgr(answer: (args: string[]) => { code: number; out: string } | undefined = () => undefined) {
   const events: string[] = [];
+  const have = new Set(['amsmath', 'hyperref']), known = new Set(['tikz-cd', 'siunitx', 'foo', 'xfoo']);
   let active = 0;
   const run: Deps['run'] = async (file, args) => {
     expect(file).toBe(BINS.tlmgr);
@@ -300,27 +312,69 @@ function fakeTlmgr(answer: (args: string[]) => { code: number; out: string } | u
     active--;
     const a = answer(args);
     if (a) return a;
-    if (args[0] === 'info') return { code: 0, out: 'amsmath\nhyperref\n' };
+    if (args[0] === 'info') return { code: 0, out: [...have].map((n) => `${n}\n`).join('') };
     if (args[0] === 'search') return { code: 0, out: SEARCH };
+    if (args[0] === 'install') {
+      const names = args.slice(1), unknown = names.filter((n) => !known.has(n));
+      const done = names.filter((n) => known.has(n)).map((n, i) => { have.add(n); return `[${i + 1}/${names.length}, ??:??/??:??] install: ${n} [12k]\n`; });
+      if (unknown.length === 0) return { code: 0, out: `${done.join('')}${REPO}\n` };
+      return { code: 1, out: `${done.join('')}${REPO}\n${unknown.map((n) => `tlmgr.pl install: package ${n} not present in repository.\n`).join('')}${TRAILER}\n` };
+    }
     return { code: 0, out: '' };
   };
-  return { events, run };
+  return { events, run, have };
 }
 
 test('Packages.ensure n’installe que les absents, et rend ceux qu’il a installés', async () => {
   const { events, run } = fakeTlmgr();
   const p = new Packages(BINS, run);
   expect(await p.installed()).toEqual(new Set(['amsmath', 'hyperref']));
-  expect(await p.ensure(['hyperref', 'tikz-cd', 'siunitx', 'tikz-cd'])).toEqual(['tikz-cd', 'siunitx']);
-  expect(await p.ensure(['amsmath'])).toEqual([]);
-  expect(events.filter((e) => e.startsWith('début'))).toEqual([
-    'début info --list --only-installed --data name',
-    'début info --list --only-installed --data name', 'début install tikz-cd siunitx',
-    'début info --list --only-installed --data name',
-  ]);
+  expect(await p.ensure(['hyperref', 'tikz-cd', 'siunitx', 'tikz-cd'])).toEqual({ installed: ['tikz-cd', 'siunitx'], failed: [] });
+  expect(await p.ensure(['amsmath', 'tikz-cd'])).toEqual({ installed: [], failed: [] });
+  expect(events.filter((e) => e.startsWith('début'))).toEqual([LIST, LIST, 'début install tikz-cd siunitx', LIST]);
 });
 
-test('Packages.installFor : search puis install, ou null sans paquet qui contienne le fichier', async () => {
+test('Packages.ensure : un nom inconnu parmi d’autres n’empêche pas les autres, et sa raison vient de tlmgr', async () => {
+  const { events, run } = fakeTlmgr();
+  const p = new Packages(BINS, run);
+  expect(await p.ensure(['tikz-cd', 'tikzcd-faute', 'siunitx'])).toEqual({
+    installed: ['tikz-cd', 'siunitx'],
+    failed: [{ name: 'tikzcd-faute', reason: 'tlmgr.pl install: package tikzcd-faute not present in repository.' }],
+  });
+  // One batch, then the list again to see which went in.
+  expect(events.filter((e) => e.startsWith('début'))).toEqual([LIST, 'début install tikz-cd tikzcd-faute siunitx', LIST]);
+  // Offline: nothing goes in, each name fails with tlmgr's cause, and the call does not throw.
+  const off = fakeTlmgr((args) => (args[0] === 'install' ? failure('tlmgr.pl: cannot download https://mirrors.ctan.org/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512') : undefined));
+  expect(await new Packages(BINS, off.run).ensure(['tikz-cd', 'siunitx'])).toEqual({
+    installed: [],
+    failed: ['tikz-cd', 'siunitx'].map((name) => ({ name, reason: 'tlmgr.pl: cannot download https://mirrors.ctan.org/systems/texlive/tlnet/tlpkg/texlive.tlpdb.sha512' })),
+  });
+});
+
+test('Packages.ensure : un nom qui commencerait comme une option de tlmgr n’atteint jamais tlmgr', async () => {
+  const { events, run } = fakeTlmgr();
+  expect(await new Packages(BINS, run).ensure(['--repository=http://ailleurs.example', '-a', 'tikz-cd', '.cache', ''])).toEqual({
+    installed: ['tikz-cd'],
+    failed: ['--repository=http://ailleurs.example', '-a', '.cache', ''].map((name) => ({ name, reason: 'nom de paquet invalide' })),
+  });
+  expect(events.filter((e) => e.startsWith('début'))).toEqual([LIST, 'début install tikz-cd']);
+  // Only invalid names: no tlmgr at all.
+  const none = fakeTlmgr();
+  expect((await new Packages(BINS, none.run).ensure(['-a'])).failed).toEqual([{ name: '-a', reason: 'nom de paquet invalide' }]);
+  expect(none.events).toEqual([]);
+});
+
+test('Packages : une TinyTeX installée n’est jamais effacée à cause d’un paquet de l’utilisateur', async () => {
+  const root = join(parent, 'TinyTeX');
+  const bins = await provision(root, fakeDeps(root).deps, () => {}, RELEASE);
+  const tl = fakeTlmgr();
+  const p = new Packages(BINS, tl.run);
+  expect((await p.ensure(['inconnu-xyz'])).failed).toEqual([{ name: 'inconnu-xyz', reason: 'tlmgr.pl install: package inconnu-xyz not present in repository.' }]);
+  expect(existsSync(bins.pdflatex)).toBe(true);
+  expect(leftovers(root)).toEqual([root]);
+});
+
+test('Packages.installFor : search puis install, ou null sans paquet qui contienne le fichier ; un échec en dit la cause', async () => {
   const { events, run } = fakeTlmgr();
   const p = new Packages(BINS, run);
   expect(await p.installFor('tikz-cd.sty')).toBe('tikz-cd');
@@ -328,38 +382,50 @@ test('Packages.installFor : search puis install, ou null sans paquet qui contien
   expect(events.filter((e) => e.startsWith('début'))).toEqual([
     'début search --global --file /tikz-cd.sty', 'début install tikz-cd', 'début search --global --file /bar.sty',
   ]);
-  // Offline: search fails, and so does the call.
-  const off = new Packages(BINS, fakeTlmgr((args) => (args[0] === 'search' ? { code: 1, out: 'tlmgr: cannot contact mirror\n' } : undefined)).run);
-  await expect(off.installFor('tikz-cd.sty')).rejects.toThrow(/tlmgr search a échoué \(code 1\) : tlmgr: cannot contact mirror/);
+  // Offline: search fails, and so does the call, with tlmgr's cause rather than its closing line.
+  const off = new Packages(BINS, fakeTlmgr((args) => (args[0] === 'search' ? failure('tlmgr.pl: cannot contact mirror') : undefined)).run);
+  await expect(off.installFor('tikz-cd.sty')).rejects.toThrow(/^tlmgr search a échoué \(code 1\) : tlmgr\.pl: cannot contact mirror$/);
+  const broken = new Packages(BINS, fakeTlmgr((args) => (args[0] === 'install' ? failure('tlmgr.pl install: checksum of tikz-cd does not match') : undefined)).run);
+  await expect(broken.installFor('tikz-cd.sty')).rejects.toThrow(/^tlmgr install a échoué \(code 1\) : tlmgr\.pl install: checksum of tikz-cd does not match$/);
+  // A package name from the repository that would read as an option is not installed.
+  const odd = new Packages(BINS, fakeTlmgr((args) => (args[0] === 'search' ? { code: 0, out: '-x:\n\ttexmf-dist/tex/latex/x/odd.sty\n' } : undefined)).run);
+  expect(await odd.installFor('odd.sty')).toBeNull();
 });
 
 test('Packages : deux appels simultanés passent l’un après l’autre, et un échec ne bloque pas les suivants', async () => {
-  const { events, run } = fakeTlmgr((args) => (args.join(' ') === 'install siunitx' ? { code: 1, out: 'non' } : undefined));
+  const { events, run } = fakeTlmgr((args) => (args.join(' ') === 'search --global --file /bar.sty' ? failure('tlmgr.pl: cannot contact mirror') : undefined));
   const p = new Packages(BINS, run);
-  const [a, b, c] = await Promise.allSettled([p.ensure(['tikz-cd']), p.installFor('tikz-cd.sty'), p.ensure(['siunitx'])]);
-  expect(a).toEqual({ status: 'fulfilled', value: ['tikz-cd'] });
-  expect(b).toEqual({ status: 'fulfilled', value: 'tikz-cd' });
-  expect(c.status).toBe('rejected');
-  expect(await p.ensure(['amsmath'])).toEqual([]);
+  const [a, b, c] = await Promise.allSettled([p.ensure(['tikz-cd']), p.installFor('bar.sty'), p.ensure(['siunitx'])]);
+  expect(a).toEqual({ status: 'fulfilled', value: { installed: ['tikz-cd'], failed: [] } });
+  expect(b.status).toBe('rejected');
+  expect(c).toEqual({ status: 'fulfilled', value: { installed: ['siunitx'], failed: [] } });
   expect(events).toEqual([
-    'début info --list --only-installed --data name', 'fin info', 'début install tikz-cd', 'fin install',
-    'début search --global --file /tikz-cd.sty', 'fin search', 'début install tikz-cd', 'fin install',
-    'début info --list --only-installed --data name', 'fin info', 'début install siunitx', 'fin install',
-    'début info --list --only-installed --data name', 'fin info',
+    LIST, 'fin info', 'début install tikz-cd', 'fin install',
+    'début search --global --file /bar.sty', 'fin search',
+    LIST, 'fin info', 'début install siunitx', 'fin install',
   ]);
 });
 
 test('Packages : un tlmgr à mettre à jour (dépôt plus récent) est mis à jour, puis l’installation reprend une fois', async () => {
   let updated = false;
+  const outdated = { code: 1, out: `${REPO}\n${'='.repeat(79)}\ntlmgr itself needs to be updated.\nPlease do this via either\n  tlmgr update --self\n${'='.repeat(79)}\ntlmgr.pl: Terminating; please see warning above!\n` };
   const { events, run } = fakeTlmgr((args) => {
     if (args[0] === 'update') { updated = true; return { code: 0, out: '' }; }
-    if (args[0] === 'install' && !updated) return { code: 1, out: 'tlmgr itself needs to be updated.\nPlease do this via either\n  tlmgr update --self\n' };
+    if (args[0] === 'install' && !updated) return outdated;
     return undefined;
   });
-  expect(await new Packages(BINS, run).installFor('tikz-cd.sty')).toBe('tikz-cd');
+  const p = new Packages(BINS, run);
+  expect(await p.installFor('tikz-cd.sty')).toBe('tikz-cd');
   expect(events.filter((e) => e.startsWith('début'))).toEqual([
     'début search --global --file /tikz-cd.sty', 'début install tikz-cd', 'début update --self', 'début install tikz-cd',
   ]);
+  // The same for ensure; and a tlmgr that cannot update itself makes the names fail with that cause, without throwing.
+  updated = false;
+  expect(await p.ensure(['siunitx'])).toEqual({ installed: ['siunitx'], failed: [] });
+  const stuck = fakeTlmgr((args) => (args[0] === 'install' ? outdated : args[0] === 'update' ? failure('tlmgr.pl: cannot contact mirror') : undefined));
+  expect(await new Packages(BINS, stuck.run).ensure(['siunitx'])).toEqual({
+    installed: [], failed: [{ name: 'siunitx', reason: 'tlmgr update a échoué (code 1) : tlmgr.pl: cannot contact mirror' }],
+  });
 });
 
 test.skipIf(!hasTex)(withTex('Packages.installed, sur la TinyTeX du banc et sans réseau, contient hyperref'), async () => {

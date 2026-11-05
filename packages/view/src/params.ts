@@ -356,9 +356,12 @@ export const DEFAULT_PARAMS: RenderParams = {
   intruderColor: hexToRgb('#ff9a3c'),
 };
 
-/** `words`: a list of words of WORD, such as package names (they reach tlmgr's command line). */
+/**
+ * `words`: a list of words of WORD, such as package names. They reach tlmgr's command line: a word starts with a
+ * letter or a digit, so that none reads as an option (`--repository=…`), the setting being synced (plan 5).
+ */
 export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list' | 'words';
-export const WORD = /^[A-Za-z0-9._-]+$/;
+export const WORD = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export interface ParamSpec {
   key: keyof RenderParams;

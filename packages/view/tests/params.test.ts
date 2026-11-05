@@ -125,8 +125,9 @@ test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage ava
   });
   expect(withOverrides({ latexPackages: ['tikz-cd'] }).latexPackages).toEqual(['tikz-cd']);
   expect(withOverrides({ latexPackages: ['siunitx', 'l3kernel', 'babel-french', 'ms.x_y'] }).latexPackages).toEqual(['siunitx', 'l3kernel', 'babel-french', 'ms.x_y']);
-  // Only words of [A-Za-z0-9._-]: they reach tlmgr's command line.
-  for (const bad of [['a b'], [3], ['tikz-cd', 3], [''], ['a&b'], ['é'], 'tikz-cd', null]) {
+  // Only words of [A-Za-z0-9._-], starting with a letter or a digit: they reach tlmgr's command line, where a word
+  // starting with « - » would be an option (the setting will be synced, plan 5).
+  for (const bad of [['a b'], [3], ['tikz-cd', 3], [''], ['a&b'], ['é'], ['--repository=x'], ['-a'], ['tikz-cd', '--reinstall'], ['.x'], 'tikz-cd', null]) {
     expect(withOverrides({ latexPackages: bad }).latexPackages, JSON.stringify(bad)).toEqual([]);
   }
   const p = { ...DEFAULT_PARAMS, latexPackages: ['tikz-cd', 'siunitx'] };
