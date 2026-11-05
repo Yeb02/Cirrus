@@ -887,6 +887,82 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 8 : mesures, captures, spec
 
+### Mesures
+
+- **Méthode** (le détail est dans `docs/bancs/latex-app-2026-11-05.md`) :
+  - l'app construite, une copie neuve de la base de test à chaque session, un profil à part, la TinyTeX du banc (`CIRRUS_TINYTEX`), menée par le protocole des outils de Chrome avec de vraies entrées ;
+  - rien de l'app n'est modifié pour mesurer (décision plus bas). La fin de la pause est le déclenchement de la minuterie de `latexTypingPauseMs` (300 ms) ; l'image dessinée est le canevas de la première page du nouveau PDF, mis dans la page, puis l'image suivante ;
+  - une frappe (« ␣a », « ␣b »…) à la fin du résumé de l'entropie, dans son éditeur compact, ou à la fin de `complexité.tex`, dans son plein écran, puis 1,2 s de repos. Une première frappe non comptée, puis 20 ; trois sessions, soit 60 par cas ;
+  - p50 et p95 au rang le plus proche.
+- **De la fin de la pause à l'aperçu dessiné** (la cible de la spec 13 est de 300 ms) :
+
+  | Cas | p50 | p95 | max | Image suivante p50 / p95 |
+  | --- | --- | --- | --- | --- |
+  | Résumé de l'entropie, dans son pop-up | 176 ms | 239 ms | 257 ms | 180 / 242 ms |
+  | `complexité.tex`, dans son plein écran | 214 ms | 282 ms | 292 ms | 216 / 287 ms (max 298) |
+
+  - La cible est tenue dans les deux cas, en médiane comme au p95. Pour le `.tex`, la marge est mince dans une session lente.
+  - D'une session à l'autre, les p50 vont de 168 à 226 ms pour le résumé et de 198 à 266 ms pour le `.tex`. La session lente l'est partout, compilation et pdf.js : c'est la machine.
+- **Où va le temps** (p50 / p95, résumé puis `.tex`) :
+  - la compilation dans le principal, de l'arrivée de l'IPC à sa réponse : 137 / 188 ms, puis 155 / 206 ms, soit les trois quarts ;
+  - l'IPC, le retour, le rendu de React et la première réponse du PDF : environ 5 ms ;
+  - pdf.js, de la première réponse du PDF au canevas : 35 / 46 ms, puis 53 / 72 ms.
+  - Le levier suivant, si la marge venait à manquer : pdfLaTeX lui-même (113 ms des 138 ms d'une compilation de `complexité.tex` à la tâche 3), puis le dessin de pdf.js, chacun à mesurer. `mylatexformat` n'y changerait rien, le préambule étant déjà chargé d'avance.
+- **Ouvrir le pop-up de l'entropie**, du relâchement du clic au résumé dessiné :
+  - rouvert dans la session, son résumé en cache : p50 17 ms, p95 20 ms (20 fois), sans compilation ;
+  - première ouverture après un redémarrage, son résumé dans le cache du disque : p50 488 ms, p95 506 ms (5 sessions), la réponse du cache en 3 ms ;
+  - première compilation après le démarrage, 1,5 s après le graphe : p50 622 ms, p95 646 ms (10 sessions), dont 154 ms de compilation. Dès que le graphe paraît : p50 579 ms (5 sessions).
+  - Dans les deux premières ouvertures, environ 0,45 s vient de pdf.js et non de LaTeX : ses morceaux arrivent en 3 ms, puis 0,3 s passent avant la première lecture du PDF, son travailleur démarre, et la page se dessine 100 ms plus tard. Le levier suivant serait de charger pdf.js et son travailleur d'avance, au repos (mineur reporté).
+- **Captures**, deux suites neuves (24 scènes chacune) :
+  - `reference-3c` : 11 sur 11 à 0 pixel ; `plan4a` : 8 sur 8 à 0 pixel ;
+  - `plan4b`, créée par la première suite : la seconde y est à 0 pixel sur 5 ;
+  - d'une suite à l'autre, les 24 PNG sont identiques, octet pour octet.
+- **Ce que montre chaque nouvelle capture**, regardée une à une :
+  - `popup-resume-compile` : le pop-up de l'entropie, son résumé compilé sur une carte blanche, l'équation (1) et « en bits. » entiers ;
+  - `relation-compilee` : la fenêtre de « Déduction jointe », sa relation compilée (« Ensemble, K(x) ≤ L_MDL(x) + O(1). ») et ses quatre membres ;
+  - `plein-ecran-tex` : l'atelier de `complexité.tex`, `\ref{absent:label}` souligné en rouge à la ligne 10, avec son point dans la gouttière, et « absent:label ? » en rouge dans l'aperçu, à côté des titres liés de MDL, de l'entropie, de Solomonoff et de « [Li et Vitányi, 2008] » ;
+  - `tex-erreur` : `\oups ` tapé au début, « Erreur ligne 1 : Undefined control sequence. » dans le bandeau, la ligne 1 soulignée, le journal ouvert avec l'erreur en tête et sa fin (« Fatal error occurred, no output PDF file produced! »), et à gauche du journal le dernier PDF valide ;
+  - `preambule` : l'éditeur du préambule sur `DEFAULT_PREAMBLE`, et l'exemple compilé à côté (le paragraphe accentué, l'équation (1), la liste, le lien vers CTAN).
+- **Suite** : 748 tests sur 748, sans test ajouté : la tâche ne change que le banc des captures. `tsc` : `core`, `store`, `view`, `fixtures` et `app` sans erreur.
+
+### Décisions
+
+- Ruling: **la mesure ne touche pas à l'app.**
+  - Options : des marques de performance dans le code (`performance.mark`), qui resteraient et s'accumuleraient dans la chronologie de la page ; des prises posées de l'extérieur (choix).
+  - Le pilote enveloppe `window.setTimeout` pour noter le déclenchement de la pause, et pose un `MutationObserver` sur les canevas des pages PDF. Un lanceur du principal, jetable, enveloppe le gestionnaire de `cirrus:latex:compile` avant que l'app ne l'enregistre.
+  - Coût si faux : nul ; les scripts sont jetables (bloc-notes de la session).
+- Ruling: **trois sessions de 20 frappes, et une frappe non comptée en tête de chacune**, plutôt qu'une seule série.
+  - Pourquoi : une première série a montré des écarts de 50 ms d'une session à l'autre, que la machine explique. Le p95 de 60 frappes dit mieux la marge.
+  - Coût si faux : nul.
+- Ruling: **une capture ne dessine pas le curseur du texte** : `.capture * { caret-color: transparent !important; }` (`styles.css`).
+  - Pourquoi : `plein-ecran-tex`, `tex-erreur` et `preambule` ont un éditeur qui a le focus, et le curseur de Chromium clignote. L'image dépendrait de l'instant où elle est prise. C'est ce que font Playwright et Puppeteer.
+  - `reference-3c` et `plan4a` sont inchangées, à 0 pixel.
+  - Coût si faux : une règle de CSS.
+- Ruling: **`CIRRUS_CLICK` accepte une entrée `type:<texte>`**, qui tape ce texte là où est le focus, par `document.execCommand('insertText')` (`App.tsx`).
+  - Options :
+    - une variable `CIRRUS_TYPE` à part : la frappe de `tex-erreur` doit venir entre deux clics, et les clics passent avant les touches ;
+    - piloter la capture par le protocole des outils de Chrome : un second mécanisme pour une seule scène ;
+    - une base avec un `.tex` déjà cassé : il n'y aurait alors aucun PDF valide à montrer ;
+    - l'entrée `type:` (choix).
+  - CodeMirror lit cette insertion comme une frappe. Le texte ne peut pas contenir de virgule, qui sépare les entrées.
+  - Coût si faux : une branche. Si Chromium retirait `execCommand`, la scène montrerait l'atelier sans erreur, et la comparaison avec `plan4b` le dirait.
+- Ruling: **les scènes nouvelles** :
+  - `relation-compilee` appuie sur le marqueur de « Déduction jointe », en (1122, 399) dans le graphe, relevé sur une capture ;
+  - `tex-erreur` tape `\oups ` au début de `complexité.tex`, là où l'éditeur ouvre son curseur, puis ouvre le journal ;
+  - `preambule` ouvre le bandeau des réglages (`CIRRUS_PANEL`, que `captures.mjs` passe désormais pour `panel: true`), puis « Modifier le préambule… ».
+  - Coût si faux : nul.
+- Ruling: **la spec change aussi aux sections 5.3, 18, 19, 21 et 23**, en plus des sections 4, 5.4, 12 et 13 de la tâche.
+  - 5.3 : la relation est compilée et peut définir des labels ;
+  - 18 : les outils de LaTeX sur le serveur, à la demande de l'utilisateur ;
+  - 19 : le groupe « LaTeX » des réglages ;
+  - 21 : la cible tenue ;
+  - 23 : la signature des paquets, l'aspect du résumé compilé et le gel de TeX Live, trois questions ouvertes.
+  - Coût si faux : nul.
+
+### Notes
+
+- Le plan est mis à jour là où les décisions de l'exécution ont changé une interface : D1 (`provision` sans paquets, `ensure`, le dépôt de CTAN, gpg), D4 (amendée), D6 (`merge`, le refus), D7 (`doubledCites`), les types de la tâche 1 (`doubledCites`, `installed` en liste), `texEnv` et `provision` (tâche 2), `LatexSetup` (tâches 3 et 7), et le test de lecture retiré (tâche 3). Chaque ajout est marqué *Exécution*.
+
 ## Mesures du plan 4b
 
 | Mesure | Tâche | Valeur | Conditions |
@@ -909,6 +985,13 @@ Fixées par le contrôleur avant la tâche :
 | Résumé ouvert pendant l’installation : compilé après « installé » | 7 | 1,6 s puis 1,5 s | idem ; sans frappe (`latexChanged`) |
 | `tikz-cd` à la demande, du préambule tapé à l’aperçu recompilé | 7 | 18,4 s ; 154,3 s une fois (miroir lent) | idem ; `search --global`, `install`, réserve refaite |
 | `tlmgr --repository ctan search --global --file` | 7 | de 10,2 à 11,9 s, quatre fois | installation neuve ; un miroir différent chaque fois |
+| Résumé de l’entropie modifié : de la fin de la pause de frappe au canevas du nouveau PDF | 8 | p50 176 ms, p95 239 ms, max 257 (60) ; image suivante 180 / 242 ms | app construite, base de test, TinyTeX du banc ; trois sessions de 20 frappes, 1,2 s de repos |
+| `complexité.tex` modifié dans son plein écran : idem | 8 | p50 214 ms, p95 282 ms, max 292 (60) ; image suivante 216 / 287 ms, max 298 | idem |
+| Part de la compilation (principal), résumé puis `.tex` | 8 | p50 137 et 155 ms ; p95 188 et 206 ms | l’IPC chronométrée dans le principal |
+| Part de pdf.js, résumé puis `.tex` | 8 | p50 35 et 53 ms ; p95 46 et 72 ms | de la première réponse du PDF au canevas |
+| Pop-up de l’entropie rouvert, son résumé en cache : du clic au résumé dessiné | 8 | p50 17 ms, p95 20 ms (20) | une session ; sans compilation |
+| Première ouverture après un redémarrage, le résumé dans le cache du disque | 8 | p50 488 ms, p95 506 ms (5) | 3 ms de réponse du cache, 475 ms de pdf.js |
+| Première compilation après le démarrage : du clic au résumé dessiné | 8 | p50 622 ms, p95 646 ms (10) ; 579 ms dès que le graphe paraît (5) | une base neuve par session ; 154 ms de compilation, 463 ms de pdf.js |
 
 ## Mineurs reportés
 
@@ -989,6 +1072,13 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - `latexChanged` refait aussi, à chaque changement d'état, la compilation d'une vue en erreur pour une autre raison qu'un paquet : une compilation rapide de plus (`scheduler.ts`, `retry`).
 - L'éditeur du préambule n'a ni suggestions ni diagnostics de labels (`registry` à null) : seule l'erreur du préambule y est marquée (`PreambleEditor.tsx`).
 - Le pop-up de connexion se ferme à tout Échap et à tout appui hors de lui, même sous un plein écran. Il faut un clic hors de lui pour ouvrir le préambule, ce qui le ferme déjà (`ConnectionPopup.tsx`).
+
+### Tâche 8
+
+- Le premier résumé compilé d'une session attend environ 0,45 s le chargement de pdf.js et de son travailleur, en plus de la compilation. Les charger d'avance, au repos après le démarrage, l'enlèverait (`LatexField.tsx`, `LatexSnippet.tsx`). Le mineur de la tâche 6 sur le source montré à la première ouverture en est la mesure.
+- Pour un `.tex`, la cible de 300 ms est tenue de peu dans une session lente : p95 de 288 ms, et 298 ms au plus jusqu'à l'image suivante. Un `.tex` plus long, ou une figure TikZ, la dépassera (la spec 13 l'accepte).
+- Les mesures sont celles du portable principal. Le petit PC, qui fixe le plancher, n'est pas mesuré (spec 21).
+- L'entrée `type:` de `CIRRUS_CLICK` passe par `document.execCommand`, que les navigateurs déclarent obsolète (`App.tsx`).
 
 ## Décisions du contrôleur (plan 4b)
 
@@ -1072,3 +1162,14 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - Ruling 5 : un nom qu'`ensure` n'a pas pu installer n'est retenté qu'une fois par session de l'app ; un fichier manquant pour lequel `installFor` a rendu null n'est plus cherché de la session — pas de boucle de tentatives au démarrage — coût si faux : un redémarrage. Appliquée sous la tâche 7.
 - Ruling 6 : parmi les correspondances exactes, `packageOf` préfère un chemin sous `texmf-dist/tex/` (mineur de la revue de la tâche 2) — coût si faux : une expression régulière. Appliquée sous la tâche 7.
 - Ruling : après `ready` ou un paquet installé, les vues compilent à nouveau sans frappe, par un compteur que le planificateur compare (mineur de la revue de la tâche 4) — coût si faux : nul. Appliquée sous la tâche 7 (`latexChanged`).
+
+### Avant la tâche 8
+
+Ce que la spec doit dire, transmis par le contrôleur :
+- D4 amendée, décision de l'utilisateur (2026-11-05 : « Pour ce qui est des tex, ne sois pas excessivement prudent, ce seront les miens ») : la décision provisoire R3.1 devient définitive. Aucun bac à sable du système n'est prévu.
+- gpg : la question reste à l'utilisateur ; la spec dit l'état actuel (R2.4 et le constat de la tâche 7).
+- Les outils sur le serveur, demande de l'utilisateur (2026-11-05 : « mettre tous les utils sur le serveur, de manière à ce que l'utilisateur n'aille rien chercher sur internet, afin de ne pas casser l'app si une version ultérieure non rétrocompatible était publiée ») : la spec 18 dit que le serveur gardera l'installateur de TinyTeX et un instantané figé du dépôt de TeX Live de l'année, et que les PC ne téléchargeront que depuis lui.
+- D6 et D7 tels que l'utilisateur les a amendés ; la clé BibTeX est le tag `clé_bibtex` (spec 5.4).
+- L'aspect du résumé compilé : du papier, noir sur blanc, à 9 cm [C]. L'utilisateur a été interrogé sur un aspect inversé ou une largeur moindre, sans réponse encore. La largeur est un réglage ; l'aspect inversé serait un réglage à construire.
+
+Appliqué sous la tâche 8 (spec 4, 5.3, 5.4, 12, 13, 18, 19, 21 et 23).

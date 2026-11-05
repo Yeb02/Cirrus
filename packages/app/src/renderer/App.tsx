@@ -37,7 +37,7 @@ const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx'
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 const NO_TEXTS: ReadonlyMap<string, string> = new Map();
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
-// so that the captures repeat to the pixel.
+// nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
 
 /** Open tabs are a per-PC convenience: kept in localStorage, which may be unavailable. */
@@ -295,7 +295,8 @@ export function App() {
     readySent.current = true;
     saver.current?.start();
     // Visual checks: CIRRUS_IMPORT="sx,sy|path" drops that file at that point of the graph, by the drop's own path
-    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements, CIRRUS_KEYS="ctrl+z,Delete" presses those keys;
+    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements — an entry "type:<text>" types that text where
+    // the focus is, as the keyboard would (an editor: plan 4b, task 8) —, CIRRUS_KEYS="ctrl+z,Delete" presses those keys;
     // the capture waits for the files' views they opened to settle (their file read, their code and language loaded).
     const [at, ...dropped] = (window.cirrus.launch.import ?? '').split('|').filter(Boolean);
     const clicks = (window.cirrus.launch.click ?? '').split(',').filter(Boolean);
@@ -305,9 +306,11 @@ export function App() {
         const [sx, sy] = at.split(',').map(Number);
         await graph.current?.dropFilesAt(sx, sy, dropped);
       }
-      // Each click waits for what the views it opened load (a PDF's reader, its pages): the next one acts on them.
+      // Each click waits for what the views it opened load (a PDF's reader, its pages, a compilation): the next one
+      // acts on them.
       for (const sel of clicks) {
-        document.querySelector<HTMLElement>(sel)?.click();
+        if (sel.startsWith('type:')) document.execCommand('insertText', false, sel.slice(5));
+        else document.querySelector<HTMLElement>(sel)?.click();
         await new Promise((r) => setTimeout(r, 300));
         await viewsSettled();
       }

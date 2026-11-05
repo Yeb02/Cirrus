@@ -239,6 +239,8 @@ button, input, select { font: inherit; color: var(--ink); }
 /* A file's menu, at the click in window pixels: out of the body it is opened in, which scrolls and clips. */
 .panel .context-menu { position: fixed; }
 .capture .volatile { visibility: hidden; }
+/* An editor's cursor blinks: a capture never draws it (plan 4b, task 8). */
+.capture * { caret-color: transparent !important; }
 .handles { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .handles line { stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
 .handles circle { stroke-width: 1; }

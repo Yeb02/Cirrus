@@ -8,7 +8,7 @@
 - lier les nœuds : un `\ref` vers le label d'un autre nœud affiche son titre, un `\cite` affiche une citation courte de la publication. Un clic sur le lien ouvre le pop-up du nœud. Un label cassé ou en double apparaît en rouge ;
 - modifier le préambule global, qui sert à tous les nœuds.
 
-L'aperçu d'un nœud ordinaire s'affiche en moins de 300 ms après la pause de frappe (spec 13). Une erreur laisse le dernier PDF valide à l'écran, avec le journal à côté. LaTeX ne lit ni n'écrit rien hors de son dossier et n'exécute aucune commande.
+L'aperçu d'un nœud ordinaire s'affiche en moins de 300 ms après la pause de frappe (spec 13). Une erreur laisse le dernier PDF valide à l'écran, avec le journal à côté. LaTeX n'écrit rien hors de son dossier et n'exécute aucune commande (D4, tel que l'utilisateur l'a amendé).
 
 **Architecture :**
 - **Compilation :** dans le principal (spec 4), par pdfLaTeX de TinyTeX, préparé d'avance comme au banc (`bench/latex/src/warmCompiler.ts`). Les PDF produits vont dans un cache local, servi par `cirrus-file://latex/…`.
@@ -27,6 +27,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
 - **D1, TinyTeX : téléchargé la première fois qu'il sert, après ton accord, dans `%LOCALAPPDATA%\Cirrus\TinyTeX`.**
   - La version est épinglée (v2026.11, celle du banc) et vérifiée par son empreinte SHA-256 avant d'être lancée. Le téléchargement fait environ 100 Mo, et l'installation environ 300 Mo.
   - Les paquets manquants s'installent d'eux-mêmes par `tlmgr`, depuis le dépôt de TeX Live (spec 13). Chacun s'ajoute au réglage partagé `latexPackages`, que chaque PC installe à son démarrage.
+  - *Exécution :* `provision` n'installe que `BASE_PACKAGES`, et les paquets de l'utilisateur passent ensuite par `Packages.ensure`, au mieux (R2.2). Le dépôt est celui de CTAN (`tlmgr option repository ctan`, R2.4). Toutes les sources sont dans `LATEX_SOURCES` (tâche 7), que le serveur remplacera (spec 18). TinyTeX ne livre pas gpg : la signature de la base des paquets n'est pas vérifiée, et la question est rendue à l'utilisateur (registre, tâche 7).
   - L'inclure dans l'installateur viendra peut-être avec le plan 9. Il n'existe pas encore, et ajouterait 100 Mo à chaque mise à jour de l'app.
   - Le dossier de données (`%APPDATA%`, itinérant) ne convient pas à 300 Mo de binaires. Une installation TeX du système irait contre la spec 13.
   - Limite connue : TeX Live gèle son dépôt chaque printemps. Vers avril 2027, le `tlmgr` de 2026 n'installera plus de paquet, et il faudra une TinyTeX plus récente (plan 9).
@@ -38,10 +39,10 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - La largeur est fixe, `latexSnippetWidthCm` (9 cm), et la hauteur suit le contenu. pdf.js le dessine à la largeur du pop-up, sans dépasser `latexSnippetMaxZoom`.
   - KaTeX ou MathJax seraient instantanés, mais ce ne serait plus la même chaîne : les macros du préambule manqueraient, et le rendu différerait du document (spec 5.2 [C]).
   - Recompiler à la largeur du pop-up recompilerait à chaque redimensionnement.
-- **D4, TeX ne lit que son dossier, sa distribution et les fichiers du nœud. Il n'écrit que dans son dossier et n'exécute rien.**
-  - Les réglages de kpathsea `openin_any=p`, `openout_any=p` et `shell_escape=f` sont passés par l'environnement, avec `-no-shell-escape`. Un nom absolu ou qui remonte (`..`) est donc refusé, en lecture comme en écriture.
-  - Les autres fichiers du nœud sont visibles sous leur nom (`\includegraphics{schéma.png}`, `\input{annexe}`). Ce sont des liens physiques vers le magasin, rangés dans un dossier hors de celui de TeX que seul `TEXINPUTS` désigne. TeX peut les lire, mais ni les écrire ni les effacer.
-  - Par défaut, TeX Live laisse tout lire : un `.tex` récupéré d'ailleurs pourrait recopier un fichier du disque dans son PDF. Copier les fichiers à chaque compilation serait lent quand un nœud porte un gros PDF.
+- **D4, TeX n'écrit que dans son dossier et n'exécute rien. Il peut lire tout fichier que le compte Windows peut lire** (amendée à la tâche 3, R3.1, puis acceptée par l'utilisateur, 2026-11-05 : « Pour ce qui est des tex, ne sois pas excessivement prudent, ce seront les miens »).
+  - Les réglages de kpathsea `openout_any=p` et `shell_escape=f` sont passés par l'environnement, avec `-no-shell-escape`. Un nom absolu ou qui remonte (`..`) est donc refusé en écriture.
+  - TeX Live 2026 a fait d'`openin_any` un réglage sans effet : `texEnv` ne le pose plus. Risques acceptés : un `.tex` venu d'ailleurs peut recopier un fichier local dans son propre PDF, qui reste dans le cache local, et un nom UNC fait contacter un serveur SMB par Windows. Aucun bac à sable du système n'est prévu.
+  - Les autres fichiers du nœud sont visibles sous leur nom (`\includegraphics{schéma.png}`, `\input{annexe}`). Ce sont des liens physiques vers le magasin, rangés dans un dossier hors de celui de TeX que seul `TEXINPUTS` désigne, par un chemin relatif. TeX peut les lire, mais ni les écrire ni les effacer.
 - **D5, le préambule est une donnée de la base, versionnée.**
   - C'est une opération `preamble` : elle entre dans l'historique et dans la synchro du plan 5, et Ctrl+Z l'annule.
   - On le modifie dans un plein écran ouvert depuis les réglages, avec un aperçu d'exemple. On l'enregistre explicitement, parce qu'un préambule à moitié tapé casserait toutes les compilations.
@@ -51,6 +52,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - **Regroupement :** des enregistrements successifs du même `.tex` ne forment qu'une seule modification dans l'historique, et un seul Ctrl+Z. Il ne faut aucune autre action entre eux : aucune autre modification, ni annulation, ni rétablissement. Cela vaut d'une ouverture du plein écran à la suivante, pendant une même session de l'app.
   - **Mécanisme :** les enregistrements regroupés portent l'identifiant d'action du premier, dans le journal, et prolongent le même pas d'annulation. Les versions intermédiaires restent dans le journal (quelques Ko chacune), mais l'historique n'en montre qu'une.
   - **Conséquence pour le plan 5 :** une action peut recevoir des lignes après avoir été envoyée, et la synchro doit l'accepter.
+  - *Exécution :* la session prend `run(build, { merge })`, la clé d'un `.tex` étant `tex:<nœud>:<nom>`. Un changement reçu (`receive`) met aussi fin au regroupement. Un enregistrement refusé (nœud ou fichier parti) garde le texte dans l'éditeur et le dit ; une seconde demande de fermeture pose « Fermer sans enregistrer ? » (registre, tâche 5).
   - N'enregistrer qu'à la fermeture perdrait la frappe en cas de panne. Enregistrer à chaque frappe ferait une version par lettre.
 - **D7, liens entre nœuds.**
   - **Vers un autre nœud :** un `\ref` vers un label d'un autre nœud affiche son titre, avec un lien `cirrus://node/<id>`. Un clic ouvre le pop-up de ce nœud ; le saut avec « précédent » et « suivant » vient avec la navigation (plan 6).
@@ -64,7 +66,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - **Dans la même source :** les vrais numéros, par le `.aux` relu. Une seconde passe n'a lieu que si ces numéros ont changé.
   - **Entre deux sources du même nœud** (deux `.tex`, ou le résumé et un `.tex`) : le titre du nœud [C].
   - **Labels invalides :** un label que rien ne définit s'affiche en rouge, suivi de « ? ». Un label défini plusieurs fois s'affiche en rouge, avec le titre de sa première définition.
-  - **`\cite{li2008}` :** il affiche « [Li et Vitányi, 2008] », avec un lien vers le nœud de la publication. Une clé inconnue s'affiche en rouge.
+  - **`\cite{li2008}` :** il affiche « [Li et Vitányi, 2008] », avec un lien vers le nœud de la publication. Une clé inconnue s'affiche en rouge. Une clé portée par plusieurs nœuds aussi, avec la citation du premier par identifiant : la requête porte pour cela `doubledCites` (revue de la tâche 4), et l'éditeur la marque.
   - **Clé de citation :** c'est un tag `clé_bibtex`, plutôt que le champ dédié prévu à la spec 5.4 [C]. Il se synchronise, se cherche et se modifie comme les autres tags, sans changer le modèle. Le plan 4c le remplira à l'import d'une publication.
 - **D8, le registre des labels est tenu par l'interface.**
   - Il est dérivé des résumés, des relations, des tags `label` et des `.tex`. Ces derniers sont lus par `cirrus-file:` et gardés en mémoire par empreinte.
@@ -216,6 +218,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
       broken: string[];       // cited, defined nowhere
       doubled: InjectedRef[]; // cited, defined more than once: the first definition
       cites: InjectedCite[];
+      doubledCites: InjectedCite[]; // cited, held by several nodes: the first's citation (task 4 review)
       unknownCites: string[];
       known: KnownLabel[];    // a hint only: never part of the cache key
       resources: FileRef[];   // the node's other files, visible under their names
@@ -223,8 +226,8 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     export interface TexError { message: string; line: number | null; where: 'source' | 'preamble' }
     export interface CompiledPdf { key: string; size: number; pages: number }
     export type CompileAnswer =
-      | { status: 'ok'; pdf: CompiledPdf; labels: KnownLabel[]; log: string; ms: number; passes: number; cached: boolean; installed?: string }
-      | { status: 'error'; error: TexError; labels: KnownLabel[]; log: string; ms: number; missing?: string }
+      | { status: 'ok'; pdf: CompiledPdf; labels: KnownLabel[]; log: string; ms: number; passes: number; cached: boolean; installed?: string[] }
+      | { status: 'error'; error: TexError; labels: KnownLabel[]; log: string; ms: number; missing?: string; installed?: string[] }
       | { status: 'cancelled' }
       | { status: 'unavailable'; reason: 'absent' | 'installing' | 'failed'; message: string };
     ```
@@ -296,6 +299,8 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
 - `texEnv(env: Record<string, string | undefined>): Record<string, string>` :
   - une copie de l'environnement, sans `TEXMFOUTPUT`, `TEXINPUTS`, `TEXMFHOME` ni `TEXMFCNF` ;
   - avec `openin_any=p`, `openout_any=p` et `shell_escape=f`.
+  - *Exécution :* il retire aussi `TEXMF_OUTPUT_DIRECTORY` et les variantes de casse et de programme de toutes ces variables, et ne pose plus `openin_any`, sans effet depuis TeX Live 2026 (R3.1).
+- *Exécution :* `provision(root, deps, onProgress, release?)`, sans liste de paquets : il règle le dépôt de CTAN, met `tlmgr` à jour et installe `BASE_PACKAGES` ; les paquets de l'utilisateur viennent ensuite par `ensure` (R2.2, R2.4). `ensure(names)` rend `{ installed: string[]; failed: { name, reason }[] }` et ne lève pas pour un nom que `tlmgr` ne connaît pas. Le texte ci-dessous est celui d'avant l'exécution.
 - `provision(root, deps, packages, onProgress): Promise<TexBinaries>` :
   - `deps: { download(url: string, dest: string, onBytes: (n: number) => void): Promise<void>; run(file: string, args: string[]): Promise<{ code: number; out: string }> }` ;
   - `onProgress(p: Progress)`, avec `type Progress = { step: 'download'; done: number; total: number } | { step: 'extract' } | { step: 'packages'; names: string[] }`.
@@ -391,6 +396,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - `warm(preamble: string): void` ;
     - `dispose(): Promise<void>`.
     - `type LatexStatus = { state: 'ready' } | { state: 'absent' } | { state: 'installing'; progress: Progress | { step: 'package'; name: string } } | { state: 'failed'; message: string }`.
+    - *Exécution :* à la tâche 7, l'état et `status` passent à `LatexSetup`, placé devant le service, qui gagne `restart()`. `ready` porte `version`. `jobBody` et la clé du cache comptent aussi `doubledCites` (`DRIVER_VERSION` 3 à la fin de la tâche 6).
   - `latexRequest(cacheDir: string, url: string, range: string | null): BlobAnswer`, dans `files.ts` :
     - `cirrus-file://latex/<clé de 64 hex>/<nom>`, servi depuis `<cacheDir>/<clé>.pdf` en `application/pdf` ;
     - avec les mêmes règles que `blobRequest` : 400, 404, plages, et `Content-Security-Policy: sandbox`.
@@ -452,7 +458,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - `annulation par l'emplacement` : une source lente puis une rapide, au même emplacement, donnent `cancelled` puis `ok` ;
     - `délai : une boucle infinie est arrêtée` : `\loop\iftrue\repeat` avec `latexTimeoutMs` à 2000 donne l'erreur en moins de 4 s ;
     - `préambule invalide : dit, et vite` : `where: 'preamble'`, avant le délai ;
-    - `TeX ne lit pas hors de son dossier` (Review Focus 2) : `\input{C:/Windows/win.ini}` et `\input{../../links/p1/x}` échouent, et `\IfFileExists{C:/Windows/win.ini}{OUI}{NON}` affiche `NON` ;
+    - `TeX ne lit pas hors de son dossier` (Review Focus 2) : `\input{C:/Windows/win.ini}` et `\input{../../links/p1/x}` échouent, et `\IfFileExists{C:/Windows/win.ini}{OUI}{NON}` affiche `NON`. *Exécution :* ce test est retiré, TeX Live 2026 laissant tout lire (D4 amendée, R3.1) ; les tests d'écriture et de `\write18` restent ;
     - `TeX n'écrit pas dans les fichiers du nœud` : un `\openout` vers le fichier de ressource, par son nom et par `../../links/p<n>/<nom>`, laisse le fichier du magasin identique, à l'empreinte près ;
     - `aucune commande` : `\immediate\write18{cmd /c echo x > pwned.txt}` ne crée aucun fichier ;
     - `fichiers du nœud sous leur nom` : `\includegraphics{schéma_compression.png}` compile, et l'image est dans le PDF ;
@@ -764,13 +770,13 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
 - Consumes : `provision`, `Packages` et `TINYTEX_RELEASE` (tâche 2), `LatexService` (tâche 3), `LatexEditor` (tâche 5), et `setPreamble` (tâche 1).
 - Produces :
   - `latexInstall(): Promise<void>` (`cirrus:latex:install`) :
-    - lance `provision` vers `tinyTexRoot(process.env)`, avec `latexPackages` ;
+    - lance `provision` vers `tinyTexRoot(process.env)`, avec `latexPackages` (*exécution :* `provision`, puis `ensure(latexPackages)` avant `ready`) ;
     - le statut passe par `installing` (progression), puis `ready` ou `failed` ;
     - un second appel pendant l'installation est sans effet ;
     - le principal ne télécharge jamais rien sans cet appel.
   - **Paquets :**
     - au démarrage, une fois la fenêtre chargée et pdfLaTeX présent, le principal fait `Packages.ensure(latexPackages)` en arrière-plan. Un échec hors ligne est seulement consigné dans la console ;
-    - une compilation qui rend `missing` déclenche `installFor`, avec le statut `{ state: 'installing', progress: { step: 'package', name } }`. Si un paquet est installé, les processus préparés sont refaits, la compilation repart une fois, et la réponse porte `installed: <paquet>` ;
+    - une compilation qui rend `missing` déclenche `installFor`, avec le statut `{ state: 'installing', progress: { step: 'package', name } }`. Si un paquet est installé, les processus préparés sont refaits, la compilation repart une fois, et la réponse porte `installed: <paquet>` (*exécution :* `installed` est une liste, et la compilation repart après chaque nouveau paquet) ;
     - si aucun paquet n'est trouvé ou si `tlmgr` échoue : l'erreur « Paquet LaTeX introuvable pour « x.sty » (hors ligne ?) ».
   - `withPackage(params: RenderParams, name: string): RenderParams | null` : null si le paquet est déjà dans la liste ou dans celle de `provision`. Sinon, l'interface ajoute le paquet à `latexPackages` et enregistre les réglages.
   - `LatexNotice` (en haut de la fenêtre, une fois par session) :

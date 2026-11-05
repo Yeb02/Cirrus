@@ -1,10 +1,11 @@
 // The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace]
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
-// suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes) and docs/captures/plan4a (those new in
-// plan 4a), each compared on its own images. A folder that already holds files is refused, so a reference is never
-// replaced by mistake; --replace removes its captures first (to remake a reference on purpose). LaTeX is compiled by
-// the bench's TinyTeX (CIRRUS_TINYTEX), which must be there; the app takes each image once its compilations are done.
+// suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a and
+// docs/captures/plan4b (those new in plans 4a and 4b), each compared on its own images. A folder that already holds
+// files is refused, so a reference is never replaced by mistake; --replace removes its captures first (to remake a
+// reference on purpose). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be there; the app takes
+// each image once its compilations are done.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -81,6 +82,20 @@ const SCENES = [
     click: [fileThenFull('Li_Vitányi_chapitre_1.pdf'), ...Array(9).fill('.full-screen .pdf-tools .zoom-out')].join(','),
   },
   { name: 'popup-vignettes', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { popupHeightPx: 720 } },
+  // Plan 4b: Entropie's pop-up (−420, −140 in the world: 372, 181 on screen), its summary compiled; the window of
+  // « Déduction jointe », by a click on its marker, its relation compiled.
+  { name: 'popup-resume-compile', view: '0,140,1', pointer: 'down 372 181; up 372 181' },
+  { name: 'relation-compilee', view: '0,140,1', pointer: 'down 1122 399; up 1122 399' },
+  // Kolmogorov's complexité.tex (Kolmogorov: −175, −140, at 617, 181) in its workbench: the broken \ref{absent:label} in
+  // red in the editor and in the preview. Then a keystroke at the start of the text that breaks the compilation: the
+  // last good PDF stays, the error line in the banner and on its line, the log open.
+  { name: 'plein-ecran-tex', view: '0,140,1', pointer: 'down 617 181; up 617 181', click: fileThenFull('complexité.tex') },
+  {
+    name: 'tex-erreur', view: '0,140,1', pointer: 'down 617 181; up 617 181',
+    click: [fileThenFull('complexité.tex'), 'type:\\oups ', '.full-screen .tex-status .log'].join(','),
+  },
+  // The preamble's editor, from the settings' « Modifier le préambule… », its sample compiled.
+  { name: 'preambule', panel: true, click: '.settings .latex-actions button:last-child' },
 ];
 
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
@@ -120,6 +135,7 @@ for (const s of SCENES) {
     for (const [key, name] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['pointer', 'CIRRUS_POINTER'], ['keys', 'CIRRUS_KEYS'], ['click', 'CIRRUS_CLICK']]) {
       if (s[key]) env[name] = s[key];
     }
+    if (s.panel) env.CIRRUS_PANEL = '1';
     if (s.import) {
       const file = join(dropDir, s.import.name);
       writeFileSync(file, s.import.text, 'utf8');

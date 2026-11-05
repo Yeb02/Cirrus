@@ -74,12 +74,12 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
     - un déplacement ou un aperçu réécrit quelques texels et quelques instances ;
     - la couche reste mince : un second moteur WebGPU reste possible.
   - Interface (panneaux, pop-ups, onglets) : React.
-  - Éditeur .tex : CodeMirror 6. Depuis le plan 4a, il affiche aussi le texte et le code, en lecture seule.
-  - Lecture et annotation de PDF : PDF.js. Depuis le plan 4a, il tourne dans un lecteur à nous ; l'annotation vient au plan 4c.
+  - Éditeur .tex : CodeMirror 6. Depuis le plan 4a, il affiche aussi le texte et le code, en lecture seule. Depuis le plan 4b, il modifie les .tex, les résumés, les relations et le préambule, avec suggestions et diagnostics.
+  - Lecture et annotation de PDF : PDF.js. Depuis le plan 4a, il tourne dans un lecteur à nous ; l'annotation vient au plan 4c. Depuis le plan 4b, il dessine aussi les aperçus compilés.
   - Octets des fichiers : un protocole `cirrus-file:`, servi par le principal (plan 4a).
 - **Base locale :** SQLite, avec les entrées en JSON et les fichiers des nœuds tels quels sur le disque.
 - **Serveur :** Node.js et TypeScript, SQLite et fichiers sur disque. Le serveur MCP utilise le SDK TypeScript officiel de MCP, la veille le SDK TypeScript d'Anthropic.
-- **LaTeX :** pdfLaTeX via TinyTeX, installé dans le dossier de l'app (section 13).
+- **LaTeX :** pdfLaTeX via TinyTeX, installé après accord dans le dossier local de l'utilisateur, `%LOCALAPPDATA%\Cirrus\TinyTeX` (section 13).
 - **Distribution :** installateur Windows et mises à jour automatiques servies par le serveur. Paquet Linux si c'est sans effort, ce qu'Electron permet en général.
 - **Langage unique :** TypeScript partout. Le modèle de données et le protocole de synchro sont partagés entre l'app et le serveur.
 
@@ -109,6 +109,12 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - **D7, pop-ups :** des panneaux en coordonnées d'écran, communs à tous les onglets et non gardés d'une session à l'autre. Ancrés au nœud, ils suivraient la caméra et deviendraient illisibles au zoom.
 - **Contraintes :** l'interface ne lit les octets d'un fichier que par `cirrus-file:`, et le principal n'y sert que les empreintes SHA-256 valides de son magasin. Rien n'est chargé du réseau : pdf.js, son travailleur, ses cartes de caractères et ses polices sont dans l'app. La politique de sécurité du contenu (CSP) n'ouvre `cirrus-file:` qu'aux images et aux lectures par `fetch`.
 
+**LaTeX (plan 4b) :** les décisions D1 à D8 du plan, que l'utilisateur a approuvé le 2026-11-05. Ce qu'elles donnent à l'usage est aux sections 12 et 13.
+- **TinyTeX :** il n'est pas dans l'installateur. Il se télécharge la première fois qu'il sert, après l'accord de l'utilisateur, dans `%LOCALAPPDATA%\Cirrus\TinyTeX` : le dossier itinérant (`%APPDATA%`) ne convient pas à 313 Mo de binaires. Toutes les adresses de téléchargement sont dans un seul module du principal (`LATEX_SOURCES`), que le serveur remplacera (section 18).
+- **Compilation :** dans le principal, par des pdfLaTeX préparés d'avance. Seul le principal lance pdfLaTeX et `tlmgr`, et touche le réseau pour eux.
+- **Cache :** les PDF compilés vont dans `<base>/latex/cache`, retrouvés par l'empreinte de tout ce qui entre dans la compilation, jamais synchronisés. L'interface les lit par `cirrus-file://latex/<empreinte>/<nom>`, comme les fichiers du magasin.
+- **Registre des labels :** il est tenu par l'interface, qui a l'état. Le principal reste sans état : la requête de compilation porte les titres et les citations dont la source a besoin.
+
 **Bancs de mesure en tête de plan :** voir la section 21.
 
 ## 5. Modèle de données
@@ -133,7 +139,7 @@ Exemple fourni par l'utilisateur : nœud « Minimum Description Length Principle
 ### 5.3 Connexion
 
 - **Titre court :** facultatif. Il est affiché discrètement près du marqueur.
-- **Relation :** court texte LaTeX, affiché dans le pop-up de la connexion.
+- **Relation :** court texte LaTeX, affiché compilé dans le pop-up de la connexion (plan 4b). Elle peut définir des labels (5.4).
 - **Tags.**
 - **Membres :** des couples (nœud, rôle). Le rôle vaut **source** (flèche sortante du nœud), **cible** (flèche entrante) ou **associé** (simple point, relation sans direction pour ce nœud). Le rôle d'un nœud dans une connexion est global : il ne peut pas être source dans un plan et cible dans un autre [C, accepté].
 - **Ensemble des membres :** c'est la réunion des branches de tous les plans (5.5). Pour le LLM et les documents, la connexion vaut cette réunion [C].
@@ -151,8 +157,8 @@ La recherche, le MCP, les badges et la santé du graphe excluent les connexions 
 - **Énumérations ordonnées :** le nom et le rang désignent la même valeur, donc `statut_epistémique:5` et `consensus_scientifique` sont équivalents. On peut ainsi filtrer « ≥ 3 » tout en lisant le nom.
 - **Valeurs par défaut :** elles ne sont pas stockées. Ajouter plus tard une clé obligatoire ne touche donc aucun nœud, et la santé du graphe peut lister les valeurs jamais renseignées.
 - **Renommage :** il est global, ce qui évite que `ml` et `machine-learning` coexistent.
-- **Labels LaTeX :** leur registre est dérivé des `\label` de tous les .tex, et chaque label est unique dans toute la base.
-- **Publications :** un nœud de publication porte les tags `auteur:…` (multivalué, `auteur:Anon` si inconnu) et `date_de_publication:…`. Il porte aussi une clé BibTeX pour `\cite` [C : un champ dédié].
+- **Labels LaTeX :** leur registre est dérivé des `\label` des .tex, des résumés (une équation, par exemple) et des relations, et du tag `label`, qui donne un label au titre d'un nœud (`label: mdl`, un seul par nœud : `\ref{mdl}` désigne le nœud) (décision de l'utilisateur, 2026-11-05). Toutes ces sortes partagent un même registre, et chaque label est unique dans toute la base : un doublon apparaît en rouge (section 13).
+- **Publications :** un nœud de publication porte les tags `auteur:…` (multivalué, `auteur:Anon` si inconnu) et `date_de_publication:…`. Il porte aussi sa clé BibTeX pour `\cite`, dans le tag `clé_bibtex` (`clé_bibtex: li2008`) [C, plan 4b : un tag plutôt qu'un champ dédié. Il se synchronise, se cherche et se modifie comme les autres, sans changer le modèle]. Une clé portée par deux nœuds apparaît en rouge, comme un label en double. Le plan 4c remplira ce tag à l'import d'une publication.
 
 ### 5.5 Plan
 
@@ -439,7 +445,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - tableaux.
   Échap quitte cette vue, qui se rouvre au même endroit. Les autres formats s'ouvrent avec l'application du système, sur une copie temporaire en lecture seule [C], pour que rien ne modifie la base en dehors de Cirrus.
 - **Mise à jour d'un fichier :** on réimporte explicitement, en déposant la nouvelle version sur le nœud. Elle remplace l'ancienne, qui reste dans l'historique [C].
-- **Édition :** le titre, le résumé, les tags, l'import de fichiers et la création de nœuds se font dans la fenêtre principale.
+- **Édition :** le titre, le résumé, les tags, l'import de fichiers et la création de nœuds se font dans la fenêtre principale. Un .tex se modifie dans son plein écran (plan 4b).
 - **Création d'un nœud :** depuis le menu contextuel du fond, le nœud suit le curseur et un clic le pose [C].
 - **Annotation de PDF :** surligner un passage crée un nœud d'annotation qui porte le passage, le PDF et la page. Le nœud du PDF devient un groupe pour le rendu, ses annotations en étant les membres.
   - **Placement [C] :** pour ne pas interrompre la lecture et ne rien placer automatiquement, une annotation n'apparaît dans aucun plan à sa création. Elle est listée dans la marge du lecteur PDF et dans le pop-up du nœud du PDF.
@@ -456,7 +462,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - **Image** (`png`, `jpg`, `gif`, `webp`, `svg`, `avif`…) : ajustée à la vue, et agrandie au plus quatre fois [C]. La molette zoome autour du curseur, le glissement la déplace, et un double-clic passe de l'ajustement au 1:1.
   - **PDF :** les pages sont virtualisées, ajustées à la largeur de la première page [C]. Le texte se sélectionne et se copie. Un lien interne mène à sa destination. Un lien `http`, `https` ou `mailto` s'ouvre par le système, et tout autre lien est ignoré.
   - **Texte et code** (`txt`, `md`, `py`, `json`, `bib`, `ipynb`…, les scripts Perl, Ruby et PHP [C], et `Makefile`, `README`) : CodeMirror 6 en lecture seule, coloré selon le langage, avec la recherche par Ctrl+F. Les lignes longues du texte se replient, pas celles du code.
-  - **LaTeX** (`tex`) : le source s'affiche, coloré. L'éditeur et l'aperçu compilé côte à côte viennent au plan 4b. Le résumé du pop-up s'affiche aussi en source jusque-là.
+  - **LaTeX** (`tex`) : au plan 4a, le source s'affichait, coloré. Depuis le plan 4b, l'aperçu montre le PDF compilé, et le plein écran l'éditeur à côté de l'aperçu (« Fixé par le plan 4b », plus bas).
   - **Tableau** (`csv`, `tsv`) : les lignes et les colonnes sont virtualisées, et la première ligne sert d'en-tête.
   - **Tout le reste** n'a pas de vue dans Cirrus : un simple clic l'ouvre avec l'application du système, sans passer par un menu. Ce que Windows lancerait est montré dans l'explorateur (« Ouverture par le système », ci-dessous).
 - **Encodages :** un texte en UTF-8, en UTF-16 avec BOM ou en Windows-1252, comme le CSV de l'Excel français, s'affiche lisiblement. Un UTF-16 sans BOM est pris pour un binaire. Un fichier binaire qui porte une extension de texte affiche « Fichier binaire : Cirrus ne peut pas l'afficher. » [C].
@@ -504,28 +510,93 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - une vignette ne lit une image ou un PDF que jusqu'à `thumbMaxMb` (4 Mo par défaut) [C]. Une image plus grande n'est pas lue, et la lecture d'un PDF s'arrête à ce plafond. La ligne montre alors l'icône du genre ;
   - ouvrir un pop-up ne lit donc aucun fichier au-delà de `thumbMaxMb`.
 
+**Fixé par le plan 4b** (approuvé par l'utilisateur le 2026-11-05) : le résumé et la relation compilés, et le plein écran d'un .tex. Le reste de la chaîne est à la section 13. [C] marque, comme plus haut, un choix de Claude fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-05-cirrus-latex-registre.md`) en donne la raison et le coût.
+
+- **Résumé et relation compilés :** le pop-up d'un nœud montre son résumé compilé, et celui d'une connexion sa relation.
+  - **Présentation :** un PDF rogné à son contenu, composé sur `latexSnippetWidthCm` (9 cm), puis dessiné à la largeur du pop-up sans dépasser `latexSnippetMaxZoom` (1,6). Il garde les couleurs du document, comme du papier : noir sur une carte blanche [C]. L'utilisateur a été interrogé sur un aspect inversé (sombre) ou une largeur moindre, sans réponse encore. La largeur est déjà un réglage ; l'aspect inversé serait un réglage à construire.
+  - **États :** avant la première compilation, ou sans LaTeX, le source s'affiche en caractères à chasse fixe, avec la raison en petit. Une erreur garde le dernier PDF valide, avec une ligne rouge (« Erreur ligne 1 : Undefined control sequence. ») et un bouton « Journal » ; sans PDF valide, le source prend sa place [C]. Un champ vide garde la zone de texte d'avant, avec « Résumé, en LaTeX » ou « Relation (LaTeX) » en attente [C].
+  - **Modifier :** un clic, Entrée ou F2 ouvre un éditeur compact, le curseur à la fin, avec l'aperçu du brouillon dessous, compilé à chaque pause de frappe. Quitter le champ enregistre le texte, en une action. Échap rend le texte enregistré sans rien écrire. Il remonte d'un cran à la fois : le journal, puis le brouillon, puis le pop-up [C]. Dans l'éditeur, Ctrl+Z agit sur le texte, jamais sur la base [C].
+  - **Liens :** un clic sur un lien vers un nœud ouvre le pop-up de ce nœud, non épinglé, à côté du panneau d'où vient le clic, ou le fait passer devant s'il est ouvert [C]. Sous un plein écran, qui est modal, le lien le dit dans l'en-tête et n'ouvre rien [C]. Un nœud parti dit « Ce nœud n'existe plus. ».
+  - **Sans éclair :** un nouveau PDF remplace l'ancien sur place, et le source ne se montre jamais entre deux PDF [C]. Un pop-up rouvert dessine son résumé en 17 ms. Le premier résumé d'une session attend la compilation et le chargement de pdf.js : environ 0,6 s, dont 0,45 s pour pdf.js.
+- **Plein écran d'un .tex :** l'éditeur à gauche, l'aperçu compilé à droite.
+  - **L'éditeur :** CodeMirror 6, coloré en LaTeX, avec les numéros de ligne, la recherche (Ctrl+F), les longues lignes repliées [C] et son propre historique (Ctrl+Z, Ctrl+Y). Dans les accolades d'un `\ref` ou d'un `\cite`, il suggère les labels et les clés du registre, dans l'ordre français, sans tenir compte de la casse ni des accents [C]. Il souligne en rouge un label inconnu ou en double, une clé inconnue ou portée par deux nœuds, et la ligne d'une erreur de compilation.
+  - **L'aperçu :** le lecteur PDF du plan 4a, sur le dernier PDF valide. Un nouveau PDF y prend la place de l'ancien, au même zoom et au même défilement, sans éclair. Il s'affiche en moins de 300 ms après la pause de frappe : 214 ms en médiane, 282 ms au p95 (section 13).
+  - **Le bandeau :** « Compilation… », « Erreur ligne 12 : … », « Enregistré » ou « Non enregistré : <raison> ». « Journal » ouvre le journal de pdfLaTeX par-dessus l'aperçu. Un clic sur l'erreur place l'éditeur à sa ligne, et Échap ne ferme que le journal.
+  - **Enregistrement** (D6, décision de l'utilisateur, 2026-11-05) : après une pause de frappe de `texSaveIdleMs` (10 s), à Ctrl+S, à la fermeture du plein écran et à celle de la fenêtre. C'est seulement si le texte diffère de la dernière version enregistrée : taper puis effacer n'enregistre rien.
+  - **Regroupement :** des enregistrements successifs du même .tex ne forment qu'une modification de l'historique, et un seul Ctrl+Z. Il ne faut aucune autre action entre eux : ni modification, ni annulation, ni rétablissement. Cela vaut d'une ouverture du plein écran à la suivante, dans une même session de l'app. Les versions intermédiaires restent dans le journal, invisibles. Pour le plan 5 : une action peut recevoir des lignes après avoir été envoyée.
+  - **Un enregistrement refusé** (le nœud ou le fichier parti entre-temps) garde le texte dans l'éditeur et dit pourquoi. Une seconde demande de fermeture pose « Fermer sans enregistrer ? », « Annuler » ayant le focus [C].
+  - **Un .tex plus grand que `textViewMaxMb`** s'affiche en lecture seule, avec la raison et sans aperçu [C].
+  - L'aperçu d'un .tex, à côté du pop-up, montre son PDF compilé.
+- **Préambule :** il se modifie dans un plein écran du même genre, ouvert depuis les réglages (section 13, D5).
+
 ## 13. LaTeX
 
-- **Compilateur :** pdfLaTeX, comme Overleaf par défaut, via TinyTeX installé dans le dossier de l'app. TinyTeX pèse environ 99 Mo compressés sous Windows. L'app détecte elle-même les paquets manquants dans le journal et les installe avec `tlmgr`. La liste des paquets installés est un paramètre partagé, pour que tous les PC compilent la même chose [C].
+- **Compilateur :** pdfLaTeX, comme Overleaf par défaut, via TinyTeX installé par l'app, après accord, dans le dossier local de l'utilisateur (D1, plus bas). TinyTeX pèse environ 74 Mo à télécharger sous Windows, et 313 Mo installé. L'app détecte elle-même les paquets manquants dans le journal et les installe avec `tlmgr`. La liste des paquets installés est un paramètre partagé, pour que tous les PC compilent la même chose [C].
 - **Fichiers .tex de nœud :** ils n'ont pas de préambule. Un préambule global unique, versionné, sert à tous. Un .tex qui contient `\documentclass` est compilé tel quel.
 - **Résumé et relation :** ils passent par la même chaîne.
 - **Lieu :** la compilation se fait sur le PC, donc aussi hors ligne.
 - **Cache :** les PDF produits restent en cache local sans être synchronisés.
 - **Erreur :** le dernier PDF valide reste affiché, avec le journal à côté.
-- **Sécurité :** aucune commande shell n'est permise. Un paquet comme `minted`, qui en a besoin, ne fonctionnera pas.
+- **Sécurité :** aucune commande shell n'est permise. Un paquet comme `minted`, qui en a besoin, ne fonctionnera pas. TeX n'écrit que dans son dossier, mais peut tout lire (D4, plus bas).
 - **Exigence explicite : temps de compilation minimaux.**
   - **Pas de compilation inutile :** chaque PDF est retrouvé par une empreinte de son contenu, du préambule et des titres cités. Après une synchro, les nœuds modifiés se recompilent en arrière-plan, donc ouvrir un nœud ne compile presque jamais.
   - **Préambule chargé d'avance :** un processus pdfLaTeX est lancé à l'avance et attend après le préambule, puis reçoit le nœud. C'est la technique de TeX-fast-recompile, qui fonctionne avec tous les paquets. `mylatexformat` (2011) ne sert qu'en complément si les mesures le justifient.
   - **Une seule passe :** les liens vers d'autres nœuds sont fournis par l'app. Une seconde passe n'a lieu que si les références internes au nœud ont changé.
-  - **Pendant la frappe :** toute modification interrompt la compilation en cours et en relance une après une courte pause.
+  - **Pendant la frappe :** toute modification interrompt la compilation en cours et en relance une après une courte pause (`latexTypingPauseMs`, 300 ms).
   - **Objectif :** moins de 300 ms pour l'aperçu d'un nœud ordinaire, à compter de la fin de la pause de frappe. C'est une cible, à mesurer en premier (section 21). Une figure TikZ lourde restera lente.
-- **Noms accentués :** l'app compile sous des noms neutres, car l'outil cité signale des problèmes de noms accentués sous Windows. Le cas d'un `\includegraphics` vers un fichier accentué reste à tester.
+- **Noms accentués :** l'app compile sous des noms neutres, car l'outil cité signale des problèmes de noms accentués sous Windows. Un `\includegraphics` vers un fichier accentué compile (plan 4b).
 - **Liens entre nœuds :**
   - `\label` alimente le registre global. Un doublon ou un lien cassé apparaît en rouge et dans la santé du graphe.
   - Dans un aperçu isolé, un `\ref` vers un autre nœud affiche le titre du nœud cible, faute de numéro. Dans le même nœud, et dans un document assemblé, les vrais numéros sont gardés.
   - `\cite` pointe vers le nœud de la publication et affiche une citation courte.
   - Les liens sont produits par `hyperref` avec un schéma d'URL propre à l'app, que le lecteur PDF intercepte.
 - **Éditeur :** simple, avec coloration syntaxique, et suggestions pour `\ref` et `\cite` à partir des registres.
+
+**Fixé par le plan 4b** (approuvé par l'utilisateur le 2026-11-05, avec D6 et D7 amendés ce jour-là, et D4 amendée ensuite par lui). Ici comme ailleurs, [C] marque un choix de Claude, fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-05-cirrus-latex-registre.md`) en donne la raison et le coût. Ce que voit l'utilisateur du résumé compilé, de la relation et du plein écran d'un .tex est à la section 12.
+
+- **D1, TinyTeX :**
+  - il se télécharge la première fois qu'il sert, après l'accord de l'utilisateur, dans `%LOCALAPPDATA%\Cirrus\TinyTeX`. Une notice le propose une fois par session, avec « Installer » et « Plus tard ». La section « LaTeX » des réglages dit son état (« LaTeX : prêt (TeX Live 2026) ») et permet de l'installer à tout moment ;
+  - la version est épinglée : TinyTeX v2026.11 (TeX Live 2026, pdfTeX 1.40.29), un installateur de 73,7 Mo vérifié par son empreinte SHA-256 avant d'être lancé. L'installation prend environ une minute (56 et 67 s mesurées), et fait 313 Mo ;
+  - une installation à moitié faite ne compte jamais : elle se fait dans un dossier à part, renommé à la fin [C]. Pendant ce temps, un résumé dit « LaTeX est en cours d'installation. », puis se compile sans frappe ;
+  - les paquets viennent du dépôt de TeX Live, par le réseau de miroirs de CTAN, et non du miroir de TinyTeX, qui est un tiers [C] ;
+  - un paquet manquant s'installe de lui-même : le fichier absent est lu dans le journal, `tlmgr` cherche le paquet qui le contient et l'installe, puis la compilation repart. Il faut de 10 à 20 s, parfois bien plus sur un miroir lent (154 s une fois). Le paquet s'ajoute au réglage partagé `latexPackages`, que chaque PC installe à son démarrage ;
+  - un nom inconnu dans `latexPackages` ne rend jamais LaTeX impossible à installer : les paquets de base passent d'abord, ceux de l'utilisateur ensuite, chacun au mieux [C] ;
+  - hors ligne, la compilation dit « Paquet LaTeX introuvable pour « x.sty » (hors ligne ?) ». La recherche n'est refaite qu'au démarrage suivant [C]. Un appel à `tlmgr` qui dépasse `latexTlmgrTimeoutMs` (10 min) est arrêté [C] ;
+  - **signature des paquets :** TinyTeX ne livre pas gpg, et TeX Live n'en fournit aucun pour Windows. Le seul candidat, `tlgpg` de N. Preining, se dit lui-même hors de TeX Live : il n'a pas été intégré. Les paquets arrivent donc par HTTPS, et chacun est contrôlé par l'empreinte SHA-512 que donne la base de TeX Live, sans que la signature de cette base soit vérifiée. La question est posée à l'utilisateur ;
+  - limite connue : TeX Live gèle son dépôt chaque printemps. Vers avril 2027, le `tlmgr` de 2026 n'installera plus de paquet depuis Internet ; c'est l'échéance du dépôt figé du serveur (section 18).
+- **D2, compilation et cache :**
+  - `latexWarmProcesses` pdfLaTeX (2) attendent après le préambule, dans le principal. Dès qu'une compilation en prend un, un autre se prépare ;
+  - chaque PDF est retrouvé par l'empreinte de tout ce qui entre dans sa compilation : la source, le préambule, les titres et les citations injectés, les fichiers du nœud, le mode, les versions du moteur et du pilote. Le cache est plafonné à `latexCacheMb` (500 Mo), le plus ancien partant le premier, et n'est jamais synchronisé. Ouvrir un pop-up dont le résumé est en cache ne compile pas ;
+  - une compilation dure au plus `latexTimeoutMs` (10 s) : une boucle infinie est arrêtée, avec « Compilation trop longue (plus de 10 s) : arrêtée. ». Un préambule invalide le dit aussitôt : « Le préambule ne compile pas : … » ;
+  - une seule passe, puisque l'app fournit les labels des autres sources. Une seconde n'a lieu que si les numéros de la source ont changé, relus de son `.aux`. Un .tex qui contient `\documentclass` est compilé tel quel, à froid, avec une seconde passe si son journal la demande [C] ;
+  - aucun pdfLaTeX ne survit à la fermeture de l'app.
+- **D3, résumé et relation :** un PDF rogné à son contenu, de largeur fixe (section 12). KaTeX ou MathJax seraient instantanés, mais les macros du préambule leur manqueraient.
+- **D4, ce que TeX peut faire** (décision de l'utilisateur, 2026-11-05 : « Pour ce qui est des tex, ne sois pas excessivement prudent, ce seront les miens ») :
+  - TeX n'écrit que dans son dossier de travail (`openout_any=p`), et n'exécute rien (`-no-shell-escape`, `shell_escape=f`) : `\write18` ne lance rien, et un `\openout` vers un fichier du nœud est refusé ;
+  - il peut lire tout fichier que le compte Windows peut lire : TeX Live 2026 a fait d'`openin_any` un réglage sans effet ;
+  - les risques acceptés : un .tex venu d'ailleurs peut recopier un fichier local dans son propre PDF, qui ne quitte pas le cache local, ou faire contacter un serveur SMB par Windows (un nom UNC). Aucun bac à sable du système n'est prévu ;
+  - les autres fichiers du nœud sont visibles sous leur nom (`\includegraphics{schéma_compression.png}`), par des liens physiques vers le magasin, dans un dossier que TeX lit sans pouvoir l'écrire. Une base dont le chemin porte des accents compile aussi : TeX y trouve ces fichiers par un chemin relatif [C] ;
+  - les variables de l'environnement de l'utilisateur qui déferaient cela (`TEXMFOUTPUT`, `TEXINPUTS`, `TEXMF_OUTPUT_DIRECTORY`…, et leurs variantes) sont retirées de celui de TeX [C] ;
+  - tout texte que l'app injecte (titres, citations) devient une source inerte : un titre comme `50 % & co_x #1 {a} \input{x}` s'affiche tel qu'il est écrit. Un caractère que pdfLaTeX ne sait pas rendre devient « ? » [C].
+- **D5, préambule :**
+  - c'est une donnée de la base, versionnée : une opération `preamble`, qui entre dans l'historique et dans la synchro, et que Ctrl+Z annule. Le préambule par défaut n'est jamais stocké : une base sans préambule utilise `DEFAULT_PREAMBLE`, qui charge `article` (11 pt, A4), `fontenc` (T1), `lmodern`, `amsmath`, `amssymb`, `amsthm`, `graphicx`, `xcolor` et `hyperref` ;
+  - il se modifie dans un plein écran ouvert par « Modifier le préambule… », dans la section « LaTeX » des réglages, avec à côté un exemple compilé : un paragraphe accentué, une équation numérotée citée par `\eqref`, une liste et un lien [C] ;
+  - on l'enregistre explicitement, par « Enregistrer » ou Ctrl+S, qui attendent la compilation en cours. Un préambule qui ne compile pas demande « Le préambule ne compile pas. L'enregistrer quand même ? ». « Annuler » ferme sans rien demander [C]. Échap ou × avec des changements demandent « Abandonner les modifications du préambule ? ». « Préambule par défaut » remet `DEFAULT_PREAMBLE` dans le brouillon.
+- **D6, un .tex se modifie dans son plein écran :** section 12.
+- **D7, liens entre nœuds :**
+  - un `\ref` vers un label d'un autre nœud affiche le titre de ce nœud, lié par `cirrus://node/<id>`. Un clic ouvre son pop-up (section 12) ;
+  - un label se définit par `\label` dans un .tex, dans un résumé ou dans une relation, et pour le titre d'un nœud par le tag `label` (5.4) ;
+  - dans la même source, les vrais numéros, par son `.aux` relu ; entre deux sources du même nœud, le titre du nœud [C] ;
+  - un label que rien ne définit s'affiche en rouge, suivi de « ? ». Un label défini plusieurs fois s'affiche en rouge, avec le titre de sa première définition. Un label d'un nœud mis à la corbeille ne compte plus ;
+  - `\cite{li2008}` affiche « [Li et Vitányi, 2008] », lié au nœud de la publication par son tag `clé_bibtex` (5.4). Une clé inconnue s'affiche en rouge, suivie de « ? » [C]. Une clé portée par deux nœuds s'affiche en rouge aussi, avec la citation du premier [C] ;
+  - l'éditeur marque les mêmes fautes que l'aperçu.
+- **D8, le registre des labels** est tenu par l'interface, dérivé des résumés, des relations, des tags `label` et des .tex. Il ne relit que les sources qui ont changé, et se reconstruit au plus une fois par pause de frappe : de 4 à 14 ms sur la base du banc, 50 000 nœuds et 549 189 connexions [C].
+- **Mesures** (`docs/bancs/latex-app-2026-11-05.md`), dans l'app construite, sur la base de test, de la fin de la pause de frappe (`latexTypingPauseMs`, 300 ms) à l'aperçu dessiné, sur 60 frappes chacune :
+  - le résumé de l'entropie, dans son pop-up : 176 ms en médiane, 239 ms au p95 ;
+  - `complexité.tex`, dans son plein écran : 214 ms en médiane, 282 ms au p95, 298 ms au plus. La cible de 300 ms est tenue, avec peu de marge pour un .tex ;
+  - la compilation, dans le principal, en prend les trois quarts (de 118 à 210 ms), et pdf.js le reste (de 25 à 95 ms) ;
+  - un pop-up rouvert dans la session, son résumé en cache : 17 ms. Le premier résumé d'une session : 0,49 s en cache, 0,62 s s'il faut compiler, dont 0,45 s pour charger pdf.js et son travailleur. Les charger d'avance, au repos, serait le levier suivant.
+- **Hors du plan 4b :** la recompilation en arrière-plan après une synchro (plan 5) ; le saut vers la cible avec « précédent » et « suivant », et l'aperçu au survol d'un lien (plan 6) ; la liste des doublons et des liens cassés dans la santé du graphe ; l'assemblage des documents (section 15) ; SyncTeX ; l'installation de TinyTeX hors de Windows, où `CIRRUS_TINYTEX` désigne une TinyTeX existante.
 
 ## 14. Navigation et recherche
 
@@ -652,6 +723,11 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - Une source signale que cette gamme était parfois impossible à commander en septembre et octobre 2026. Le repli est OVH VPS-1, en France, autour de 8 € HT par mois.
   - S'y ajoute un nom de domaine, environ 10 € par an, pour le HTTPS.
 - **Rôle du serveur :** synchroniser, stocker les PDF, servir le MCP, lancer la veille, héberger l'installateur et les mises à jour, et garder une copie du code. Il ne compile pas de LaTeX.
+- **Outils de LaTeX sur le serveur** (demande de l'utilisateur, 2026-11-05 : « mettre tous les utils sur le serveur, de manière à ce que l'utilisateur n'aille rien chercher sur internet, afin de ne pas casser l'app si une version ultérieure non rétrocompatible était publiée ») :
+  - le serveur gardera l'installateur épinglé de TinyTeX, et un instantané figé, tel quel, du dépôt de TeX Live de l'année : environ 5 Go. La signature de TeX Live y reste vérifiable, une fois la question de gpg réglée (section 13) ;
+  - les PC ne téléchargeront que depuis lui, et passer à une TeX Live plus récente deviendra un acte délibéré ;
+  - toutes les sources de téléchargement sont déjà dans un seul module du principal (`LATEX_SOURCES`), et `tlmgr` nomme son dépôt à chaque appel : les installations faites avant le serveur le suivront aussi ;
+  - jusqu'à ce que le serveur existe (plans 5 et 9), les PC vont sur Internet. Le gel de printemps de TeX Live, vers avril 2027, est l'échéance.
 - **Sécurité** (« ne transige pas, mais pas overkill », la VM étant dédiée) [C, accepté] :
   - administration uniquement par clé SSH ;
   - pare-feu n'ouvrant que HTTPS et SSH ;
@@ -696,6 +772,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - seuil séparant un clic d'un déplacement ;
   - délais de pause et de synchro ;
   - réponse par défaut des dialogues « partout ou ici seulement ».
+- **LaTeX (plan 4b) :** les réglages de la chaîne forment un groupe « LaTeX » des avancés : les processus préparés, les délais, la largeur et l'agrandissement du résumé compilé, le cache, le journal, la pause de frappe, l'enregistrement d'un .tex, les suggestions de l'éditeur, le délai de `tlmgr`, et la liste partagée des paquets ajoutés (`latexPackages`). Une section « LaTeX » du bandeau dit l'état de LaTeX, propose de l'installer et ouvre le préambule, qui est une donnée de la base et non un réglage (section 13, D5).
 - **Mode performance :** envisageable si les bancs de mesure le rendent nécessaire (section 21). Un interrupteur dans les paramètres graphiques allégerait alors les effets coûteux : flou des enveloppes, rubans à largeur variable, ciel étoilé, résolution du rendu.
 - **Stockage :** les valeurs sont centralisées sur le serveur et communes à tous les PC. Des valeurs propres à un PC seront revues plus tard si besoin.
 - **Hors ligne :** chaque PC garde sa copie, et la modification la plus récente l'emporte à la reconnexion.
@@ -733,7 +810,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
      - Si les marges ne sont pas tenues, on ajoute le mode performance (section 19) plutôt que de changer de moteur.
      - Le rendu ne doit traiter que ce qui est visible et déplié : il faut un index spatial par plan et une gestion des niveaux de détail, plutôt que de tout envoyer à la carte graphique.
      - **Arrière-plan :** fenêtre cachée ou sans le focus, le rendu est en pause (réglage avancé « Mise en pause du rendu »). Le reste du temps, une image n'est dessinée que si quelque chose a changé.
-   - **compilation :** TinyTeX, processus préparé à l'avance et objectif de 300 ms, mesurés sur le portable principal.
+   - **compilation :** TinyTeX, processus préparé à l'avance et objectif de 300 ms, mesurés sur le portable principal. Le banc du 2026-11-02 l'a tenu, et l'app aussi au plan 4b (section 13, « Mesures »).
 2. **Base de test artificielle :** juste ce qu'il faut pour exercer chaque fonctionnalité, avec des tests automatiques par fonctionnalité.
 3. **Serveur en local :** tout fonctionne en local, y compris la synchro entre deux instances de l'app, avant de louer le serveur.
 4. **Déploiement sur le serveur loué :** en dernier.
@@ -758,7 +835,10 @@ Le découpage détaillé relève du plan d'implémentation.
 - **Volume :** quelques centaines de milliers de connexions pèsent aussi sur la première synchro d'un nouveau PC, l'index de recherche et la pagination du MCP, à vérifier avec la base synthétique.
 - **ChatGPT :** le mode développeur est en bêta, les forfaits éligibles sont incertains, et l'emplacement de l'option a changé en 2026.
 - **Hébergeur :** disponibilité et prix des offres Hetzner à vérifier à la commande.
-- **Noms accentués :** risque avec pdfLaTeX sous Windows.
+- **Noms accentués :** risque avec pdfLaTeX sous Windows. Au plan 4b, un fichier accentué et une base au chemin accentué compilent ; une installation de TinyTeX sous un chemin accentué n'a pas été essayée.
+- **Signature des paquets LaTeX :** sans gpg, la base des paquets de TeX Live n'est pas vérifiée (section 13, D1). La question est posée à l'utilisateur.
+- **Aspect du résumé compilé :** du papier, noir sur blanc, à 9 cm ; un aspect sombre ou une largeur moindre attendent la réponse de l'utilisateur (section 12).
+- **Gel de TeX Live :** vers avril 2027, `tlmgr` 2026 n'installera plus de paquet depuis Internet, d'où le dépôt figé du serveur (section 18).
 - **PDF :** le serveur est le seul à les détenir tous. Un PDF déjà lu reste toutefois en cache sur les PC qui l'ont ouvert, donc seul un PDF jamais ouvert et introuvable ailleurs serait perdu avec le serveur.
 
 ## 24. Écarté ou reporté
