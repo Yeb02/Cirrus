@@ -56,13 +56,16 @@ test.skipIf(!hasTex)(withTex('findBinaries : les chemins et la version de la Tin
   expect(bins!.version).toMatch(/^pdfTeX \S+ \(TeX Live 2026\)$/);
 }, 30_000);
 
-test('texEnv : TeX ne lit ni n’écrit hors de son dossier et n’exécute rien (D4) ; PATH est gardé', () => {
+test('texEnv : TeX n’écrit que dans son dossier et n’exécute rien (D4) ; PATH est gardé', () => {
   const env = texEnv({
     PATH: 'C:\\Windows', TEXMFOUTPUT: 'C:\\', TEXINPUTS: 'C:\\//', TEXMFHOME: 'C:\\texmf', TEXMFCNF: 'C:\\cnf', HOME: undefined,
+    // TeX Live 2024's output directory: TeX would write its .log, .aux, .pdf and \openout files there.
+    TEXMF_OUTPUT_DIRECTORY: 'C:\\ailleurs', texmf_output_directory_pdflatex: 'C:\\ailleurs',
     // Windows reads its variables whatever their case, and kpathsea reads VAR.progname and VAR_progname before VAR.
-    OPENIN_ANY: 'a', 'openout_any.pdflatex': 'a', TEXINPUTS_pdflatex: 'C:\\//', shell_escape: 't',
+    OPENOUT_ANY: 'a', 'openout_any.pdflatex': 'a', TEXINPUTS_pdflatex: 'C:\\//', shell_escape: 't',
   });
-  expect(env).toEqual({ PATH: 'C:\\Windows', openin_any: 'p', openout_any: 'p', shell_escape: 'f' });
+  // No openin_any: TeX Live 2026 made it a no-op (texmf.cnf), so setting it would only pretend to restrict reads.
+  expect(env).toEqual({ PATH: 'C:\\Windows', openout_any: 'p', shell_escape: 'f' });
 });
 
 test('runFile : un .bat dans un dossier à espace, ses arguments et son code de sortie ; un argument dangereux est refusé', async () => {

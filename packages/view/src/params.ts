@@ -182,6 +182,16 @@ export interface RenderParams {
   // LaTeX (plan 4b)
   /** The packages installed on demand, which every PC installs at its start (D1). */
   latexPackages: string[];
+  /** The pdfLaTeX waiting with the preamble loaded (D2): a compilation takes one, another is prepared at once. */
+  latexWarmProcesses: number;
+  /** A compilation running longer is stopped (an infinite loop, Review Focus 3). */
+  latexTimeoutMs: number;
+  /** A summary or a relation is compiled this wide, its height following its content (D3). */
+  latexSnippetWidthCm: number;
+  /** The local cache of the compiled PDFs (D2), the one used longest ago removed first, */
+  latexCacheMb: number;
+  /** each with the end of its log, this long at most. */
+  latexLogMaxKb: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -327,6 +337,11 @@ export const DEFAULT_PARAMS: RenderParams = {
   panelGapPx: 12,
   tagSuggestions: 8,
   latexPackages: [],
+  latexWarmProcesses: 2,
+  latexTimeoutMs: 10_000,
+  latexSnippetWidthCm: 9,
+  latexCacheMb: 500,
+  latexLogMaxKb: 256,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -502,6 +517,11 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('panelGapPx', 'Écart entre le clic et le pop-up qu’il ouvre (px)', A, 'Pop-ups', 0, 60, 1),
   num('tagSuggestions', 'Suggestions montrées pendant la saisie d’un tag', A, 'Pop-ups', 1, 50, 1),
   { key: 'latexPackages', label: 'Paquets LaTeX ajoutés (installés sur chaque PC)', section: A, group: 'LaTeX', kind: 'words' },
+  num('latexWarmProcesses', 'pdfLaTeX préparés d’avance', A, 'LaTeX', 1, 4, 1),
+  num('latexTimeoutMs', 'Durée maximale d’une compilation (ms)', A, 'LaTeX', 1000, 120_000, 100),
+  num('latexSnippetWidthCm', 'Largeur du résumé et de la relation compilés (cm)', A, 'LaTeX', 4, 20, 0.5),
+  num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),
+  num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'LaTeX', 16, 4096, 16),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

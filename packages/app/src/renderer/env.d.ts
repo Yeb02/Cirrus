@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import type { FileRef, Id } from '@cirrus/core';
+import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@cirrus/core';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
@@ -40,6 +40,18 @@ export interface CirrusBridge {
   openUrl(url: string): Promise<void>;
   /** A node's history for its pop-up: its first and last change (ms), and the number of actions. */
   historyOf(id: Id): Promise<HistorySummary>;
+  /**
+   * A LaTeX compilation (plan 4b): from the cache at once (`cached`), or by a pdfLaTeX prepared ahead of time. A newer
+   * request of the same slot cancels this one (`cancelled`). The PDF is read at cirrus-file://latex/<pdf.key>/<name>.
+   */
+  latexCompile(req: CompileRequest): Promise<CompileAnswer>;
+  /** The slot's request, waiting or running, is cancelled. */
+  latexCancel(slot: string): void;
+  /** Prepares pdfLaTeX with this preamble (after loading, and when the preamble changes). */
+  latexWarm(preamble: string): void;
+  /** LaTeX's state on this PC; onLatexStatus is told each change. Returns the unsubscription. */
+  latexStatus(): Promise<LatexStatus>;
+  onLatexStatus(cb: (s: LatexStatus) => void): () => void;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

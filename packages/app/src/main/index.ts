@@ -2,14 +2,17 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { type Action, type FileRef, type Id, OpConflictError } from '@cirrus/core';
+import { type Action, type CompileRequest, type FileRef, type Id, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
-import { withOverrides } from '@cirrus/view';
+import { type RenderParams, withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
-import { blobResponse, cleanCopies, FILE_SCHEME, historySummary, importPaths, openFailure, openTarget } from './files.ts';
+import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget } from './files.ts';
+import { PdfCache } from './latex/cache.ts';
+import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
+import { findBinaries, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
 import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
 import { readSettings, writeSettings } from './settings.ts';
@@ -17,8 +20,9 @@ import { readSettings, writeSettings } from './settings.ts';
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
  * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. It serves the nodes' files
- * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). Closing waits, at most
- * snapshotQuitMs, for the interface's last snapshot. CIRRUS_CAPTURE=<png> captures the window once the first frame is
+ * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). It compiles LaTeX, the PDFs
+ * served by the same protocol (latex/, plan 4b). Closing waits, at most snapshotQuitMs, for the interface's last
+ * snapshot, and quitting for every pdfLaTeX to exit. CIRRUS_CAPTURE=<png> captures the window once the first frame is
  * drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
@@ -82,6 +86,24 @@ app.on('second-instance', () => {
 });
 /** The base's lock, held (referenced) until the store is closed. */
 let lock: { release(): void } | null = null;
+/** LaTeX's compilations (plan 4b), once the base is open. */
+let latex: LatexService | null = null;
+let texFound: TexBinaries | null = null;
+/** pdfLaTeX: looked for again while it is absent (task 7 installs it during the session). */
+async function texBinaries(): Promise<TexBinaries | null> {
+  if (texFound) return texFound;
+  let root: string;
+  try {
+    root = tinyTexRoot(process.env);
+  } catch {
+    return null;
+  }
+  return (texFound = await findBinaries(root));
+}
+/** Quits once every pdfLaTeX has exited (no orphan, Global Constraints): the exits that skip will-quit. */
+function exitAfterLatex(code: number): void {
+  void (latex?.dispose() ?? Promise.resolve()).finally(() => app.exit(code));
+}
 
 function createWindow(): void {
   const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
@@ -149,7 +171,7 @@ function createWindow(): void {
         mkdirSync(dirname(capture), { recursive: true });
         writeFileSync(capture, img.toPNG());
         console.log(`Capture écrite : ${capture}`);
-        app.exit(code);
+        exitAfterLatex(code);
       });
     };
     ipcMain.once('cirrus:ready', () => setTimeout(() => shoot(0), 500));
@@ -170,8 +192,14 @@ ipcMain.handle('cirrus:load', (_e, fromTables: unknown) => {
 ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { saveSnapshot(store!, data, seq); });
 /** The settings: the defaults, or on the bench CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting. */
 const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir));
+/** The settings LaTeX reads at each compilation, several times: read from the file again once the interface writes it. */
+let latexParams: RenderParams | null = null;
+const currentParams = (): RenderParams => (latexParams ??= withOverrides(settings()));
 ipcMain.handle('cirrus:settings:get', () => settings());
-ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => { if (!bench) writeSettings(dir, overrides); });
+ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => {
+  if (!bench) writeSettings(dir, overrides);
+  latexParams = null;
+});
 /** The largest file an import takes, in bytes (setting maxImportMb). */
 const maxImportBytes = () => withOverrides(settings()).maxImportMb * 2 ** 20;
 // Files dropped on a node or chosen in the dialog, copied into the store before an action refers to them (plan 4a, D6).
@@ -234,8 +262,21 @@ ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'proce
   const record: PassRecord = { ...run, phases: loadPhases({ ...benchMarks, ...run.marks }, performance.timeOrigin), processMb: processMemory() };
   const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), record, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
   if (report) console.log(`Rapport écrit : ${report}`);
-  app.exit(0);
+  exitAfterLatex(0);
 });
+// LaTeX (plan 4b, D2, D8): the interface sends what the source needs; the request's form is checked here whatever the
+// interface did (strings, lists, a source of textViewMaxMb at most, resources of plain names present in the store).
+ipcMain.handle('cirrus:latex:compile', (_e, req: unknown) => {
+  const why = invalidRequest(req, dir, currentParams().textViewMaxMb * 2 ** 20);
+  if (why !== null || !latex) {
+    console.warn(`Compilation LaTeX refusée : ${why ?? 'base non ouverte'}`);
+    return INVALID_REQUEST;
+  }
+  return latex.compile(req as CompileRequest);
+});
+ipcMain.on('cirrus:latex:cancel', (_e, slot: unknown) => { if (typeof slot === 'string') latex?.cancel(slot); });
+ipcMain.on('cirrus:latex:warm', (_e, preamble: unknown) => { if (typeof preamble === 'string') latex?.warm(preamble); });
+ipcMain.handle('cirrus:latex:status:get', () => latex?.state() ?? { state: 'absent' });
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
@@ -306,13 +347,33 @@ void app.whenReady().then(() => {
     return;
   }
   markNow('baseOpened');
-  protocol.handle(FILE_SCHEME, (request) => blobResponse(dir, request));
+  const latexRoot = join(dir, 'latex'), latexCache = join(latexRoot, 'cache');
+  latex = new LatexService({
+    binaries: texBinaries, root: latexRoot, store: dir, params: currentParams,
+    cache: new PdfCache(latexCache, () => currentParams().latexCacheMb * 2 ** 20),
+    status: (s) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('cirrus:latex:status', s); },
+  });
+  protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request));
   createWindow();
   // The copies of earlier sessions, while the window loads; measuring runs leave the user's alone.
   if (!bench && !capture) cleanCopies(copies);
 });
+// The base's lock is released once every pdfLaTeX is gone: the next instance empties the service's folders.
+let latexDisposed = false;
 app.on('window-all-closed', () => {
-  store?.close();
-  lock?.release();
-  app.quit();
+  void (latex?.dispose() ?? Promise.resolve()).finally(() => {
+    latexDisposed = true;
+    store?.close();
+    lock?.release();
+    app.quit();
+  });
+});
+// No pdfLaTeX outlives the app, however it quits: will-quit waits for every one to be killed and gone.
+app.on('will-quit', (e) => {
+  if (!latex || latexDisposed) return;
+  e.preventDefault();
+  void latex.dispose().finally(() => {
+    latexDisposed = true;
+    app.quit();
+  });
 });

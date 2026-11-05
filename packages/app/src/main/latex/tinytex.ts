@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import type { InstallProgress } from '@cirrus/core';
 
 /**
  * The LaTeX distribution (plan 4b, D1): TinyTeX, downloaded the first time it is needed, after the user's consent, into
@@ -33,7 +34,8 @@ export interface Deps {
   run(file: string, args: string[]): Promise<{ code: number; out: string }>;
 }
 
-export type Progress = { step: 'download'; done: number; total: number } | { step: 'extract' } | { step: 'packages'; names: string[] };
+/** The interface shows it too (LatexStatus): its type lives in @cirrus/core. */
+export type Progress = InstallProgress;
 
 /** CIRRUS_TINYTEX if set (a TinyTeX of one's own, the tests' and the captures'), else %LOCALAPPDATA%\Cirrus\TinyTeX. */
 export function tinyTexRoot(env: Record<string, string | undefined>): string {
@@ -62,8 +64,10 @@ export async function findBinaries(root: string, run: Deps['run'] = runFile): Pr
  * and VAR_progname before VAR.
  */
 const variants = (names: string[]) => new RegExp(`^(${names.join('|')})([._].*)?$`, 'i');
-const TEX_PATHS = variants(['TEXMFOUTPUT', 'TEXINPUTS', 'TEXMFHOME', 'TEXMFCNF']);
-const SANDBOX = { openin_any: 'p', openout_any: 'p', shell_escape: 'f' };
+/** TEXMF_OUTPUT_DIRECTORY (TeX Live 2024) would send every file TeX writes elsewhere. */
+const TEX_PATHS = variants(['TEXMFOUTPUT', 'TEXMF_OUTPUT_DIRECTORY', 'TEXINPUTS', 'TEXMFHOME', 'TEXMFCNF']);
+// No openin_any: TeX Live 2026 made it a no-op (texmf.cnf), and setting it would pretend to restrict reads.
+const SANDBOX = { openout_any: 'p', shell_escape: 'f' };
 const SANDBOX_VARS = variants(Object.keys(SANDBOX));
 
 function copyEnv(env: Record<string, string | undefined>, drop: RegExp[]): Record<string, string> {
@@ -73,8 +77,9 @@ function copyEnv(env: Record<string, string | undefined>, drop: RegExp[]): Recor
 }
 
 /**
- * The environment of a TeX process (D4): it reads only its folder, its distribution and what TEXINPUTS names (the
- * compiler sets it), writes only in its folder (names absolute or going up refused) and runs nothing.
+ * The environment of a TeX process (D4, as ruled in task 3): it writes only in its folder (names absolute or going up
+ * refused) and runs nothing; it reads what the Windows account can read, TEXINPUTS (the compiler sets it) naming the
+ * node's files.
  */
 export function texEnv(env: Record<string, string | undefined>): Record<string, string> {
   return { ...copyEnv(env, [TEX_PATHS, SANDBOX_VARS]), ...SANDBOX };

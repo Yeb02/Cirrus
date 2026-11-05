@@ -1,0 +1,14 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.10.21)  5 NOV 2026 12:59
+**job-1-src.tex
+(./job-1-src.tex
+(c:/TinyTeX/texmf-dist/tex/latex/base/article.cls
+(c:/TinyTeX/texmf-dist/tex/latex/base/size10.clo
+)
+) (c:/TinyTeX/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def
+)
+
+! Undefined control sequence.
+l.3 Bonjour \foo
+                .
+
+!  ==> Fatal error occurred, no output PDF file produced!

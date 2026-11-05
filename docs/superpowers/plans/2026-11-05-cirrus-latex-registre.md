@@ -167,6 +167,181 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 3 : principal — compilation préchauffée, cloisonnée, en cache
 
+### Constat : TeX Live 2026 ne restreint plus les lectures
+
+- **Ce que TeX Live 2026 a changé** : `openin_any` n'a plus aucun effet. Le `texmf.cnf` de TinyTeX v2026.11 le dit, lignes 702 à 716 : « as of 2026, openin_any no longer has any effect; the underlying kpse_in_name_ok and related functions always return true » (fil `tex-live` de décembre 2025). La raison donnée : le réglage cassait des compilations normales, et des moyens détournés lisaient tout de même les zones interdites.
+- **Mesuré** (pdfTeX 1.40.29, environnement de `texEnv`, `openin_any=p` posé, pilote préchauffé) :
+  - `kpsewhich -safe-in-name` accepte un nom absolu (`C:/Windows/win.ini`), un nom qui remonte (`../x.tex`) et un nom UNC (`//evil.example/share/x.tex`). Il refuse les mêmes noms en écriture (`-safe-out-name`) ;
+  - `\input{C:/Windows/win.ini}` lit le fichier, et le journal montre `(c:/Windows/win.ini)`. `\input{../../links/p1/x.tex}` lit aussi. `\IfFileExists{C:/Windows/win.ini}{OUI}{NON}` affiche OUI ;
+  - les primitives de pdfTeX lisent tout chemin :
+    - `\pdffiledump` a mis dans le PDF les premiers octets de `win.ini` (« ; for 16-bit app ») ;
+    - `\pdfmdfivesum file`, `\pdffilesize` et `\pdffilemoddate` y ont mis l'empreinte, la taille et la date d'un fichier ;
+    - `\pdfximage` y a mis une image prise ailleurs sur le disque ;
+    - `\pdfobj stream file` y a mis le contenu d'un fichier texte ;
+  - redéfinir les commandes ne protège pas : après `\let\input\relax`, `\pdfprimitive\input{…}` lit encore. expl3 garde en plus ses propres copies des primitives (`\tex_filedump:D`…) ;
+  - un nom UNC fait ouvrir par Windows une connexion SMB vers un serveur quelconque.
+- **Ce qui tient** :
+  - `\openout` vers `../../links/p<n>/schéma_compression.png` est refusé (« I can't write on file »), et le fichier du magasin reste identique, octet pour octet ;
+  - `\write18` ne lance rien.
+- **Décision du contrôleur, appliquée dans cette tâche :**
+
+  Ruling (provisoire, soumis à l'utilisateur) : D4 devient « TeX n'écrit que dans son dossier et n'exécute rien ; il peut lire tout fichier que le compte Windows peut lire » — TeX Live 2026 a fait d'`openin_any` un réglage sans effet, et aucune solution simple ne restreint les lectures — risques restants : un .tex venu d'ailleurs peut recopier un fichier du disque dans son propre PDF, qui reste dans le cache local, et un nom UNC fait contacter un serveur SMB par Windows ; le vrai remède est un bac à sable du système (AppContainer : aucune lecture hors des dossiers accordés, aucun réseau), au plan 9 sauf décision contraire de l'utilisateur.
+
+  - En conséquence :
+    - `texEnv` ne pose plus `openin_any`. Le laisser suggérerait une protection qui n'existe pas ; un commentaire d'une ligne le dit ;
+    - les tests du Review Focus 2 sont reformulés : trois tests d'écriture et `\write18`, sans aucun test de lecture, ni refusée ni permise.
+  - Les options pesées pour garder D4 sont dans le rapport de la tâche 3 :
+    - un bac à sable du système (le seul qui tienne) ;
+    - l'examen de la source avant compilation ;
+    - le fichier `-recorder` relu après coup : falsifiable, car la source peut le tronquer par `\openout` ;
+    - un autre moteur.
+
+### Mesures
+
+- **Compilation préchauffée de `complexité.tex`** :
+  - **p50 de 138 ms sur 20** (min 130, max 144) ;
+  - conditions : `DEFAULT_PREAMBLE`, mode `page`, l'image du nœud, trois références, une citation, un label cassé, et les `known` de la première compilation (une passe chacune). Une pause de 1,2 s entre deux compilations laisse la réserve se refaire : la mesure est celle d'un processus prêt ;
+  - le test `complexité.tex préchauffé` refait la mesure. Son seuil est de 420 ms, trois fois la mesure.
+  - Décomposition, mesurée avant les deux optimisations ci-dessous (p50 de 156 ms) :
+
+    | Étape | Durée |
+    | --- | --- |
+    | Clé | 1 ms |
+    | Prise d'un processus | 12 ms, le lancement du remplaçant qui bloquait le fil |
+    | Liens, source et corps | 5 ms |
+    | pdfLaTeX | environ 115 ms |
+    | Lecture du journal et du `.aux` | 7 ms |
+    | Mise en cache | 11 ms |
+
+  - pdfLaTeX seul, mesuré hors du service (du nom du job à la sortie) : 113 ms pour ce `.tex`, 89 ms pour `Bonjour $x^2$.`. Le banc mesurait de 35 à 84 ms, avec un autre préambule et d'autres fragments.
+- **Chemin accentué (Review Focus 1)** : chaque test qui compile a sa base sous `cirrus-é-latex-…`. Un `TEXINPUTS` absolu n'y trouve pas `schéma_compression.png`, alors que la même base en ASCII le trouve. La forme relative le trouve (décision plus bas).
+- **Suite** : 645 tests sur 645 (604 avant la tâche) :
+
+  | Fichier | Tests ajoutés |
+  | --- | --- |
+  | `latexCompiler.test.ts` | 23 (2 sans TeX) |
+  | `latexLog.test.ts` | 12 |
+  | `latexCache.test.ts` | 4 |
+  | `latex.test.ts` (core) | 1 |
+  | `params.test.ts` | 1 |
+
+  `tsc` : `app`, `view`, `core`, `store` et `fixtures` sans erreur. `electron-vite build` réussit. Une capture de l'app construite (`CIRRUS_TINYTEX` du banc) démarre, s'écrit, puis quitte sans laisser de `pdflatex.exe`. `%LOCALAPPDATA%\Cirrus` n'a pas été créé.
+- **Le test `TEXMF_OUTPUT_DIRECTORY` mord** : sans le correctif de `texEnv`, pdfLaTeX a écrit `.aux`, `.log`, `.out`, `.pdf` et le fichier de `\openout` dans le dossier de la variable, et le test échoue. Avec le correctif, ce dossier reste vide.
+
+### Décisions
+
+- Ruling: **`TEXINPUTS=../../links/p<n>;`, relatif au dossier de travail**, et non le chemin absolu du dossier de liens.
+  - Options :
+    - le chemin absolu (la tâche) ;
+    - un nom court 8.3 : Node ne sait pas le demander, et il peut être désactivé sur le volume ;
+    - des copies dans le dossier de travail : lent pour un gros fichier, et TeX pourrait les écrire ;
+    - le chemin relatif (choix).
+  - Pourquoi :
+    - le chemin absolu échoue sous un chemin de base accentué (mesuré) : kpathsea semble lire l'environnement dans la page de code ANSI ;
+    - le chemin relatif reste en ASCII quel que soit le chemin de la base, et désigne le même dossier.
+  - Coût si faux : une ligne.
+- Ruling: **`texEnv` retire aussi `TEXMF_OUTPUT_DIRECTORY`** (TeX Live 2024) et ses variantes de casse et de programme.
+  - Pourquoi : cette variable, posée dans l'environnement de l'utilisateur, envoyait ailleurs tout ce que TeX écrit (mesuré).
+  - Elle s'ajoute aux quatre variables de chemin de la tâche 2. `runFile`, qui lance `tlmgr` et `pdflatex --version`, l'enlève donc aussi.
+  - Coût si faux : nul.
+- Ruling: **un dossier par processus**, `work/p<n>` et `links/p<n>`, `n` étant le numéro du processus, et `job-<n>` son job.
+  - Les dossiers sont effacés dès que le processus est sorti et son PDF parti au cache, puis vidés au démarrage du service.
+  - Pourquoi : un remplaçant se prépare pendant que le job précédent tourne. Partager un dossier de liens mêlerait leurs fichiers.
+  - Coût si faux : deux dossiers et deux petits fichiers par processus, environ 1 ms.
+- Ruling: **le pilote définit trois macros de l'app.**
+  - `\cirrus@label{nom}{numéro}{page}{ancre}` définit `\r@<nom>` à cinq champs, avec ou sans hyperref :
+    - le noyau de 2026 lit lui aussi cinq champs (mesuré : `\ref` affiche le premier, `\pageref` le deuxième) ;
+    - le nom est passé par `\detokenize`.
+  - `\cirrus@cite{clé}{texte}` définit `\b@<clé>` directement. hyperref met son lien de citation dans `\bibcite`, et non dans `\cite` : le seul lien est donc le nôtre, et aucun lien n'est imbriqué.
+  - `\cirrus@link{id}{texte}` donne `\href{cirrus://node/<id>}{texte}` :
+    - le préfixe de l'adresse est passé par `\detokenize` dès la lecture du pilote, si bien qu'aucun caractère actif de babel n'y entre ;
+    - l'identifiant n'est injecté que s'il vérifie `[0-9A-Za-z_-]{1,100}` ; sinon, pas de lien.
+  - Un label d'une autre source a pour premier champ son titre lié, et ses champs 4 et 5 vides. hyperref 7.01s ne fait alors pas son propre lien (« Suppressing link with empty target ») : un seul lien `cirrus://node/<id>`, que pdf.js lit.
+  - Coût si faux : quelques lignes du pilote, et `DRIVER_VERSION`.
+- Ruling: **la page d'un label d'une autre source est « ? »**, pour un label cassé ou en double aussi.
+  - Pourquoi : `\pageref` vers un autre nœud n'a pas de page. Le titre ne convient pas non plus : hyperref fait de la page le nom d'une ancre, `page.<champ>`.
+  - Coût si faux : un champ.
+- Ruling: **un label ou une clé porteur de `^^` est omis**, en plus de ce que refuse `safeLabel`.
+  - Pourquoi : TeX lit `^^7b` comme `{` avant tout le reste, et le corps du job casserait.
+  - Les champs des `known` (numéro, page, ancre) sont injectés tels que le `.aux` les donne. Ils sont omis si leurs accolades ne s'équilibrent pas, ou s'ils portent `#`, `%`, `^^` ou un caractère de contrôle.
+  - Coût si faux : un label exotique s'affiche en « ?? ».
+- Ruling: **une clé de citation inconnue s'affiche en rouge, suivie de « ? »** (`[li2009 ?]`), comme un label cassé. Un doublon s'affiche en rouge, avec le titre de sa première définition, **lié à son nœud** s'il en a un : le lien est posé autour du rouge, qui l'emporte ainsi sur `urlcolor`. Coût si faux : une ligne de `jobBody`.
+- Ruling: **les labels que la source cite** sont l'argument de toute commande finissant par `ref` (`\ref`, `\eqref`, `\pageref`, `\autoref`, `\cref{a,b}`…), hors des commentaires.
+  - Le commentaire suit la règle du `scanTex` de la tâche 4 : un `%` qu'aucune barre oblique inverse n'échappe.
+  - Une seconde passe part si l'un de ces labels, défini par la source, a un numéro, une page ou une ancre différents des `known`.
+  - Coût si faux : une seconde passe de trop ou de moins.
+- Ruling: **un document autonome n'a une seconde passe** que si son journal demande « Rerun » (« Rerun to get », « Rerun LaTeX », « Please rerun »), ou si les lignes de renvois de son `.aux` ont changé (`\newlabel`, `\bibcite`, `\@writefile`).
+  - Pourquoi : le `.aux` change toujours à la première passe, car il contient au moins `\relax` et `\@abspage@last`. Le comparer en entier ferait toujours deux compilations à froid, soit une seconde de plus.
+  - La seconde passe se fait dans le même dossier, sous le même nom de job : elle relit le `.aux` et la table des matières de la première. Le test d'une table des matières le vérifie (`passes: 2`).
+  - Coût si faux : une expression régulière.
+- Ruling: **le journal ne se coupe pas** : `max_print_line=100000`, `error_line=254` et `half_error_line=238` sont dans l'environnement de pdfLaTeX, que kpathsea lit.
+  - Pourquoi : la pile des fichiers ouverts se lit alors sur les parenthèses du journal, sans ligne coupée.
+  - `parseLog` saute l'extrait de texte qui suit un « Overfull » ou un « Underfull » : ses parenthèses n'ouvrent aucun fichier. Le test d'un extrait réel à parenthèse ouverte le vérifie.
+  - Une erreur est du préambule si elle précède `CIRRUS-READY` et que la source n'est pas ouverte. Sa ligne n'est donnée que si le fichier lu est `preamble.tex`, ou la source pour une erreur de la source.
+  - Coût si faux : nul.
+- Ruling: **un préambule qui échoue est redit aussitôt**, sans nouveau processus, jusqu'à `warm()` ou un autre préambule, quand l'échec est déterministe : le processus sort avec un journal.
+  - Un dépassement du délai, ou un pdfLaTeX qui ne démarre pas, n'est pas retenu : la requête suivante réessaie.
+  - La tâche 7 appellera `warm(préambule)` après avoir installé un paquet.
+  - Coût si faux : un champ.
+- Ruling: **deux optimisations du chemin d'une compilation** (mesurées, plus haut) :
+  - la réserve se complète au tour suivant de la boucle d'événements, une fois le job remis. Lancer un processus prend environ 10 ms du fil principal ;
+  - le journal et le `.aux` sont lus en même temps.
+- Ruling: **le cache tient un index en mémoire.**
+  - Il est dressé une seule fois depuis le dossier, dans l'ordre des dates des PDF. Une lecture rafraîchit la date de son PDF, pour la session suivante.
+  - Une compilation ne liste donc jamais le dossier. À 500 Mo de PDF de 100 Ko, ce serait 5 000 `stat` à chaque compilation.
+  - La description est écrite directement après le PDF : une description coupée est un raté.
+  - `trim` ne retire jamais le PDF qu'on vient de ranger, même seul au-dessus du plafond.
+  - `get` rend aussi `passes`, que le service rend avec `cached: true`.
+  - Coût si faux : le dossier modifié par un autre programme n'est vu qu'au démarrage suivant.
+- Ruling: **un nom déjà présent dans le dossier de liens est effacé avant d'être relié ou copié.**
+  - Pourquoi : copier sur un lien physique écrirait dans le fichier du magasin.
+  - Les noms passent par `plainName` (`files.ts`, exporté). La règle est plus stricte que celle de la tâche : elle refuse aussi `<>"|?*`, un point ou une espace final, et les noms de périphériques.
+  - Coût si faux : nul.
+- Ruling: **les IPC.**
+  - `cirrus:latex:compile` passe par `invoke`. Une requête refusée reçoit la réponse fixée (`INVALID_REQUEST`), et sa cause va dans la console.
+  - `cirrus:latex:cancel` et `cirrus:latex:warm` passent par `send`.
+  - `latexStatus()` lit `cirrus:latex:status:get`, et `cirrus:latex:status` pousse les changements.
+  - `LatexStatus` et `InstallProgress` vivent dans `@cirrus/core`. Le `Progress` de `tinytex.ts` en est un alias.
+  - Le service a une méthode de plus, `state()`.
+  - Coût si faux : des noms de canaux.
+- Ruling: **la fermeture attend `dispose()`.**
+  - `window-all-closed` l'attend avant de rendre le verrou de la base : l'instance suivante vide les dossiers du service, que des processus en train de sortir tiendraient encore.
+  - `will-quit` l'attend pour tout autre arrêt.
+  - Les sorties des captures et du banc passent par `exitAfterLatex`, car `app.exit` saute `will-quit`.
+  - Coût si faux : nul.
+- Ruling: **les réglages que LaTeX lit sont gardés en mémoire** dans le principal (`currentParams`), et relus du fichier après `cirrus:settings:set`.
+  - Pourquoi : une compilation les lit plusieurs fois, et chaque lecture relit `settings.json`.
+  - Coût si faux : nul.
+- Ruling: **les pas des réglages**, que la tâche ne fixe pas (sauf la largeur) :
+
+  | Réglage | Pas |
+  | --- | --- |
+  | `latexWarmProcesses` | 1 |
+  | `latexTimeoutMs` | 100 |
+  | `latexSnippetWidthCm` | 0,5 (la tâche) |
+  | `latexCacheMb` | 10 |
+  | `latexLogMaxKb` | 16 |
+
+  Les libellés prennent l'apostrophe typographique (décision du plan 4a). La durée du message de délai s'écrit à la française : « 2 s », « 1,5 s ». Coût si faux : des pas.
+- Ruling: **deux messages que la tâche ne donne pas.**
+  - Une compilation en mode `page` qui ne produit aucune page reçoit « La compilation n'a produit aucune page. ».
+  - En mode `snippet`, la page fait au moins 1 pt de haut, pour une source vide.
+  - Coût si faux : un message.
+- Ruling: **deux tests adaptés à la TinyTeX du banc.**
+  - **babel français** : `babel-french` (`french.ldf`) n'y est pas. `\usepackage[french]{babel}` échoue (« Unknown option 'french' »). Avec `provide=*`, le français se charge depuis la locale de babel, mais `:` n'est pas actif (catcode 12, mesuré).
+    - Le test prend donc `\usepackage[french,provide=*]{babel}` et rend `:` actif par le mécanisme de babel, `\useshorthands*{:}\defineshorthand{:}{\thinspace\string:}`, comme le fait `french.ldf` (catcode 13, mesuré). Le risque testé, un `:` actif dans `\ref{eq:x}` et dans une clé de citation, est le même.
+  - **`letterpaper`** : le document autonome charge `geometry`. Le noyau seul ne donne pas la taille du papier à pdfTeX, qui garde l'A4 du `pdftexconfig` de TinyTeX (mesuré : 595,3 pt).
+  - Coût si faux : deux préambules de test.
+- Ruling: **TeX ne lit qu'en vertu de la décision provisoire** (plus haut).
+  - Les tests d'écriture visent `../../links/p<k>/…` à la k-ième compilation d'un service, qui tourne dans `p<k>` : chaque tentative vise donc le dossier de liens de son propre processus.
+  - Le refus ne dépend pas du dossier visé, puisque `..` est refusé à l'écriture.
+
+### Notes
+
+- Le `titleToTex` de la tâche 1 parcourt désormais `text.normalize('NFC')` (relecture de la tâche 1, mineur 1). Un « e » suivi de l'accent combinant donnait « e? », et donne « é » ; un test le vérifie.
+- `blobRequest` et `latexRequest` partagent la lecture de l'adresse (`parseUrl`) et la réponse avec ses plages (`served`). `fileResponse` choisit l'hôte du protocole.
+- Les extraits de journal des tests sont réels : `tests/latex-logs/*.log`, sortis de TinyTeX v2026.11 sous le pilote. Le chemin de TinyTeX y est raccourci. Une ligne n'en est retirée que si ses propres parenthèses ferment ce qu'elles ouvrent, si bien que la pile des fichiers reste la vraie.
+
 ## Tâche 4 : interface — registre des labels et des citations, requêtes, compilation à la pause
 
 ## Tâche 5 : interface — éditeur LaTeX, plein écran d'un `.tex`, enregistrement
@@ -187,6 +362,8 @@ Fixées par le contrôleur avant la tâche :
 | `Packages.ensure` de 3 noms, dont un inconnu | 2 | 17,2 s | un lot `tlmgr install`, puis la liste relue ; miroirs de CTAN |
 | `installFor` d'un paquet absent (`siunitx`) | 2 | 10,4 s puis 9,2 s | `search --global`, puis `install`, depuis `tlnet.yihui.org` |
 | `Packages.installed()` (`tlmgr info --list --only-installed`) | 2 | 1,6 s | TinyTeX du banc, sans réseau |
+| Compilation préchauffée de `complexité.tex` (de la requête à la réponse) | 3 | p50 138 ms sur 20 (min 130, max 144) ; 156 ms avant les optimisations | `DEFAULT_PREAMBLE`, mode `page`, image, 3 références, 1 citation, 1 label cassé, une passe ; TinyTeX du banc |
+| pdfLaTeX seul, préchauffé (du nom du job à la sortie) | 3 | 113 ms pour `complexité.tex` ; 89 ms pour `Bonjour $x^2$.` | p50 sur 9, hors du service |
 
 ## Mineurs reportés
 
@@ -206,6 +383,17 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - Pour la tâche 7 : `BASE_PACKAGES` est dans le principal (décision P1). Si `withPackage` vit dans l'interface, elle ne pourra pas importer `tinytex.ts`, qui tire `node:child_process`. La liste irait alors dans `@cirrus/core` (`latex.ts`).
 - Une installation dans un chemin accentué (un nom d'utilisateur Windows accentué, dans `LOCALAPPDATA`) n'a pas été essayée. Un chemin avec une espace l'a été. `tlmgr.bat` et le Perl de TeX Live sont connus pour mal vivre les chemins non ASCII (`tinytex.ts`, `provision`).
 - `texEnv` laisse les autres variables d'arbres de kpathsea (`TEXMF`, `TEXMFAUXTREES`, `TEXMFLOCAL`…). Elles ne viennent que de l'environnement de l'utilisateur, mais pourraient ajouter des arbres que TeX lirait. La tâche en nomme quatre (`tinytex.ts`, `TEX_PATHS`).
+
+### Tâche 3
+
+- Pour la tâche 6 : `\nameref` vers le label d'un autre nœud n'affiche rien, car le troisième champ est vide. Y mettre le titre lié demanderait de vérifier ce que nameref en fait (`driver.ts`, `jobBody`).
+- Sous le vrai `babel-french`, absent de la TinyTeX du banc, `: ; ! ?` prennent l'espace fine française dans un titre ou un nom de label injecté (« absent :label ? »). C'est la typographie de babel ; rien n'est interprété (`driver.ts`, `jobBody`).
+- Un document autonome qui ne charge ni `geometry` ni hyperref garde l'A4 de pdfTeX, quel que soit son papier. C'est le comportement de pdfLaTeX lui-même (`compiler.ts`, `runStandalone`).
+- `citedLabels` ne voit pas `\hyperref[label]{texte}`, dont le label est entre crochets (`driver.ts`).
+- Le délai vaut par passe : une compilation en deux passes peut durer deux fois `latexTimeoutMs` (`compiler.ts`, `finish`).
+- Au-delà de `latexWarmProcesses` requêtes simultanées, les suivantes attendent qu'un processus se prépare à froid, environ 600 ms (`compiler.ts`, `fill`).
+- pdfLaTeX seul prend 89 ms pour une ligne sur cette machine, contre 35 à 84 ms au banc pour ses fragments. La différence n'a pas été cherchée : le préambule et les fragments diffèrent, et la mesure de la tâche 8 tranchera (`compiler.ts`).
+- Les dossiers des processus tués par `dispose()` restent jusqu'au démarrage suivant, qui les vide (`compiler.ts`, `dispose`).
 
 ## Décisions du contrôleur (plan 4b)
 
@@ -249,3 +437,12 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
     - Sans gpg, `tlmgr` télécharge tout de même par HTTPS et contrôle chaque archive par l'empreinte SHA-512 de la base `texlive.tlpdb`. Seule l'authenticité de cette base, signée par TeX Live, n'est pas vérifiée.
     - Le dépôt ne contient pas de paquet `tlgpg` (`tlmgr info tlgpg` ne trouve rien).
     - Rien n'a été changé pour cela. C'est une décision à prendre : fixer `TL_GNUPG` vers un gpg, en livrer un, ou accepter HTTPS et les empreintes.
+
+### Tâche 3, blocage de D4
+
+- Ruling R3.1 (provisoire, soumis à l'utilisateur) : **D4 devient « TeX n'écrit que dans son dossier et n'exécute rien ; il peut lire tout fichier que le compte Windows peut lire »**, avec ses conséquences :
+  - un `TEXINPUTS` relatif ;
+  - `TEXMF_OUTPUT_DIRECTORY` retiré, et `openin_any` plus posé, par `texEnv` ;
+  - des tests d'écriture à la place des tests de lecture.
+
+  Le texte de la décision et le constat qui l'a amenée sont sous la tâche 3, plus haut.

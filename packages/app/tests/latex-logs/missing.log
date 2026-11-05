@@ -1,0 +1,24 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.10.21)  5 NOV 2026 12:55
+**driver.tex
+(./driver.tex
+(./preamble.tex (c:/TinyTeX/texmf-dist/tex/latex/base/article.cls
+(c:/TinyTeX/texmf-dist/tex/latex/base/size10.clo
+)
+) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsmath.sty
+
+(c:/TinyTeX/texmf-dist/tex/latex/amsmath/amstext.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsgen.sty
+)) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsbsy.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsopn.sty
+)
+))
+
+! LaTeX Error: File `paquetinexistant.sty' not found.
+
+! Emergency stop.
+<read *> 
+l.1 \input{preamble}
+                    ^^M
+*** (cannot \read from terminal in nonstop modes)
+
+!  ==> Fatal error occurred, no output PDF file produced!

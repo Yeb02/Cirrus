@@ -40,6 +40,11 @@ test('titleToTex : tout autre caractère devient « ? », un par caractère (pai
   expect(titleToTex('a\tb\nc\u0000d\u007fe\u0085f')).toBe('a?b?c?d?e?f');
 });
 
+test('titleToTex : une lettre décomposée (NFD, « e » puis l’accent combinant) est lue composée', () => {
+  expect(titleToTex('été')).toBe('été');
+  expect(titleToTex('Vitányi')).toBe('Vitányi');
+});
+
 test('safeLabel : 1 à 200 caractères, sans \\ { } % # ni caractère de contrôle', () => {
   for (const name of ['eq:mdl', 'fig:a_b', 'thm 2', 'x'.repeat(200), 'été']) expect(safeLabel(name), name).toBe(true);
   for (const name of ['', 'a}b', 'a{b', 'a\\b', 'a%b', 'a#b', 'x'.repeat(201), 'a\u0007b', 'a\nb', 'a\u009fb']) expect(safeLabel(name), JSON.stringify(name)).toBe(false);

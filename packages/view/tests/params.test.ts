@@ -135,6 +135,21 @@ test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage ava
   expect(withOverrides(diffFromDefaults(p))).toEqual(p);
 });
 
+test('compilation LaTeX : processus préparés, délai, largeur du résumé, cache, journal, réglages avancés du groupe « LaTeX » (plan 4b, tâche 3)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['latexWarmProcesses', 2, 'pdfLaTeX préparés d’avance', 1, 4, 1],
+    ['latexTimeoutMs', 10_000, 'Durée maximale d’une compilation (ms)', 1000, 120_000, 100],
+    ['latexSnippetWidthCm', 9, 'Largeur du résumé et de la relation compilés (cm)', 4, 20, 0.5],
+    ['latexCacheMb', 500, 'Taille du cache des PDF compilés (Mo)', 20, 20_000, 10],
+    ['latexLogMaxKb', 256, 'Taille gardée d’un journal de compilation (Ko)', 16, 4096, 16],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'LaTeX', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ latexWarmProcesses: 9, latexSnippetWidthCm: 1 })).toMatchObject({ latexWarmProcesses: 4, latexSnippetWidthCm: 4 });
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

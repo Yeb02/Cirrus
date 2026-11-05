@@ -1,0 +1,98 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.10.21)  5 NOV 2026 12:55
+**driver.tex
+(./driver.tex
+(./preamble.tex (c:/TinyTeX/texmf-dist/tex/latex/base/article.cls
+(c:/TinyTeX/texmf-dist/tex/latex/base/size11.clo
+)
+) (c:/TinyTeX/texmf-dist/tex/latex/base/fontenc.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/lm/lmodern.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsmath.sty
+
+(c:/TinyTeX/texmf-dist/tex/latex/amsmath/amstext.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsgen.sty
+)) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsbsy.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/amsmath/amsopn.sty
+)
+) (c:/TinyTeX/texmf-dist/tex/latex/amsfonts/amssymb.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/amsfonts/amsfonts.sty
+)) (c:/TinyTeX/texmf-dist/tex/latex/amscls/amsthm.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/graphics/graphicx.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/graphics/keyval.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/graphics/graphics.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/graphics/trig.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/graphics-cfg/graphics.cfg
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/graphics-def/pdftex.def
+))
+) (c:/TinyTeX/texmf-dist/tex/latex/xcolor/xcolor.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/graphics-cfg/color.cfg
+)
+) (c:/TinyTeX/texmf-dist/tex/latex/hyperref/hyperref.sty
+ (c:/TinyTeX/texmf-dist/tex/generic/iftex/iftex.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/kvsetkeys/kvsetkeys.sty
+) (c:/TinyTeX/texmf-dist/tex/generic/kvdefinekeys/kvdefinekeys.sty
+) (c:/TinyTeX/texmf-dist/tex/generic/pdfescape/pdfescape.sty
+ (c:/TinyTeX/texmf-dist/tex/generic/ltxcmds/ltxcmds.sty
+) (c:/TinyTeX/texmf-dist/tex/generic/pdftexcmds/pdftexcmds.sty
+ (c:/TinyTeX/texmf-dist/tex/generic/infwarerr/infwarerr.sty
+)
+)) (c:/TinyTeX/texmf-dist/tex/latex/hycolor/hycolor.sty
+) (c:/TinyTeX/texmf-dist/tex/latex/hyperref/nameref.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/refcount/refcount.sty
+) (c:/TinyTeX/texmf-dist/tex/generic/gettitlestring/gettitlestring.sty
+ (c:/TinyTeX/texmf-dist/tex/latex/kvoptions/kvoptions.sty
+))
+) (c:/TinyTeX/texmf-dist/tex/latex/etoolbox/etoolbox.sty
+) (c:/TinyTeX/texmf-dist/tex/generic/stringenc/stringenc.sty
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/hyperref/pd1enc.def
+) (c:/TinyTeX/texmf-dist/tex/generic/intcalc/intcalc.sty
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/hyperref/puenc.def
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/url/url.sty
+)
+ (c:/TinyTeX/texmf-dist/tex/generic/bitset/bitset.sty
+ (c:/TinyTeX/texmf-dist/tex/generic/bigintcalc/bigintcalc.sty
+))
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/hyperref/hpdftex.def
+ (c:/TinyTeX/texmf-dist/tex/latex/rerunfilecheck/rerunfilecheck.sty
+ (c:/TinyTeX/texmf-dist/tex/generic/uniquecounter/uniquecounter.sty
+)
+)
+)
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/lm/t1lmr.fd
+) (c:/TinyTeX/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def
+)
+
+(c:/TinyTeX/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
+
+Package epstopdf Warning: Shell escape feature is not enabled.
+
+(c:/TinyTeX/texmf-dist/tex/latex/latexconfig/epstopdf-sys.cfg
+))
+
+ CIRRUS-READY
+
+\cirrusjob=job-1-body.tex
+
+(./job-1-body.tex (./job-1-src.tex
+ (c:/TinyTeX/texmf-dist/tex/latex/lm/ot1lmr.fd
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/lm/omllmm.fd
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/lm/omslmsy.fd
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/lm/omxlmex.fd
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/amsfonts/umsa.fd
+)
+ (c:/TinyTeX/texmf-dist/tex/latex/amsfonts/umsb.fd
+)
+! Undefined control sequence.
+l.4 Trois \foo
+              {} ici.
+
+!  ==> Fatal error occurred, no output PDF file produced!

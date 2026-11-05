@@ -48,5 +48,14 @@ contextBridge.exposeInMainWorld('cirrus', {
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
   openUrl: (url: string) => ipcRenderer.invoke('cirrus:open-url', url),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),
+  latexCompile: (req: unknown) => ipcRenderer.invoke('cirrus:latex:compile', req),
+  latexCancel: (slot: string) => ipcRenderer.send('cirrus:latex:cancel', slot),
+  latexWarm: (preamble: string) => ipcRenderer.send('cirrus:latex:warm', preamble),
+  latexStatus: () => ipcRenderer.invoke('cirrus:latex:status:get'),
+  onLatexStatus: (fn: (s: unknown) => void) => {
+    const listener = (_e: unknown, s: unknown) => fn(s);
+    ipcRenderer.on('cirrus:latex:status', listener);
+    return () => { ipcRenderer.removeListener('cirrus:latex:status', listener); };
+  },
   launch,
 });

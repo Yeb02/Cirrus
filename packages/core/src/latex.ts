@@ -53,11 +53,12 @@ const MATH = new Map(Object.entries({
  * A text of the user (a title, a short citation) as inert pdfLaTeX source: TeX's special characters as text, Greek
  * letters and the usual symbols in math mode, Latin letters (basic, Latin-1, Extended-A) and typographic punctuation as
  * they are; any other character becomes « ? », the control characters (U+007F to U+009F among them) and the few
- * letters LaTeX does not set up included, since each would stop the compilation. Nothing of it is a command.
+ * letters LaTeX does not set up included, since each would stop the compilation. Nothing of it is a command. A letter
+ * typed decomposed (« e » then a combining accent) is read composed (NFC).
  */
 export function titleToTex(text: string): string {
   let out = '';
-  for (const ch of text) {
+  for (const ch of text.normalize('NFC')) {
     const special = SPECIALS.get(ch);
     if (special !== undefined) { out += special; continue; }
     const math = MATH.get(ch);
@@ -108,3 +109,12 @@ export type CompileAnswer =
   | { status: 'error'; error: TexError; labels: KnownLabel[]; log: string; ms: number; missing?: string }
   | { status: 'cancelled' }
   | { status: 'unavailable'; reason: 'absent' | 'installing' | 'failed'; message: string };
+
+/** The steps of TinyTeX's installation (D1): the main process's Progress (latex/tinytex.ts). */
+export type InstallProgress = { step: 'download'; done: number; total: number } | { step: 'extract' } | { step: 'packages'; names: string[] };
+/** The state of LaTeX on this PC, pushed by the main process (cirrus:latex:status). */
+export type LatexStatus =
+  | { state: 'ready' }
+  | { state: 'absent' }
+  | { state: 'installing'; progress: InstallProgress | { step: 'package'; name: string } }
+  | { state: 'failed'; message: string };

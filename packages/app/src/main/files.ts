@@ -14,9 +14,13 @@ import { type ChangeRow, filePath, importFile } from '@cirrus/store';
  * the system's applications.
  */
 
-/** The files' scheme: cirrus-file://blob/<sha256>/<name, encoded by encodeURIComponent>; the name only gives the type. */
+/**
+ * The files' scheme: cirrus-file://blob/<sha256>/<name, encoded by encodeURIComponent>, the store's blobs, and
+ * cirrus-file://latex/<cache key>/<name>, the compiled PDFs (plan 4b, D2); the name only gives the type.
+ */
 export const FILE_SCHEME = 'cirrus-file';
-const URL_PREFIX = `${FILE_SCHEME}://blob/`;
+const BLOB_PREFIX = `${FILE_SCHEME}://blob/`;
+const LATEX_PREFIX = `${FILE_SCHEME}://latex/`;
 const HASH = /^[0-9a-f]{64}$/;
 const RANGE = /^bytes=(\d*)-(\d*)$/i;
 
@@ -49,19 +53,39 @@ export function contentTypeOf(name: string): string {
  * (RFC 9110, 14.2). `end` is included, as in createReadStream.
  */
 export function blobRequest(storeDir: string, url: string, range: string | null): BlobAnswer {
-  const bare = (status: 400 | 404 | 416, more?: Record<string, string>): BlobAnswer =>
-    ({ status, headers: { 'Accept-Ranges': 'bytes', 'Content-Length': '0', ...more } });
-  if (!url.startsWith(URL_PREFIX) || url.includes('\\')) return bare(400);
+  const parsed = parseUrl(url, BLOB_PREFIX);
+  if (!parsed) return bare(400);
+  return served(filePath(storeDir, { name: parsed.name, hash: parsed.hash, size: 0 }), contentTypeOf(parsed.name), range);
+}
+
+/**
+ * The same for a compiled PDF (plan 4b, D2): cirrus-file://latex/<64 hex>/<name>, served from <cacheDir>/<key>.pdf as
+ * application/pdf, by the same rules (400, 404, ranges, sandboxed).
+ */
+export function latexRequest(cacheDir: string, url: string, range: string | null): BlobAnswer {
+  const parsed = parseUrl(url, LATEX_PREFIX);
+  if (!parsed) return bare(400);
+  return served(join(cacheDir, `${parsed.hash}.pdf`), 'application/pdf', range);
+}
+
+const bare = (status: 400 | 404 | 416, more?: Record<string, string>): BlobAnswer =>
+  ({ status, headers: { 'Accept-Ranges': 'bytes', 'Content-Length': '0', ...more } });
+
+/** <prefix><sha256>/<name>, the name decoded; null for anything else. */
+function parseUrl(url: string, prefix: string): { hash: string; name: string } | null {
+  if (!url.startsWith(prefix) || url.includes('\\')) return null;
   // Chromium hands over the query and the fragment too; encodeURIComponent escapes « ? » and « # » in a name.
-  const parts = url.slice(URL_PREFIX.length).split(/[?#]/)[0].split('/');
-  if (parts.length !== 2 || !HASH.test(parts[0]) || parts[1] === '') return bare(400);
-  let name: string;
+  const parts = url.slice(prefix.length).split(/[?#]/)[0].split('/');
+  if (parts.length !== 2 || !HASH.test(parts[0]) || parts[1] === '') return null;
   try {
-    name = decodeURIComponent(parts[1]);
+    return { hash: parts[0], name: decodeURIComponent(parts[1]) };
   } catch {
-    return bare(400);
+    return null;
   }
-  const path = filePath(storeDir, { name, hash: parts[0], size: 0 });
+}
+
+/** The answer for the file at `path`, whole or by the range asked: 404 if it is not a file. */
+function served(path: string, contentType: string, range: string | null): BlobAnswer {
   let size: number;
   try {
     const st = statSync(path);
@@ -72,27 +96,36 @@ export function blobRequest(storeDir: string, url: string, range: string | null)
   }
   // Sandboxed: should the window ever navigate to a served SVG or HTML, its scripts would run with the bridge exposed
   // (checked in Electron 45); the header is ignored by <img>, fetch and XHR.
-  const served = (status: 200 | 206, start: number, end: number): BlobAnswer => ({
+  const answer = (status: 200 | 206, start: number, end: number): BlobAnswer => ({
     status, path, start, end,
     headers: {
       'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1),
       ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
-      'Content-Type': contentTypeOf(name), 'Content-Security-Policy': 'sandbox',
+      'Content-Type': contentType, 'Content-Security-Policy': 'sandbox',
     },
   });
   const m = range === null ? null : RANGE.exec(range.trim());
   const first = m && m[1] !== '' ? Number(m[1]) : null, last = m && m[2] !== '' ? Number(m[2]) : null;
-  if (!m || (first === null && last === null) || (first !== null && last !== null && last < first)) return served(200, 0, size - 1);
+  if (!m || (first === null && last === null) || (first !== null && last !== null && last < first)) return answer(200, 0, size - 1);
   // A suffix of n bytes is the last n (all of them if the file is shorter); a suffix of 0, or an empty file, starts at
   // the end: unsatisfiable.
   const start = first ?? Math.max(0, size - last!);
   if (start >= size) return bare(416, { 'Content-Range': `bytes */${size}` });
-  return served(206, start, first === null || last === null ? size - 1 : Math.min(last, size - 1));
+  return answer(206, start, first === null || last === null ? size - 1 : Math.min(last, size - 1));
 }
 
 /** The protocol's response (protocol.handle): the range streamed from the disk, never the blob read whole. */
 export function blobResponse(storeDir: string, request: Request): Response {
-  const a = blobRequest(storeDir, request.url, request.headers.get('range'));
+  return respond(blobRequest(storeDir, request.url, request.headers.get('range')));
+}
+
+/** The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). */
+export function fileResponse(storeDir: string, cacheDir: string, request: Request): Response {
+  const range = request.headers.get('range');
+  return respond(request.url.startsWith(LATEX_PREFIX) ? latexRequest(cacheDir, request.url, range) : blobRequest(storeDir, request.url, range));
+}
+
+function respond(a: BlobAnswer): Response {
   // The same stream at run time; Node's and the DOM's typings of it differ.
   const body = 'path' in a && a.end >= a.start
     ? Readable.toWeb(createReadStream(a.path, { start: a.start, end: a.end })) as unknown as ReadableStream<Uint8Array>
@@ -151,8 +184,11 @@ export function isRunnable(name: string): boolean {
 /** The code of the error openableCopy throws for a refused name or hash. */
 const REFUSED_NAME = 'CIRRUS_REFUSED_NAME';
 
-/** A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite. */
-function plainName(name: string): boolean {
+/**
+ * A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite
+ * (« . » and « .. » among them). The compiler links the node's files under such names only (plan 4b, D4).
+ */
+export function plainName(name: string): boolean {
   if (name === '' || /[<>:"/\\|?*]|[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) return false;
   for (let i = 0; i < name.length; i++) if (name.charCodeAt(i) < 32) return false;
   return true;
