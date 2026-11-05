@@ -1,7 +1,7 @@
 import type { CompileAnswer, CompiledPdf, CompileRequest, KnownLabel } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { loading, viewsSettled } from '../src/renderer/files/read.ts';
-import { CompileScheduler, type CompiledView, knownLabels } from '../src/renderer/latex/scheduler.ts';
+import { CompileScheduler, type CompiledView, knownLabels, latexChanged, noteInstalled, onPackagesInstalled } from '../src/renderer/latex/scheduler.ts';
 import { PendingHold } from '../src/renderer/latex/useCompiled.ts';
 
 const PAUSE = 300;
@@ -192,6 +192,55 @@ test('CompileScheduler : LaTeX indisponible, un pont qui échoue, null puis la m
   advance(PAUSE);
   expect(views).toHaveLength(seen);
   expect(sent).toHaveLength(4);
+});
+
+test('CompileScheduler : LaTeX prêt (latexChanged), une source restée sans compilation ou en erreur repart sans frappe ; une compilée, non', async () => {
+  const { scheduler, sent, view, advance } = setup();
+  const slot = freshSlot();
+  scheduler.request(req(slot, 'a'));
+  await sent[0].answer({ status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
+  // The same request again changes nothing, as before.
+  scheduler.request(req(slot, 'a'));
+  expect(sent).toHaveLength(1);
+  latexChanged();
+  expect(sent.map((x) => x.req.source)).toEqual(['a', 'a']);
+  expect(view()).toMatchObject({ pending: true });
+  await sent[1].answer(ok('A'));
+  expect(view()).toMatchObject({ pdf: pdf('A'), pending: false, unavailable: null });
+  latexChanged();
+  expect(sent).toHaveLength(2);
+  // An error (a package missing then) is asked again once, at the next change.
+  scheduler.request(req(slot, 'b'));
+  advance(PAUSE);
+  await sent[2].answer({ status: 'error', error: { message: 'File `x.sty\' not found.', line: 1, where: 'preamble' }, labels: [], log: '', ms: 1, missing: 'x.sty' });
+  latexChanged();
+  expect(sent.map((x) => x.req.source)).toEqual(['a', 'a', 'b', 'b']);
+  await sent[3].answer(ok('B'));
+  // A request running when LaTeX changes is not cancelled; its answer, if it could not compile, goes once more.
+  scheduler.request(req(slot, 'c'));
+  advance(PAUSE);
+  const t = sent.length;
+  latexChanged();
+  expect(sent).toHaveLength(t);
+  await sent[t - 1].answer({ status: 'unavailable', reason: 'installing', message: 'LaTeX est en cours d’installation.' });
+  expect(sent.map((x) => x.req.source).slice(t)).toEqual(['c']);
+  await sent[t].answer(ok('C'));
+  expect(view()).toMatchObject({ pdf: pdf('C'), pending: false });
+  scheduler.dispose();
+  latexChanged();
+  expect(sent).toHaveLength(t + 1);
+});
+
+test('noteInstalled : les paquets qu’une réponse dit installés sont dits à qui écoute', () => {
+  const heard: string[][] = [];
+  const off = onPackagesInstalled((names) => heard.push(names));
+  noteInstalled({ ...ok('A'), installed: ['tikz-cd'] } as CompileAnswer);
+  noteInstalled(ok('B'));
+  noteInstalled({ status: 'error', error: { message: 'x', line: null, where: 'source' }, labels: [], log: '', ms: 1, installed: ['a', 'b'] });
+  noteInstalled({ status: 'cancelled' });
+  off();
+  noteInstalled({ ...ok('C'), installed: ['siunitx'] } as CompileAnswer);
+  expect(heard).toEqual([['tikz-cd'], ['a', 'b']]);
 });
 
 test('PendingHold : une compilation demandée, sa pause comprise, compte parmi ce que les vues chargent, et une capture l’attend (plan 4b, tâche 6)', async () => {

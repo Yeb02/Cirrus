@@ -1,36 +1,29 @@
-import { execFile } from 'node:child_process';
+import { type ChildProcess, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
-import type { InstallProgress } from '@cirrus/core';
+import { basename, extname, join, resolve } from 'node:path';
+import { BASE_PACKAGES, type InstallProgress } from '@cirrus/core';
+import { LATEX_SOURCES, type TinyTexRelease } from './sources.ts';
 
 /**
  * The LaTeX distribution (plan 4b, D1): TinyTeX, downloaded the first time it is needed, after the user's consent, into
  * %LOCALAPPDATA%\Cirrus\TinyTeX. The release is pinned and its SHA-256 checked before it is run; missing packages come
- * from TeX Live's repository through tlmgr. Electron stays out of this module: the download's fetch is handed in.
+ * from TeX Live's repository through tlmgr. Where both come from is LATEX_SOURCES' (sources.ts). Electron stays out of
+ * this module: the download's fetch is handed in.
  */
 
-export interface TinyTexRelease { version: string; asset: string; url: string; sha256: string; bytes: number }
+export type { TinyTexRelease } from './sources.ts';
 
-/** TinyTeX-1 for Windows, v2026.11 (TeX Live 2026, pdfTeX 1.40.29): the bench's, downloaded and hashed on 2026-11-05. */
-export const TINYTEX_RELEASE: TinyTexRelease & { version: 'v2026.11' } = {
-  version: 'v2026.11',
-  asset: 'TinyTeX-1-windows-v2026.11.exe',
-  url: 'https://github.com/rstudio/tinytex-releases/releases/download/v2026.11/TinyTeX-1-windows-v2026.11.exe',
-  sha256: '375e8adec0177cd9ec6a1f8c76efe0c22b1a0c260e76a00386bcea52d88e5354',
-  bytes: 73_710_178,
-};
-
-/** The packages every installation gets: DEFAULT_PREAMBLE's, and pgf for TikZ. Task 7's withPackage reads it (ruling P1). */
-export const BASE_PACKAGES: readonly string[] = ['pgf', 'xcolor', 'hyperref', 'amsmath', 'amsfonts', 'amscls', 'lm', 'graphics'];
+/** The pinned TinyTeX release (LATEX_SOURCES.tinytex). */
+export const TINYTEX_RELEASE: TinyTexRelease = LATEX_SOURCES.tinytex;
 
 export interface TexBinaries { root: string; pdflatex: string; tlmgr: string; version: string }
 
 export interface Deps {
   /** Writes `url` to `dest`, calling onBytes with the bytes written so far. */
   download(url: string, dest: string, onBytes: (n: number) => void): Promise<void>;
-  /** Runs a program to its end: its exit code, and its output then its errors. Rejects only if it could not run. */
+  /** Runs a program to its end: its exit code, and its output then its errors. Rejects only if it could not run, or was stopped. */
   run(file: string, args: string[]): Promise<{ code: number; out: string }>;
 }
 
@@ -85,28 +78,46 @@ export function texEnv(env: Record<string, string | undefined>): Record<string, 
   return { ...copyEnv(env, [TEX_PATHS, SANDBOX_VARS]), ...SANDBOX };
 }
 
-/** The words a .bat may receive: cmd.exe would read any other character as an operator, a quote or a variable. */
-const SHELL_SAFE = /^[A-Za-z0-9._/=-]+$/;
+/**
+ * The words a .bat may receive: cmd.exe would read any other character as an operator, a quote or a variable. « : »
+ * means nothing to it inside an argument, and lets a repository's address through (LATEX_SOURCES).
+ */
+const SHELL_SAFE = /^[A-Za-z0-9._/:=-]+$/;
+
+/** A process and every one it started: Windows kills a process alone, and tlmgr.bat's perl would go on without it. */
+function killTree(child: ChildProcess): void {
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => {});
+  } else child.kill();
+}
+
+const seconds = (ms: number) => `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s`;
 
 /**
  * The production `run`, hidden window. A .bat goes through cmd.exe (Node refuses to start one alone), its command line
  * built here from checked words, and by `call`: started alone, a batch that ends by `goto :eof`, as tlmgr.bat does,
  * loses its exit code (a failed tlmgr install gave 0). TeX's tools get the environment without the user's own TeX
- * paths, so that a TeX of the system never stands in for TinyTeX's trees.
+ * paths, so that a TeX of the system never stands in for TinyTeX's trees. A run longer than `timeoutMs`
+ * (latexTlmgrTimeoutMs) is stopped with every process it started, and rejects: « tlmgr ne répond plus (plus de 600 s) :
+ * arrêté. ».
  */
-export function runFile(file: string, args: string[]): Promise<{ code: number; out: string }> {
+export function runFile(file: string, args: string[], timeoutMs = Infinity): Promise<{ code: number; out: string }> {
   const bat = /\.(bat|cmd)$/i.test(file);
   const unsafe = bat ? [file, ...args].find((a, i) => (i === 0 ? /["%^]/.test(a) : !SHELL_SAFE.test(a))) : undefined;
   if (unsafe !== undefined) return Promise.reject(new Error(`Argument refusé pour ${basename(file)} : ${unsafe}`));
   const [cmd, argv] = bat ? [process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"call "${file}" ${args.join(' ')}"`]] : [file, args];
   return new Promise((done, fail) => {
-    execFile(cmd, argv, {
+    let late = false;
+    const child = execFile(cmd, argv, {
       windowsHide: true, windowsVerbatimArguments: bat, maxBuffer: 64 * 2 ** 20, env: copyEnv(process.env, [TEX_PATHS]),
     }, (e, stdout, stderr) => {
+      clearTimeout(timer);
+      if (late) fail(new Error(`${basename(file, extname(file))} ne répond plus (plus de ${seconds(timeoutMs)}) : arrêté.`));
       // A number is the exit code; anything else (ENOENT, a signal, too much output) means it did not run to its end.
-      if (e && typeof e.code !== 'number') fail(e);
+      else if (e && typeof e.code !== 'number') fail(e);
       else done({ code: e ? (e.code as number) : 0, out: `${stdout}${stderr}` });
     });
+    const timer = Number.isFinite(timeoutMs) ? setTimeout(() => { late = true; killTree(child); }, timeoutMs) : undefined;
   });
 }
 
@@ -170,8 +181,9 @@ function reasonFor(out: string, name: string): string | undefined {
 
 const tlmgrError = (args: string[], r: { code: number; out: string }) => new Error(`tlmgr ${args[0]} a échoué (code ${r.code}) : ${reasonOf(r.out)}`);
 
-async function tlmgr(run: Deps['run'], bin: string, args: string[]): Promise<string> {
-  const r = await run(bin, args);
+/** tlmgr's `args` (the action first, which its error names), after its global options `global`. */
+async function tlmgr(run: Deps['run'], bin: string, args: string[], global: string[] = []): Promise<string> {
+  const r = await run(bin, [...global, ...args]);
   if (r.code !== 0) throw tlmgrError(args, r);
   return r.out;
 }
@@ -198,11 +210,11 @@ async function renameRetrying(from: string, to: string): Promise<void> {
 
 /**
  * Installs TinyTeX into `root` (D1): the pinned release downloaded into <root>.download and checked, extracted into
- * <root>.partial, set on TeX Live's own repository (CTAN's mirrors, rather than TinyTeX's), its tlmgr updated (the
- * bundled one refuses a newer repository) and BASE_PACKAGES installed, then renamed into place. Any failure leaves
- * neither <root> nor .partial nor .download: a half-done installation never counts as installed. An existing <root>
- * is taken only if empty: another one is the user's, never removed. The user's packages come after, by
- * Packages.ensure: a name tlmgr does not know never makes LaTeX uninstallable.
+ * <root>.partial, set on TeX Live's own repository (LATEX_SOURCES.repository: CTAN's mirrors, rather than TinyTeX's),
+ * its tlmgr updated (the bundled one refuses a newer repository) and BASE_PACKAGES installed, then renamed into place.
+ * Any failure leaves neither <root> nor .partial nor .download: a half-done installation never counts as installed.
+ * An existing <root> is taken only if empty: another one is the user's, never removed. The user's packages come
+ * after, by Packages.ensure: a name tlmgr does not know never makes LaTeX uninstallable.
  */
 export async function provision(
   root: string, deps: Deps, onProgress: (p: Progress) => void, release: TinyTexRelease = TINYTEX_RELEASE,
@@ -231,7 +243,7 @@ export async function provision(
     if (x.code !== 0) throw new Error(`La décompression de TinyTeX a échoué (code ${x.code}).`);
     onProgress({ step: 'packages', names: [...BASE_PACKAGES] });
     const tl = join(binDir(staged), 'tlmgr.bat');
-    await tlmgr(deps.run, tl, ['option', 'repository', 'ctan']);
+    await tlmgr(deps.run, tl, ['option', 'repository', LATEX_SOURCES.repository]);
     await tlmgr(deps.run, tl, ['update', '--self']);
     await tlmgr(deps.run, tl, ['install', ...BASE_PACKAGES]);
     const bins = await findBinaries(staged, deps.run);
@@ -254,26 +266,38 @@ export function missingFile(log: string): string | null {
   return PACKAGE_FILE.exec(log)?.[1] ?? null;
 }
 
-/** On `tlmgr search --global --file /<file>`'s output (each package, then its files, indented): the first package with a file ending exactly in /<file>. */
+/**
+ * On `tlmgr search --global --file /<file>`'s output (each package, then its files, indented): the first package with
+ * a file ending exactly in /<file> under texmf-dist/tex/, where TeX looks; else the first with one anywhere (a
+ * documentation or a source tree may carry a copy of another package's file).
+ */
 export function packageOf(out: string, file: string): string | null {
-  let pkg: string | null = null;
+  let pkg: string | null = null, anywhere: string | null = null;
   for (const line of out.split(/\r?\n/)) {
     const head = /^(\S+):$/.exec(line);
     if (head) pkg = head[1];
-    else if (pkg !== null && /^\s/.test(line) && line.trim().endsWith(`/${file}`)) return pkg;
+    else if (pkg !== null && /^\s/.test(line) && line.trim().endsWith(`/${file}`)) {
+      if (/^(texmf-dist|RELOC)\/tex\//.test(line.trim())) return pkg;
+      anywhere ??= pkg;
+    }
   }
-  return null;
+  return anywhere;
 }
 
-/** TinyTeX's packages, through its tlmgr: one tlmgr runs at a time, each call waiting for the previous ones. */
+/**
+ * TinyTeX's packages, through its tlmgr: one tlmgr runs at a time, each call waiting for the previous ones. Each call
+ * that reaches the network names `repository` (LATEX_SOURCES'): a new source reaches the installations made before it.
+ */
 export class Packages {
   private readonly bins: TexBinaries;
   private readonly run: Deps['run'];
+  private readonly global: string[];
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(bins: TexBinaries, run: Deps['run']) {
+  constructor(bins: TexBinaries, run: Deps['run'], repository = LATEX_SOURCES.repository) {
     this.bins = bins;
     this.run = run;
+    this.global = ['--repository', repository];
   }
 
   /** The installed packages, read from the local database (no network). */
@@ -315,7 +339,7 @@ export class Packages {
    */
   installFor(file: string): Promise<string | null> {
     return this.turn(async () => {
-      const pkg = packageOf(await tlmgr(this.run, this.bins.tlmgr, ['search', '--global', '--file', `/${file}`]), file);
+      const pkg = packageOf(await tlmgr(this.run, this.bins.tlmgr, ['search', '--global', '--file', `/${file}`], this.global), file);
       if (pkg === null || !PACKAGE_NAME.test(pkg)) return null;
       const r = await this.install([pkg]);
       if (r.code !== 0) throw tlmgrError(['install'], r);
@@ -339,9 +363,9 @@ export class Packages {
    * to install anything: it is updated (a failure there throws), and the installation tried once more.
    */
   private async install(names: string[]): Promise<{ code: number; out: string }> {
-    const r = await this.run(this.bins.tlmgr, ['install', ...names]);
+    const r = await this.run(this.bins.tlmgr, [...this.global, 'install', ...names]);
     if (r.code === 0 || !r.out.includes('tlmgr itself needs to be updated')) return r;
-    await tlmgr(this.run, this.bins.tlmgr, ['update', '--self']);
-    return this.run(this.bins.tlmgr, ['install', ...names]);
+    await tlmgr(this.run, this.bins.tlmgr, ['update', '--self'], this.global);
+    return this.run(this.bins.tlmgr, [...this.global, 'install', ...names]);
   }
 }

@@ -54,9 +54,14 @@ export interface CirrusBridge {
   latexCancel(slot: string): void;
   /** Prepares pdfLaTeX with this preamble (after loading, and when the preamble changes). */
   latexWarm(preamble: string): void;
-  /** LaTeX's state on this PC; onLatexStatus is told each change. Returns the unsubscription. */
+  /** LaTeX's state on this PC; onLatexStatus is told each change, and `ready` again once packages are installed. Returns the unsubscription. */
   latexStatus(): Promise<LatexStatus>;
   onLatexStatus(cb: (s: LatexStatus) => void): () => void;
+  /**
+   * Installs TinyTeX (D1, task 7), the user having asked: the only call that downloads it. Resolves once done; how it
+   * went is told by onLatexStatus (`ready`, or `failed` with its reason). A call while one runs does nothing more.
+   */
+  latexInstall(): Promise<void>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

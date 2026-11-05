@@ -2,11 +2,14 @@ import type { CompileRequest } from '@cirrus/core';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { loading } from '../files/read.ts';
-import { CompileScheduler, type CompiledView, IDLE_VIEW } from './scheduler.ts';
+import { CompileScheduler, type CompiledView, IDLE_VIEW, noteInstalled } from './scheduler.ts';
 
-/** The main process's compilation, counted among what the views load (a capture waits for it). */
+/**
+ * The main process's compilation, counted among what the views load (a capture waits for it); the packages an answer
+ * installed are told (noteInstalled), whichever view it goes to.
+ */
 const bridge = {
-  compile: (r: CompileRequest) => loading(window.cirrus.latexCompile(r)),
+  compile: (r: CompileRequest) => loading(window.cirrus.latexCompile(r).then((a) => { noteInstalled(a); return a; })),
   cancel: (slot: string) => window.cirrus.latexCancel(slot),
 };
 const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clear: (h: unknown) => window.clearTimeout(h as number) };

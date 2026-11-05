@@ -35,12 +35,43 @@ export function tabTarget(count: number, at: number, back: boolean): number | nu
 const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]';
 
 /**
+ * A modal over the whole window (FullScreen; the preamble's, task 7): it takes the focus and keeps it — Tab goes round
+ * inside `root` (tabTarget), and a focus gone elsewhere comes back —, so that no key reaches what is under it; Escape
+ * that nothing took calls `close`; the focus goes back where it was as it leaves.
+ */
+export function useModal(root: RefObject<HTMLElement | null>, close: RefObject<() => void>): void {
+  useEffect(() => {
+    const el = root.current!;
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        const list = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((x) => x.tabIndex >= 0 && !x.matches(':disabled') && x.getClientRects().length > 0);
+        const to = tabTarget(list.length, list.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+        if (to !== null || list.length === 0) e.preventDefault();
+        if (to !== null) list[to].focus();
+      } else if (e.key === 'Escape' && !e.defaultPrevented) {
+        e.preventDefault();
+        close.current();
+      }
+    };
+    const away = (e: FocusEvent) => { if (!el.contains(e.target as Node)) el.focus({ preventScroll: true }); };
+    window.addEventListener('keydown', key);
+    document.addEventListener('focusin', away);
+    return () => {
+      window.removeEventListener('keydown', key);
+      document.removeEventListener('focusin', away);
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  }, []);
+}
+
+/**
  * A file in full screen (spec 12; plan 4a, task 5): over the whole window, tabs included, its Viewer under a header
  * that names the file and its node, and offers « Ouvrir avec l’application du système » for the kinds handed to it
  * (offersSystem: images and PDFs; never text, code or tables). Escape that nothing took (CodeMirror's search panel
  * takes its own) leaves it, as its ×; App closes it when its file is gone (resolveTarget, Review Focus 5).
- * A modal (Minor 5 of the task 5 review): it takes the focus and keeps it — Tab goes round inside it (tabTarget), and
- * a focus gone elsewhere comes back —, so that no key reaches the graph or the panels under it; App leaves its
+ * A modal (Minor 5 of the task 5 review; useModal): no key reaches the graph or the panels under it; App leaves its
  * shortcuts (Ctrl+Z, Ctrl+Y) while it is open. It gives the focus back as it leaves.
  * A .tex (plan 4b, D6) opens its workbench instead of a view (`tex`): the editor and the compiled preview, followed by
  * its name (a save changes its hash, the workbench stays). Escape and × then go through the workbench, which saves
@@ -74,30 +105,7 @@ export function FullScreen(props: {
   };
   const close = useRef(leave);
   close.current = leave;
-  useEffect(() => {
-    const el = root.current!;
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (!el.contains(document.activeElement)) el.focus({ preventScroll: true });
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Tab') {
-        const list = [...el.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((x) => x.tabIndex >= 0 && !x.matches(':disabled') && x.getClientRects().length > 0);
-        const to = tabTarget(list.length, list.indexOf(document.activeElement as HTMLElement), e.shiftKey);
-        if (to !== null || list.length === 0) e.preventDefault();
-        if (to !== null) list[to].focus();
-      } else if (e.key === 'Escape' && !e.defaultPrevented) {
-        e.preventDefault();
-        close.current();
-      }
-    };
-    const away = (e: FocusEvent) => { if (!el.contains(e.target as Node)) el.focus({ preventScroll: true }); };
-    window.addEventListener('keydown', key);
-    document.addEventListener('focusin', away);
-    return () => {
-      window.removeEventListener('keydown', key);
-      document.removeEventListener('focusin', away);
-      if (before?.isConnected) before.focus({ preventScroll: true });
-    };
-  }, []);
+  useModal(root, close);
   return (
     <div ref={root} className="full-screen" tabIndex={-1} role="dialog" aria-modal="true" aria-label={file.name}>
       <header>

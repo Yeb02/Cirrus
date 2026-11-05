@@ -1,5 +1,7 @@
+import type { LatexStatus } from '@cirrus/core';
 import { DEFAULT_PARAMS, hexToRgb, PARAM_SPECS, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
+import { latexStateText } from '../latex/install.ts';
 
 type Value = RenderParams[keyof RenderParams];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -104,11 +106,16 @@ function Section(props: { title: string; specs: ParamSpec[]; params: RenderParam
 
 /**
  * The graphic settings side panel (spec 19): generated from PARAM_SPECS, the main settings first, every other rendering
- * or interaction constant under « Avancés ». Changes apply at once; they are not in the history nor undoable.
+ * or interaction constant under « Avancés ». Changes apply at once; they are not in the history nor undoable. Its
+ * « LaTeX » section (task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX » when it is absent or
+ * its installation failed, and opens the preamble's full screen.
  */
-export function SettingsPanel(props: { params: RenderParams; onChange(p: RenderParams): void; onClose(): void }) {
+export function SettingsPanel(props: {
+  params: RenderParams; onChange(p: RenderParams): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
+}) {
   const [advanced, setAdvanced] = useState(false);
   const set = (key: keyof RenderParams, v: Value) => props.onChange({ ...props.params, [key]: v });
+  const state = props.latex?.state;
   return (
     <aside className="settings" aria-label="Paramètres graphiques">
       <header>
@@ -116,6 +123,14 @@ export function SettingsPanel(props: { params: RenderParams; onChange(p: RenderP
         <button className="close" aria-label="Fermer le bandeau" onClick={props.onClose}>×</button>
       </header>
       <Section title="graphique" specs={PARAM_SPECS.filter((s) => s.section === 'graphique')} params={props.params} onChange={set} />
+      <div className="param-group latex-setup">
+        <h3>LaTeX</h3>
+        <p className="latex-state">{latexStateText(props.latex)}</p>
+        <div className="latex-actions">
+          {(state === 'absent' || state === 'failed') && <button onClick={props.onInstallLatex}>Installer LaTeX</button>}
+          <button onClick={props.onEditPreamble}>Modifier le préambule…</button>
+        </div>
+      </div>
       <button className="toggle" onClick={() => setAdvanced((a) => !a)}>{advanced ? '▾' : '▸'} Avancés</button>
       {advanced && <Section title="avancé" specs={PARAM_SPECS.filter((s) => s.section === 'avancé')} params={props.params} onChange={set} />}
       <button className="reset-all" onClick={() => props.onChange({ ...DEFAULT_PARAMS })}>Tout réinitialiser</button>

@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BASE_PACKAGES } from '@cirrus/core';
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { LATEX_SOURCES } from '../src/main/latex/sources.ts';
 import {
-  BASE_PACKAGES, type Deps, findBinaries, missingFile, packageOf, Packages, type Progress, provision, runFile, texEnv, type TexBinaries,
-  TINYTEX_RELEASE, tinyTexRoot,
+  type Deps, findBinaries, missingFile, packageOf, Packages, type Progress, provision, runFile, texEnv, type TexBinaries, TINYTEX_RELEASE, tinyTexRoot,
 } from '../src/main/latex/tinytex.ts';
 
 // The bench's TinyTeX, read only (pdflatex --version, tlmgr info): the tests never download anything.
@@ -25,7 +26,22 @@ test('TINYTEX_RELEASE : l’asset TinyTeX-1 Windows épinglé de la version v202
   expect(TINYTEX_RELEASE.url).toBe(`https://github.com/rstudio/tinytex-releases/releases/download/v2026.11/${TINYTEX_RELEASE.asset}`);
   expect(TINYTEX_RELEASE.sha256).toMatch(/^[0-9a-f]{64}$/);
   expect(TINYTEX_RELEASE.bytes).toBeGreaterThan(50e6);
+  // In @cirrus/core since task 7: the interface's withPackage reads it too.
   expect(BASE_PACKAGES).toEqual(['pgf', 'xcolor', 'hyperref', 'amsmath', 'amsfonts', 'amscls', 'lm', 'graphics']);
+});
+
+test('LATEX_SOURCES : l’installateur de TinyTeX et le dépôt des paquets, en un seul endroit ; aucun autre module du principal ne nomme d’adresse ni de dépôt', () => {
+  expect(LATEX_SOURCES).toEqual({ tinytex: TINYTEX_RELEASE, repository: 'ctan' });
+  expect(TINYTEX_RELEASE).toBe(LATEX_SOURCES.tinytex);
+  const main = join(repo, 'packages', 'app', 'src', 'main');
+  const files = (readdirSync(main, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => join(main, f));
+  expect(files.length).toBeGreaterThan(5);
+  for (const f of files) {
+    if (f.endsWith(join('latex', 'sources.ts'))) continue;
+    const text = readFileSync(f, 'utf8');
+    expect(text, relative(main, f)).not.toMatch(/['"`]https?:\/\//);
+    expect(text, relative(main, f)).not.toMatch(/['"`]ctan['"`]/);
+  }
 });
 
 test('tinyTexRoot : CIRRUS_TINYTEX, sinon LOCALAPPDATA\\Cirrus\\TinyTeX, sinon une erreur', () => {
@@ -81,7 +97,25 @@ test('runFile : un .bat dans un dossier à espace, ses arguments et son code de 
     await expect(runFile(bat, [arg]), arg).rejects.toThrow(/refusé/);
   }
   await expect(runFile(join(parent, 'absent.exe'), [])).rejects.toThrow();
+  // A repository's address (LATEX_SOURCES, plan 5/9's server): « : » means nothing to cmd.exe in an argument.
+  expect((await runFile(bat, ['--repository', 'https://serveur.example/tlnet'])).out.trim()).toBe('args=--repository https://serveur.example/tlnet');
 });
+
+test('runFile : un programme qui dépasse son délai est arrêté avec ses descendants, et l’échec le dit en français', async () => {
+  // The batch starts another cmd.exe, which would write `marque.txt` after about 2 s: killing the batch alone would
+  // leave it running (Windows does not kill a process's children with it).
+  const bat = join(parent, 'tlmgr.bat'), late = join(parent, 'attente.bat'), mark = join(parent, 'marque.txt');
+  writeFileSync(late, `@echo off\r\nping -n 3 127.0.0.1 >nul\r\necho fini>"${mark}"\r\n`);
+  writeFileSync(bat, `@echo off\r\ncmd /d /c "${late}"\r\nexit /b 0\r\n`);
+  const t0 = performance.now();
+  await expect(runFile(bat, ['install', 'x'], 500)).rejects.toThrow(/^tlmgr ne répond plus \(plus de 0,5 s\) : arrêté\.$/);
+  expect(performance.now() - t0).toBeLessThan(1800);
+  await new Promise((r) => setTimeout(r, 3000));
+  expect(existsSync(mark)).toBe(false);
+  // Within its time, it runs to its end.
+  expect((await runFile(late, [], 20_000)).code).toBe(0);
+  expect(existsSync(mark)).toBe(true);
+}, 30_000);
 
 test('runFile : l’échec d’un .bat qui finit comme tlmgr.bat (goto :eof après le programme) n’est pas un succès', async () => {
   // tlmgr.bat runs tlmgr.pl, then `if not exist "%tlupdater%" goto :eof`: started alone by cmd /c, the batch's exit
@@ -291,6 +325,21 @@ test('packageOf : le premier paquet dont un fichier finit exactement par /<fichi
   expect(packageOf('', 'foo.sty')).toBeNull();
 });
 
+test('packageOf : parmi les chemins exacts, un fichier sous texmf-dist/tex/ l’emporte sur la documentation ou les sources', () => {
+  // A package's documentation or sources may carry a copy of another's .sty (an example, a .dtx's output).
+  const out = `${SEARCH.split('\n')[0]}
+exemples:
+\ttexmf-dist/doc/latex/exemples/foo.sty
+sources:
+\ttexmf-dist/source/latex/sources/foo.sty
+foo:
+\ttexmf-dist/tex/latex/foo/foo.sty
+`;
+  expect(packageOf(out, 'foo.sty')).toBe('foo');
+  // Without one under tex/, the first exact match.
+  expect(packageOf(out.split('foo:')[0], 'foo.sty')).toBe('exemples');
+});
+
 // --- Packages, with a fake tlmgr ---
 
 const BINS: TexBinaries = { root: 'C:\\TinyTeX', pdflatex: 'C:\\TinyTeX\\bin\\windows\\pdflatex.exe', tlmgr: 'C:\\TinyTeX\\bin\\windows\\tlmgr.bat', version: 'pdfTeX' };
@@ -299,14 +348,17 @@ const LIST = 'début info --list --only-installed --data name';
 /**
  * A tlmgr with amsmath and hyperref installed, whose repository knows tikz-cd, siunitx, foo and xfoo, and which takes
  * 10 ms per call. Like the real one, it installs what it knows of a batch, says which names it does not know, and
- * then fails with its closing line. `answer` overrides a call.
+ * then fails with its closing line. `answer` overrides a call. A call to the network names its repository first
+ * (`--repository`, LATEX_SOURCES): `raw` keeps the calls as they came, the rest sees them without it.
  */
 function fakeTlmgr(answer: (args: string[]) => { code: number; out: string } | undefined = () => undefined) {
-  const events: string[] = [];
+  const events: string[] = [], raw: string[][] = [];
   const have = new Set(['amsmath', 'hyperref']), known = new Set(['tikz-cd', 'siunitx', 'foo', 'xfoo']);
   let active = 0;
-  const run: Deps['run'] = async (file, args) => {
+  const run: Deps['run'] = async (file, given) => {
     expect(file).toBe(BINS.tlmgr);
+    raw.push(given);
+    const args = given[0] === '--repository' ? given.slice(2) : given;
     active++;
     events.push(`début ${args.join(' ')}`);
     if (active > 1) throw new Error('deux tlmgr à la fois');
@@ -325,8 +377,29 @@ function fakeTlmgr(answer: (args: string[]) => { code: number; out: string } | u
     }
     return { code: 0, out: '' };
   };
-  return { events, run, have };
+  return { events, run, have, raw };
 }
+
+test('Packages : chaque appel au réseau nomme le dépôt de LATEX_SOURCES ; la liste locale, non', async () => {
+  let updated = false;
+  const tl = fakeTlmgr((args) => {
+    if (args[0] === 'update') { updated = true; return { code: 0, out: '' }; }
+    if (args[0] === 'install' && !updated) return { code: 1, out: 'tlmgr itself needs to be updated.\n' };
+    return undefined;
+  });
+  const p = new Packages(BINS, tl.run);
+  await p.ensure(['tikz-cd']);
+  await p.installFor('foo.sty');
+  const repo = ['--repository', LATEX_SOURCES.repository];
+  expect(tl.raw).toEqual([
+    ['info', '--list', '--only-installed', '--data', 'name'], [...repo, 'install', 'tikz-cd'], [...repo, 'update', '--self'], [...repo, 'install', 'tikz-cd'],
+    [...repo, 'search', '--global', '--file', '/foo.sty'], [...repo, 'install', 'foo'],
+  ]);
+  // Another repository (plan 5/9's server) is given as it is.
+  const other = fakeTlmgr();
+  await new Packages(BINS, other.run, 'https://serveur.example/tlnet').installFor('tikz-cd.sty');
+  expect(other.raw[0]).toEqual(['--repository', 'https://serveur.example/tlnet', 'search', '--global', '--file', '/tikz-cd.sty']);
+});
 
 test('Packages.ensure n’installe que les absents, et rend ceux qu’il a installés', async () => {
   const { events, run } = fakeTlmgr();

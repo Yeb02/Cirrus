@@ -326,7 +326,7 @@ test.skipIf(!hasTex)(hasTex ? 'pdfLaTeX : la requête de complexité.tex compile
   const b = opened();
   const bins = await findBinaries(TINYTEX);
   const svc = new LatexService({
-    binaries: async () => bins, root: join(b.dir, 'latex'), store: b.dir, params: () => DEFAULT_PARAMS, status: () => {},
+    binaries: async () => bins, root: join(b.dir, 'latex'), store: b.dir, params: () => DEFAULT_PARAMS,
     cache: new PdfCache(join(b.dir, 'latex', 'cache'), () => DEFAULT_PARAMS.latexCacheMb * 2 ** 20),
   });
   try {

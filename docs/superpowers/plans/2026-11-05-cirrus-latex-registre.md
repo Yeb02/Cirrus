@@ -739,6 +739,152 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 7 : préambule, installation de LaTeX, paquets manquants
 
+### Constat : aucun gpg pour Windows dans TeX Live
+
+- **Ce que TeX Live livre** :
+  - `install-tl.zip` des versions 2019, 2021, 2022, 2023, 2024, 2025 et 2026 n'a pas de `tlpkg/installer/gpg/`. Ces archives sont figées dans les archives historiques de TUG (`https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/<année>/`) ; j'ai lu leur répertoire central par des requêtes HTTP Range ;
+  - celui de 2026 (2026-03-01, 25 736 787 octets, SHA-256 `16894548ee3812727581dde08ceb7053d0e4a64bfdbdef2e9dd152930664de93`) porte `tlpkg/gpg/` : c'est le trousseau de TeX Live, que TinyTeX a déjà. Son `tlpkg/installer/` ne contient que curl, wget, xz, `tar.exe` et des scripts ;
+  - le dépôt tlnet n'a pas de paquet `tlgpg`. Sa base (8 229 paquets, en cache dans la TinyTeX du banc) ne cite aucun fichier `installer/gpg`, et `texlive.infra.windows` ne livre que curl, lz4, tar, wget et xz ;
+  - le svn de TeX Live (`tug.org/svn`) était injoignable d'ici : la connexion a été réinitialisée par curl et par Node, et refusée par WebFetch. Le fil `tex-live` de février 2023 le dit : « TeX Live does not install gpg itself ».
+- **Le fichier que cherche `tlmgr`** (`TLCrypto.pm`, l. 402 : « a shipped version from tlgpg » ; `tlmgr.pl`, l. 7754 : « sub-repos (like tlgpg) ») vient d'un dépôt annexe.
+  - Ce dépôt est à `https://www.texlive.info/tlgpg/`, tenu par Norbert Preining, l'auteur de `tlmgr`. Sa page le dit : « This repository and its contained programs are not part of TeX Live, nor are they affiliated with the TeX Users Group (TUG) ».
+  - L'artefact : `archive/tlgpg.windows.tar.xz`, révision 10, de 1 802 264 octets, daté du 2023-03-20 (SHA-256 `07d37d9fcb2876851f2acbe6247cabfb95e1c18e4bc75f6b2d654b0ce714c881`). Il contient `gpg.exe` (GnuPG 1.4.23, 2018) et `iconv.dll`. Il a été listé, jamais lancé.
+- **GnuPG lui-même** publie des installateurs NSIS signés : `https://gnupg.org/ftp/gcrypt/binary/gnupg-w32cli-1.4.23.exe` et `gnupg-w32-2.5.24_20260923.exe`. Les extraire demande 7-Zip, ou une installation sur le système.
+- **gpg : question rendue à l'utilisateur, R2.4 inchangé.** Décision du contrôleur : rien n'est téléchargé, épinglé ni intégré. `tlmgr` télécharge par HTTPS et contrôle chaque archive par son SHA-512, sans vérifier la signature de la base. Les téléchargements de cette recherche sont effacés.
+
+### Mesures
+
+- **Installation complète depuis l'app construite** :
+  - les conditions : sans `CIRRUS_TINYTEX`, `LOCALAPPDATA` dans un dossier temporaire neuf (`%TEMP%\cirrus-t7\local`), la notice, puis « Installer » ;
+  - deux passes, de « Installer » à « LaTeX est installé. » :
+
+    | Passe | Total | Téléchargement | Extraction | Paquets (`option`, `update --self`, base, renommage) |
+    | --- | --- | --- | --- | --- |
+    | 1 | 67,0 s | 17,6 s | 20 s | 24 s |
+    | 2 | 55,7 s | 14,1 s | 18 s | 21 s |
+
+  - Une passe antérieure, dans le dossier du bloc-notes, a pris 262,5 s, dont 203 s de paquets. Elle n'est pas retenue : son chemin était trop long (plus bas).
+  - La notice a suivi chaque pourcentage (de 64 à 74 textes), puis « décompression… », « Installation des paquets… » et « LaTeX est installé. ». Rien n'est resté de `.partial` ni de `.download`.
+  - Selon `tlmgr info --list --only-installed`, les huit paquets de base et `tikz-cd` sont installés.
+- **Première compilation** : le pop-up de MDL, ouvert pendant l'installation, affichait « LaTeX est en cours d'installation. ». Son résumé s'est compilé sans frappe, 1,5 s puis 1,6 s après « installé ».
+- **`tikz-cd` à la demande** :
+  - le geste : `\usepackage{tikz-cd}` tapé dans le préambule ; la notice dit alors « Installation du paquet LaTeX « tikz-cd.sty »… » ;
+  - de la frappe à l'aperçu recompilé sans erreur : 18,4 s, puis 154,3 s (un miroir lent), et 12,7 s dans la passe au chemin long ;
+  - `settings.json` porte ensuite `"latexPackages":["tikz-cd"]`.
+- **Appels de `tlmgr`**, sur une installation neuve, depuis les miroirs de CTAN :
+  - l'étape « paquets » : `option repository ctan` 1,5 s ; `update --self` 10,0 s ; `install --reinstall` des huit paquets de base 19,7 s ;
+  - `--repository ctan search --global --file /siunitx.sty`, quatre fois : de 10,2 à 11,9 s. Un miroir différent chaque fois : xjj.sh, ibcp.fr, sw-servers.net, tetaneutral.net.
+  - Les 203 s et 154 s ci-dessus viennent d'un miroir lent : mirror.ctan.org en redirige chaque appel.
+- **Défaut de l'essai : un chemin trop long perd des fichiers sans erreur.**
+  - Sous `%TEMP%\claude\…\scratchpad\drive7-run\local\Cirrus\TinyTeX`, `tar` n'a pas pu écrire les fichiers les plus profonds de pgf : plus de 260 caractères (« Could not create file … No such file or directory »).
+  - `tlmgr install pgf` a pourtant rendu 0, et pgf restait « installed: No ».
+  - La racine réelle, `C:\Users\alpha\AppData\Local\Cirrus\TinyTeX`, fait 43 caractères, et le fichier le plus profond de pgf environ 130 de plus. Les passes retenues ont été refaites sous `%TEMP%\cirrus-t7` (racine de 61 caractères).
+- **Vu dans l'app construite** (26 vérifications sur 26, puis 17 sur 17) :
+  - **dans le préambule** :
+    - Échap avec un changement demande « Abandonner les modifications du préambule ? », « Annuler » ayant le focus ; un second Échap ferme la question seule ;
+    - « Enregistrer » ferme sans question un préambule qui compile, et le résumé suit : un nouveau PDF ;
+    - Ctrl+Z sur le graphe rend le préambule par défaut ;
+    - sans changement, Échap ferme ;
+  - **au redémarrage** : aucune notice, et l'`ensure` de `latexPackages` passe en silence ;
+  - **hors ligne** (un proxy mort) :
+    - « Plus tard » range la notice, qui ne revient pas ;
+    - « Installer LaTeX » des réglages donne « L'installation de LaTeX a échoué : Le téléchargement de TinyTeX a échoué (net::ERR_PROXY_CONNECTION_FAILED). », avec « Réessayer » ;
+    - le résumé du pop-up dit l'échec, et rien ne reste dans `LOCALAPPDATA` ;
+  - **à la fermeture** : aucun pdflatex de cette TinyTeX n'est resté.
+- **Le dossier de l'essai a été effacé, et `%LOCALAPPDATA%\Cirrus` n'a jamais été créé.** Deux `pdflatex.exe` vivaient pendant l'essai, mais ils appartiennent à une autre instance de l'app (`packages/app/demo/out/main/index.js`, TinyTeX du banc). Ils n'ont pas été touchés.
+- **Captures** : 11 sur 11 contre `reference-3c`, 8 sur 8 contre `plan4a`, à 0 pixel. La section « LaTeX » des réglages n'apparaît dans aucune capture, et la notice ne paraît pas quand LaTeX est là dès le départ.
+- **Suite** : 748 tests sur 748 (724 avant la tâche), répartis ainsi. `tsc` : `app`, `view` et `core` sans erreur.
+
+  | Fichier | Tests ajoutés |
+  | --- | --- |
+  | `latexInstall.test.ts` | 16 |
+  | `tinytex.test.ts` | 4 |
+  | `compileScheduler.test.ts` | 2 |
+  | `latexCompiler.test.ts` | 1 |
+  | `params.test.ts` | 1 |
+
+### Décisions
+
+- Ruling: **`LatexSetup` (`latex/setup.ts`) se place devant `LatexService`, et porte seul l'état de LaTeX.**
+  - Il tient l'état et ses poussées, l'installation, les paquets du démarrage et les paquets manquants.
+  - `LatexService` perd `status` et `state()`, et gagne `restart()` : la réserve est refaite avec son préambule, et son échec oublié.
+  - Pourquoi :
+    - les tests de la tâche veulent un service factice ;
+    - deux sources de l'état se contrediraient : `absent` poussé pendant une installation.
+  - Coût si faux : un module.
+- Ruling: **`installed` est une liste**, sur une réponse `ok` comme sur une réponse `error`.
+  - Après chaque paquet installé, la compilation repart une fois, tant que la réponse nomme un autre fichier que cette requête n'a pas encore cherché (par exemple tcolorbox, qui demande environ).
+  - Pourquoi : un seul paquet par requête laisserait la vue en erreur jusqu'à la frappe suivante.
+  - Coût si faux : le type d'un champ.
+- Ruling: **les recherches de paquets passent une à une, une seule par fichier**, et les requêtes simultanées l'attendent ensemble.
+  - Une recherche dont toutes les requêtes ont pris fin avant son tour n'a pas lieu, et n'est pas retenue : c'est un nom en cours de frappe (`t.sty`, puis `ti.sty`…).
+  - Une requête annulée pendant sa recherche répond aussitôt `cancelled`, et la recherche continue.
+  - La mémoire de la session (décision 5) retient aussi un échec de `tlmgr` (hors ligne) : il n'est réessayé qu'au démarrage suivant.
+  - Coût si faux : un redémarrage après le retour du réseau.
+- Ruling: **le statut d'un paquet en cours d'installation nomme le fichier manquant** : « Installation du paquet LaTeX « tikz-cd.sty »… ».
+  - Pourquoi : le paquet n'est connu qu'après la recherche de `tlmgr`.
+  - Coût si faux : un texte.
+- Ruling: **`ready` porte `version`, la distribution** (« TeX Live 2026 », tirée de `pdflatex --version`) : la section « LaTeX » des réglages la montre. Coût si faux : un champ.
+- Ruling: **le téléchargement n'est dit qu'à chaque pourcentage entier**.
+  - Pourquoi : une centaine de messages IPC, au lieu d'un par morceau reçu, soit des milliers.
+  - Coût si faux : nul.
+- Ruling: **l'installation installe aussi les paquets de l'utilisateur (`ensure`), sous l'étape « Installation des paquets… », avant `ready`.**
+  - Pourquoi : la première compilation les trouve. Le préambule a souvent besoin de `latexPackages`.
+  - Coût si faux : environ 17 s de plus quand la liste n'est pas vide.
+- Ruling: **les paquets du démarrage** :
+  - **Quand** : `ensureAtStart`, à chaque `did-finish-load` de la fenêtre, jamais pour le banc ni pour les captures, qui gardent la TinyTeX du banc telle quelle.
+  - **L'état** : il ne change pas pendant cette vérification. Si des paquets s'installent, la réserve est refaite et `ready` est redit, ce qui relance les vues.
+  - **Les échecs** : un nom en échec n'est pas retenté de la session. Un `ensure` qui lève (liste illisible, délai dépassé) est consigné, puis retenté au chargement suivant.
+  - Coût si faux : un démarrage.
+- Ruling: **le délai de `tlmgr`, `latexTlmgrTimeoutMs`**.
+  - Il vaut pour tout programme que lance l'installation : `tlmgr`, l'extracteur de TinyTeX, `pdflatex --version`. Le libellé le dit : « Durée maximale d'un appel à tlmgr ou à l'installateur de TinyTeX (ms) ».
+  - Ses valeurs : 600 000 ms par défaut, de 10 000 ms à 1 h, par pas de 1 000. Le défaut vaut environ trois fois l'appel le plus lent mesuré (203 s, un miroir lent).
+  - Le processus qui dépasse est arrêté avec ses descendants (`taskkill /t /f` : tuer `cmd.exe` seul laisserait le perl de `tlmgr`). L'échec dit « tlmgr ne répond plus (plus de 600 s) : arrêté. ».
+  - Coût si faux : un réglage.
+- Ruling: **`Packages` nomme le dépôt de `LATEX_SOURCES` à chaque appel qui atteint le réseau** (`--repository ctan`, pour `search`, `install` et `update --self`), en plus de l'`option repository` de `provision`.
+  - Pourquoi : une nouvelle source, le serveur du plan 5/9, atteint aussi les installations faites avant elle.
+  - `runFile` laisse passer « : » vers un `.bat`, pour une adresse ; `cmd.exe` n'en fait rien dans un argument.
+  - Coût si faux : un argument.
+- Ruling: **`LATEX_SOURCES` (`latex/sources.ts`) porte l'installateur de TinyTeX et le dépôt.**
+  - `TINYTEX_RELEASE` en reste un alias, exporté par `tinytex.ts`.
+  - Un test refuse toute adresse (`'https://…'`) et tout `'ctan'` dans les autres modules du principal.
+  - Coût si faux : nul.
+- Ruling: **`packageOf` préfère un chemin qui commence par `texmf-dist/tex/` (ou `RELOC/tex/`)**, puis la première correspondance exacte. Coût si faux : une expression régulière.
+- Ruling: **les vues redemandent à chaque changement d'état de LaTeX, et à chaque `ready`** (`latexChanged`), pas seulement quand LaTeX devient prêt.
+  - Ce qui repart : une source sans compilation ou en erreur, et une requête en cours, après sa réponse, si elle était partie avant le changement.
+  - Pourquoi : un pop-up resté sur « LaTeX n'est pas installé. » montre ainsi « en cours d'installation », puis l'échec (vu dans l'app).
+  - Coût si faux : une compilation de plus, rapide, par vue en erreur à chaque changement.
+- Ruling: **`withPackage` refuse aussi un nom hors de `WORD`**, que le réglage rejetterait en entier au chargement. Coût si faux : nul.
+- Ruling: **les paquets installés sont dits par le pont** (`noteInstalled`, dans `useCompiled.ts`), quelle que soit la vue qui reçoit la réponse ; App les ajoute à `latexPackages`. Coût si faux : nul.
+- Ruling: **la notice** :
+  - elle est dans la colonne des notifications, en haut au centre, au-dessus des pleins écrans ;
+  - « Plus tard » vaut aussi pour un échec, et une installation relancée remet la notice ;
+  - « LaTeX est installé. » reste `toastMs` ;
+  - le conteneur des notifications est maintenant toujours dans la page, vide et invisible (captures à 0 pixel).
+
+  Coût si faux : du style.
+- Ruling: **la section « LaTeX » des réglages vient entre les réglages principaux et « Avancés ».**
+  - Ses états : « LaTeX : prêt (TeX Live 2026) », « absent », « installation… », « l'installation a échoué ».
+  - « Installer LaTeX » y paraît quand LaTeX est absent ou que son installation a échoué.
+  - Coût si faux : une place.
+- Ruling: **le plein écran du préambule** :
+  - **Ses boutons** :
+    - « Annuler » ferme sans demander : c'est un choix explicite ;
+    - × demande, comme Échap ;
+    - « Enregistrer » (et Ctrl+S) attend la compilation en cours ;
+    - sans LaTeX, il enregistre sans demander, faute de pouvoir dire si le préambule compile ;
+    - un brouillon inchangé ferme (`saveStep`).
+  - **Ses erreurs** : une erreur du préambule est marquée sur sa ligne dans l'éditeur, et le journal y mène ; une erreur de l'exemple se dit « Dans l'exemple : … ».
+  - **Sa construction** : il a son propre morceau, chargé à la demande. `useModal` est tiré de `FullScreen`, et sert aux deux.
+  - Coût si faux : nul.
+- Ruling: **`Panels` est couvert aussi par le plein écran du préambule** (`covered`). Vu dans l'app : l'Échap du préambule fermait le pop-up resté dessous. Coût si faux : nul.
+- Ruling: **`PREAMBLE_SAMPLE`** : un paragraphe accentué (« Déjà, l'âme naïve du cœur… »), l'équation numérotée de l'entropie citée par `\eqref`, une liste à puces avec des mathématiques en ligne, et un lien `\href` vers CTAN. Coût si faux : un texte.
+
+### Notes
+
+- Les décisions 2 à 6 du contrôleur sont appliquées : les sources en un seul endroit, `BASE_PACKAGES` dans `@cirrus/core`, le délai de `tlmgr`, aucune boucle de tentatives au démarrage, et `packageOf` préférant `/tex/`. La relance des vues a été ajoutée au planificateur, comme le demandait la revue de la tâche 4.
+- La tâche ne liste pas `sources.ts`, `setup.ts`, `install.ts` ni `preamble.ts`. La logique y est pure et testée, comme dans `saveScheduler.ts`.
+
 ## Tâche 8 : mesures, captures, spec
 
 ## Mesures du plan 4b
@@ -758,7 +904,11 @@ Fixées par le contrôleur avant la tâche :
 | Fermeture de la fenêtre pendant la pause : enregistré, instantané, sortie | 5 | 655 ms | idem, `WM_CLOSE` jusqu'à la sortie du processus ; une mesure |
 | Pop-up de l'Entropie, première ouverture : du clic au résumé dessiné | 6 | de 0,73 à 1,0 s | app construite, base de test, TinyTeX du banc ; pdfLaTeX préparé, morceau de pdf.js et son worker compris |
 | Même pop-up rouvert, son résumé en cache : du clic au résumé dessiné | 6 | 23 ms (trois fois) | idem ; aucune compilation, le source jamais montré |
-| Brouillon d'un résumé : de la frappe au snippet dessiné | 6 | environ 500 ms | idem ; pause de frappe de 300 ms comprise |
+| Brouillon d’un résumé : de la frappe au snippet dessiné | 6 | environ 500 ms | idem ; pause de frappe de 300 ms comprise |
+| Installation de LaTeX depuis l’app : de « Installer » à « LaTeX est installé. » | 7 | 67,0 s puis 55,7 s (téléchargement 17,6 et 14,1 s) | app construite, `LOCALAPPDATA` temporaire, `net.fetch`, miroirs de CTAN |
+| Résumé ouvert pendant l’installation : compilé après « installé » | 7 | 1,6 s puis 1,5 s | idem ; sans frappe (`latexChanged`) |
+| `tikz-cd` à la demande, du préambule tapé à l’aperçu recompilé | 7 | 18,4 s ; 154,3 s une fois (miroir lent) | idem ; `search --global`, `install`, réserve refaite |
+| `tlmgr --repository ctan search --global --file` | 7 | de 10,2 à 11,9 s, quatre fois | installation neuve ; un miroir différent chaque fois |
 
 ## Mineurs reportés
 
@@ -774,8 +924,8 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 
 ### Tâche 2
 
-- Pour la tâche 7 : `runFile` n'a pas de délai maximal. Un `tlmgr` suspendu au réseau bloquerait la file de `Packages`, et tous les appels suivants. Un délai serait un réglage avancé du groupe « LaTeX » (`packages/app/src/main/latex/tinytex.ts`, `runFile`).
-- Pour la tâche 7 : `BASE_PACKAGES` est dans le principal (décision P1). Si `withPackage` vit dans l'interface, elle ne pourra pas importer `tinytex.ts`, qui tire `node:child_process`. La liste irait alors dans `@cirrus/core` (`latex.ts`).
+- Pour la tâche 7 : `runFile` n'a pas de délai maximal. Un `tlmgr` suspendu au réseau bloquerait la file de `Packages`, et tous les appels suivants. Un délai serait un réglage avancé du groupe « LaTeX » (`packages/app/src/main/latex/tinytex.ts`, `runFile`). Traité à la tâche 7 (`latexTlmgrTimeoutMs`).
+- Pour la tâche 7 : `BASE_PACKAGES` est dans le principal (décision P1). Si `withPackage` vit dans l'interface, elle ne pourra pas importer `tinytex.ts`, qui tire `node:child_process`. La liste irait alors dans `@cirrus/core` (`latex.ts`). Traité à la tâche 7 (décision 3 du contrôleur).
 - Une installation dans un chemin accentué (un nom d'utilisateur Windows accentué, dans `LOCALAPPDATA`) n'a pas été essayée. Un chemin avec une espace l'a été. `tlmgr.bat` et le Perl de TeX Live sont connus pour mal vivre les chemins non ASCII (`tinytex.ts`, `provision`).
 - `texEnv` laisse les autres variables d'arbres de kpathsea (`TEXMF`, `TEXMFAUXTREES`, `TEXMFLOCAL`…). Elles ne viennent que de l'environnement de l'utilisateur, mais pourraient ajouter des arbres que TeX lirait. La tâche en nomme quatre (`tinytex.ts`, `TEX_PATHS`).
 
@@ -826,6 +976,19 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
   - des répétitions à mettre en commun ;
   - un second Échap sur la relation compilée ne ferme pas le pop-up de connexion, qui arrête ses touches (`ConnectionPopup.tsx`) ;
   - les tests chronométrés déjà instables, `scale.test.ts` (store) et `scale-perf.test.ts` (view).
+
+### Tâche 7
+
+- **Un chemin trop long** : une racine de TinyTeX de plus de 120 caractères environ perd des fichiers sans erreur.
+  - `tar` ne peut pas écrire les fichiers les plus profonds de pgf (plus de 260 caractères), et `tlmgr install` rend tout de même 0 (mesuré).
+  - `provision` ne vérifie pas que `BASE_PACKAGES` est inscrit dans la base locale. La racine réelle de cette machine fait 43 caractères (`tinytex.ts`, `provision`).
+- Une requête annulée pendant l'installation de son paquet répond `cancelled`, sans `installed`. `latexPackages` ne gagne alors pas ce paquet, que les autres PC installeront à la demande (`setup.ts`, `compileInstalling`).
+- Une recherche qui échoue (`tlmgr` hors ligne) n'est pas refaite de la session : il faut redémarrer l'app après le retour du réseau (`setup.ts`, `found`).
+- Quitter l'app pendant une installation laisse `tlmgr` ou l'extracteur aller à leur fin, sans les tuer. Ce qui reste de `.partial` est effacé à l'essai suivant (`index.ts`, `setup.ts`).
+- Les miroirs de CTAN varient beaucoup. mirror.ctan.org redirige chaque appel, et des appels de 203 s et 154 s ont été vus, contre 10 à 30 s d'ordinaire. Le délai de 600 s couvre trois fois le pire vu (`sources.ts`, `repository`).
+- `latexChanged` refait aussi, à chaque changement d'état, la compilation d'une vue en erreur pour une autre raison qu'un paquet : une compilation rapide de plus (`scheduler.ts`, `retry`).
+- L'éditeur du préambule n'a ni suggestions ni diagnostics de labels (`registry` à null) : seule l'erreur du préambule y est marquée (`PreambleEditor.tsx`).
+- Le pop-up de connexion se ferme à tout Échap et à tout appui hors de lui, même sous un plein écran. Il faut un clic hors de lui pour ouvrir le préambule, ce qui le ferme déjà (`ConnectionPopup.tsx`).
 
 ## Décisions du contrôleur (plan 4b)
 
@@ -897,3 +1060,15 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - Ruling : trois points de la revue de la tâche 5 passent à la tâche 6 : les constantes des suggestions de CodeMirror deviennent des réglages du groupe « LaTeX » ; dans « Fermer sans enregistrer ? », le focus et Entrée vont au choix qui ne perd rien ; le `live` de l'aperçu de l'atelier devient stable — règle de l'utilisateur sur les constantes, et une frappe qui ne relance pas la mise en page du PDF — coût si faux : nul. Appliquée sous la tâche 6.
 - Ruling : le snippet dessine toutes ses pages ; « quitter le champ et son aperçu » veut dire sortir de l'élément du champ, et un clic sur un lien de l'aperçu n'enregistre rien à lui seul ; un lien du résumé vers son propre nœud fait passer son pop-up devant ; dans un plein écran, modal, un lien vers un nœud n'ouvre rien et le dit dans son bandeau, ailleurs il ouvre le pop-up — ambiguïtés de la tâche — coût si faux : nul. Appliquée sous la tâche 6.
 - Ruling : un enregistrement refusé à la fermeture laisse le plein écran ouvert avec son bandeau ; une seconde demande ferme après « Fermer sans enregistrer ? » — plus simple que de garder le texte pour la session — coût si faux : une question. Appliquée sous la tâche 5.
+
+### Avant la tâche 7
+
+- Ruling 1 (gpg) : restaurer le gpg Windows officiel de TeX Live dans `<root>/tlpkg/installer/gpg/`, depuis un artefact officiel épinglé — décision de l'utilisateur, « sauf contrordre applique ta recommandation » — coût si faux : un téléchargement.
+  - Constat de la tâche 7 : il n'existe pas d'artefact officiel de TeX Live qui le porte (le constat est sous la tâche 7).
+  - Le contrôleur, ensuite : le gpg sort de la tâche. Rien n'est téléchargé, épinglé ni intégré, R2.4 reste, et la question revient à l'utilisateur.
+- Ruling 2 : toutes les sources de téléchargement en un seul module du principal, `LATEX_SOURCES` (l'installateur de TinyTeX et le dépôt des paquets), Internet par défaut — demande de l'utilisateur : « mettre tous les utils sur le serveur, de manière à ce que l'utilisateur n'aille rien chercher sur internet » (plan 5/9) — coût si faux : un module. Appliquée sous la tâche 7.
+- Ruling 3 : `BASE_PACKAGES` passe dans `@cirrus/core` : `withPackage`, dans l'interface, en a besoin — coût si faux : un import. Appliquée sous la tâche 7.
+- Ruling 4 : `runFile` reçoit un délai pour `tlmgr`, un réglage « LaTeX » ; l'appel dépassé est arrêté, et l'échec dit en français — un `ensure` du démarrage ne doit jamais tenir la file — coût si faux : un réglage. Appliquée sous la tâche 7.
+- Ruling 5 : un nom qu'`ensure` n'a pas pu installer n'est retenté qu'une fois par session de l'app ; un fichier manquant pour lequel `installFor` a rendu null n'est plus cherché de la session — pas de boucle de tentatives au démarrage — coût si faux : un redémarrage. Appliquée sous la tâche 7.
+- Ruling 6 : parmi les correspondances exactes, `packageOf` préfère un chemin sous `texmf-dist/tex/` (mineur de la revue de la tâche 2) — coût si faux : une expression régulière. Appliquée sous la tâche 7.
+- Ruling : après `ready` ou un paquet installé, les vues compilent à nouveau sans frappe, par un compteur que le planificateur compare (mineur de la revue de la tâche 4) — coût si faux : nul. Appliquée sous la tâche 7 (`latexChanged`).

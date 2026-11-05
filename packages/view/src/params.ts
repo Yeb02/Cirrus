@@ -186,6 +186,8 @@ export interface RenderParams {
   latexWarmProcesses: number;
   /** A compilation running longer is stopped (an infinite loop, Review Focus 3). */
   latexTimeoutMs: number;
+  /** A run of tlmgr (or of TinyTeX's installer) longer than this is stopped with what it started (task 7): never a queue held. */
+  latexTlmgrTimeoutMs: number;
   /** A summary or a relation is compiled this wide, its height following its content (D3), */
   latexSnippetWidthCm: number;
   /** and drawn at its pop-up's width, enlarged no more than this (plan 4b, task 6). */
@@ -348,6 +350,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexPackages: [],
   latexWarmProcesses: 2,
   latexTimeoutMs: 10_000,
+  latexTlmgrTimeoutMs: 600_000,
   latexSnippetWidthCm: 9,
   latexSnippetMaxZoom: 1.6,
   latexCacheMb: 500,
@@ -533,6 +536,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   { key: 'latexPackages', label: 'Paquets LaTeX ajoutés (installés sur chaque PC)', section: A, group: 'LaTeX', kind: 'words' },
   num('latexWarmProcesses', 'pdfLaTeX préparés d’avance', A, 'LaTeX', 1, 4, 1),
   num('latexTimeoutMs', 'Durée maximale d’une compilation (ms)', A, 'LaTeX', 1000, 120_000, 100),
+  num('latexTlmgrTimeoutMs', 'Durée maximale d’un appel à tlmgr ou à l’installateur de TinyTeX (ms)', A, 'LaTeX', 10_000, 3_600_000, 1000),
   num('latexSnippetWidthCm', 'Largeur du résumé et de la relation compilés (cm)', A, 'LaTeX', 4, 20, 0.5),
   num('latexSnippetMaxZoom', 'Agrandissement maximal du résumé compilé', A, 'LaTeX', 0.5, 4, 0.1),
   num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),

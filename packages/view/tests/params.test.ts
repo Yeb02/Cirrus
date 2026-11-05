@@ -184,6 +184,16 @@ test('résumé compilé et suggestions de l’éditeur LaTeX : réglages avancé
   });
 });
 
+test('délai de tlmgr : un réglage avancé du groupe « LaTeX » (plan 4b, tâche 7)', () => {
+  // About three times the slowest call measured (203 s, a slow CTAN mirror: tlmgr's base packages, registry).
+  expect(DEFAULT_PARAMS.latexTlmgrTimeoutMs).toBe(600_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'latexTlmgrTimeoutMs')).toEqual({
+    key: 'latexTlmgrTimeoutMs', label: 'Durée maximale d’un appel à tlmgr ou à l’installateur de TinyTeX (ms)', section: 'avancé', group: 'LaTeX',
+    kind: 'number', min: 10_000, max: 3_600_000, step: 1000,
+  });
+  expect(withOverrides({ latexTlmgrTimeoutMs: 1 }).latexTlmgrTimeoutMs).toBe(10_000);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

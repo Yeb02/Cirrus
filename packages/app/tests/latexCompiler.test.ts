@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type CompileAnswer, type CompileRequest, DEFAULT_PREAMBLE, type LatexStatus } from '@cirrus/core';
+import { type CompileAnswer, type CompileRequest, DEFAULT_PREAMBLE } from '@cirrus/core';
 import { filePath, importFile } from '@cirrus/store';
 import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest';
@@ -41,12 +41,10 @@ beforeAll(async () => { if (hasTex) bins = await findBinaries(TEX); }, 30_000);
 // Each test has its own base, its path accented (Review Focus 1): the service's folders are under it.
 let base: string;
 let svc: LatexService | null = null;
-const statuses: LatexStatus[] = [];
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), 'cirrus-é-latex-'));
   spawned.length = 0;
   cwdOf.clear();
-  statuses.length = 0;
 });
 afterEach(async () => {
   await svc?.dispose();
@@ -59,7 +57,7 @@ let params: RenderParams = DEFAULT_PARAMS;
 function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBinaries | null> = async () => bins): LatexService {
   params = { ...DEFAULT_PARAMS, ...over };
   svc = new LatexService({
-    binaries, root: join(base, 'latex'), store: base, params: () => params, status: (s) => statuses.push(s),
+    binaries, root: join(base, 'latex'), store: base, params: () => params,
     cache: new PdfCache(join(base, 'latex', 'cache'), () => params.latexCacheMb * 2 ** 20),
   });
   return svc;
@@ -122,11 +120,10 @@ test('invalidRequest : une requête bien formée passe ; une forme fausse, une s
   for (const [what, x] of bad) expect(invalidRequest(x, base, 1000), what).toEqual(expect.any(String));
 });
 
-test('sans pdfLaTeX : unavailable, avec reason « absent », dit par le statut, et rien n’est lancé', async () => {
+test('sans pdfLaTeX : unavailable, avec reason « absent », et rien n’est lancé (le statut est celui de LatexSetup, tâche 7)', async () => {
   const s = start({}, async () => null);
   expect(await s.compile(req())).toEqual({ status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
-  expect(await s.state()).toEqual({ state: 'absent' });
-  expect(statuses).toEqual([{ state: 'absent' }]);
+  s.restart();
   s.warm(DEFAULT_PREAMBLE);
   await sleep(50);
   expect(spawned).toEqual([]);
@@ -141,8 +138,27 @@ texTest('snippet : la page a la largeur réglée et la hauteur du contenu', asyn
   expect(Math.abs(page.width - 255.1)).toBeLessThan(1);
   expect(page.height).toBeLessThan(40);
   expect(page.text).toContain('Bonjour');
-  expect(await svc!.state()).toEqual({ state: 'ready' });
-  expect(statuses).toEqual([{ state: 'ready' }]);
+});
+
+texTest('restart : la réserve est refaite avec son préambule, et un préambule en échec réessayé (un paquet vient d’être installé, tâche 7)', async () => {
+  const s = start();
+  ok(await s.compile(req()));
+  await until(() => spawned.filter(alive).length === 2);
+  const before = spawned.filter(alive);
+  s.restart();
+  await until(() => before.every((p) => !alive(p)) && spawned.filter(alive).length === 2);
+  expect(spawned.filter(alive).some((p) => before.includes(p))).toBe(false);
+  ok(await s.compile(req({ source: 'Après.' })));
+  // A preamble that fails is said again from memory, without a process; restarted, it is loaded again.
+  const preamble = `${DEFAULT_PREAMBLE}\\usepackage{paquetinexistant}\n`;
+  expect(await s.compile(req({ preamble }))).toMatchObject({ status: 'error', missing: 'paquetinexistant.sty' });
+  await until(() => spawned.filter(alive).length === 0);
+  const n = spawned.length;
+  expect(await s.compile(req({ preamble, source: 'Encore.' }))).toMatchObject({ status: 'error', missing: 'paquetinexistant.sty' });
+  expect(spawned.length).toBe(n);
+  s.restart();
+  await until(() => spawned.length > n);
+  expect(spawned.slice(n).every((p) => preambleOf(p) === preamble || preambleOf(p) === '')).toBe(true);
 });
 
 texTest('snippet : sous la dernière ligne, au moins la profondeur d’un strut, même sans jambage (plan 4b, tâche 6)', async () => {

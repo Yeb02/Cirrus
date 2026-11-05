@@ -153,8 +153,9 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * a click outside every panel or Escape closes them. A click on a panel brings it in front. Edits go through `onEdit`
  * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab; a node's
  * files are imported and opened by `files` (App). A file clicked in a pop-up opens its preview beside it, or its full
- * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), the panels are under it:
- * Escape and a press there are its own, and a preview of that file leaves its view to it. Each panel has its own
+ * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), or the preamble's
+ * (`covered`, task 7), the panels are under it: Escape and a press there are its own, and a preview of that file
+ * leaves its view to it. Each panel has its own
  * PanelBoundary: one that fails says so in its frame, which still moves and closes; the others and the window stay.
  * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built), and so are the
  * pop-ups' summaries; a link to a node clicked in a panel goes to `onNodeLink`, with that panel's place (App's: it
@@ -166,7 +167,7 @@ export function Panels(props: {
   state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
-  onNodeLink(node: Id, near: Rect): void;
+  onNodeLink(node: Id, near: Rect): void; covered?: boolean;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -176,7 +177,7 @@ export function Panels(props: {
   const paramsRef = useRef(props.params);
   paramsRef.current = props.params;
   const covered = useRef(false);
-  covered.current = props.fullHash !== null;
+  covered.current = props.fullHash !== null || props.covered === true;
   /** Where panels may be: the window under the tabs (the layer covers it). */
   const bounds = (): Rect => {
     const r = layer.current?.getBoundingClientRect();

@@ -1,7 +1,7 @@
 import {
   type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
   exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placeNode, removeFromPlan,
-  removeMember, type Role, setBranches, setLayout, setRole, splitArm, type State, type TagKeyDef, type TagValue, type Vec2,
+  removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
@@ -353,6 +353,14 @@ export function texSaveRefusal(s: State, node: Id, name: string): string | null 
   const n = s.nodes.get(node);
   if (!n || n.trashedAt !== undefined) return 'Ce nœud n’existe plus.';
   return n.files.some((f) => sameName(f.name, name)) ? null : `« ${name} » n’est plus dans ce nœud.`;
+}
+
+/**
+ * The global LaTeX preamble saved from its full screen (D5, task 7): « Modifier le préambule LaTeX », in the history,
+ * undone by Ctrl+Z; refused when it is the one in effect by then.
+ */
+export function preambleBuild(text: string): Build {
+  return (st) => setPreamble(st, text);
 }
 
 /** A node's file renamed in its place, its content kept; a name checkFileName refuses is refused when the action is computed. */

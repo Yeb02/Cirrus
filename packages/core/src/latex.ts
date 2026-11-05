@@ -1,6 +1,6 @@
-// What the LaTeX chain shares between the interface and the main process (plan 4b): the default preamble, the tags it
-// reads, the escaping of the user's texts it injects, what makes a source a document of its own, and the types its
-// compile IPC exchanges.
+// What the LaTeX chain shares between the interface and the main process (plan 4b): the default preamble and the
+// packages every installation gets, the tags it reads, the escaping of the user's texts it injects, what makes a source
+// a document of its own, and the types its compile IPC exchanges.
 import type { FileRef, Id } from './model.ts';
 
 /** The global preamble of a base that never set one (spec 5.6, D5): never stored, as the default values of tags. */
@@ -15,6 +15,12 @@ export const DEFAULT_PREAMBLE = [
   '\\hypersetup{colorlinks, linkcolor=blue!50!black, citecolor=green!40!black, urlcolor=blue!60!black}',
   '',
 ].join('\n');
+
+/**
+ * The packages every TinyTeX installation gets (D1): DEFAULT_PREAMBLE's, and pgf for TikZ. The main process installs
+ * them; the interface never adds them to `latexPackages` (withPackage, task 7).
+ */
+export const BASE_PACKAGES: readonly string[] = ['pgf', 'xcolor', 'hyperref', 'amsmath', 'amsfonts', 'amscls', 'lm', 'graphics'];
 
 /** A publication's BibTeX key, for \cite (D7: a tag rather than the dedicated field of spec 5.4). */
 export const CITE_KEY_TAG = 'clé_bibtex';
@@ -125,17 +131,24 @@ export interface CompileRequest {
 }
 export interface TexError { message: string; line: number | null; where: 'source' | 'preamble' }
 export interface CompiledPdf { key: string; size: number; pages: number }
+/**
+ * `installed`: the packages installed while answering, for files the source was missing (task 7), each followed by
+ * one more compilation; the interface adds them to `latexPackages`.
+ */
 export type CompileAnswer =
-  | { status: 'ok'; pdf: CompiledPdf; labels: KnownLabel[]; log: string; ms: number; passes: number; cached: boolean; installed?: string }
-  | { status: 'error'; error: TexError; labels: KnownLabel[]; log: string; ms: number; missing?: string }
+  | { status: 'ok'; pdf: CompiledPdf; labels: KnownLabel[]; log: string; ms: number; passes: number; cached: boolean; installed?: string[] }
+  | { status: 'error'; error: TexError; labels: KnownLabel[]; log: string; ms: number; missing?: string; installed?: string[] }
   | { status: 'cancelled' }
   | { status: 'unavailable'; reason: 'absent' | 'installing' | 'failed'; message: string };
 
 /** The steps of TinyTeX's installation (D1): the main process's Progress (latex/tinytex.ts). */
 export type InstallProgress = { step: 'download'; done: number; total: number } | { step: 'extract' } | { step: 'packages'; names: string[] };
-/** The state of LaTeX on this PC, pushed by the main process (cirrus:latex:status). */
+/**
+ * The state of LaTeX on this PC, pushed by the main process (cirrus:latex:status). `version`: the distribution
+ * (« TeX Live 2026 »); `package`: the missing file whose package is being looked up and installed.
+ */
 export type LatexStatus =
-  | { state: 'ready' }
+  | { state: 'ready'; version: string }
   | { state: 'absent' }
   | { state: 'installing'; progress: InstallProgress | { step: 'package'; name: string } }
   | { state: 'failed'; message: string };

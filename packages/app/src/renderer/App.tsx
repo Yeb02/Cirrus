@@ -1,18 +1,21 @@
-import { type Action, type FileRef, type Id, type NodeRec, preambleText, type State } from '@cirrus/core';
+import { type Action, type FileRef, type Id, type LatexStatus, type NodeRec, preambleText, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import type { Build } from './actions.ts';
+import { type Build, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { loading, MB, viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
+import { withPackage } from './latex/install.ts';
 import { LatexRegistry } from './latex/registry.ts';
+import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
+import { LatexNotice } from './ui/latex/LatexNotice.tsx';
 import { saveTex } from './ui/latex/saveScheduler.ts';
 import type { WorkbenchHandle } from './ui/latex/TexWorkbench.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
@@ -28,6 +31,8 @@ import { EditSession, openState, type Result, SnapshotSaver } from './session.ts
 
 const TABS_KEY = 'cirrus.tabs';
 const NODE_GONE = 'Ce nœud n’existe plus.';
+/** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
+const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 const NO_TEXTS: ReadonlyMap<string, string> = new Map();
@@ -104,6 +109,12 @@ export function App() {
   const [registry, setRegistry] = useState<LatexRegistry | null>(null);
   /** The last registry built, and when: the next one reuses its analyses, and waits for the pause. */
   const built = useRef<{ registry: LatexRegistry | null; at: number }>({ registry: null, at: -Infinity });
+  /** LaTeX on this PC (task 7), as the main process tells it; null until it has. */
+  const [latex, setLatex] = useState<LatexStatus | null>(null);
+  /** The preamble's full screen (D5), opened from the settings; a modal, as a file's. */
+  const [preambleOpen, setPreambleOpen] = useState(false);
+  const preambleRef = useRef(preambleOpen);
+  preambleRef.current = preambleOpen;
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -121,11 +132,12 @@ export function App() {
   };
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field, or a LaTeX field being edited, they
-  // belong to the text (spec 6.4: textOwnsKeys). Not under a full screen: they would change the graph hidden under it
-  // (ruling of the task 5 review).
+  // belong to the text (spec 6.4: textOwnsKeys). Not under a full screen, a file's or the preamble's: they would change
+  // the graph hidden under it (ruling of the task 5 review).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!session.current || !e.ctrlKey || fullRef.current || textOwnsKeys(e.target instanceof Element ? (e.target as HTMLElement) : null)) return;
+      if (!session.current || !e.ctrlKey || fullRef.current || preambleRef.current) return;
+      if (textOwnsKeys(e.target instanceof Element ? (e.target as HTMLElement) : null)) return;
       const k = e.key.toLowerCase();
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); void session.current.undo().then((r) => report(r, 'Annulé')); }
       else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); void session.current.redo().then((r) => report(r, 'Rétabli')); }
@@ -220,6 +232,24 @@ export function App() {
   useEffect(() => {
     if (preamble !== null && window.cirrus.launch.bench === undefined) window.cirrus.latexWarm(preamble);
   }, [preamble]);
+
+  // LaTeX's state (task 7): asked once, then told at each change. At each change of state, and at each `ready`
+  // (installed, or packages added), the views that could not compile ask again (latexChanged): they compile, or say
+  // why not as it now stands (installing, failed). Not for the bench, which measures the graph.
+  useEffect(() => {
+    if (window.cirrus.launch.bench !== undefined) return;
+    let told = false, before: LatexStatus['state'] | null = null;
+    const off = window.cirrus.onLatexStatus((s) => {
+      told = true;
+      setLatex(s);
+      if (s.state === 'ready' || s.state !== before) latexChanged();
+      before = s.state;
+    });
+    window.cirrus.latexStatus().then((s) => { if (!told) setLatex(s); }, (e: unknown) => console.error('État de LaTeX :', e));
+    return off;
+  }, []);
+  // The packages a compilation installed join latexPackages, which every PC installs at its start (D1).
+  useEffect(() => onPackagesInstalled((names) => setParams((p) => names.reduce((q, name) => withPackage(q, name) ?? q, p))), []);
 
   // The .tex not read yet, after each change of the state; the texts of the files gone are let go. Another ceiling
   // reads them all again: one left empty as too long may fit now.
@@ -341,6 +371,8 @@ export function App() {
     }
     for (const notice of await addImported(session.current!, node, { refs: r.refs, refused: [...refused, ...r.refused] })) toast(notice);
   };
+  /** TinyTeX installed, the user having asked (the notice, the settings); how it goes is told by its state. */
+  const installLatex = () => { window.cirrus.latexInstall().catch((e: unknown) => console.error('Installation de LaTeX :', e)); };
   const files: NodeFiles = {
     importInto: (node, paths, refused) => addFiles(node, paths.length > 0 ? window.cirrus.importFiles(paths) : Promise.resolve({ refs: [], refused: [] }), refused),
     pickInto: (node) => addFiles(node, window.cirrus.pickFiles()),
@@ -377,13 +409,18 @@ export function App() {
             onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} ref={graph}
           />
         </GraphBoundary>
-        {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
+        {panel && (
+          <SettingsPanel
+            params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
+            onEditPreamble={() => setPreambleOpen(true)}
+          />
+        )}
         <Panels
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
-          onNodeLink={nodeLink}
+          onNodeLink={nodeLink} covered={preambleOpen}
         />
-        <Toasts toasts={toasts} />
+        <Toasts toasts={toasts}><LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} /></Toasts>
       </div>
       {fullNow?.file && (
         // A full screen that fails says so over the window, which stays (PanelBoundary); closed, it is tried again next time.
@@ -398,6 +435,15 @@ export function App() {
               onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),
             }}
           />
+        </PanelBoundary>
+      )}
+      {preambleOpen && (
+        <PanelBoundary what="Préambule LaTeX" fallback={<FullScreenFailed name="Préambule LaTeX" onClose={() => setPreambleOpen(false)} />}>
+          <Suspense fallback={null}>
+            <PreambleEditor
+              state={state} params={params} views={views} onClose={() => setPreambleOpen(false)} onSave={(text) => edit(preambleBuild(text))}
+            />
+          </Suspense>
         </PanelBoundary>
       )}
     </div>

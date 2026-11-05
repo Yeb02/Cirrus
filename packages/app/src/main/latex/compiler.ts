@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isStandalone, type KnownLabel, type LatexStatus, type TexError } from '@cirrus/core';
+import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isStandalone, type KnownLabel, type TexError } from '@cirrus/core';
 import { filePath } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { plainName } from '../files.ts';
@@ -11,15 +11,14 @@ import { citedLabels, driverSource, jobBody } from './driver.ts';
 import { parseLog, readAux } from './log.ts';
 import { missingFile, texEnv, type TexBinaries } from './tinytex.ts';
 
-export type { LatexStatus } from '@cirrus/core';
-
 /**
  * LaTeX's compilations, in the main process (plan 4b, D2, D4): pdfLaTeX prepared ahead of time, the preamble loaded,
  * as on the bench (bench/latex/src/warmCompiler.ts); the PDFs in a local cache. Each process has its folders,
  * <root>/work/p<n> (its current directory: the driver, the preamble, the jobs) and <root>/links/p<n> (the node's files,
  * hard links to the store, which TEXINPUTS names); both are removed once it is done, and emptied at the service's
  * start. TeX writes only in its work folder and runs nothing: openout_any=p, shell escape off (texEnv). It can read what
- * the Windows account can read: TeX Live 2026 made openin_any a no-op (ruling of task 3).
+ * the Windows account can read: TeX Live 2026 made openin_any a no-op (ruling of task 3). LaTeX's state, its
+ * installation and its missing packages are LatexSetup's (setup.ts, task 7), which stands in front of this service.
  */
 
 export interface LatexServiceOptions {
@@ -31,8 +30,6 @@ export interface LatexServiceOptions {
   store: string;
   cache: PdfCache;
   params: () => RenderParams;
-  /** Called when LaTeX's state changes (cirrus:latex:status). */
-  status(s: LatexStatus): void;
 }
 
 /** The folders of one process: work/p<n>, its current directory, where its job is job-<n>; links/p<n>. */
@@ -108,7 +105,6 @@ export class LatexService {
   private counter = 0;
   private disposed = false;
   private bins: TexBinaries | null = null;
-  private current: LatexStatus | null = null;
   /** The pool's preamble: the last one asked for. */
   private preamble: string | null = null;
   /** The pool: prepared or preparing with `preamble`, not taken yet. */
@@ -134,12 +130,6 @@ export class LatexService {
         console.warn(`Dossier LaTeX ${join(opts.root, d)} non vidé :`, e);
       }
     }
-  }
-
-  /** LaTeX's state now: pdfLaTeX looked for again if it was absent. */
-  async state(): Promise<LatexStatus> {
-    await this.texBinaries();
-    return this.current!;
   }
 
   /**
@@ -178,6 +168,15 @@ export class LatexService {
     });
   }
 
+  /**
+   * Prepares the pool again, with its preamble, its failure forgotten: packages were just installed (task 7), and a
+   * prepared pdfLaTeX knows only the files kpathsea listed when it started. Requests running keep their process.
+   */
+  restart(): void {
+    if (this.disposed || this.preamble === null) return;
+    this.switchPool(this.preamble);
+  }
+
   /** Kills every pdfLaTeX and waits for their exit (closing the app: none survives it); the requests are cancelled. */
   async dispose(): Promise<void> {
     this.disposed = true;
@@ -197,11 +196,6 @@ export class LatexService {
       console.error('Recherche de pdfLaTeX :', e);
     }
     this.bins = bins;
-    const s: LatexStatus = bins ? { state: 'ready' } : { state: 'absent' };
-    if (this.current?.state !== s.state) {
-      this.current = s;
-      this.opts.status(s);
-    }
     return bins;
   }
 

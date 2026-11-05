@@ -6,13 +6,14 @@ import { type Action, type CompileRequest, type FileRef, type Id, OpConflictErro
 import { forceGc } from '@cirrus/fixtures';
 import type { LocalStore } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText } from './files.ts';
 import { PdfCache } from './latex/cache.ts';
 import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
-import { findBinaries, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
+import { LatexSetup } from './latex/setup.ts';
+import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
 import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
 import { readSettings, writeSettings } from './settings.ts';
@@ -21,9 +22,9 @@ import { readSettings, writeSettings } from './settings.ts';
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
  * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. It serves the nodes' files
  * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). It compiles LaTeX, the PDFs
- * served by the same protocol (latex/, plan 4b). Closing waits, at most snapshotQuitMs, for the interface's last
- * snapshot, and quitting for every pdfLaTeX to exit. CIRRUS_CAPTURE=<png> captures the window once the first frame is
- * drawn, then quits (visual checks).
+ * served by the same protocol, and installs TinyTeX when the user asks, then the packages it misses (latex/, plan 4b).
+ * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit.
+ * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
  * times instead, without a window, and the file's size recorded.
@@ -86,8 +87,9 @@ app.on('second-instance', () => {
 });
 /** The base's lock, held (referenced) until the store is closed. */
 let lock: { release(): void } | null = null;
-/** LaTeX's compilations (plan 4b), once the base is open. */
+/** LaTeX's compilations (plan 4b), once the base is open; and in front of them, LaTeX's state and installation (task 7). */
 let latex: LatexService | null = null;
+let latexSetup: LatexSetup | null = null;
 let texFound: TexBinaries | null = null;
 /** pdfLaTeX: looked for again while it is absent (task 7 installs it during the session). */
 async function texBinaries(): Promise<TexBinaries | null> {
@@ -151,6 +153,9 @@ function createWindow(): void {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(page);
+  // The user's LaTeX packages (latexPackages, D1), installed if missing once the window is loaded (task 7), in the
+  // background. Measuring runs leave the bench's TinyTeX as it is.
+  if (!bench && !capture) win.webContents.on('did-finish-load', () => { void latexSetup?.ensureAtStart(); });
 
   if (capture || bench || process.env.CIRRUS_LOG === '1') {
     win.webContents.on('console-message', (e) => console.log(`[interface] ${e.level}: ${e.message}`));
@@ -271,15 +276,17 @@ ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'proce
 // interface did (strings, lists, a source of textViewMaxMb at most, resources of plain names present in the store).
 ipcMain.handle('cirrus:latex:compile', (_e, req: unknown) => {
   const why = invalidRequest(req, dir, currentParams().textViewMaxMb * 2 ** 20);
-  if (why !== null || !latex) {
+  if (why !== null || !latexSetup) {
     console.warn(`Compilation LaTeX refusée : ${why ?? 'base non ouverte'}`);
     return INVALID_REQUEST;
   }
-  return latex.compile(req as CompileRequest);
+  return latexSetup.compile(req as CompileRequest);
 });
-ipcMain.on('cirrus:latex:cancel', (_e, slot: unknown) => { if (typeof slot === 'string') latex?.cancel(slot); });
+ipcMain.on('cirrus:latex:cancel', (_e, slot: unknown) => { if (typeof slot === 'string') latexSetup?.cancel(slot); });
 ipcMain.on('cirrus:latex:warm', (_e, preamble: unknown) => { if (typeof preamble === 'string') latex?.warm(preamble); });
-ipcMain.handle('cirrus:latex:status:get', () => latex?.state() ?? { state: 'absent' });
+ipcMain.handle('cirrus:latex:status:get', () => latexSetup?.state() ?? { state: 'absent' });
+// TinyTeX's installation (D1, task 7): only this call, which the user's « Installer » makes, downloads it.
+ipcMain.handle('cirrus:latex:install', () => latexSetup?.install());
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
@@ -354,6 +361,14 @@ void app.whenReady().then(() => {
   latex = new LatexService({
     binaries: texBinaries, root: latexRoot, store: dir, params: currentParams,
     cache: new PdfCache(latexCache, () => currentParams().latexCacheMb * 2 ** 20),
+  });
+  // tlmgr, TinyTeX's installer and pdflatex --version under latexTlmgrTimeoutMs: a network that hangs never holds the
+  // packages' queue (task 7). The download goes through Electron's network stack (its proxy, its certificates).
+  const toolRun: Deps['run'] = (file, args) => runFile(file, args, currentParams().latexTlmgrTimeoutMs);
+  latexSetup = new LatexSetup({
+    service: latex, binaries: texBinaries, params: currentParams,
+    provision: async (onProgress) => provision(tinyTexRoot(process.env), { download: fetchDownload((url) => net.fetch(url)), run: toolRun }, onProgress),
+    packages: (bins) => new Packages(bins, toolRun),
     status: (s) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('cirrus:latex:status', s); },
   });
   protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request));
