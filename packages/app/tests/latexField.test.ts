@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { textOwnsKeys } from '../src/renderer/keys.ts';
 import { type FieldEvent, fieldReducer, type FieldState, VIEW } from '../src/renderer/ui/latex/fieldState.ts';
 import { linkTarget, nodeLinkOf } from '../src/renderer/ui/latex/links.ts';
 
@@ -83,4 +84,29 @@ test('fieldReducer : en vue, ce qui n’est ni un clic ni Entrée ni F2 ne chang
     expect(r.state, e.kind).toBe(VIEW);
     expect(r.commit, e.kind).toBeUndefined();
   }
+});
+
+test('fieldReducer : en modification, un clic ailleurs que sur un lien, un bouton, le journal ou l’éditeur rend le focus à l’éditeur (revue, tour 1)', () => {
+  const s = edit('brouillon');
+  // The draft's preview, its status line: the caret goes back to the editor, the state stays.
+  expect(fieldReducer(s, { kind: 'click', link: false, value: SAVED })).toEqual({ state: s, focusEditor: true });
+  expect(fieldReducer(s, { kind: 'click', link: false, value: SAVED }).state).toBe(s);
+  // A link, a button, the log, the editor itself take their own click.
+  expect(fieldReducer(s, { kind: 'click', link: true, value: SAVED })).toEqual({ state: s });
+  // Shown compiled, a click opens the editor, which takes the focus by itself.
+  expect(fieldReducer(VIEW, { kind: 'click', link: false, value: SAVED }).focusEditor).toBeUndefined();
+});
+
+/** A key's target as the shortcuts read it: its tag, whether it is editable, and the selectors it is inside of. */
+const target = (tagName: string, inside: string[] = [], isContentEditable = false) => ({
+  tagName, isContentEditable, closest: (sel: string) => (inside.includes(sel) ? {} : null),
+});
+
+test('textOwnsKeys : un champ de texte, ou un champ LaTeX en modification, garde ses touches ; ailleurs, les raccourcis de l’app agissent (revue, tour 1)', () => {
+  for (const t of [target('INPUT'), target('TEXTAREA'), target('SELECT'), target('DIV', [], true)]) expect(textOwnsKeys(t), t.tagName).toBe(true);
+  // The field's root, its draft's preview, its log, while it is typed in: Ctrl+Z belongs to the text (spec 6.4).
+  expect(textOwnsKeys(target('DIV', ['.latex-field.edit']))).toBe(true);
+  expect(textOwnsKeys(target('SPAN', ['.latex-field.edit']))).toBe(true);
+  // Shown compiled, the field is no text being typed: the base's undo acts.
+  for (const t of [target('DIV', ['.latex-field.view']), target('CANVAS'), target('BODY'), null]) expect(textOwnsKeys(t)).toBe(false);
 });

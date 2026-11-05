@@ -130,7 +130,7 @@ function ViewMode(props: {
  */
 function EditMode(props: {
   shown: Shown; seed: CompiledPdf | null; ariaLabel: string; onInput(text: string): void; onPdf(pdf: CompiledPdf): void; onNodeLink(id: Id): void;
-  onLogClosed(): void;
+  onLogClosed(): void; focusSeq: number;
 }) {
   const { shown } = props;
   const [jump, setJump] = useState<{ line: number; seq: number } | undefined>(undefined);
@@ -147,7 +147,7 @@ function EditMode(props: {
       <Suspense fallback={<div className="latex-editor compact" />}>
         <LatexEditor
           value={text} registry={registry} diagnostics={diagnostics} params={shown.params} compact autoFocus ariaLabel={props.ariaLabel} jumpTo={jump}
-          onChange={props.onInput}
+          focusSeq={props.focusSeq} onChange={props.onInput}
         />
       </Suspense>
       {!blank(text) && (
@@ -189,6 +189,8 @@ export function LatexField(props: {
   /** Each mode's last PDF, and the one the mode shown now starts from. */
   const last = useRef<{ view: CompiledPdf | null; draft: CompiledPdf | null }>({ view: null, draft: null });
   const [seed, setSeed] = useState<CompiledPdf | null>(null);
+  /** Asks the editor for the focus back, at each new value (fieldReducer's `focusEditor`). */
+  const [editorFocus, setEditorFocus] = useState(0);
 
   // The value changed (the commit written, or any other change): what was committed is in it, or replaced.
   useEffect(() => { setCommitted(null); }, [props.value]);
@@ -208,6 +210,7 @@ export function LatexField(props: {
       if (before.mode !== r.state.mode) setSeed(r.commit !== undefined ? last.current.draft : last.current.view);
     }
     if (r.commit !== undefined) commit(r.commit);
+    if (r.focusEditor) setEditorFocus((n) => n + 1);
   };
   // Unmounted while typed in (its pop-up closed, its node gone): what is typed is committed still.
   useEffect(() => () => {
@@ -232,7 +235,7 @@ export function LatexField(props: {
   } else {
     body = (
       <EditMode
-        shown={shown} seed={seed} ariaLabel={props.placeholder} onNodeLink={props.onNodeLink} onLogClosed={refocus}
+        shown={shown} seed={seed} ariaLabel={props.placeholder} onNodeLink={props.onNodeLink} onLogClosed={refocus} focusSeq={editorFocus}
         onInput={(t) => dispatch({ kind: 'input', text: t })} onPdf={(pdf) => { last.current.draft = pdf; }}
       />
     );
@@ -242,11 +245,10 @@ export function LatexField(props: {
       ref={root} className={`latex-field ${field.mode}`} tabIndex={field.mode === 'view' ? 0 : -1}
       title={field.mode === 'view' ? 'Modifier : clic, Entrée ou F2' : undefined}
       onClick={(e) => {
-        if (fieldNow.current.mode !== 'view') return;
-        // A selection made in the compiled text is kept; a link, a button, the log are their own.
+        // A selection made in the compiled text is kept; a link, a button, the log, the editor take their own clicks.
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.anchorNode && e.currentTarget.contains(sel.anchorNode)) return;
-        dispatch({ kind: 'click', link: (e.target as Element).closest('a, button, .compile-log') !== null, value: textNow.current });
+        dispatch({ kind: 'click', link: (e.target as Element).closest('a, button, .compile-log, .cm-editor') !== null, value: textNow.current });
       }}
       onKeyDown={(e) => {
         if (fieldNow.current.mode === 'view') {

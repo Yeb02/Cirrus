@@ -7,6 +7,7 @@ import { mark } from './bench.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { loading, MB, viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
+import { textOwnsKeys } from './keys.ts';
 import { LatexRegistry } from './latex/registry.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { liveTabs } from './tabs.ts';
@@ -119,12 +120,12 @@ export function App() {
     }
   };
 
-  // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field they belong to the text (spec 6.4). Not
-  // under a full screen: they would change the graph hidden under it (ruling of the task 5 review).
+  // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field, or a LaTeX field being edited, they
+  // belong to the text (spec 6.4: textOwnsKeys). Not under a full screen: they would change the graph hidden under it
+  // (ruling of the task 5 review).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (!session.current || !e.ctrlKey || fullRef.current || (t && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)))) return;
+      if (!session.current || !e.ctrlKey || fullRef.current || textOwnsKeys(e.target instanceof Element ? (e.target as HTMLElement) : null)) return;
       const k = e.key.toLowerCase();
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); void session.current.undo().then((r) => report(r, 'Annulé')); }
       else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); void session.current.redo().then((r) => report(r, 'Rétabli')); }

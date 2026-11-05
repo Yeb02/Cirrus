@@ -713,6 +713,30 @@ Fixées par le contrôleur avant la tâche :
 - Menée en arrière-plan par le protocole des outils de Chrome, la fenêtre n'a pas le focus du système : `document.hasFocus()` y vaut faux, et la sortie du champ passait pour la fenêtre quittée. `Emulation.setFocusEmulationEnabled` rend la situation d'une fenêtre au premier plan.
 - Points de la revue de la tâche 5 traités : les deux réglages des suggestions, le focus de « Fermer sans enregistrer ? », et l'aperçu stable de l'atelier.
 
+### Revue, tour 1
+
+- **Important corrigé : un clic sur l'aperçu du brouillon faisait perdre la frappe, et Ctrl+Z atteignait la base.**
+  - Le constat : en modification, un clic sur l'aperçu ou sur la ligne d'état donnait le focus à l'élément du champ lui-même (`tabIndex` −1), et non à l'éditeur. Le curseur disparaissait, et la frappe suivante était perdue. Ctrl+Z passait au raccourci global d'`App`, qui annulait une action de la base. Quitter le champ enregistrait ensuite, ce qui vidait le rétablissement. C'était contraire à la spec 6.4.
+  - Premier correctif : un clic qui ne sélectionne rien, ailleurs que sur un lien, un bouton, le journal ou l'éditeur, rend le focus à l'éditeur, son curseur où il était. `fieldReducer` le dit (`focusEditor`), et `LatexEditor` le prend par `focusSeq`, avec le `focus()` de CodeMirror, qui remet sa sélection.
+  - Second correctif : le raccourci global d'`App` laisse aussi les touches d'un champ LaTeX en modification (`textOwnsKeys`, `keys.ts`, une fonction pure). C'est le cas après une sélection faite dans l'aperçu, quand le focus reste sur le champ.
+  - Suppr ne peut pas atteindre la base depuis un champ : le pop-up de connexion arrête ses touches, et les panneaux sont hors du graphe.
+  - Tests : `fieldReducer` (`focusEditor`) et `textOwnsKeys`. Le premier échouait avant le correctif (« expected { state } to deeply equal { state, focusEditor } »).
+  - Vu dans l'app construite :
+    - un clic sur l'aperçu, puis sur la ligne d'état, rend le focus à `.cm-content`, et la frappe continue au curseur (« en bits. ABC ») ;
+    - après une sélection glissée dans l'aperçu, le focus reste sur le champ, et Ctrl+Z n'annule pas le tag ajouté juste avant à la base ;
+    - ce Ctrl+Z, que le raccourci de l'app laisse passer, a été pris par l'annulation du texte du navigateur, qui a retiré la dernière frappe de l'éditeur ;
+    - de retour dans l'éditeur, Ctrl+Z agit sur son historique, et la base reste inchangée.
+- **Important corrigé : un lien d'un PDF du magasin ne prenait plus le focus** (régression du plan 4a). Le `mousedown` empêché valait pour toute `PdfPage` : après un clic sur un lien interne, + et − n'allaient plus au lecteur.
+  - Le correctif : il ne vaut plus que pour le snippet (`keepFocus`, faux par défaut).
+  - Vu dans l'app construite : un lien interne du chapitre de la publication, dans son aperçu, prend le focus dans la vue, et « + » fait ensuite passer le zoom de 65 % à 75 %. Un lien du brouillon laisse toujours le focus à l'éditeur, et ouvre le pop-up de MDL.
+- Suite après les correctifs : 724 tests sur 724, deux de plus. `tsc` : `app` et `view` sans erreur. Captures : 11 sur 11 contre `reference-3c`, 8 sur 8 contre `plan4a`, à 0 pixel, sans rien de nouveau à refaire.
+- Ruling: **le clic qui rend le focus à l'éditeur** :
+  - ce qu'il touche prend son propre clic s'il est un lien, un bouton, le journal ou l'éditeur (`link` de l'événement) ;
+  - un clic qui finit une sélection la garde, et ne rend pas le focus ;
+  - une sélection glissée ne passe pas à l'éditeur, et c'est `textOwnsKeys` qui garde alors la base de Ctrl+Z.
+
+  Coût si faux : une condition.
+
 ## Tâche 7 : préambule, installation de LaTeX, paquets manquants
 
 ## Tâche 8 : mesures, captures, spec
@@ -796,6 +820,12 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - À chaque frappe, le champ analyse le brouillon deux fois (`buildRequest`, puis `diagnosticsFor` par `scanOf`), comme l'atelier (`LatexField.tsx`, `EditMode`).
 - `shownBefore` garde un enregistrement par résumé ou relation montré, pour toute la session (`LatexField.tsx`).
 - Le journal fermé par son ×, en vue, rend le focus au champ ; l'Échap suivant ferme alors le pop-up, comme avant d'ouvrir le journal (`LatexField.tsx`, `refocus`).
+- Revue, tour 1, reportés par le contrôleur :
+  - un enregistrement refusé laisse un temps le rendu du texte refusé (`LatexField.tsx`, `committed`) ;
+  - le câblage React du champ, des pop-ups et d'`App` n'a pas de test automatique : seule l'app construite le vérifie ;
+  - des répétitions à mettre en commun ;
+  - un second Échap sur la relation compilée ne ferme pas le pop-up de connexion, qui arrête ses touches (`ConnectionPopup.tsx`) ;
+  - les tests chronométrés déjà instables, `scale.test.ts` (store) et `scale-perf.test.ts` (view).
 
 ## Décisions du contrôleur (plan 4b)
 

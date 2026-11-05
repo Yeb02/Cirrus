@@ -61,11 +61,12 @@ const lineStartIn = (state: EditorState, line: number) => state.doc.line(Math.mi
  * suggestions or a panel of the editor take it. `value` is the text: one that is not what the editor last told
  * (`onChange`) replaces its text. `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
  * are drawn, and how soon, are settings (`params`: suggestionOptions). `autoFocus`: the focus at once, the cursor at
- * the end of the text when `compact` (a summary, a relation: task 6).
+ * the end of the text when `compact` (a summary, a relation: task 6). `focusSeq`: the focus back, the cursor where it
+ * was, at each new value.
  */
 export function LatexEditor(props: {
   value: string; onChange(text: string): void; registry: LatexRegistry | null; diagnostics: Diag[]; params: RenderParams; compact?: boolean;
-  autoFocus?: boolean; onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number };
+  autoFocus?: boolean; onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number }; focusSeq?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -160,6 +161,9 @@ export function LatexEditor(props: {
     const n = v.state.doc.length, at = (x: number) => Math.min(Math.max(0, x), n);
     v.dispatch(setDiagnostics(v.state, props.diagnostics.map((d) => ({ from: at(d.from), to: at(Math.max(d.from, d.to)), severity: d.severity, message: d.message }))));
   }, [props.diagnostics, props.value]);
+
+  // CodeMirror's own focus: it puts its selection back in the page.
+  useEffect(() => { if (props.focusSeq) view.current?.focus(); }, [props.focusSeq]);
 
   useEffect(() => {
     const v = view.current, j = props.jumpTo;

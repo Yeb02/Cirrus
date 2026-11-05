@@ -101,7 +101,7 @@ export function LatexSnippet(props: { pdf: CompiledPdf; params: RenderParams; on
       ? (
         <PdfPage
           key={i} doc={doc.doc} index={i} top={height} left={0} width={w} height={h} scale={zoom * CSS_PER_PT} drawn maxPixels={maxPixels}
-          onSize={onSize} onNode={onNode}
+          onSize={onSize} onNode={onNode} keepFocus
         />
       )
       : <div key={i} className="pdf-page" style={{ top: height, left: 0, width: w, height: h }} />);

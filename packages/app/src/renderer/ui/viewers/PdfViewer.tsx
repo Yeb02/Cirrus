@@ -306,6 +306,11 @@ export interface PageProps {
   onSize(index: number, size: PageSize): void;
   /** Where a link inside the document leads, and one to a node of the base; without them, those are not links. */
   onDest?(dest: unknown): void; onNode?(node: Id): void;
+  /**
+   * A link pressed keeps the focus where it was (a compiled summary's, under its editor: plan 4b, task 6, its links
+   * drawn anew with each compilation); the reader's take it, as any link, so that its keys go to the reader.
+   */
+  keepFocus?: boolean;
 }
 
 /**
@@ -430,9 +435,7 @@ export const PdfPage = memo(function PdfPage(props: PageProps) {
         }}
       />
       {links.length > 0 && (
-        // A link pressed keeps the focus where it was (plan 4b, task 6: a summary typed in; a link is drawn anew with
-        // each compilation, and the focus on it would be lost with it).
-        <div className="pdf-links" onMouseDown={(e) => { if ((e.target as Element).closest('a')) e.preventDefault(); }}>
+        <div className="pdf-links" onMouseDown={props.keepFocus ? (e) => { if ((e.target as Element).closest('a')) e.preventDefault(); } : undefined}>
           {links.map((l, i) => (
             l.url
               ? (
