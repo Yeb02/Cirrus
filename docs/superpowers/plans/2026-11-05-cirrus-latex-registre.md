@@ -1246,3 +1246,210 @@ Revue de toute la branche (533fc69..95729ac), puis une seule vague de correctifs
 - Captures, une suite neuve : contre `reference-3c`, 11 sur 11 à 0 pixel ; contre `plan4a`, 8 sur 8 à 0 pixel ; contre `plan4b`, 5 sur 5 à 0 pixel. Aucune référence n'est refaite.
 - Aucun test n'a écrit dans `%LOCALAPPDATA%\Cirrus`, ouvert la base de l'utilisateur, ni fait produire de police à la TinyTeX du banc (son `texmf-var` est inchangé).
 
+
+## Annexe : journal du contrôleur (plan 4b)
+
+Le journal de suivi de l’exécution, copié tel quel (en anglais) avant l’effacement de son dossier de travail : le contrôle préalable du plan, chaque relecture, chaque `Ruling:` du contrôleur et chaque mineur reporté. Les décisions de l’utilisateur y sont citées avec leur date.
+
+
+Spec: C:\Users\alpha\Desktop\Cirrus\2026-11-02-cirrus-design.md (sections 5.2–5.6, 12, 13, 19). User approved plan 2026-11-05 ("Vas y") with D6 amended (10 s pause, save only if changed, successive saves of one .tex merged into one history modification) and D7 amended (labels in summaries, tag `label` for a node's title).
+Shared context for every implementer: .superpowers/sdd/2026-11-05-cirrus-latex/context.md (plan header, Décisions, Global Constraints, Review Focus).
+Models: every subagent on opus (user rule).
+
+## Pre-flight scan
+
+Shared interfaces:
+| Producer → consumer | Produces / consumes | Found |
+|---|---|---|
+| T1 → T3 | titleToTex, safeLabel, CompileRequest/Answer (passes, installed?) | consistent |
+| T1 → T4 | CITE_KEY_TAG, LABEL_TAG, preambleText, types | consistent |
+| T2 → T3 | texEnv, findBinaries (async), TexBinaries.version (cache engine), Progress (LatexStatus) | consistent |
+| T2 → T7 | provision, Packages, TINYTEX_RELEASE; T7 withPackage needs provision's base list | gap: list not exported → Ruling P1 |
+| T3 → T4 | bridge latexCompile/latexCancel, CompileAnswer | consistent |
+| T3 → T5 | main serves cirrus-file://latex/<key>/<name>; renderer ViewRef store 'latex' | consistent |
+| T4 → T5 | LatexRegistry, buildRequest, useCompiled, scanTex, Origin (diagnosticsFor own: Origin) | consistent |
+| T4 → T6 | useCompiled, buildRequest, Origin | consistent |
+| T5 → T6 | LatexEditor, CompileLog, ViewRef; both edit PdfViewer (live mode, then cirrus links) | sequential, consistent |
+| T3 → T7 | LatexService gets the install hook in compiler.ts | consistent |
+| T1 → T5 | session merge (T5) uses action ids; history counts distinct action_id (store) | consistent |
+
+Per-task self-consistency:
+| Task | Tests vs code, files | Found |
+|---|---|---|
+| T1 | fixture texts (entropie equation, complexité.tex refs ent:def/solomonoff) match T4 expectations; captures may change (Kolmogorov files) → Ruling at step 4 | ok |
+| T2 | provision step 4 list = BASE list; manual download into temp CIRRUS_TINYTEX | ok (P1) |
+| T3 | 9 cm = 255.1 pt; ../../links/p1 from work/p1 is right; TEXINPUTS-under-paranoid read is an assumption the tests check | ok |
+| T4 | complexité request: refs mdl:enonce, ent:def, solomonoff; broken absent:label; resources [schéma] | ok |
+| T5 | SaveScheduler(saved, save(text)) matches TexWorkbench.onSave(text); merge in session | ok |
+| T6 | « Titre court » relabel of the connection title + new empty-relation look would change reference-3c fenetre-connexion, which the constraints freeze | conflict → Rulings P2, P3 |
+| T7 | withPackage needs base list (P1) | ok (P1) |
+| T8 | captures list vs scenes | ok |
+
+Ruling P1: T2 exports the base package list as `BASE_PACKAGES` (the list provision installs); T7's withPackage reads it — the plan names the list but no symbol — cost if wrong: a rename.
+Ruling P2: T6 drops « Le titre de la connexion change de libellé : il devient « Titre court » » — the user never asked for it and it would change the frozen reference-3c capture fenetre-connexion — cost if wrong: one label.
+Ruling P3: T6 keeps the relation's empty-field look as today (placeholder « Relation (LaTeX) », same box) so that reference-3c fenetre-connexion (« Analogue bayésien », no relation) stays within tolerance; if impossible, the capture is re-referenced with a Ruling — cost if wrong: one placeholder text.
+
+## Tasks
+Task 1: dispatched (BASE 533fc69, implementer ae49a2a5eb6e7e2fb, opus)
+Task 1: implementer DONE_WITH_CONCERNS (8942dba; concerns: titleToTex '?' for chars that stop pdfLaTeX, Greek caps \mathrm, T1 ligatures deferred minor, png asset location wording)
+Task 1: review dispatched (a4eb4fa6f2fd10a39, opus, package review-533fc69..8942dba.diff)
+Task 1: review — spec ✅, quality Approved, 0 Critical/Important, 6 Minor. ⚠️ push verified (origin/main = 8942dba); captures: diff shows only plan4a/popup-vignettes.png changed (Ruling in registry).
+Task 1: minor (deferred): titleToTex walks raw code points — NFD « e + U+0301 » becomes « e? » → carried into Task 3 dispatch (normalize NFC first, one test).
+Task 1: minor (deferred): DEFAULT_PREAMBLE test not pinned with toBe on the whole string.
+Task 1: minor (deferred): safeLabel code-point length untested on astral chars.
+Task 1: minor (deferred): bulk-load guard `if (x.preamble)` looser than codec's `!== undefined` (state.ts:826).
+Task 1: minor (deferred): subject 'preamble' can collide with a tag key named « preamble » in historyOf (plan-mandated; note for Task 7).
+Task 1: minor (deferred): forward notes for T3 — \mathbb needs amssymb (driver \providecommand fallback, already in T3 brief); safeLabel admits active chars (~, babel :) → \detokenize injection (already in T3 brief).
+Task 1: complete (commits 533fc69..8942dba, review clean)
+Task 2: dispatched (BASE 8942dba, implementer a3fea5e7765d7136e, opus)
+Task 2: implementer DONE (ae85d55; 601/601; pinned TinyTeX-1-windows-v2026.11.exe 73 710 178 B; manual provision 75 s, 313.5 MB; tlmgr.bat exit-code bug fixed via call; concerns for T7: runFile no timeout, BASE_PACKAGES in main, fetchDownload(net.fetch); tlmgr repository tlnet.yihui.org kept)
+Task 2: review dispatched (a9532e0760825c9f7, opus, review-8942dba..ae85d55.diff)
+Task 2: review — spec ✅ (2 justified deviations; tlnet.yihui.org mirror flagged), quality Needs fixes: I1 failed install reports tlmgr's trailer line, not the reason; I2 (plan-mandated) one unknown word in latexPackages makes provision fail and delete the verified install on every PC.
+Task 2: Ruling: I2 — provision installs BASE_PACKAGES only (its failure still fails the install); user packages go through Packages.ensure, best-effort per name, after provision and at startup (Task 7), returning { installed, failed: { name, reason }[] } — a typo in a shared setting must never block LaTeX on every PC; the plan bundled both lists in one tlmgr call — cost if wrong: one more tlmgr call at install.
+Task 2: Ruling: regraded Minor → Important — a package word starting with « - » reaches tlmgr as an option (e.g. --repository); latexPackages is synced from the server in plan 5, so a word must start with a letter or digit (setting validation and before any tlmgr call) — cost if wrong: none.
+Task 2: Ruling: tlmgr's repository is set to TeX Live's own CTAN network (`tlmgr option repository ctan`) during provision, instead of TinyTeX's default tlnet.yihui.org — D1 and the network constraint say « le dépôt de TeX Live »; signature verification state recorded as found — cost if wrong: a slower mirror.
+Task 2: minor (deferred): no timeout/cancel in fetchDownload, runFile, Deps; killing cmd.exe leaves perl/7z → Task 7 (carried).
+Task 2: minor (deferred): synchronous rmSync of a ~300 MB tree on failure paths blocks the main process.
+Task 2: minor (deferred): packageOf takes the first exact match, possibly under doc/ → prefer /tex/ paths (carry to Task 7, avoid retry loops).
+Task 2: minor (deferred): texEnv keeps TEXMF, TEXMFAUXTREES, TEXMFDOTDIR, TEXMFLOCAL from the user's environment.
+Task 2: minor (deferred): runFile / fake-exe findBinaries tests assume cmd.exe, not skipped off Windows.
+Task 2: minor (deferred): provision rebuilds binary paths findBinaries already builds.
+Task 2: fix round 1 dispatched (resume a3fea5e7765d7136e; FIX_BASE ae85d55; findings I1 trailer, I2 ruling, word '-' injection, CTAN repository)
+Task 2: fix round 1 implementer DONE (e1ab300; 604/604; gpg unavailable in app → tlpdb signature unchecked, archives SHA-512 over HTTPS — R2.4 in registry, to surface to the user)
+Task 2: fix round 1/5 (4 addressed, 0 open — trailer reason, user packages best-effort, '-' words refused, CTAN repository; commits ae85d55..e1ab300)
+Task 2: minor (deferred): reason rule misses multi-line fatal errors (cross-release refusal, critical-update frame) → prefer lines starting with tlmgr's program name.
+Task 2: minor (deferred): GENERIC does not exclude tlmgr's progress line « [n/m, …] install: <name> ».
+Task 2: minor (deferred): ensure treats exit 0 as all installed; tlmgr exits 0 on a failed archive download → re-read the list always.
+Task 2: minor (deferred): « never deleted » test builds Packages from fake BINS, not provision's result.
+Task 2: Ruling: (out-of-scope obs.) TeX Live 2027 on CTAN (spring 2027) makes provision/ensure fail until TINYTEX_RELEASE is bumped — stands as D1's known limit (plan 9 bumps the release; tlnet-final of 2026 exists only after the freeze) — cost if wrong: LaTeX packages uninstallable on new PCs from spring 2027 until the bump.
+Task 2: note for Task 7: ensure retries invalid/unknown names at every start (network tlmgr, holds the queue, no timeout) → remember failed names, don't retry them each start.
+Task 2: OPEN QUESTION to the user (security): gpg absent in TinyTeX → tlpdb signature unchecked; option 2 = restore TeX Live's official Windows gpg (pinned) — asked 2026-11-05, awaiting answer; does not block Tasks 3–6.
+Task 2: complete (commits 8942dba..e1ab300, review clean after 1 fix round)
+Task 3: dispatched (BASE e1ab300, implementer a0bc52199bbf6a880, opus; carries T1 minor NFC in titleToTex)
+Task 3: implementer BLOCKED — D4's read restriction is impossible: TeX Live 2026 made openin_any a no-op (texmf.cnf 702–716, confirmed by the controller); \input of absolute/../UNC paths, \pdffiledump, \pdfximage, \pdfobj file all read anywhere; \pdfprimitive defeats redefinitions. Writes stay confined (openout_any=p), \write18 runs nothing. Gap: TEXMF_OUTPUT_DIRECTORY not removed by texEnv. Absolute TEXINPUTS fails under an accented base path; relative ../../links/p<n>; works.
+Task 3: Ruling (PROVISIONAL, security — asked to the user 2026-11-05): D4 becomes « TeX n'écrit que dans son dossier et n'exécute rien ; il peut lire tout fichier que le compte Windows peut lire » — writes confined, no shell escape, TEXMF_OUTPUT_DIRECTORY & co removed, openin_any dropped from texEnv (a no-op that would give a false sense of security); residual risks documented (a foreign .tex can copy a local file into its own PDF, which stays in the local cache; a UNC name makes Windows contact an SMB host, which can leak the account's NTLM hash); the real fix is an OS sandbox (AppContainer: no reads outside granted folders, no network) — plan 9 unless the user wants it now — cost if wrong: one more task (sandbox) added to the plan; nothing built now is lost.
+Task 3: implementer DONE under provisional D4 (bec55cc; 645/645; warm complexité.tex p50 138 ms; babel french absent from bench TinyTeX — shorthand test; \nameref cross-node deferred)
+Task 3: review dispatched (ae0d4a38a4d68c124, opus, review-e1ab300..bec55cc.diff)
+Task 3: Ruling (FINAL, user 2026-11-05: « Pour ce qui est des tex, ne sois pas excessivement prudent, ce seront les miens ») — D4 as amended stands: writes confined, nothing run, reads unrestricted; no OS sandbox planned (not even plan 9 unless the user asks) — cost if wrong: a foreign .tex could read local files into its local PDF or contact an SMB host.
+Task 2: Ruling (user 2026-11-05: « sauf contrordre applique ta recommandation ») — restore TeX Live's official Windows gpg (pinned URL + SHA-256) into <root>/tlpkg/installer/gpg/, where TLCrypto.pm:403 looks for it, so tlmgr verifies the TeX Live signature of its database; done in Task 7 with provision (implementer must find a stable pinnable source and prove « verified ») — cost if wrong: a few MB more at install.
+User 2026-11-05: « mettre tous les utils sur le serveur, de manière à ce que l'utilisateur n'aille rien chercher sur internet » — Ruling: in 4b, Task 7 gathers every download source (TinyTeX installer, gpg, package repository) in one place of main, internet by default, so plan 5/9 can point them at the server without touching the rest; Task 8 writes into spec 18 (rôle du serveur) that the server will keep the pinned installer, gpg and a verbatim frozen snapshot of the year's TeX Live repository (~5 GB, TeX Live's signature still verifiable), PCs downloading only from it; upgrading TeX Live becomes a deliberate act — cost if wrong: one config indirection.
+Task 3: review — spec ✅ (as amended by D4 ruling), quality Needs fixes: I1 a waiter's dedicated process leaks when the pool comes back to its preamble (P1, P2, P1 with requests queued), and its load timeout can kill a healthy compilation.
+Task 3: minor (deferred): stale `known` can be cached when a cited label is no longer defined (renderer's `broken` hides it).
+Task 3: minor (deferred): snippet width read twice (key vs body) — a setting change mid-queue caches under the wrong key.
+Task 3: minor (deferred): a second-pass waiter can hang if the pool became resting/failed between passes.
+Task 3: minor (deferred): node files named job-<n>-body/src.tex shadow the app's (TEXINPUTS before .) → \input{./…} or refuse job-* names.
+Task 3: minor (deferred): kpathsea mktex* helpers (mktextfm, mktexpk, mf) can still run and write into TEXMFVAR; TEXMFLOG from env — record beside R3.1 (user: not excessively cautious) or set MKTEX*=0.
+Task 3: minor (deferred): PdfCache.get deletes a good entry when utimesSync fails.
+Task 3: minor (deferred): timed test prints with console.log (test noise).
+Task 3: minor (deferred): wrong test comment « the k-th compilation runs in p<k> ».
+Task 3: minor (deferred): coverage gaps — preamble switching, warm(), pool size, tail(), fileResponse routing, exact INVALID_REQUEST from the handler.
+Task 3: minor (deferred): compiler.ts 629 lines mixing pool state machine, jobs, folders, IPC validation; SHA-256 regex ×3; OWN_VARS re-implements variants().
+Task 3: fix round 1 dispatched (resume a0bc52199bbf6a880; FIX_BASE bec55cc; finding I1 pool leak)
+Task 3: fix round 1 implementer DONE (180e0d3; 2 regression tests RED→GREEN; full suite 646/647 — store scale.test.ts timing under CPU load; controller re-ran it alone: 1/1 pass).
+Task 3: minor (deferred, outside task): store scale.test.ts cleanup throws EPERM when its timing assertion fails, hiding the assertion and leaving a 587 MB base in %TEMP%.
+Task 3: fix round 1/5 (1 addressed, 0 open — pool leak / dedicated process; commits bec55cc..180e0d3)
+Task 3: minor (deferred): new branch compiler.ts:492-493 (dedicated process fails while queued, pool back on its preamble → waits for the pool) has no test.
+Task 3: minor (deferred): doc comment of Warm.waiter omits that prepFailed clears it.
+Task 3: minor (deferred): test `params` module-level — a test starting two services would share settings.
+Task 3: complete (commits e1ab300..180e0d3, review clean after 1 fix round)
+Task 4: dispatched (BASE 180e0d3, implementer a4cd0e81ca68a27f5, opus)
+Task 4: implementer DONE (2bfaec2; 681/681 ×2; captures reference-3c 11/11, plan4a 8/8 at 0 px; registry build on bench base 4–14 ms after relationRows/connRelation in core; isStandalone moved to core).
+Task 4: Ruling: Review Focus 5 wants a cite key held by two nodes red in the preview, but the brief fixed `cites` to the first node with no field for it — Task 5 adds `doubledCites: InjectedCite[]` to CompileRequest (first node's citation, shown red by jobBody, like doubled labels) and the editor diagnostic « Clé de citation portée par plusieurs nœuds : x » — cost if wrong: one request field.
+Task 4: Ruling: two useCompiled on one slot cancel each other in main — an editor's draft uses its own slot `draft:<slot>` (the saved view keeps `<slot>`), and at most one useCompiled per slot is mounted; callers pass params.latexTypingPauseMs — carried into Tasks 5–6 — cost if wrong: none.
+Task 4: review dispatched (ab6c9d1138d1fce60, opus, review-180e0d3..2bfaec2.diff)
+Task 4: review — spec ✅ except plan-mandated cite conflict, quality Needs fixes: I1 scanner drops a whole argument when a % comment splits it (\cite{a,%⏎ b}, \cref{…}); I2 (plan-mandated) doubled cite key not red in the preview.
+Task 4: Ruling (supersedes the earlier one): I2 is fixed in Task 4's fix round instead of Task 5 — core CompileRequest gains `doubledCites: InjectedCite[]` (first node's citation), jobBody shows it red, DRIVER_VERSION bumped, cache key includes it, buildRequest fills it; Task 5 adds only the editor diagnostic — cost if wrong: none.
+Task 4: minor (deferred): .tex reads already fetched are lost when an action aborts a read pass; no aborted check in the success callback (App.tsx:215-227).
+Task 4: minor (deferred): bench — .tex walk + registry build (4–14 ms/action on the bench base) still run under the bench; never measured there.
+Task 4: minor (deferred): setRegistry re-renders App before anything reads it.
+Task 4: minor (deferred): scanner gaps — cite optional args not scanned (\cite[voir \ref{x}]{k}); cleveref \label[type]{name}.
+Task 4: minor (deferred → carried to Task 7): scheduler no-op on an equal request after unavailable / bridge failure / main cancelled — Task 7 needs a retry path after LaTeX is installed.
+Task 4: minor (deferred): shortCitation last-word rule fails on « Li, Ming » (BibTeX order) — note for plan 4c.
+Task 4: minor (deferred): tests missing for previous-build after remove/trash/rename, useCompiled and App wiring; duplicated test helpers; App.tsx +45 lines of LaTeX plumbing (a useLatexRegistry hook).
+Task 4: fix round 1 dispatched (resume a4cd0e81ca68a27f5; FIX_BASE 2bfaec2; I1 % comments in arguments, I2 doubledCites)
+Task 4: fix round 1 implementer DONE (0c3e33a; 683/683; DRIVER_VERSION 2)
+Task 4: fix round 1/5 (2 addressed, 0 open — % comments in arguments, doubledCites; commits 2bfaec2..0c3e33a)
+Task 4: minor (deferred): TexMark doc « the name's offsets inside its braces » — a span cut by a comment includes it (text.slice(from,to) !== name) → carried to Task 5.
+Task 4: minor (deferred): plan text (lines ~219, 383, 520) lacks doubledCites — the registry carries the change; Task 8 updates the spec.
+Task 4: minor (deferred): \ref inside a cite's optional argument never seen (main loop jumps past the whole cite).
+Task 4: complete (commits 180e0d3..0c3e33a, review clean after 1 fix round)
+Task 5: dispatched (BASE 0c3e33a, implementer ac767dd67aa94d682, opus; carries draft slot rule, doubled-cite editor diagnostic, TexMark doc fix; ruling: a refused flush on close keeps the full screen open with the banner, a second close asks « Fermer sans enregistrer ? »)
+Task 5: implementer DONE (56af0f0; 705/705; captures 11/11 + 8/8 at 0 px; built-app checks ok; quit save 655 ms within snapshotQuitMs 2 s)
+Task 5: review dispatched (a498406ec3e53fa41, opus, review-0c3e33a..56af0f0.diff)
+Task 5: review — spec ✅, quality Approved, 0 Critical/Important, 13 Minor.
+Task 5: minor (carried to Task 6, regraded by effect — user's settings rule): CodeMirror's maxRenderedOptions (100) and activateOnTypingDelay (100 ms) become « LaTeX » settings (precedent tagSuggestions).
+Task 5: minor (carried to Task 6, regraded by effect — data loss on Enter): « Fermer sans enregistrer ? » gives the default focus to the destructive choice → default focus on the safe choice.
+Task 5: minor (carried to Task 6 — user puts performance first): PdfViewer re-renders per keystroke because `live={{ keptAs }}` is a new object each render → stable prop / memo.
+Task 5: minor (deferred): SaveScheduler race — typing back to saved text while a save is in flight leaves dirty with no idle timer (re-arm in write()).
+Task 5: minor (deferred): `leaving` stays 'refused' after a later successful save.
+Task 5: minor (deferred): stale compile error drawn on the current text's line while a compile is pending.
+Task 5: minor (deferred): focus not given back to the editor when the Journal closes.
+Task 5: minor (deferred): DRY — TexPreview repeats the workbench's read/request/useCompiled; timers duplicated; editorLogic re-declares scan's char codes.
+Task 5: minor (deferred): Ctrl+S only with focus in the editor.
+Task 5: minor (deferred): a .tex save at window close must fit in snapshotQuitMs (measured 655 ms of 2 s).
+Task 5: minor (deferred): no automated test for requestClose/refusal flow, PdfViewer live swap, App quit order, Escape keymap.
+Task 5: minor (deferred): store scale.test.ts EPERM noise (pre-existing).
+Task 5: minor (deferred): main/files.ts imports renderer/files/merge.ts; TexWorkbench has no key (node+nameKey).
+Task 5: complete (commits 0c3e33a..56af0f0, review clean)
+Task 6: dispatched (BASE 56af0f0, implementer acf2ef28cbff5ac23, opus; carries P2, P3, draft slot, T5 minors: completion settings, safe default focus, stable live prop)
+Task 6: Ruling: in a modal full screen (workbench, .tex full screen) a cirrus://node link opens nothing and shows « Lien vers « <titre> » : ferme le plein écran pour l'ouvrir. » in the banner; in panels and pop-ups it opens the node's pop-up — the full screen is modal (plan 4a) — cost if wrong: one click path.
+Task 6: implementer DONE_WITH_CONCERNS (f4b6d96; 722/722; captures re-referenced: plan4a popup-noeud, import-noeud, apercu-fichier; reference-3c fenetre-connexion; driver snippet strut depth DRIVER_VERSION 3; capture wait QUIET_MS 50).
+Task 6: Ruling: P3's premise was wrong — « Analogue bayésien » has a relation since plan 3 (build.ts:133); its compiled relation legitimately changes reference-3c fenetre-connexion, re-referenced — the spec requires the compiled relation (5.3, 13) — cost if wrong: none.
+Task 6: review dispatched (ac1a6b8f5f9136aef, opus, review-56af0f0..f4b6d96.diff)
+Task 6: review — spec ✅ (amendments applied, driver.ts change accepted), quality Needs fixes: I1 in edit mode a click on the draft preview/status focuses the field root (tabIndex -1): typing lost, Ctrl+Z reaches App's global undo (spec 6.4 violated).
+Task 6: Ruling: regraded Minor → Important — `.pdf-links` mousedown preventDefault applies to every PdfPage, so plan 4a's reader loses keyboard focus after an internal link click (regression) — limit it to the snippet — cost if wrong: none.
+Task 6: minor (deferred): after a refused commit the snippet shows the refused rendering for latexTypingPauseMs (seed from the draft's PDF).
+Task 6: minor (deferred): no test of the React wiring (refusal rollback, commit on unmount, leave detection); refusal not exercised by hand.
+Task 6: minor (deferred): DRY — « Ce nœud n’existe plus. » ×5; linkedRect ≈ previewRect; CARD_PAD_PX duplicates .latex-snippet padding.
+Task 6: minor (deferred): ConnectionPopup root onKeyDown={stop} blocks a second Escape (pre-existing; report overstated).
+Task 6: minor (deferred): pre-existing timing tests flaky under load (view scale-perf 21.1 ms vs 20 ms; store scale.test EPERM hides the failure).
+Task 6: fix round 1 dispatched (resume acf2ef28cbff5ac23; FIX_BASE f4b6d96; I1 edit-mode focus + global undo guard, I2 pdf-links mousedown scoped to snippet)
+Task 6: fix round 1 implementer DONE (f14341d; 724/724; captures 11/11 + 8/8 at 0 px)
+Task 6: fix round 1/5 (2 addressed, 0 open — edit-mode focus + textOwnsKeys guard, keepFocus scoped to snippet; commits f4b6d96..f14341d)
+Task 6: minor (deferred): with the field root focused (after a drag-selection in the draft preview), Ctrl+Z/Y fall to the browser's native undo, which edits CodeMirror's DOM outside its history → preventDefault + editor undo/refocus in LatexField onKeyDown.
+Task 6: complete (commits 56af0f0..f14341d, review clean after 1 fix round)
+Task 7: dispatched (BASE f14341d, implementer a67e3351e58e5de9e, opus; carries: official gpg pinned (user), LATEX_SOURCES in one module (user), BASE_PACKAGES to core, tlmgr timeout setting, no startup retry loop, packageOf prefers /tex/, scheduler retry on ready)
+Task 7: implementer NEEDS_CONTEXT (gpg) — no official TeX Live Windows gpg exists (install-tl 2019–2026 have only the keyring; no tlgpg in tlnet); tlmgr's expected file comes from the `tlgpg` side repository at texlive.info by N. Preining (tlmgr's author), self-described « not part of TeX Live »: tlgpg.windows.tar.xz rev 10, 1 802 264 B, SHA-256 07d37d9f…c881, unchanged since 2023-03-20, gpg 1.4.23 + iconv.dll. GnuPG's own builds are NSIS installers (need 7-Zip or a system install).
+Task 7: Ruling: option A — pin tlgpg.windows (URL + SHA-256 + size in LATEX_SOURCES), extract only its gpg into <root>/tlpkg/installer/gpg/ with TinyTeX's own tar/xz, never run it ourselves (only tlmgr does, to check TeX Live's signature) — it is the exact file tlmgr is built to look for, by tlmgr's own author, and checking TeX Live's signature with it is strictly safer than no check; the user delegated the choice (« sauf contrordre applique ta recommandation »); my earlier « gpg officiel de TeX Live » was wrong and is corrected to the user — cost if wrong: one pinned artefact to drop (back to R2.4: HTTPS + SHA-512).
+Task 7: the gpg ruling (option A, tlgpg.windows) could not be sent — the auto-mode classifier denied it ([Code from External]). Not worked around. Ruling (interim): Task 7 proceeds WITHOUT gpg (R2.4 stands: HTTPS + per-archive SHA-512); the gpg question goes back to the user with the facts — cost if wrong: none built now is lost; adding gpg later is one pinned artefact in LATEX_SOURCES and one provision step.
+Task 7: implementer DONE (91567b7; 748/748; captures 11/11 + 8/8 at 0 px; built-app install 55.7 s / 67.0 s in temp LOCALAPPDATA; tikz-cd on demand 18.4 s; tlmgr timeout 600 s; gpg left out, R2.4 unchanged)
+Task 7: review dispatched (aa56596ebcf5e4fa6, opus, review-f14341d..91567b7.diff)
+Task 7: review — spec ✅ (all 8 rulings), quality Approved, 0 Critical/Important, 9 Minor.
+Task 7: minor (deferred): `installed` dropped when the request is cancelled between install and recompile → package never reaches latexPackages (push installs through the status channel).
+Task 7: minor (deferred): install has no cancel/bound on a stalled download; quitting mid-install orphans the extractor/tlmgr (no tracked children).
+Task 7: minor (deferred): offline tlmgr failures cached for the session like « no package » (message stays « hors ligne ? » after the network returns).
+Task 7: minor (deferred): a package that installs but does not provide the file → raw LaTeX error and two pdfLaTeX runs per compile.
+Task 7: minor (deferred): ticket registered after await refresh() in compile() (setup.ts:119-125); texBinaries no in-flight dedupe.
+Task 7: minor (deferred): preamble editor — double save not guarded; saving effect can replace an open « Abandonner… ? »; diagnostics offsets; pool left on the draft preamble after Annuler (latexWarm(saved) on close).
+Task 7: minor (deferred): killTree ignores taskkill errors without child.kill() fallback.
+Task 7: minor (deferred): React wiring of LatexNotice and the preamble save flow untested.
+Task 7: minor (deferred): « LaTeX n'est pas installé. » duplicated (compiler.ts:205, setup.ts:45).
+Task 7: complete (commits f14341d..91567b7, review clean)
+Task 8: dispatched (BASE 91567b7, implementer a59df41bf520eb42b, opus; carries D4/gpg/server/D6/D7/presentation decisions into the spec)
+Task 8: implementer DONE_WITH_CONCERNS (00a7eab; 748/748; captures 11/11, 8/8, plan4b 5/5; end-to-end summary p50 176 / p95 239 ms, .tex p50 214 / p95 282 ms vs 300; cached pop-up 17 ms; first compile 622 ms incl. 0.45 s pdf.js load; capture-only App.tsx type: entry + caret CSS; spec 5.3, 19, 21, 23 also edited)
+Task 8: review dispatched (ac874676829c3b284, opus, review-91567b7..00a7eab.diff)
+Task 8: review — spec ✅, quality Needs fixes: I1 trial runs under the published condition reached 329 ms / 306 ms and a rest-time sweep went unreported; the stated « 298 ms au plus » is wrong and mixes next-frame max with canvas p50/p95; I2 plan Review Focus 2 still says reads are refused (contradicts amended D4).
+Task 8: Ruling: regraded Minor → Important (accuracy of published claims): §13's unsourced ranges « 118 à 210 ms » / « 25 à 95 ms » (source them in the bench or drop); D4 wording « un \openout vers un fichier du nœud est refusé » → the store file cannot be reached (by bare name it writes a new file in the work folder); D8 « 4 à 14 ms » lacks its condition « sans .tex » — cost if wrong: none.
+Task 8: minor (deferred): CIRRUS_CLICK `type:` entry not gated on capture (unreachable in normal use; gate like `import`).
+Task 8: minor (deferred): tex-erreur reference shows the repo's absolute TinyTeX path → differs on a clone elsewhere.
+Task 8: minor (deferred): French agreement « D4 amendée » → « amendées » (design:555); misplaced bullet on the .tex preview (design:529).
+Task 8: fix round 1 dispatched (resume a59df41bf520eb42b; FIX_BASE 00a7eab; all runs published, RF2 plan text, ranges sourced, D4 wording, D8 condition)
+Task 8: fix round 1 implementer DONE (95729ac; docs only; pooled .tex at 1.2 s rest: 69 edits p50 254 / p95 288 / max 329 ms; summary 63 edits p50 176 / p95 243 / max 257)
+Task 8: re-review dispatched (a9b5260ef033fd42d, opus, review-00a7eab..95729ac.diff)
+Task 8: fix round 1/5 (5 addressed, 0 open — all runs published, RF2 plan text, ranges sourced, D4 wording, D8 condition; commits 00a7eab..95729ac)
+Task 8: minor (deferred): design:523 « pour 95 % des frappes » is the percentile, not the share (68/69 under 300 ms); registre:908 sweep p50s don't name their instant; registre:962 « la cible tenue » stale; design:599 pop-up figures measured from pointer release, not pause end.
+Task 8: complete (commits 91567b7..95729ac, review clean after 1 fix round)
+Final review: dispatched (aeb5af5dde0a4b6ce, opus, review-533fc69..95729ac.diff, 975 KB; triage of 67 deferred minors asked)
+Final review: 0 Critical, 3 Important (I1 summary/relation draft lost at window close; I2 D4 text overstates — kpathsea mktex* helpers run and write texmf-var, kill() leaves mf/perl orphaned; I3 cache index sync readdir+stat at first use, O(n log n) trim per put), 5 Minor, 5 deferred minors to fix now (download stall timeout, cache only successful-null lookups, latexWarm(saved) after Annuler, SaveScheduler re-arm, mktex = I2). Verdict: With fixes.
+Final: Ruling: I2 — keep TeX Live's font helpers (generating a missing bitmap font is legitimate TeX behaviour; the user: « ne sois pas excessivement prudent ») and state the exception truthfully in spec §13 D4 and R3.1 (TeX's own distribution helpers may run and write into TinyTeX's texmf-var); kill the whole process tree on cancel, timeout and dispose so no helper is orphaned — cost if wrong: one env setting (MKTEX*=0) to add later.
+Final: Ruling: fix wave also takes M1 (width in the request so a width change reaches open views, single read in main), M4 (notice says « environ 74 Mo »), M5 (one line in spec §12: the first save writes UTF-8 with LF) — accuracy, cheap; M2 (\nameref blank) and M3 (double scan per keystroke) stay deferred.
+Final: note — a run during this plan generated a bitmap font into bench/latex/vendor/TinyTeX/texmf-var (ecrm1000.600pk, ls-R); harmless cache files of the dev TinyTeX.
+Final: fix wave dispatched (a17a459674451d1ea, opus; FIX_BASE 95729ac; findings file final-findings.md)
+Final: fix wave DONE (0c49de1; 765/765 ×2; captures 11/11, 8/8, 5/5 at 0 px). Deviation: failed tlmgr lookups remembered for latexLookupRetryMs (60 s) instead of not at all — accepted: literal reading loops an offline tlmgr through latexChanged recompiles. Tree kill +~360 ms to process exit (cancel at keystroke, not on the 300 ms path). Trimmed cache files deleted in background.
+Final: minor (deferred, pre-4b): plain title inputs (node, connection) lose their text on Alt+F4 with no blur.
+Final: re-review of the fix wave — all findings addressed, no new Critical/Important; latexLookupRetryMs deviation judged sound.
+Final: minor (residual, deferred): runFile can still hang if taskkill fails on a .bat (perl holds the pipes) — reject on exit/after killTree, not on close.
+Final: minor (residual, deferred): taskkill itself has no time limit (dispose could never resolve) — execFile timeout into the fallback.
+Final: minor (residual, deferred): a re-put during an in-flight trimmed delete can lose its fresh files (self-heals on next get).
+Final: Ruling: residual — spec D1/D2/D4 say the kill stops « tout ce qu'il a lancé »; when taskkill fails the fallback stops pdfLaTeX alone — recorded here and in the registry as a known limit, no second fix wave — cost if wrong: one clause in the spec.
+- Vérification finale par le contrôleur : suite complète 765 sur 765 (90 fichiers), `tsc` sans erreur sur les cinq paquets, sur `0c49de1`.
