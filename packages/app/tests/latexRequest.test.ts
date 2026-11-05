@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Action, applyOps, CITE_KEY_TAG, editNode, type Id, type KnownLabel, preambleText, setPreamble, type State } from '@cirrus/core';
+import { type Action, applyOps, CITE_KEY_TAG, deleteEverywhere, editNode, type Id, type KnownLabel, preambleText, setPreamble, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -46,6 +46,7 @@ test('buildRequest : complexité.tex de la base de test', () => {
   expect(req.broken).toEqual(['absent:label']);
   expect(req.doubled).toEqual([]);
   expect(req.cites).toEqual([{ key: 'li2008', text: 'Li et Vitányi, 2008', node: ids.nodes.publication }]);
+  expect(req.doubledCites).toEqual([]);
   expect(req.unknownCites).toEqual([]);
   // Its own label: its number comes from its .aux (known), not from the registry.
   expect(req.refs.map((r) => r.label)).not.toContain('kc:def');
@@ -84,6 +85,12 @@ test('buildRequest : un doublon avec sa première définition, le texte tel que 
     s, registry, known: [],
   });
   expect(typed).toMatchObject({ refs: [{ label: 'solomonoff' }], broken: ['propre'], doubled: [] });
+  // li2008 on two nodes: red in the preview, with the first's citation (Review Focus 5), not among the cites.
   const [byId] = [ids.nodes.mdl, ids.nodes.publication].sort();
-  expect(typed.cites).toEqual([{ key: 'li2008', text: shortCitation(s.nodes.get(byId)!), node: byId }]);
+  expect(typed.cites).toEqual([]);
+  expect(typed.doubledCites).toEqual([{ key: 'li2008', text: shortCitation(s.nodes.get(byId)!), node: byId }]);
+  // Once one of them is in the trash, the other is the key's only node.
+  run(s, deleteEverywhere(s, ids.nodes.mdl));
+  const after = buildRequest({ origin: { kind: 'summary', node: ids.nodes.occam }, source: '\\cite{li2008}', s, registry, known: [] });
+  expect(after).toMatchObject({ cites: [{ key: 'li2008', text: 'Li et Vitányi, 2008', node: ids.nodes.publication }], doubledCites: [], unknownCites: [] });
 });

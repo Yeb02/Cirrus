@@ -399,7 +399,7 @@ Fixées par le contrôleur avant la tâche :
 - Ruling: **`scanTex` ne découpe par virgules que les refs de cleveref** (`\cref`, `\Cref`), et les citations ; chaque nom d'une liste perd ses espaces de bord. Un nom seul est pris tel qu'il est écrit, comme LaTeX le lit : `\ref{ a }` cherche « a » entouré d'espaces.
   - Le `citedLabels` du principal découpe toute commande en « ref ». Il ne décide que d'une seconde passe : la différence ne change aucune compilation.
   - Coût si faux : un ensemble de noms.
-- Ruling: **ce qui n'est pas une marque** : un nom vide ou fait d'espaces, un nom qui porte `#` (le paramètre d'une macro, `\newcommand\r[1]{\ref{#1}}`), la clé `*` (`\nocite{*}`), un argument jamais fermé, ou coupé par un commentaire.
+- Ruling: **ce qui n'est pas une marque** : un nom vide ou fait d'espaces, un nom qui porte `#` (le paramètre d'une macro, `\newcommand\r[1]{\ref{#1}}`), la clé `*` (`\nocite{*}`), un argument jamais fermé. Un commentaire dans un argument en est retiré, comme le fait TeX (revue, tour 1, plus bas).
   - Pourquoi : l'éditeur (tâche 5) marquerait en rouge `\ref{#1}` dans une définition, et `*` comme une clé inconnue. `safeLabel` refuserait de toute façon `#` à l'injection.
   - Coût si faux : une condition.
 - Ruling: **`scanTex` saute aussi `verbatim*` et `Verbatim*`**, et cherche la fin `\end{<nom>}` telle quelle, comme le fait LaTeX. Un environnement jamais fermé va jusqu'au bout du texte. TeX saute les espaces et les sauts de ligne entre la commande, son étoile, ses arguments optionnels et son accolade : `scanTex` aussi. Les refs ne lisent pas d'argument optionnel, puisque aucune de la liste n'en prend. Coût si faux : nul.
@@ -450,6 +450,22 @@ Fixées par le contrôleur avant la tâche :
 
 - `scanTex` fait une passe sur le texte, plus celle de `isStandalone`. Les lignes se comptent au fil des marques.
 - Le registre n'est encore lu par aucune vue : `App` le tient dans son état, pour les pop-ups et le plein écran des tâches 5 et 6.
+
+### Revue, tour 1
+
+- **Important corrigé : un commentaire dans un argument faisait perdre l'argument entier.** `\cite{li2008,%⏎ solomonoff1964}` ou `\cite{%⏎ a,%⏎ b}` ne donnaient aucune marque. Les clés n'allaient alors ni dans `cites` ni dans `unknownCites`, et l'aperçu montrait un « [?] » sans lien ni rouge.
+  - Le correctif est dans `scan.ts`. La recherche de l'accolade fermante saute un commentaire jusqu'au bout de sa ligne, au lieu d'échouer.
+  - Le contenu d'un argument est lu comme TeX le lit : un commentaire en est retiré, avec la fin de sa ligne et les espaces du début de la suivante. Une liste se découpe et perd ses espaces sur ce contenu. Les positions restent celles du texte : une marque va de son premier caractère à son dernier, et `\ref{kc%⏎:def}` donne `kc:def`.
+  - Un commentaire entre la commande et son accolade est sauté aussi (`\cite%⏎{k}`).
+  - Un test le vérifie : un `\cite` sur deux lignes avec commentaires, la forme `\cite{%⏎ a,%⏎ b}`, un `\cref` sur deux lignes, `\label{a%⏎}`, un argument optionnel, une virgule dans un commentaire. Il échouait avant le correctif, avec « expected [] to deeply equal [ …(2) ] ».
+- **Important corrigé : une clé portée par plusieurs nœuds est rouge dans l'aperçu** (décision du contrôleur, plus bas, « Tâche 4, revue »).
+  - `CompileRequest` reçoit `doubledCites: InjectedCite[]`.
+  - `buildRequest` y met une clé que tiennent plusieurs nœuds vivants, avec la citation du premier par identifiant. Les nœuds du registre sont relus dans l'état : un nœud parti à la corbeille depuis la construction ne compte plus.
+  - `jobBody` l'affiche comme un label en double : la citation courte en rouge, liée au nœud du premier.
+  - `DRIVER_VERSION` passe à 2. La clé du cache compte le champ, et `invalidRequest` le vérifie.
+  - Tests : `buildRequest` (deux nœuds, puis l'un à la corbeille), `jobBody` (la branche rouge, et une clé refusée omise), la clé du cache, la validation, et une compilation réelle (« [Li et Vitányi, 2008] », du rouge, le lien vers la publication). Avant le correctif, la compilation réelle donnait « Voir [?]. ».
+- Ruling: **un doublon de clé est lié au premier nœud**, comme un label en double, le rouge à l'intérieur du lien, ce qui l'emporte sur `citecolor`. Coût si faux : une ligne de `jobBody`.
+- Suite après les correctifs : 683 tests sur 683, deux de plus. `tsc` : `app`, `view` et `core` sans erreur.
 
 ## Tâche 5 : interface — éditeur LaTeX, plein écran d'un `.tex`, enregistrement
 
@@ -505,7 +521,7 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 
 ### Tâche 4
 
-- Pour la tâche 5 ou 6 : une clé `clé_bibtex` portée par deux nœuds ne s'affiche pas en rouge dans l'aperçu. `cites` prend le premier nœud, comme la tâche le fixe, et la requête n'a aucun champ pour un doublon de clé. Le Review Focus 5 veut ce lien en rouge dans l'aperçu comme dans l'éditeur. L'éditeur peut le dire par `citeNodes(key).length > 1` ; l'aperçu demanderait un champ de plus dans `CompileRequest` et dans `jobBody` (`request.ts`, `driver.ts`).
+- Pour la tâche 5 : une clé `clé_bibtex` portée par deux nœuds est rouge dans l'aperçu depuis la revue (`doubledCites`). L'éditeur doit la marquer aussi, par `citeNodes(key).length > 1` (`request.ts`).
 - Pour les tâches 5 et 6 : deux vues du même emplacement s'annulent l'une l'autre dans le principal, puisqu'une requête annule la précédente de son emplacement. Une source ne doit avoir qu'un `useCompiled` à la fois (`scheduler.ts`).
 - Pour les tâches 5 et 6 : `useCompiled` compare la requête à chaque changement de son identité, c'est-à-dire le JSON de toute la source. Les appelants gagnent à la mémoriser (`useMemo`) (`useCompiled.ts`).
 - `\verb|…|` n'est pas sauté : `\verb|%|` y commence un commentaire, et `\verb|\label{x}|` y serait un label. Le `withoutComments` du principal fait de même (`scan.ts`).
@@ -564,3 +580,8 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
   - des tests d'écriture à la place des tests de lecture.
 
   Le texte de la décision et le constat qui l'a amenée sont sous la tâche 3, plus haut.
+
+### Tâche 4, revue (correctifs, tour 1)
+
+- Ruling : une clé de citation portée par plusieurs nœuds est rouge dans l'aperçu, avec la citation courte du premier nœud (champ `doubledCites` de la requête), comme un label en double — Review Focus 5 le demandait, la tâche 4 ne le portait pas — coût si faux : un champ.
+  - Appliquée sous la tâche 4 (« Revue, tour 1 ») : `CompileRequest.doubledCites`, `buildRequest`, `jobBody`, `DRIVER_VERSION` à 2, la clé du cache et la validation de la requête par le principal.

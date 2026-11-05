@@ -43,7 +43,7 @@ let slots = 0;
 /** A slot of its own per test: the table of known labels belongs to the module. */
 const freshSlot = () => `summary:test-${++slots}`;
 const req = (slot: string, source: string, known: KnownLabel[] = []): CompileRequest => ({
-  slot, mode: 'snippet', source, preamble: 'P', refs: [], broken: [], doubled: [], cites: [], unknownCites: [], known, resources: [],
+  slot, mode: 'snippet', source, preamble: 'P', refs: [], broken: [], doubled: [], cites: [], doubledCites: [], unknownCites: [], known, resources: [],
 });
 const pdf = (key: string): CompiledPdf => ({ key, size: 100, pages: 1 });
 const ok = (key: string, labels: KnownLabel[] = []): CompileAnswer => ({ status: 'ok', pdf: pdf(key), labels, log: `log ${key}`, ms: 50, passes: 1, cached: false });

@@ -38,10 +38,11 @@ export class PdfCache {
    */
   key(req: CompileRequest, engine: string, widthCm: number): string {
     const ref = (r: { label: string; title: string; node: string | null }) => ({ label: r.label, title: r.title, node: r.node });
+    const cite = (c: { key: string; text: string; node: string }) => ({ key: c.key, text: c.text, node: c.node });
     const resources = [...req.resources].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map((r) => ({ name: r.name, hash: r.hash }));
     return createHash('sha256').update(JSON.stringify([
       DRIVER_VERSION, engine, req.mode, req.mode === 'snippet' ? widthCm : null, isStandalone(req.source) ? null : req.preamble, req.source,
-      req.refs.map(ref), req.broken, req.doubled.map(ref), req.cites.map((c) => ({ key: c.key, text: c.text, node: c.node })), req.unknownCites, resources,
+      req.refs.map(ref), req.broken, req.doubled.map(ref), req.cites.map(cite), req.doubledCites.map(cite), req.unknownCites, resources,
     ])).digest('hex');
   }
 

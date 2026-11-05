@@ -118,6 +118,7 @@ export interface CompileRequest {
   broken: string[];       // cited, defined nowhere
   doubled: InjectedRef[]; // cited, defined more than once: the first definition
   cites: InjectedCite[];
+  doubledCites: InjectedCite[]; // cited, held by several nodes: the first's citation, by identifier
   unknownCites: string[];
   known: KnownLabel[];    // a hint only: never part of the cache key
   resources: FileRef[];   // the node's other files, visible under their names

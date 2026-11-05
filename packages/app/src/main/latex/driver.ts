@@ -7,8 +7,8 @@ import { type CompileRequest, type InjectedRef, safeLabel, titleToTex, withoutCo
  * links folder that TEXINPUTS names.
  */
 
-/** Part of the cache key: raised whenever the driver or a job's body changes what a compilation gives. */
-export const DRIVER_VERSION = 1;
+/** Part of the cache key: raised whenever the driver or a job's body changes what a compilation gives. 2: doubledCites. */
+export const DRIVER_VERSION = 2;
 
 /**
  * The bench's driver (bench/latex/src/driver.ts), the preamble read by its relative name. Then the app's macros:
@@ -75,7 +75,8 @@ const label = (name: string, number: string, page: string, anchor = '') => `\\ci
  * A job's body (D7), in this order: this source's labels as its last compilation numbered them (`known`); the labels of
  * other sources, as their node's title linked to it; the broken ones in red, their name followed by « ? »; the doubled
  * ones in red, with the title of their first definition; the citations, as their short text linked to the publication's
- * node, and the unknown keys in red. Every text of the user goes through titleToTex; a label or a key that cannot be
+ * node; the keys held by several nodes in red, with the first's short text, linked to it, as a doubled label is; the
+ * unknown keys in red. Every text of the user goes through titleToTex; a label or a key that cannot be
  * injected is left out (the source then shows LaTeX's « ?? »). A label of another source shows « ? » as its page.
  * Then the source: as is in `page` mode; in `snippet` mode, set in a box `widthCm` wide, without indent, and shipped
  * alone on a page of the box's exact size (D3).
@@ -92,6 +93,7 @@ export function jobBody(req: CompileRequest, src: string, widthCm: number): stri
   for (const b of req.broken) if (injectable(b)) lines.push(label(b, red(`${titleToTex(b)}~?`), '?'));
   other(req.doubled, (r) => red(titleToTex(r.title)));
   for (const c of req.cites) if (injectable(c.key)) lines.push(`\\cirrus@cite{\\detokenize{${c.key}}}{${linked(c.node, titleToTex(c.text))}}`);
+  for (const c of req.doubledCites) if (injectable(c.key)) lines.push(`\\cirrus@cite{\\detokenize{${c.key}}}{${linked(c.node, red(titleToTex(c.text)))}}`);
   for (const k of req.unknownCites) if (injectable(k)) lines.push(`\\cirrus@cite{\\detokenize{${k}}}{${red(`${titleToTex(k)}~?`)}}`);
   if (req.mode === 'page') {
     lines.push('\\makeatother', `\\input{${src}}`);

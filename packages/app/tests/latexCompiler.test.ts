@@ -67,7 +67,7 @@ function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBina
 
 const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
   slot: 'summary:n1', mode: 'snippet', source: 'Bonjour $x^2$.', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [],
-  unknownCites: [], known: [], resources: [], ...over,
+  doubledCites: [], unknownCites: [], known: [], resources: [], ...over,
 });
 const NODE = '0192f0c3-7a1b-7c2d-8e3f-a1b2c3d4e5f6';
 const PUB = '0192f0c3-7a1b-7c2d-8e3f-000000000042';
@@ -102,8 +102,8 @@ test('invalidRequest : une requête bien formée passe ; une forme fausse, une s
   const png = importFile(base, join(ASSETS, 'schéma_compression.png'));
   const good = req({
     resources: [png], refs: [{ label: 'a', title: 'A', node: NODE }, { label: 'b', title: 'B', node: null }], broken: ['c'],
-    doubled: [{ label: 'd', title: 'D', node: NODE }], cites: [{ key: 'k', text: 'K', node: PUB }], unknownCites: ['u'],
-    known: [{ label: 'e', number: '1', page: '1', anchor: 'equation.1' }],
+    doubled: [{ label: 'd', title: 'D', node: NODE }], cites: [{ key: 'k', text: 'K', node: PUB }], doubledCites: [{ key: 'k2', text: 'K2', node: PUB }],
+    unknownCites: ['u'], known: [{ label: 'e', number: '1', page: '1', anchor: 'equation.1' }],
   });
   expect(invalidRequest(good, base, 1000)).toBeNull();
   const bad: [string, unknown][] = [
@@ -113,6 +113,7 @@ test('invalidRequest : une requête bien formée passe ; une forme fausse, une s
     ['un nœud qui n’est pas un texte', { ...good, doubled: [{ label: 'd', title: 'D', node: 3 }] }],
     ['un label cassé qui n’est pas un texte', { ...good, broken: [1] }], ['une citation sans nœud', { ...good, cites: [{ key: 'k', text: 'K', node: null }] }],
     ['une clé inconnue qui n’est pas un texte', { ...good, unknownCites: [null] }],
+    ['sans clés en double', { ...good, doubledCites: undefined }], ['une clé en double sans texte', { ...good, doubledCites: [{ key: 'k', node: PUB }] }],
     ['un label connu incomplet', { ...good, known: [{ label: 'e', number: '1', page: '1' }] }],
     ['une ressource absente du magasin', { ...good, resources: [{ ...png, hash: 'f'.repeat(64) }] }],
     ['une empreinte mal formée', { ...good, resources: [{ ...png, hash: '../../x' }] }],
@@ -202,6 +203,14 @@ texTest('\\cite d’une publication', async () => {
   const [page] = await pagesOf(a);
   expect(page.text).toContain('[Li et Vitányi, 2008]');
   expect(page.text).toContain('[li2009 ?]');
+  expect(page.links).toEqual([`cirrus://node/${PUB}`]);
+});
+
+texTest('\\cite d’une clé portée par deux nœuds : la citation du premier, en rouge, et son lien (Review Focus 5)', async () => {
+  const a = await start().compile(req({ mode: 'page', source: 'Voir \\cite{li2008}.', doubledCites: [{ key: 'li2008', text: 'Li et Vitányi, 2008', node: PUB }] }));
+  const [page] = await pagesOf(a);
+  expect(page.text).toContain('[Li et Vitányi, 2008]');
+  expect(page.colors).toContain('#ff0000');
   expect(page.links).toEqual([`cirrus://node/${PUB}`]);
 });
 

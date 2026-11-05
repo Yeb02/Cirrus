@@ -90,8 +90,8 @@ test('readAux : les labels du .aux, numéro, page et ancre', () => {
 });
 
 const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
-  slot: 'summary:n1', mode: 'page', source: 'x', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [], unknownCites: [], known: [],
-  resources: [], ...over,
+  slot: 'summary:n1', mode: 'page', source: 'x', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [], doubledCites: [], unknownCites: [],
+  known: [], resources: [], ...over,
 });
 const NODE = '0192f0c3-7a1b-7c2d-8e3f-a1b2c3d4e5f6';
 
@@ -108,13 +108,15 @@ test('driverSource : le préambule par son nom relatif, les macros de l’app, l
   expect(d).not.toMatch(/(?<![A-Za-z])[A-Za-z]:[\\/]/);
 });
 
-test('jobBody : les labels connus, puis les références, les cassés, les doublons, les citations et les clés inconnues, puis la source', () => {
+test('jobBody : les labels connus, puis les références, les cassés, les doublons, les citations, les clés en double et les clés inconnues, puis la source', () => {
   const body = jobBody(req({
     known: [{ label: 'a', number: '1', page: '1', anchor: 'equation.1' }],
     refs: [{ label: 'mdl:enonce', title: 'Minimum Description Length Principle (MDL)', node: NODE }],
     broken: ['absent:label'],
     doubled: [{ label: 'dup', title: 'Titre du doublon', node: NODE }],
     cites: [{ key: 'li2008', text: 'Li et Vitányi, 2008', node: NODE }],
+    // A key held by several nodes: the first's citation, in red and linked to it, as a doubled label.
+    doubledCites: [{ key: 'deux', text: 'Li, 2008', node: NODE }],
     unknownCites: ['li2009'],
   }), SRC, 9);
   const parts = [
@@ -123,6 +125,7 @@ test('jobBody : les labels connus, puis les références, les cassés, les doubl
     '\\cirrus@label{\\detokenize{absent:label}}{\\cirrus@red{absent:label~?}}',
     `\\cirrus@label{\\detokenize{dup}}{\\cirrus@link{${NODE}}{\\cirrus@red{Titre du doublon}}}`,
     `\\cirrus@cite{\\detokenize{li2008}}{\\cirrus@link{${NODE}}{Li et Vitányi, 2008}}`,
+    `\\cirrus@cite{\\detokenize{deux}}{\\cirrus@link{${NODE}}{\\cirrus@red{Li, 2008}}}`,
     '\\cirrus@cite{\\detokenize{li2009}}{\\cirrus@red{li2009~?}}',
     `\\input{${SRC}}`,
   ];
@@ -138,7 +141,7 @@ test('jobBody : un titre passe par titleToTex ; un label refusé par safeLabel, 
       { label: 'a}b', title: 'Jamais', node: NODE }, { label: 'x^^7b', title: 'Jamais', node: NODE }, { label: '', title: 'Jamais', node: NODE },
       { label: 'sans-lien', title: 'Sans lien', node: 'a b}' }, { label: 'nul', title: 'Nul', node: null },
     ],
-    broken: ['c%d'], cites: [{ key: 'k#1', text: 'Jamais', node: NODE }], unknownCites: ['u{'],
+    broken: ['c%d'], cites: [{ key: 'k#1', text: 'Jamais', node: NODE }], doubledCites: [{ key: 'x^^7b', text: 'Jamais', node: NODE }], unknownCites: ['u{'],
     known: [{ label: 'k', number: '1}', page: '1', anchor: 'x' }, { label: 'k2', number: '#1', page: '1', anchor: 'x' }],
   }), SRC, 9);
   expect(body).toContain(`\\cirrus@link{${NODE}}{50 \\% \\& co\\_x \\#1 \\{a\\} \\textbackslash{}input\\{x\\}}`);

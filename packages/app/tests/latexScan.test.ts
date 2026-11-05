@@ -84,10 +84,35 @@ test('scanTex : ce qui n’est pas une marque — accolade jamais fermée, nom v
   expect(scanTex('\\newcommand\\r[1]{\\ref{#1}}\\cite{#1,k}').refs).toEqual([]);
   expect(scanTex('\\newcommand\\r[1]{\\ref{#1}}\\cite{#1,k}').cites.map((m) => m.name)).toEqual(['k']);
   expect(scanTex('\\nocite{*}').cites).toEqual([]);
-  // A comment inside the braces: not a mark, and the comment is still one.
-  expect(scanTex('\\ref{a% \\label{c}\n}\\label{d}').labels.map((m) => m.name)).toEqual(['d']);
+  // A comment that hides the closing brace up to the end of the text: never closed.
+  expect(scanTex('\\ref{a % }')).toMatchObject({ refs: [] });
   // An escaped brace is part of the name, nested braces too.
   expect(scanTex('\\label{a\\}b}\\label{x{y}z}').labels.map((m) => m.name)).toEqual(['a\\}b', 'x{y}z']);
+});
+
+test('scanTex : un commentaire dans un argument en est retiré, comme TeX le fait, et une liste continue à la ligne suivante', () => {
+  // Each key, its offsets and its line, the comment and the spaces starting the next line taken out.
+  const t = 'Voir \\cite{li2008,%  le livre\n   solomonoff1964}.';
+  expect(scanTex(t).cites).toEqual([at(t, 'li2008', 1), at(t, 'solomonoff1964', 2)]);
+  const u = '\\cite{%\n  a,%\n  b}';
+  expect(scanTex(u).cites).toEqual([at(u, 'a', 2), at(u, 'b', 3)]);
+  // \cref, its list over two lines, with or without a comment.
+  const v = '\\cref{eq:1,%\n eq:2} \\Cref{eq:3,\n eq:4}';
+  expect(scanTex(v).refs).toEqual([at(v, 'eq:1', 1), at(v, 'eq:2', 2), at(v, 'eq:3', 2), at(v, 'eq:4', 3)]);
+  // A single name: the comment out, the end of its line with it.
+  const w = '\\label{a%\n}\\ref{kc%\n  :def} \\ref{x% \\label{c}\n}';
+  const a = w.indexOf('{a%') + 1;
+  expect(scanTex(w).labels).toEqual([{ name: 'a', from: a, to: a + 1, line: 1 }]);
+  // A name cut by a comment is read whole; its offsets run from its first character to its last.
+  expect(scanTex(w).refs).toEqual([
+    { name: 'kc:def', from: w.indexOf('kc%'), to: w.indexOf(':def') + 4, line: 2 }, at(w, 'x', 3),
+  ]);
+  // In an optional argument, and between the command and its braces.
+  const x = '\\citep[p.~3,%\n]{k1}\\cite%\n{k2}';
+  expect(scanTex(x).cites).toEqual([at(x, 'k1', 2), at(x, 'k2', 3)]);
+  // A comma or a brace inside the comment counts for nothing.
+  const y = '\\cite{a% , b}\n}';
+  expect(scanTex(y).cites).toEqual([at(y, 'a', 1)]);
 });
 
 test('scanTex : complexité.tex de la base de test', () => {

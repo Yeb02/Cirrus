@@ -613,6 +613,7 @@ const isText = (v: unknown): v is string => typeof v === 'string';
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const listOf = (v: unknown, item: (x: unknown) => boolean) => Array.isArray(v) && v.every(item);
 const isRef = (x: unknown) => isRecord(x) && isText(x.label) && isText(x.title) && (x.node === null || isText(x.node));
+const isCite = (x: unknown) => isRecord(x) && isText(x.key) && isText(x.text) && isText(x.node);
 
 /** What cirrus:latex:compile answers a request it refuses (its cause in the console). */
 export const INVALID_REQUEST: CompileAnswer = {
@@ -633,7 +634,8 @@ export function invalidRequest(x: unknown, store: string, maxSourceBytes: number
   if (!listOf(x.refs, isRef)) return 'refs';
   if (!listOf(x.broken, isText)) return 'broken';
   if (!listOf(x.doubled, isRef)) return 'doubled';
-  if (!listOf(x.cites, (c) => isRecord(c) && isText(c.key) && isText(c.text) && isText(c.node))) return 'cites';
+  if (!listOf(x.cites, isCite)) return 'cites';
+  if (!listOf(x.doubledCites, isCite)) return 'doubledCites';
   if (!listOf(x.unknownCites, isText)) return 'unknownCites';
   if (!listOf(x.known, (k) => isRecord(k) && isText(k.label) && isText(k.number) && isText(k.page) && isText(k.anchor))) return 'known';
   if (!Array.isArray(x.resources)) return 'resources';

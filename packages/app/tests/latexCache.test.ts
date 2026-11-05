@@ -16,7 +16,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); 
 const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
   slot: 'summary:n1', mode: 'snippet', source: 'Bonjour $x^2$.', preamble: DEFAULT_PREAMBLE,
   refs: [{ label: 'mdl', title: 'MDL', node: 'n2' }], broken: ['absent'], doubled: [], cites: [{ key: 'li2008', text: 'Li et Vitányi, 2008', node: 'n3' }],
-  unknownCites: [], known: [], resources: [{ name: 'b.png', hash: 'b'.repeat(64), size: 3 }, { name: 'a.png', hash: 'a'.repeat(64), size: 2 }], ...over,
+  doubledCites: [], unknownCites: [], known: [], resources: [{ name: 'b.png', hash: 'b'.repeat(64), size: 3 }, { name: 'a.png', hash: 'a'.repeat(64), size: 2 }], ...over,
 });
 const ENGINE = 'pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026)';
 
@@ -31,6 +31,7 @@ test('PdfCache.key : la même requête donne la même clé ; ni l’emplacement 
   for (const other of [
     req({ source: 'Bonjour $x^2$. ' }), req({ preamble: `${DEFAULT_PREAMBLE}%` }), req({ mode: 'page' }), req({ refs: [{ label: 'mdl', title: 'MDL ', node: 'n2' }] }),
     req({ broken: [] }), req({ doubled: [{ label: 'd', title: 'D', node: null }] }), req({ cites: [] }), req({ unknownCites: ['x'] }),
+    req({ doubledCites: [{ key: 'li2008', text: 'Li et Vitányi, 2008', node: 'n3' }] }),
     req({ resources: [{ name: 'a.png', hash: 'c'.repeat(64), size: 2 }] }),
   ]) expect(cache.key(other, ENGINE, 9)).not.toBe(k);
   expect(cache.key(req(), `${ENGINE}x`, 9)).not.toBe(k);
