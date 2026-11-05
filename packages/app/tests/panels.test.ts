@@ -9,7 +9,7 @@ import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/ren
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
 import {
-  closedIds, inFront, nodeOpenedBy, openingRect, type Panel, resolveTarget, withNode, withoutLoose, withoutTopLoose,
+  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withLinked, withNode, withoutLoose, withoutTopLoose,
 } from '../src/renderer/ui/panels/Panels.tsx';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
@@ -148,6 +148,30 @@ test('clic dans le graphe : un nœud, un groupe ou le fantôme d’un nœud loin
   // Ctrl+click builds a selection; the background, a connection or a stub designate no item.
   expect(nodeOpenedBy(node, true)).toBeNull();
   expect(nodeOpenedBy(undefined, false)).toBeNull();
+});
+
+test('lien vers un nœud (plan 4b, tâche 6) : son pop-up s’ouvre non épinglé, devant, sans rien fermer ; déjà ouvert, il passe devant', () => {
+  const at = (x: number): Rect => ({ x, y: 100, w: 380, h: 460 });
+  const ps: Panel[] = [
+    { id: 1, target: { kind: 'node', node: 'a' }, rect: at(10), pinned: false, z: 1 },
+    { id: 2, target: { kind: 'file', node: 'a', name: 'x.tex' }, rect: at(400), pinned: false, z: 2 },
+    { id: 3, target: { kind: 'node', node: 'c' }, rect: at(800), pinned: true, z: 3 },
+  ];
+  // The panel the link was clicked in stays (it is being read), and every other one too.
+  const linked = withLinked(ps, 'b', at(900), 4);
+  expect(linked.map((p) => [p.id, p.pinned, p.z])).toEqual([[1, false, 1], [2, false, 2], [3, true, 3], [4, false, 4]]);
+  expect(linked[3]).toEqual({ id: 4, target: { kind: 'node', node: 'b' }, rect: at(900), pinned: false, z: 4 });
+  expect(closedIds(ps, linked)).toEqual([]);
+  // Its node's pop-up already open, pinned or not: no second one, it comes in front where it is.
+  expect(withLinked(ps, 'c', at(900), 4).map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 1], [2, 400, 2], [3, 800, 4]]);
+  expect(withLinked(ps, 'a', at(900), 4).map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 4], [2, 400, 2], [3, 800, 3]]);
+});
+
+test('linkedRect : à droite du panneau d’où vient le lien, à la taille d’un pop-up ; à gauche s’il n’y a pas la place', () => {
+  const p = { popupWidthPx: 380, popupHeightPx: 460, panelMinPx: 200, panelGapPx: 12 };
+  expect(linkedRect({ x: 100, y: 120, w: 560, h: 460 }, p, SCREEN)).toEqual({ x: 672, y: 120, w: 380, h: 460 });
+  expect(linkedRect({ x: 1000, y: 120, w: 560, h: 460 }, p, SCREEN)).toEqual({ x: 1000 - 12 - 380, y: 120, w: 380, h: 460 });
+  expect(linkedRect({ x: 100, y: 120, w: 560, h: 460 }, { ...p, popupWidthPx: 120 }, SCREEN).w).toBe(200);
 });
 
 test('openingRect : la taille d’ouverture n’est jamais sous panelMinPx (Minor 2 de la relecture)', () => {

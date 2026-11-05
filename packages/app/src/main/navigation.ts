@@ -17,13 +17,17 @@ export function navigationAllowed(url: string, appUrl: string): boolean {
   }
 }
 
-/** The schemes a PDF's link may hand to the system (plan 4a, task 6); the app's own scheme comes with plan 4b. */
+/**
+ * The schemes a PDF's link may hand to the system (plan 4a, task 6). The app's own, `cirrus://node/<id>` (a compiled
+ * \ref or \cite, plan 4b, D7), never comes here: the interface opens that node's pop-up itself (ui/latex/links.ts).
+ */
 const EXTERNAL = new Set(['http:', 'https:', 'mailto:']);
 
 /**
  * Whether `url`, a link clicked in a PDF (openUrl), may be opened by the system's handler (shell.openExternal): an
- * address in http:, https: or mailto: only. Anything else — file:, javascript:, cirrus:, the store's cirrus-file:,
- * ftp:, tel:, a string that is no address — is refused, so a document never has Windows run or open a local file.
+ * address in http:, https: or mailto: only. Anything else — file:, javascript:, cirrus: (should it ever reach the main
+ * process), the store's cirrus-file:, ftp:, tel:, a string that is no address — is refused, so a document never has
+ * Windows run or open a local file.
  */
 export function externalUrlAllowed(url: string): boolean {
   try {

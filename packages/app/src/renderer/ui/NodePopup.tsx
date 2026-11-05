@@ -3,7 +3,7 @@ import {
   type State, subjectOf, TagError, type TagValue,
 } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
@@ -13,7 +13,9 @@ import {
   droppedPaths, dropRoute, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor,
 } from '../files/nodeFiles.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../files/tags.ts';
+import type { LatexRegistry, Origin } from '../latex/registry.ts';
 import { ContextMenu } from './ContextMenu.tsx';
+import { LatexField } from './latex/LatexField.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
 
 const KIND: Record<FileKind, string> = { image: 'image', pdf: 'PDF', tex: 'LaTeX', text: 'texte', table: 'tableau', other: 'autre' };
@@ -293,17 +295,20 @@ function Files(props: {
 
 /**
  * A node's pop-up (spec 12), in a floating panel: its title in the header, typed in place (Enter or leaving the field
- * keeps it, Escape gives it up); its summary as LaTeX source, kept on leaving the field; its tags; its metadata (history,
- * plans, knowledge connections, identifier); its files (Files), each opened in a preview or in full screen
- * (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). `found`: the node as resolveTarget finds
- * it, null once it is gone (Review Focus 5). An edit the session refuses (in a toast) puts its field back to the node's
- * value.
+ * keeps it, Escape gives it up); its summary compiled, edited in place with its preview under it (LatexField, plan 4b,
+ * task 6: kept on leaving the field, given up by Escape), a link in it opening its node's pop-up (`onNodeLink`); its
+ * tags; its metadata (history, plans, knowledge connections, identifier); its files (Files), each opened in a preview
+ * or in full screen (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). `found`: the node as
+ * resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses (in a toast) puts its
+ * field back to the node's value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile;
+  registry: LatexRegistry | null; onNodeLink(node: Id): void;
 }) {
   const { id, found: n, state: s } = props;
+  const summary = useMemo<Origin>(() => ({ kind: 'summary', node: id }), [id]);
   const history = useHistory(id, props.rev, props.action);
   // The last title seen stays in the header once the node is gone; a refused edit reads the node as it is by then.
   const lastTitle = useRef('');
@@ -345,10 +350,9 @@ export function NodePopup(props: {
     return (
       <>
         <h4>Résumé (LaTeX)</h4>
-        <textarea
-          key={`r${n.summary}`} defaultValue={n.summary} rows={4} placeholder="Résumé, en LaTeX" spellCheck={false}
-          onBlur={(e) => { const v = e.target.value; if (v !== n.summary) commit(e.target, summaryBuild(id, v), (x) => x.summary); }}
-          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); } }}
+        <LatexField
+          origin={summary} value={n.summary} placeholder="Résumé, en LaTeX" rows={4} state={s} registry={props.registry} params={props.params}
+          onCommit={(t) => props.onEdit(summaryBuild(id, t))} onNodeLink={props.onNodeLink}
         />
         <h4>Tags</h4>
         <Tags s={s} id={id} tags={n.tags} suggested={props.params.tagSuggestions} onEdit={props.onEdit} />

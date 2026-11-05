@@ -1,7 +1,10 @@
 import { type Id, placementKey, type Role, type State } from '@cirrus/core';
-import { nodeSuggestions } from '@cirrus/view';
-import { useEffect, useRef, useState } from 'react';
+import { nodeSuggestions, type RenderParams } from '@cirrus/view';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { type Build, connectionTextBuild, roleBuild } from '../actions.ts';
+import type { LatexRegistry, Origin } from '../latex/registry.ts';
+import { LatexField } from './latex/LatexField.tsx';
+import type { Rect } from './panels/geometry.ts';
 
 const ROLES: { value: Role; label: string }[] = [
   { value: 'source', label: 'source' }, { value: 'target', label: 'cible' }, { value: 'associate', label: 'associé' },
@@ -9,17 +12,21 @@ const ROLES: { value: Role; label: string }[] = [
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 
 /**
- * The connection's pop-up (spec 8.5, 11.2), at the click: title, relation as plain text (its LaTeX preview comes with
- * plan 4), the members with their roles, those not shown in this plan greyed. A line standing for several connections
- * lists them first. Adding or removing a member goes through the graph, which asks « partout ou ici seulement ».
+ * The connection's pop-up (spec 8.5, 11.2), at the click: title, relation compiled and edited in place with its
+ * preview under it (LatexField, plan 4b, task 6; a link in it opens its node's pop-up beside this one, `onNodeLink`),
+ * the members with their roles, those not shown in this plan greyed. A line standing for several connections lists
+ * them first. Adding or removing a member goes through the graph, which asks « partout ou ici seulement ». `onEdit`
+ * resolves with whether the edit was written.
  */
 export function ConnectionPopup(props: {
-  state: State; plan: Id; connections: Id[]; x: number; y: number;
-  onEdit(build: Build): void; onAddMember(connection: Id, node: Id): void; onRemoveMember(connection: Id, node: Id): void; onClose(): void;
+  state: State; plan: Id; connections: Id[]; x: number; y: number; registry: LatexRegistry | null; params: RenderParams;
+  onEdit(build: Build): Promise<boolean>; onAddMember(connection: Id, node: Id): void; onRemoveMember(connection: Id, node: Id): void; onClose(): void;
+  onNodeLink(node: Id, near: Rect): void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [current, setCurrent] = useState<Id | null>(props.connections.length === 1 ? props.connections[0] : null);
   const [adding, setAdding] = useState<string | null>(null);
+  const relation = useMemo<Origin | null>(() => (current ? { kind: 'relation', connection: current } : null), [current]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') props.onClose(); };
     // A click elsewhere closes it, except in the question it asked.
@@ -28,6 +35,11 @@ export function ConnectionPopup(props: {
     window.addEventListener('pointerdown', away, true);
     return () => { window.removeEventListener('keydown', key); window.removeEventListener('pointerdown', away, true); };
   }, []);
+  /** A link clicked in the relation: its node's pop-up beside this one. */
+  const nodeLink = (node: Id) => {
+    const r = ref.current?.getBoundingClientRect();
+    props.onNodeLink(node, r ? { x: r.left, y: r.top, w: r.width, h: r.height } : { x: props.x, y: props.y, w: 0, h: 0 });
+  };
 
   const s = props.state;
   const c = current ? s.connections.get(current) : undefined;
@@ -45,7 +57,7 @@ export function ConnectionPopup(props: {
     if (!c || c.trashedAt !== undefined) return <p className="dim">Cette connexion n’existe plus.</p>;
     const commit = (patch: { title?: string; relation?: string }) => {
       const changed = (patch.title !== undefined && patch.title !== c.title) || (patch.relation !== undefined && patch.relation !== c.relation);
-      if (changed) props.onEdit(connectionTextBuild(c.id, patch));
+      if (changed) void props.onEdit(connectionTextBuild(c.id, patch));
     };
     const members = new Set(c.members.map((m) => m.node));
     const found = adding === null ? [] : nodeSuggestions(s, adding, members, 8);
@@ -53,8 +65,10 @@ export function ConnectionPopup(props: {
       <>
         <input key={`t${c.title}`} className="title" defaultValue={c.title} placeholder="Titre (facultatif)"
           onBlur={(e) => commit({ title: e.target.value.trim() })} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
-        <textarea key={`r${c.relation}`} defaultValue={c.relation} placeholder="Relation (LaTeX)" rows={3}
-          onBlur={(e) => commit({ relation: e.target.value })} />
+        <LatexField
+          key={c.id} origin={relation!} value={c.relation} placeholder="Relation (LaTeX)" rows={3} state={s} registry={props.registry} params={props.params}
+          onCommit={(t) => props.onEdit(connectionTextBuild(c.id, { relation: t }))} onNodeLink={nodeLink}
+        />
         <h4>Membres</h4>
         <ul>
           {c.members.map((m) => {
@@ -63,7 +77,7 @@ export function ConnectionPopup(props: {
             return (
               <li key={m.node} className={shown ? '' : 'dim'} title={shown ? undefined : 'Pas affiché dans ce plan'}>
                 <span className="name">{s.nodes.get(m.node)?.title ?? '?'}{shown && !placed ? ' (amorce)' : ''}</span>
-                <select value={m.role} onChange={(e) => props.onEdit(roleBuild(c.id, m.node, e.target.value as Role))}>
+                <select value={m.role} onChange={(e) => void props.onEdit(roleBuild(c.id, m.node, e.target.value as Role))}>
                   {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
                 <button className="remove" title="Retirer de la connexion" onClick={() => props.onRemoveMember(c.id, m.node)}>×</button>

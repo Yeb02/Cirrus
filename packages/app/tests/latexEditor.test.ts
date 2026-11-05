@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { type Action, applyOps, CITE_KEY_TAG, editNode, type State, type TexError } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
+import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { fileKind } from '../src/renderer/files/kind.ts';
 import { LatexRegistry, type Origin } from '../src/renderer/latex/registry.ts';
 import { buildRequest } from '../src/renderer/latex/request.ts';
 import { scanTex } from '../src/renderer/latex/scan.ts';
-import { completionsFor, diagnosticsFor, refContext } from '../src/renderer/ui/latex/editorLogic.ts';
+import { completionsFor, diagnosticsFor, lineStartOf, refContext, suggestionOptions } from '../src/renderer/ui/latex/editorLogic.ts';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
 let dir: string, store: LocalStore, ids: FixtureIds;
@@ -132,4 +133,17 @@ test('diagnosticsFor : un nom coupé par un commentaire est marqué sur toute sa
   expect(diagnosticsFor(scanTex(text), req, registry, own, null, lineStarts(text))).toEqual([
     { from: 5, to: text.length - 1, severity: 'error', message: 'Label inconnu : absent' },
   ]);
+});
+
+test('lineStartOf : le premier caractère d’une ligne, comptée à partir de 1 ; la longueur + 1 après la dernière', () => {
+  const text = 'a\nbc\n\nd';
+  const expected = lineStarts(text);
+  for (let line = 1; line <= 6; line++) expect(lineStartOf(text, line), String(line)).toBe(expected(line));
+  expect(lineStartOf('', 1)).toBe(0);
+  expect(lineStartOf('', 2)).toBe(1);
+});
+
+test('suggestionOptions : le nombre de suggestions montrées et leur délai sont des réglages (plan 4b, tâche 6)', () => {
+  expect(suggestionOptions(DEFAULT_PARAMS)).toEqual({ maxRenderedOptions: 100, activateOnTypingDelay: 100 });
+  expect(suggestionOptions({ ...DEFAULT_PARAMS, latexSuggestionsMax: 30, latexSuggestionDelayMs: 0 })).toEqual({ maxRenderedOptions: 30, activateOnTypingDelay: 0 });
 });

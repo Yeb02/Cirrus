@@ -154,6 +154,8 @@ test('jobBody : un titre passe par titleToTex ; un label refusé par safeLabel, 
 test('jobBody : en mode snippet, la source composée dans une boîte de la largeur réglée, émise seule sur une page à sa taille', () => {
   const body = jobBody(req({ mode: 'snippet' }), SRC, 9.5);
   for (const s of ['\\hsize=9.5cm', '\\parindent=0pt', `\\input{${SRC}}`, '\\pdfpagewidth=\\wd', '\\pdfpageheight=', '\\shipout']) expect(body, s).toContain(s);
+  // At least a strut's depth under the last baseline (plan 4b, task 6): a last line without descenders keeps its ink.
+  expect(body).toContain('\\ifdim\\dimen@<\\dp\\strutbox\\dimen@=\\dp\\strutbox\\fi');
   const page = jobBody(req({ mode: 'page' }), SRC, 9.5);
   expect(page).toContain(`\\input{${SRC}}`);
   expect(page).not.toContain('\\shipout');

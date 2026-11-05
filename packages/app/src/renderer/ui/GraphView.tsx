@@ -24,7 +24,9 @@ import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
+import type { Rect } from './panels/geometry.ts';
 import { carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
+import type { LatexRegistry } from '../latex/registry.ts';
 
 /** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
 export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
@@ -94,6 +96,11 @@ export function GraphView(props: {
   onClickAway(): void;
   /** Files dropped on a node or a group (plan 4a, task 4): their paths, and those refused already (App's importInto). */
   onDropFiles(node: Id, paths: string[], refused?: Refusal[]): Promise<void>;
+  /**
+   * The labels and keys of the base, for a connection's relation compiled in its pop-up (plan 4b: App's, null until
+   * built); a link to a node clicked in it opens that node's pop-up beside it (`onNodeLink`, App's).
+   */
+  registry: LatexRegistry | null; onNodeLink(node: Id, near: Rect): void;
   ref?: Ref<GraphHandle>;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -1412,7 +1419,8 @@ export function GraphView(props: {
       {popup && (
         <ConnectionPopup
           key={`${popup.connections.join()}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connections={popup.connections} x={popup.x} y={popup.y}
-          onEdit={(b) => edit(b)} onClose={() => setPopup(null)} onRemoveMember={removeMember}
+          registry={props.registry} params={props.params} onNodeLink={props.onNodeLink}
+          onEdit={(b) => edit(b).then((r) => r !== null && r.ok)} onClose={() => setPopup(null)} onRemoveMember={removeMember}
           onAddMember={(connection, node) => askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
             otherPlans(stateRef.current, props.plan, [node], connection), (everywhere) => edit(addMemberBuild(props.plan, connection, node, everywhere)))}
         />

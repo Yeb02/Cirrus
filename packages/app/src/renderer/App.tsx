@@ -17,6 +17,7 @@ import type { WorkbenchHandle } from './ui/latex/TexWorkbench.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
+import type { Rect } from './ui/panels/geometry.ts';
 import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
@@ -25,6 +26,7 @@ import { type Toast, Toasts } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
 
 const TABS_KEY = 'cirrus.tabs';
+const NODE_GONE = 'Ce nœud n’existe plus.';
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 const NO_TEXTS: ReadonlyMap<string, string> = new Map();
@@ -236,7 +238,8 @@ export function App() {
   }, [state, rev, params.textViewMaxMb]);
 
   // The registry, built again when the state or the texts change, at most once per typing pause: at once after a
-  // quiet moment, else once the pause since the last build is over, with the state as it then is.
+  // quiet moment, else once the pause since the last build is over, with the state as it then is. A build waiting is
+  // counted among what the views load: a capture waits for the compilations it changes (plan 4b, task 6).
   useEffect(() => {
     if (!state) return;
     const build = () => {
@@ -249,8 +252,10 @@ export function App() {
       build();
       return;
     }
-    const timer = setTimeout(build, wait);
-    return () => clearTimeout(timer);
+    let done = () => {};
+    void loading(new Promise<void>((resolve) => { done = resolve; }));
+    const timer = setTimeout(() => { build(); done(); }, wait);
+    return () => { clearTimeout(timer); done(); };
   }, [state, rev, texts, params.latexTypingPauseMs]);
 
   /** Captures wait for the first drawn frame; a due snapshot waits for it too (R16). */
@@ -309,6 +314,14 @@ export function App() {
   }
   // The lobby has its own tab, always there: only another plan is added to the open ones.
   const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
+  /**
+   * A link to a node clicked in a summary, a relation or a PDF (plan 4b, D7): the node's pop-up, loose, beside the
+   * panel `near` it was clicked in, or in front if it is open (openLinked); a node gone, or in the trash, says so.
+   */
+  const nodeLink = (node: Id, near: Rect) => {
+    if (resolveTarget(state, { kind: 'node', node })) panels.current?.openLinked(node, near);
+    else toast(NODE_GONE);
+  };
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
   /**
@@ -360,13 +373,14 @@ export function App() {
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onOpenPlan={openPlan}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
-            onDropFiles={files.importInto} ref={graph}
+            onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} ref={graph}
           />
         </GraphBoundary>
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
         <Panels
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
+          onNodeLink={nodeLink}
         />
         <Toasts toasts={toasts} />
       </div>
@@ -377,6 +391,7 @@ export function App() {
         >
           <FullScreen
             node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
+            nodeTitle={(id) => { const n = resolveTarget(state, { kind: 'node', node: id })?.node; return n ? n.title || 'Sans titre' : null; }}
             tex={{
               state, registry, workbench,
               onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),

@@ -3,7 +3,8 @@
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
 // suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes) and docs/captures/plan4a (those new in
 // plan 4a), each compared on its own images. A folder that already holds files is refused, so a reference is never
-// replaced by mistake; --replace removes its captures first (to remake a reference on purpose).
+// replaced by mistake; --replace removes its captures first (to remake a reference on purpose). LaTeX is compiled by
+// the bench's TinyTeX (CIRRUS_TINYTEX), which must be there; the app takes each image once its compilations are done.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -21,6 +22,13 @@ if (targets.length !== 1 || args.some((a) => a.startsWith('--') && a !== '--repl
   process.exit(2);
 }
 const out = resolve(process.env.INIT_CWD ?? process.cwd(), targets[0]);
+// Plan 4b: summaries and relations are compiled, by the bench's TinyTeX (never the user's, never a download). Without
+// it, a capture would show the sources instead: refused.
+const tinyTex = join(appDir, '..', '..', 'bench', 'latex', 'vendor', 'TinyTeX');
+if (!existsSync(join(tinyTex, 'bin', 'windows', 'pdflatex.exe'))) {
+  console.error(`Pas de TinyTeX dans ${tinyTex} : les captures compilent les résumés avec la TinyTeX du banc (bench/latex).`);
+  process.exit(2);
+}
 if (existsSync(out) && readdirSync(out).length > 0) {
   if (!replace) {
     console.error(`${out} n’est pas vide : choisis un dossier neuf, ou --replace pour remplacer ses captures.`);
@@ -108,7 +116,7 @@ for (const s of SCENES) {
     execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     fixHistoryTimes(data);
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
-    const env = { ...env0, CIRRUS_DATA: data, CIRRUS_CAPTURE: join(out, `${s.name}.png`), CIRRUS_SIZE: SIZE };
+    const env = { ...env0, CIRRUS_DATA: data, CIRRUS_CAPTURE: join(out, `${s.name}.png`), CIRRUS_SIZE: SIZE, CIRRUS_TINYTEX: tinyTex };
     for (const [key, name] of [['plan', 'CIRRUS_PLAN'], ['view', 'CIRRUS_VIEW'], ['hover', 'CIRRUS_HOVER'], ['pointer', 'CIRRUS_POINTER'], ['keys', 'CIRRUS_KEYS'], ['click', 'CIRRUS_CLICK']]) {
       if (s[key]) env[name] = s[key];
     }

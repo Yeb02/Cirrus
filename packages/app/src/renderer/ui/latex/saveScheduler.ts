@@ -3,6 +3,7 @@ import { texSaveBuild, texSaveRefusal, UP_TO_DATE } from '../../actions.ts';
 import { nameKey } from '../../files/merge.ts';
 import type { Timers } from '../../latex/scheduler.ts';
 import { type EditSession, messageOf } from '../../session.ts';
+import type { Question } from '../Dialogs.tsx';
 
 /** Where a .tex's saves stand (TexWorkbench's banner): `saved`, one went through since it opened; `failure`, why the last was refused. */
 export interface SaveState { dirty: boolean; saving: boolean; saved: boolean; failure: string | null }
@@ -144,4 +145,18 @@ export async function saveTex(
   if (!build) return { ok: true };
   const r = await session.run(build, { merge: texMergeKey(node, name) });
   return r.ok || r.message === UP_TO_DATE ? { ok: true } : { ok: false, message: r.message };
+}
+
+/**
+ * The question a full screen asks before leaving a .tex whose text could not be saved (`failure`, why): close without
+ * saving (`close`), or stay. « Annuler » has the focus (task 5 review): Enter never throws the text away.
+ */
+export function unsavedQuestion(name: string, failure: string | null, close: () => void): Question {
+  return {
+    text: 'Fermer sans enregistrer ?',
+    detail: `Le texte tapé dans « ${name} » n’est pas enregistré${failure ? ` : ${failure}` : '.'}`,
+    choices: [{ value: 'close', label: 'Fermer sans enregistrer' }],
+    focusCancel: true,
+    answer: (v) => { if (v === 'close') close(); },
+  };
 }

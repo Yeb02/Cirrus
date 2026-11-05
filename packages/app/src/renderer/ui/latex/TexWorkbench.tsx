@@ -1,6 +1,6 @@
-import type { FileRef, NodeRec, State } from '@cirrus/core';
+import type { FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
-import { type Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { type Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { decodeText } from '../../files/decode.ts';
 import type { ViewRef } from '../../files/kind.ts';
 import { loading, MB, readHead } from '../../files/read.ts';
@@ -14,9 +14,9 @@ import { Banner, BINARY, Message, Notice, readFailure } from '../viewers/common.
 import { PdfViewer } from '../viewers/PdfViewer.tsx';
 import { TextViewer } from '../viewers/TextViewer.tsx';
 import { CompileLog, errorText } from './CompileLog.tsx';
-import { diagnosticsFor } from './editorLogic.ts';
+import { diagnosticsFor, lineStartOf } from './editorLogic.ts';
 import { LatexEditor } from './LatexEditor.tsx';
-import { type SaveAnswer, SaveScheduler, type SaveState } from './saveScheduler.ts';
+import { type SaveAnswer, SaveScheduler, type SaveState, unsavedQuestion } from './saveScheduler.ts';
 
 /** What App and FullScreen ask of the workbench open: whether its text is unsaved, its last save (closing the window), its leaving. */
 export interface WorkbenchHandle {
@@ -27,17 +27,6 @@ export interface WorkbenchHandle {
 }
 
 const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms), clear: (h: unknown) => window.clearTimeout(h as number) };
-
-/** The first offset of a 1-based line of `text`; the text's length + 1 past its last line (diagnosticsFor). */
-function lineStart(text: string, line: number): number {
-  let at = 0;
-  for (let k = 1; k < line; k++) {
-    const nl = text.indexOf('\n', at);
-    if (nl < 0) return text.length + 1;
-    at = nl + 1;
-  }
-  return at;
-}
 
 /** The file as it opened: its text to edit; too long, shown without being editable; binary or unreadable, why. */
 type Opened = { text: string } | { tooLong: string } | { message: string };
@@ -50,11 +39,13 @@ type Opened = { text: string } | { tooLong: string } | { message: string };
  * the error takes the editor to its line). The file is read once by readHead and decoded, its line breaks as the
  * editor reads them (« \n »): a text cut by textViewMaxMb, or a binary, is shown without being editable, with why.
  * The text is saved by `onSave` (SaveScheduler: at the pause of texSaveIdleMs, Ctrl+S, closing); leaving goes through
- * requestClose, and App flushes it before the window closes.
+ * requestClose, and App flushes it before the window closes. A link to a node clicked in the preview goes to
+ * `onNodeLink` (the full screen's: plan 4b, task 6). The preview is given the same props while the text is typed, so
+ * that typing does not draw it again (task 5 review).
  */
 export function TexWorkbench(props: {
   node: NodeRec; file: FileRef; state: State; registry: LatexRegistry; params: RenderParams; views: ViewStates;
-  onSave(text: string): Promise<SaveAnswer>; onClose(): void; ref?: Ref<WorkbenchHandle>;
+  onSave(text: string): Promise<SaveAnswer>; onClose(): void; onNodeLink?(node: Id): void; ref?: Ref<WorkbenchHandle>;
 }) {
   const { node, file, params, registry } = props;
   const [opened, setOpened] = useState<Opened | null>(null);
@@ -138,9 +129,11 @@ export function TexWorkbench(props: {
   }, [text, registry, origin]);
   const view = useCompiled(req, params.latexTypingPauseMs);
   const diagnostics = useMemo(
-    () => (text === null || req === null ? [] : diagnosticsFor(registry.scanOf(origin, text), req, registry, origin, view.error, (n) => lineStart(text, n))),
+    () => (text === null || req === null ? [] : diagnosticsFor(registry.scanOf(origin, text), req, registry, origin, view.error, (n) => lineStartOf(text, n))),
     [req, view.error],
   );
+  const live = useMemo(() => ({ keptAs: `latex:${slot}` }), [slot]);
+  const onNodeLink = useCallback((id: Id) => latest.current.onNodeLink?.(id), []);
   const pdf = useMemo<ViewRef | null>(
     () => (view.pdf ? { name: `${file.name.replace(/\.tex$/i, '')}.pdf`, hash: view.pdf.key, size: view.pdf.size, store: 'latex' } : null),
     [view.pdf?.key],
@@ -169,14 +162,14 @@ export function TexWorkbench(props: {
       <div className="tex-panes">
         <div className="tex-source">
           <LatexEditor
-            value={text!} registry={registry} diagnostics={diagnostics} autoFocus ariaLabel={file.name} jumpTo={jump}
+            value={text!} registry={registry} diagnostics={diagnostics} params={params} autoFocus ariaLabel={file.name} jumpTo={jump}
             onChange={(t) => { setText(t); scheduler.current?.edit(t); }}
             onSave={() => { void scheduler.current?.saveNow(); }}
           />
         </div>
         <div className="tex-preview">
           {pdf
-            ? <PdfViewer file={pdf} params={params} views={props.views} mode="preview" live={{ keptAs: `latex:${slot}` }} />
+            ? <PdfViewer file={pdf} params={params} views={props.views} mode="preview" live={live} onNodeLink={onNodeLink} />
             : <Message text={view.unavailable?.message ?? (view.error && !view.pending ? errorText(view.error) : 'Compilation…')} />}
           {logOpen && (
             <CompileLog
@@ -189,17 +182,11 @@ export function TexWorkbench(props: {
       {asking && (
         <AskDialog
           onClose={() => setAsking(false)}
-          q={{
-            text: 'Fermer sans enregistrer ?',
-            detail: `Le texte tapé dans « ${file.name} » n’est pas enregistré${saving.failure ? ` : ${saving.failure}` : '.'}`,
-            choices: [{ value: 'close', label: 'Fermer sans enregistrer' }],
-            answer: (v) => {
-              if (v !== 'close') return;
-              scheduler.current?.dispose();
-              scheduler.current = null;
-              latest.current.onClose();
-            },
-          }}
+          q={unsavedQuestion(file.name, saving.failure, () => {
+            scheduler.current?.dispose();
+            scheduler.current = null;
+            latest.current.onClose();
+          })}
         />
       )}
     </div>

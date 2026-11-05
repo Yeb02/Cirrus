@@ -16,11 +16,12 @@ const ExpandIcon = () => (
  * shows it in full screen. `found`: the file as resolveTarget finds it by its name, null once it is gone (Review Focus 5):
  * the panel says why (`gone`), its last name in the header. While its content is in full screen (`covered`: views keep
  * their place by content), its view here is left, its place kept, and comes back where the full screen leaves it.
- * A .tex shows its compiled PDF (plan 4b, task 5: `latex`, App's state and registry).
+ * A .tex shows its compiled PDF (plan 4b, task 5: `latex`, App's state and registry); a link to a node clicked in a
+ * PDF goes to `onNodeLink` (task 6).
  */
 export function FilePreview(props: {
   frame: Frame; node: Id; found: FileRef | null; gone: string; covered: boolean; params: RenderParams; views: ViewStates; latex: LatexContext;
-  onFull(): void;
+  onFull(): void; onNodeLink(node: Id): void;
 }) {
   const f = props.found;
   const lastName = useRef('');
@@ -31,7 +32,12 @@ export function FilePreview(props: {
     <FloatingPanel frame={props.frame} className="file-preview" title={title} tools={tools}>
       {!f ? <p className="dim gone">{props.gone}</p>
         : props.covered ? null
-        : <Viewer key={f.hash} file={f} node={props.node} mode="preview" params={props.params} views={props.views} latex={props.latex} />}
+        : (
+          <Viewer
+            key={f.hash} file={f} node={props.node} mode="preview" params={props.params} views={props.views} latex={props.latex}
+            onNodeLink={props.onNodeLink}
+          />
+        )}
     </FloatingPanel>
   );
 }

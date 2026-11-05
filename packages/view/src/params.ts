@@ -186,8 +186,10 @@ export interface RenderParams {
   latexWarmProcesses: number;
   /** A compilation running longer is stopped (an infinite loop, Review Focus 3). */
   latexTimeoutMs: number;
-  /** A summary or a relation is compiled this wide, its height following its content (D3). */
+  /** A summary or a relation is compiled this wide, its height following its content (D3), */
   latexSnippetWidthCm: number;
+  /** and drawn at its pop-up's width, enlarged no more than this (plan 4b, task 6). */
+  latexSnippetMaxZoom: number;
   /** The local cache of the compiled PDFs (D2), the one used longest ago removed first, */
   latexCacheMb: number;
   /** each with the end of its log, this long at most. */
@@ -196,6 +198,9 @@ export interface RenderParams {
   latexTypingPauseMs: number;
   /** A .tex typed in its full screen is saved once typing has paused this long (D6), and at Ctrl+S and closing. */
   texSaveIdleMs: number;
+  /** The LaTeX editor's suggestions of labels and keys: how many are drawn at most, and how long after a key they are asked. */
+  latexSuggestionsMax: number;
+  latexSuggestionDelayMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -344,10 +349,13 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexWarmProcesses: 2,
   latexTimeoutMs: 10_000,
   latexSnippetWidthCm: 9,
+  latexSnippetMaxZoom: 1.6,
   latexCacheMb: 500,
   latexLogMaxKb: 256,
   latexTypingPauseMs: 300,
   texSaveIdleMs: 10_000,
+  latexSuggestionsMax: 100,
+  latexSuggestionDelayMs: 100,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -526,10 +534,13 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexWarmProcesses', 'pdfLaTeX préparés d’avance', A, 'LaTeX', 1, 4, 1),
   num('latexTimeoutMs', 'Durée maximale d’une compilation (ms)', A, 'LaTeX', 1000, 120_000, 100),
   num('latexSnippetWidthCm', 'Largeur du résumé et de la relation compilés (cm)', A, 'LaTeX', 4, 20, 0.5),
+  num('latexSnippetMaxZoom', 'Agrandissement maximal du résumé compilé', A, 'LaTeX', 0.5, 4, 0.1),
   num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'LaTeX', 16, 4096, 16),
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'LaTeX', 50, 3000, 10),
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'LaTeX', 1000, 600_000, 500),
+  num('latexSuggestionsMax', 'Suggestions de labels et de clés montrées dans l’éditeur LaTeX', A, 'LaTeX', 10, 1000, 10),
+  num('latexSuggestionDelayMs', 'Délai avant les suggestions de l’éditeur LaTeX (ms)', A, 'LaTeX', 0, 1000, 10),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

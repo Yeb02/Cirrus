@@ -1,4 +1,5 @@
 import type { CompileRequest, TexError } from '@cirrus/core';
+import type { RenderParams } from '@cirrus/view';
 import { type LatexRegistry, type Origin, slotOf } from '../../latex/registry.ts';
 import { CITES, REF_LISTS, REFS, type TexMark, type TexScan } from '../../latex/scan.ts';
 
@@ -110,6 +111,25 @@ function choicesOf(kind: RefContext['kind'], registry: LatexRegistry): Choice[] 
 export function completionsFor(ctx: RefContext, registry: LatexRegistry): { label: string; detail: string }[] {
   const prefix = folded(ctx.prefix);
   return choicesOf(ctx.kind, registry).filter((c) => c.key.startsWith(prefix)).map(({ label, detail }) => ({ label, detail }));
+}
+
+/**
+ * How many suggestions CodeMirror draws, and how long after a key it asks for them (its maxRenderedOptions and
+ * activateOnTypingDelay): settings (latexSuggestionsMax, latexSuggestionDelayMs), its own values by default.
+ */
+export function suggestionOptions(p: Pick<RenderParams, 'latexSuggestionsMax' | 'latexSuggestionDelayMs'>): { maxRenderedOptions: number; activateOnTypingDelay: number } {
+  return { maxRenderedOptions: p.latexSuggestionsMax, activateOnTypingDelay: p.latexSuggestionDelayMs };
+}
+
+/** The first offset of a 1-based line of `text`; the text's length + 1 past its last line (diagnosticsFor's `lineStart`). */
+export function lineStartOf(text: string, line: number): number {
+  let at = 0;
+  for (let k = 1; k < line; k++) {
+    const nl = text.indexOf('\n', at);
+    if (nl < 0) return text.length + 1;
+    at = nl + 1;
+  }
+  return at;
 }
 
 /** A diagnostic of the editor (@codemirror/lint's), its offsets in the source. */

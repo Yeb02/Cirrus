@@ -1,6 +1,8 @@
 import type { CompileAnswer, CompiledPdf, CompileRequest, KnownLabel } from '@cirrus/core';
 import { expect, test } from 'vitest';
+import { loading, viewsSettled } from '../src/renderer/files/read.ts';
 import { CompileScheduler, type CompiledView, knownLabels } from '../src/renderer/latex/scheduler.ts';
+import { PendingHold } from '../src/renderer/latex/useCompiled.ts';
 
 const PAUSE = 300;
 
@@ -190,4 +192,40 @@ test('CompileScheduler : LaTeX indisponible, un pont qui échoue, null puis la m
   advance(PAUSE);
   expect(views).toHaveLength(seen);
   expect(sent).toHaveLength(4);
+});
+
+test('PendingHold : une compilation demandée, sa pause comprise, compte parmi ce que les vues chargent, et une capture l’attend (plan 4b, tâche 6)', async () => {
+  const hold = new PendingHold();
+  hold.set(true);
+  hold.set(true);
+  let settled = false;
+  const waiting = viewsSettled().then(() => { settled = true; });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(settled).toBe(false);
+  hold.set(false);
+  await waiting;
+  expect(settled).toBe(true);
+  // Let go when not held: nothing; held again then let go: settled again.
+  hold.set(false);
+  hold.set(true);
+  const again = viewsSettled();
+  hold.set(false);
+  await again;
+});
+
+test('viewsSettled : ce qu’une lecture finie fait commencer au tour suivant (le rendu de React, ses effets) est attendu aussi (plan 4b, tâche 6)', async () => {
+  // A compilation answers; React renders the snippet a task later, which starts reading the PDF: the capture waits for
+  // that reading too, not only for the compilation.
+  const steps: string[] = [];
+  let release = () => {};
+  void loading(new Promise<void>((r) => { release = r; })).then(() => {
+    setTimeout(() => {
+      steps.push('lecture du PDF commencée');
+      void loading(new Promise<void>((r) => setTimeout(r, 40))).then(() => steps.push('PDF dessiné'));
+    }, 0);
+  });
+  const waiting = viewsSettled().then(() => steps.push('prêt'));
+  release();
+  await waiting;
+  expect(steps).toEqual(['lecture du PDF commencée', 'PDF dessiné', 'prêt']);
 });

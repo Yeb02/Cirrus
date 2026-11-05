@@ -57,10 +57,19 @@ export function loading<T>(p: Promise<T>): Promise<T> {
 }
 
 /**
+ * A quiet turn after the last load settled, for what it made React render, and that render's effects, to start their
+ * own loads (a compilation answered: its snippet's chunk, then its PDF). A wait of the capture harness, not a setting.
+ */
+const QUIET_MS = 50;
+
+/**
  * Once nothing the views load is pending: a capture waits for it before it is taken (CIRRUS_CLICK opens a view, whose
  * file, code and language arrive later), so that it shows the view as it settles. What a settled load starts is waited
- * for too.
+ * for too, at once or after the render it causes (QUIET_MS).
  */
 export async function viewsSettled(): Promise<void> {
-  while (pending.size > 0) await Promise.allSettled([...pending]);
+  do {
+    while (pending.size > 0) await Promise.allSettled([...pending]);
+    await new Promise((r) => setTimeout(r, QUIET_MS));
+  } while (pending.size > 0);
 }

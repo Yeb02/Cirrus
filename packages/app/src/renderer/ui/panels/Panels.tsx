@@ -46,6 +46,16 @@ export function withNode(panels: Panel[], node: Id, rect: Rect, id: number): Pan
   return own ? kept.map((p) => (p === own ? { ...p, z } : p)) : [...kept, { id, target: { kind: 'node', node }, rect, pinned: false, z }];
 }
 
+/**
+ * A node's pop-up opened by a link (plan 4b, task 6: a \ref or a \cite compiled, clicked in a summary, a relation or a
+ * PDF): loose, in front, at `rect`; no panel closes — the one the link was clicked in is being read. A node whose
+ * pop-up is open already, pinned or not, gets no second one: that one comes in front, where it is.
+ */
+export function withLinked(panels: Panel[], node: Id, rect: Rect, id: number): Panel[] {
+  const z = front(panels), own = panels.find((p) => isNode(p, node));
+  return own ? panels.map((p) => (p === own ? { ...p, z } : p)) : [...panels, { id, target: { kind: 'node', node }, rect, pinned: false, z }];
+}
+
 const isFile = (p: Panel, node: Id, name: string) => p.target.kind === 'file' && p.target.node === node && sameName(p.target.name, name);
 
 /**
@@ -114,12 +124,22 @@ export function previewRect(
   return clampRect(placeBeside(near, size, bounds, p.panelGapPx), bounds, p.panelMinPx);
 }
 
+/** Where a linked node's pop-up opens (withLinked): beside the panel `near` the link was clicked in, at a pop-up's size. */
+export function linkedRect(
+  near: Rect, p: Pick<RenderParams, 'popupWidthPx' | 'popupHeightPx' | 'panelMinPx' | 'panelGapPx'>, bounds: Rect,
+): Rect {
+  const size = { w: Math.max(p.panelMinPx, p.popupWidthPx), h: Math.max(p.panelMinPx, p.popupHeightPx) };
+  return clampRect(placeBeside(near, size, bounds, p.panelGapPx), bounds, p.panelMinPx);
+}
+
 /** What App asks of the panels. */
 export interface PanelsHandle {
   /** A click on a node (GraphView), at this point of the window. */
   openNode(node: Id, client: { x: number; y: number }): void;
   /** A file's preview, beside the panel `near` (its node's pop-up). */
   openFile(node: Id, name: string, near: Rect): void;
+  /** A node's pop-up a link leads to, beside the panel `near` it was clicked in (withLinked). */
+  openLinked(node: Id, near: Rect): void;
   /** Any other click in the graph. */
   closeLoose(): void;
 }
@@ -136,7 +156,9 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), the panels are under it:
  * Escape and a press there are its own, and a preview of that file leaves its view to it. Each panel has its own
  * PanelBoundary: one that fails says so in its frame, which still moves and closes; the others and the window stay.
- * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built).
+ * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built), and so are the
+ * pop-ups' summaries; a link to a node clicked in a panel goes to `onNodeLink`, with that panel's place (App's: it
+ * opens the node's pop-up beside it, openLinked).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -144,6 +166,7 @@ export function Panels(props: {
   state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
+  onNodeLink(node: Id, near: Rect): void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -181,6 +204,10 @@ export function Panels(props: {
       apply((ps) => withNode(ps, node, rect, id));
     },
     openFile,
+    openLinked: (node, near) => {
+      const id = nextId.current++, rect = linkedRect(near, paramsRef.current, bounds());
+      apply((ps) => withLinked(ps, node, rect, id));
+    },
     closeLoose: () => apply(withoutLoose),
   }), []);
   useEffect(() => {
@@ -234,7 +261,7 @@ export function Panels(props: {
                 frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
                 covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
                 latex={{ state: props.state, registry: props.registry }}
-                onFull={() => { if (file) props.onFullScreen(node, file.name); }}
+                onFull={() => { if (file) props.onFullScreen(node, file.name); }} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               />
             </PanelBoundary>
           );
@@ -245,7 +272,7 @@ export function Panels(props: {
             <NodePopup
               frame={frame} id={node} found={resolveTarget(props.state, p.target)?.node ?? null}
               state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
-              files={props.files}
+              files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
             />
           </PanelBoundary>

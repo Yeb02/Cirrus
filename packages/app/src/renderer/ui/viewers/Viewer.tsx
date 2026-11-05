@@ -47,24 +47,24 @@ class ViewBoundary extends Component<{ name: string; children: ReactNode }, { fa
  * included), a table, a PDF (task 6). `node`: the node the file is shown for, as the plan's interface gives it; no
  * view reads it yet. Its parent keys it by the file's hash, so that a new version of the file is a new view. A view
  * that fails says so in its place (ViewBoundary). With `latex` (plan 4b, task 5: a preview), a .tex shows its compiled
- * PDF (TexPreview) instead of its source.
+ * PDF (TexPreview) instead of its source. A link to a node of the base clicked in a PDF goes to `onNodeLink` (task 6).
  */
-export function Viewer(props: ViewProps & { node: Id; latex?: LatexContext }) {
+export function Viewer(props: ViewProps & { node: Id; latex?: LatexContext; onNodeLink?(node: Id): void }) {
   return <ViewBoundary name={props.file.name}><ViewOf {...props} /></ViewBoundary>;
 }
 
 /** What a .tex's preview needs to be compiled (plan 4b, task 5): the state and the registry, App's (null until built). */
 export interface LatexContext { state: State; registry: LatexRegistry | null }
 
-function ViewOf(props: ViewProps & { node: Id; latex?: LatexContext }) {
+function ViewOf(props: ViewProps & { node: Id; latex?: LatexContext; onNodeLink?(node: Id): void }) {
   const view: ViewProps = { file: props.file, params: props.params, views: props.views, mode: props.mode };
-  if (props.latex && fileKind(props.file.name) === 'tex') return <TexPreview {...view} node={props.node} latex={props.latex} />;
+  if (props.latex && fileKind(props.file.name) === 'tex') return <TexPreview {...view} node={props.node} latex={props.latex} onNodeLink={props.onNodeLink} />;
   const choice = viewOf(props.file.name);
   switch (choice?.view) {
     case 'image': return <ImageViewer {...view} />;
     case 'table': return <TableViewer {...view} />;
     case 'text': return <Suspense fallback={<Notice text="Lecture…" />}><TextViewer {...view} wrap={choice.wrap} /></Suspense>;
-    case 'pdf': return <Suspense fallback={<Notice text="Lecture…" />}><PdfViewer {...view} /></Suspense>;
+    case 'pdf': return <Suspense fallback={<Notice text="Lecture…" />}><PdfViewer {...view} onNodeLink={props.onNodeLink} /></Suspense>;
     case undefined: return <Notice text="Cirrus n’a pas de vue pour ce genre de fichier." />;
   }
 }
@@ -80,7 +80,7 @@ type TexRead = { text: string } | { source: true } | { message: string };
  * compiled, or a binary, the source view saying why. Its text is read once (readHead); the registry not built yet, it
  * waits for it.
  */
-function TexPreview(props: ViewProps & { node: Id; latex: LatexContext }) {
+function TexPreview(props: ViewProps & { node: Id; latex: LatexContext; onNodeLink?(node: Id): void }) {
   const { file, params, latex } = props;
   const [read, setRead] = useState<TexRead | null>(null);
   useEffect(() => {
@@ -109,6 +109,7 @@ function TexPreview(props: ViewProps & { node: Id; latex: LatexContext }) {
     () => (compiled.pdf ? { name: `${file.name.replace(/\.tex$/i, '')}.pdf`, hash: compiled.pdf.key, size: compiled.pdf.size, store: 'latex' } : null),
     [compiled.pdf?.key],
   );
+  const live = useMemo(() => ({ keptAs: `latex:${slot}` }), [slot]);
   const view: ViewProps = { file, params, views: props.views, mode: props.mode };
   if (read === null) return <Notice text="Lecture…" />;
   if ('message' in read) return <Notice text={read.message} />;
@@ -118,7 +119,7 @@ function TexPreview(props: ViewProps & { node: Id; latex: LatexContext }) {
     <div className="viewer viewer-tex">
       {pdf && error && <Banner lines={[error]} />}
       {pdf
-        ? <Suspense fallback={<Notice text="Lecture…" />}><PdfViewer {...view} file={pdf} live={{ keptAs: `latex:${slot}` }} /></Suspense>
+        ? <Suspense fallback={<Notice text="Lecture…" />}><PdfViewer {...view} file={pdf} live={live} onNodeLink={props.onNodeLink} /></Suspense>
         : <Message text={error ?? 'Compilation…'} />}
     </div>
   );

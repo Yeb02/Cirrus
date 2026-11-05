@@ -16,7 +16,8 @@ import { fileKind } from '../src/renderer/files/kind.ts';
 import { LatexRegistry } from '../src/renderer/latex/registry.ts';
 import { buildRequest } from '../src/renderer/latex/request.ts';
 import { EditSession } from '../src/renderer/session.ts';
-import { saveTex, SaveScheduler, texMergeKey } from '../src/renderer/ui/latex/saveScheduler.ts';
+import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
+import { saveTex, SaveScheduler, texMergeKey, unsavedQuestion } from '../src/renderer/ui/latex/saveScheduler.ts';
 import { readPdf } from './latexPdf.ts';
 
 const MAX = 200 * 2 ** 20;
@@ -273,6 +274,23 @@ test('texMergeKey : le nœud et le nom normalisé par sameName', () => {
   expect(texMergeKey('n1', 'Complexité.TEX')).toBe(texMergeKey('n1', 'complexite\u0301.tex'));
   expect(texMergeKey('n1', 'a.tex')).not.toBe(texMergeKey('n2', 'a.tex'));
   expect(texMergeKey('n1', 'a.tex')).toBe('tex:n1:a.tex');
+});
+
+test('« Fermer sans enregistrer ? » : Entrée ne jette jamais le texte, le focus est sur « Annuler » (revue de la tâche 5)', () => {
+  let closed = 0;
+  const q = unsavedQuestion('complexité.tex', 'Ce nœud n’existe plus.', () => { closed++; });
+  expect(q.text).toBe('Fermer sans enregistrer ?');
+  expect(q.detail).toBe('Le texte tapé dans « complexité.tex » n’est pas enregistré : Ce nœud n’existe plus.');
+  expect(unsavedQuestion('a.tex', null, () => {}).detail).toBe('Le texte tapé dans « a.tex » n’est pas enregistré.');
+  expect(q.choices).toEqual([{ value: 'close', label: 'Fermer sans enregistrer' }]);
+  // « Annuler » (-1) has the focus: Enter keeps the full screen open; only the choice itself closes it.
+  expect(focusedChoice(q)).toBe(-1);
+  q.answer(null);
+  expect(closed).toBe(0);
+  q.answer('close');
+  expect(closed).toBe(1);
+  // Any other question keeps its first choice focused (« partout ou ici seulement »).
+  expect(focusedChoice({ text: 'x', choices: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], answer: () => {} })).toBe(0);
 });
 
 // --- storeText: the main process's side

@@ -290,37 +290,37 @@ button, input, select { font: inherit; color: var(--ink); }
 }
 .viewer-pdf .pdf-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: scroll; position: relative; outline: none; }
 .viewer-pdf .pdf-sizer { position: relative; }
-.viewer-pdf .pdf-page {
+:is(.viewer-pdf, .latex-snippet) .pdf-page {
   position: absolute; background: #fff; box-shadow: 0 1px 6px rgba(2, 6, 16, 0.55); overflow: hidden;
   --scale-round-x: 1px; --scale-round-y: 1px;
 }
-.viewer-pdf .pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.viewer-pdf .pdf-links { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-.viewer-pdf .pdf-links a { position: absolute; pointer-events: auto; cursor: pointer; }
-.viewer-pdf .pdf-links a:hover, .viewer-pdf .pdf-links a:focus-visible { background: rgba(143, 184, 255, 0.18); outline: 1px solid rgba(80, 120, 200, 0.5); }
+:is(.viewer-pdf, .latex-snippet) .pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+:is(.viewer-pdf, .latex-snippet) .pdf-links { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+:is(.viewer-pdf, .latex-snippet) .pdf-links a { position: absolute; pointer-events: auto; cursor: pointer; }
+:is(.viewer-pdf, .latex-snippet) .pdf-links a:hover, :is(.viewer-pdf, .latex-snippet) .pdf-links a:focus-visible { background: rgba(143, 184, 255, 0.18); outline: 1px solid rgba(80, 120, 200, 0.5); }
 /* pdf.js's text layer (its pdf_viewer.css, the rules the text needs): transparent text over the canvas, at its place. */
-.viewer-pdf .textLayer {
+:is(.viewer-pdf, .latex-snippet) .textLayer {
   position: absolute; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-align: initial; z-index: 1;
   letter-spacing: normal; word-spacing: normal; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0;
   caret-color: CanvasText; color-scheme: only light;
   --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size));
 }
-.viewer-pdf .textLayer :is(span, br) {
+:is(.viewer-pdf, .latex-snippet) .textLayer :is(span, br) {
   color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text;
 }
-.viewer-pdf .textLayer > :not(.markedContent), .viewer-pdf .textLayer .markedContent span:not(.markedContent) {
+:is(.viewer-pdf, .latex-snippet) .textLayer > :not(.markedContent), :is(.viewer-pdf, .latex-snippet) .textLayer .markedContent span:not(.markedContent) {
   z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
   --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
-.viewer-pdf .textLayer .markedContent { display: contents; }
-.viewer-pdf .textLayer span[role="img"] { user-select: none; cursor: default; }
-.viewer-pdf .textLayer ::selection { background: rgba(0, 90, 255, 0.28); color: transparent; }
-.viewer-pdf .textLayer br::selection { background: transparent; }
-.viewer-pdf .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
-.viewer-pdf .textLayer.selecting .endOfContent { top: 0; }
-.viewer-pdf [data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
-.viewer-pdf [data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
-.viewer-pdf [data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+:is(.viewer-pdf, .latex-snippet) .textLayer .markedContent { display: contents; }
+:is(.viewer-pdf, .latex-snippet) .textLayer span[role="img"] { user-select: none; cursor: default; }
+:is(.viewer-pdf, .latex-snippet) .textLayer ::selection { background: rgba(0, 90, 255, 0.28); color: transparent; }
+:is(.viewer-pdf, .latex-snippet) .textLayer br::selection { background: transparent; }
+:is(.viewer-pdf, .latex-snippet) .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+:is(.viewer-pdf, .latex-snippet) .textLayer.selecting .endOfContent { top: 0; }
+:is(.viewer-pdf, .latex-snippet) [data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+:is(.viewer-pdf, .latex-snippet) [data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+:is(.viewer-pdf, .latex-snippet) [data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 /* Tokens of the text view (CodeMirror's classHighlighter), in the palette's cool tones. */
 .tok-keyword, .tok-tagName { color: #c3a6ff; }
 .tok-string, .tok-inserted { color: #a8d8a0; }
@@ -398,3 +398,40 @@ button, input, select { font: inherit; color: var(--ink); }
 .compile-log pre .bang { color: #ff9a8a; }
 .compile-log pre .dim { opacity: 0.7; }
 .viewer-tex > .viewer-banner { color: #ff9a8a; }
+/*
+ * A summary or a relation in its pop-up (plan 4b, task 6). Compiled: its pages on a white card, the document's own
+ * colours (its padding is CARD_PAD_PX, LatexSnippet.tsx). Before its first compilation, or without LaTeX: its source,
+ * in the box of the text field it was; empty: that text field, its placeholder. Typed in: the compact LaTeX editor in
+ * that box, the draft compiled under it, then a status line.
+ */
+.latex-field { position: relative; outline: none; border-radius: 5px; }
+.latex-field.view { cursor: text; }
+.latex-field:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.popup .latex-field { margin-top: 6px; }
+.popup .latex-field textarea { margin-top: 0; }
+.latex-snippet { padding: 6px 8px; background: #fff; border-radius: 5px; }
+.latex-snippet .pages { position: relative; }
+.latex-snippet .pdf-page { box-shadow: none; }
+.latex-source {
+  margin: 0; box-sizing: border-box; max-height: 16em; overflow: auto; padding: 3px 6px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 12.5px/1.4 Consolas, monospace; color: var(--ink); background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px;
+}
+.latex-reason { margin: 3px 0 0; font-size: 11.5px; color: var(--muted); }
+.latex-error { color: #ff9a8a; }
+.latex-status { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-top: 3px; font-size: 12px; }
+.latex-status .spacer { flex: 1; }
+.latex-status .latex-reason { margin: 0; font-size: 12px; }
+.latex-status .latex-error { min-width: 0; }
+.latex-status .latex-log {
+  flex: none; padding: 0 8px; border-radius: 5px; background: var(--sky2); border: 1px solid var(--edge); color: var(--ink); cursor: pointer; font-size: 12px;
+}
+.latex-status .latex-log.on { border-color: var(--accent); }
+.latex-field .compile-log { position: static; width: auto; height: 220px; margin-top: 4px; box-shadow: none; }
+.latex-field .latex-editor { min-height: 4.4em; background: var(--sky1); border: 1px solid var(--accent); border-radius: 5px; }
+.latex-field .latex-editor .cm-editor { height: auto; max-height: 16em; }
+.latex-field .latex-editor .cm-scroller { overflow: auto; }
+.latex-draft { margin-top: 6px; }
+/* A link to a node clicked in a full screen, which opens nothing (it is modal): said in its header for a moment. */
+.full-screen > header .notice {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--warn);
+}

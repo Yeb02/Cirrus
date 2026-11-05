@@ -168,6 +168,22 @@ test('pause de frappe avant l’enregistrement d’un .tex : 10 s, de 1 s à 10 
   expect(withOverrides({ texSaveIdleMs: 9e9 }).texSaveIdleMs).toBe(600_000);
 });
 
+test('résumé compilé et suggestions de l’éditeur LaTeX : réglages avancés du groupe « LaTeX » (plan 4b, tâche 6)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['latexSnippetMaxZoom', 1.6, 'Agrandissement maximal du résumé compilé', 0.5, 4, 0.1],
+    // CodeMirror's own values (maxRenderedOptions, activateOnTypingDelay), now settings.
+    ['latexSuggestionsMax', 100, 'Suggestions de labels et de clés montrées dans l’éditeur LaTeX', 10, 1000, 10],
+    ['latexSuggestionDelayMs', 100, 'Délai avant les suggestions de l’éditeur LaTeX (ms)', 0, 1000, 10],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'LaTeX', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ latexSnippetMaxZoom: 9, latexSuggestionsMax: 1, latexSuggestionDelayMs: -5 })).toMatchObject({
+    latexSnippetMaxZoom: 4, latexSuggestionsMax: 10, latexSuggestionDelayMs: 0,
+  });
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

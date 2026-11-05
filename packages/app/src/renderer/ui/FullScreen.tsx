@@ -1,6 +1,6 @@
-import type { FileRef, NodeRec, State } from '@cirrus/core';
+import type { FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
-import { lazy, type RefObject, Suspense, useEffect, useRef } from 'react';
+import { lazy, type RefObject, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { fileKind } from '../files/kind.ts';
 import { offersSystem } from '../files/nodeFiles.ts';
 import { loading } from '../files/read.ts';
@@ -45,12 +45,27 @@ const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex], [conten
  * A .tex (plan 4b, D6) opens its workbench instead of a view (`tex`): the editor and the compiled preview, followed by
  * its name (a save changes its hash, the workbench stays). Escape and × then go through the workbench, which saves
  * what is typed before leaving (requestClose).
+ * A link to a node clicked in a PDF here (plan 4b, task 6) opens nothing, the full screen being modal: its header says
+ * « Lien vers « titre » : ferme le plein écran pour l’ouvrir. » for toastMs (`nodeTitle`: the node's title, null when it
+ * is gone, which it says too).
  */
 export function FullScreen(props: {
   node: NodeRec; file: FileRef; params: RenderParams; views: ViewStates; onClose(): void; onSystem(file: FileRef): void; tex?: TexContext;
+  nodeTitle(node: Id): string | null;
 }) {
   const { node, file, tex } = props;
   const root = useRef<HTMLDivElement>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const latest = useRef(props);
+  latest.current = props;
+  const noticeTimer = useRef<number | undefined>(undefined);
+  const onNodeLink = useCallback((id: Id) => {
+    const title = latest.current.nodeTitle(id);
+    setNotice(title === null ? 'Ce nœud n’existe plus.' : `Lien vers « ${title} » : ferme le plein écran pour l’ouvrir.`);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), latest.current.params.toastMs);
+  }, []);
+  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
   const isTex = tex !== undefined && fileKind(file.name) === 'tex';
   const leave = () => {
     const bench = isTex ? tex.workbench.current : null;
@@ -89,16 +104,17 @@ export function FullScreen(props: {
         <span className="name" title={file.name}>{file.name}</span>
         <span className="node" title={node.title}>{node.title}</span>
         <span className="spacer" />
+        {notice && <span className="notice" role="status">{notice}</span>}
         {offersSystem(file.name) && <button className="system" onClick={() => props.onSystem(file)}>Ouvrir avec l’application du système</button>}
         <button className="close" title="Quitter le plein écran (Échap)" onClick={() => leave()}>×</button>
       </header>
-      {!isTex ? <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} />
+      {!isTex ? <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} onNodeLink={onNodeLink} />
         : !tex.registry ? <Notice text="Lecture…" />
         : (
           <Suspense fallback={<Notice text="Lecture…" />}>
             <TexWorkbench
               ref={tex.workbench} node={node} file={file} state={tex.state} registry={tex.registry} params={props.params} views={props.views}
-              onSave={tex.onSave} onClose={props.onClose}
+              onSave={tex.onSave} onClose={props.onClose} onNodeLink={onNodeLink}
             />
           </Suspense>
         )}

@@ -1,3 +1,4 @@
+import type { RenderParams } from '@cirrus/view';
 import {
   autocompletion, closeCompletion, type CompletionContext, completionKeymap, type CompletionResult, completionStatus,
 } from '@codemirror/autocomplete';
@@ -5,7 +6,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching, syntaxHighlighting } from '@codemirror/language';
 import { lintGutter, lintKeymap, setDiagnostics } from '@codemirror/lint';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { Annotation, Compartment, EditorState, Prec } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, type Extension, Prec } from '@codemirror/state';
 import { EditorView, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
 import { useEffect, useRef } from 'react';
@@ -13,7 +14,7 @@ import { loading } from '../../files/read.ts';
 import type { LatexRegistry } from '../../latex/registry.ts';
 import { languageFor, PHRASES_FR } from '../viewers/language.ts';
 import { THEME } from '../viewers/TextViewer.tsx';
-import { completionsFor, type Diag, refContext } from './editorLogic.ts';
+import { completionsFor, type Diag, refContext, suggestionOptions } from './editorLogic.ts';
 
 /** The editable parts of the look, over the text view's (THEME): the suggestions and the diagnostics, in its palette. */
 const EDITING = EditorView.theme({
@@ -54,15 +55,17 @@ const lineStartIn = (state: EditorState, line: number) => state.doc.line(Math.mi
  * The LaTeX editor (plan 4b, task 5), a CodeMirror 6 to type in: coloured as LaTeX (the legacy `stex` mode, loaded once
  * it shows), the search (Ctrl+F) and CodeMirror's texts in French, its own history (Ctrl+Z and Ctrl+Y act on the text),
  * long lines wrapped, line numbers and a gutter of diagnostics except when `compact`. In a ref's or a citation's braces,
- * the registry's labels and keys are suggested (refContext, completionsFor); `diagnostics` are shown as they are given,
+ * the registry's labels and keys are suggested (refContext, completionsFor; none while it is not built); `diagnostics` are shown as they are given,
  * in red, once they belong to the text the editor has. Ctrl+S calls `onSave`. Its keys stay its own: the app's
  * shortcuts (Delete, Ctrl+Z…) skip an editable field, and Escape is left to the full screen or the panel, unless the
  * suggestions or a panel of the editor take it. `value` is the text: one that is not what the editor last told
- * (`onChange`) replaces its text. `jumpTo`: a line to put the cursor on, again at each new `seq`.
+ * (`onChange`) replaces its text. `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
+ * are drawn, and how soon, are settings (`params`: suggestionOptions). `autoFocus`: the focus at once, the cursor at
+ * the end of the text when `compact` (a summary, a relation: task 6).
  */
 export function LatexEditor(props: {
-  value: string; onChange(text: string): void; registry: LatexRegistry; diagnostics: Diag[]; compact?: boolean; autoFocus?: boolean;
-  onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number };
+  value: string; onChange(text: string): void; registry: LatexRegistry | null; diagnostics: Diag[]; params: RenderParams; compact?: boolean;
+  autoFocus?: boolean; onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number };
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -70,17 +73,21 @@ export function LatexEditor(props: {
   latest.current = props;
   /** The text the editor last told, or was given. */
   const told = useRef(props.value);
+  /** The suggestions' extension, configured again when their settings change. */
+  const suggestions = useRef<{ compartment: Compartment; of(p: RenderParams): Extension } | null>(null);
 
   useEffect(() => {
-    const language = new Compartment();
+    const language = new Compartment(), suggesting = new Compartment();
     const suggest = (ctx: CompletionContext): CompletionResult | null => {
       const line = ctx.state.doc.lineAt(ctx.pos);
-      const at = refContext(line.text, ctx.pos - line.from);
-      if (!at) return null;
-      const options = completionsFor(at, latest.current.registry).map((c) => ({ label: c.label, detail: c.detail, type: at.kind === 'ref' ? 'variable' : 'text' }));
+      const at = refContext(line.text, ctx.pos - line.from), registry = latest.current.registry;
+      if (!at || !registry) return null;
+      const options = completionsFor(at, registry).map((c) => ({ label: c.label, detail: c.detail, type: at.kind === 'ref' ? 'variable' : 'text' }));
       // In our order (French, the label's own), and asked again at each key: CodeMirror neither filters nor sorts them.
       return { from: line.from + at.from, options, filter: false };
     };
+    const suggestionsOf = (p: RenderParams) => autocompletion({ override: [suggest], defaultKeymap: false, ...suggestionOptions(p) });
+    suggestions.current = { compartment: suggesting, of: suggestionsOf };
     const v = new EditorView({
       parent: host.current!,
       state: EditorState.create({
@@ -93,7 +100,7 @@ export function LatexEditor(props: {
           bracketMatching(),
           search({ top: true }),
           highlightSelectionMatches(),
-          autocompletion({ override: [suggest], defaultKeymap: false }),
+          suggesting.of(suggestionsOf(props.params)),
           SUGGESTION_KEYS,
           keymap.of([
             { key: 'Mod-s', preventDefault: true, run: () => { latest.current.onSave?.(); return true; } },
@@ -115,7 +122,10 @@ export function LatexEditor(props: {
       }),
     });
     view.current = v;
-    if (props.autoFocus) v.focus();
+    if (props.autoFocus) {
+      if (props.compact) v.dispatch({ selection: { anchor: v.state.doc.length } });
+      v.focus();
+    }
     let live = true;
     // A language that could not be loaded leaves the text uncoloured.
     const desc = languageFor('source.tex');
@@ -127,6 +137,13 @@ export function LatexEditor(props: {
     }
     return () => { live = false; v.destroy(); view.current = null; };
   }, []);
+
+  // New settings of the suggestions: CodeMirror's autocompletion configured again.
+  const { latexSuggestionsMax, latexSuggestionDelayMs } = props.params;
+  useEffect(() => {
+    const v = view.current, s = suggestions.current;
+    if (v && s) v.dispatch({ effects: s.compartment.reconfigure(s.of(props.params)) });
+  }, [latexSuggestionsMax, latexSuggestionDelayMs]);
 
   // A text given from outside (not the one the editor told): the whole text replaced.
   useEffect(() => {

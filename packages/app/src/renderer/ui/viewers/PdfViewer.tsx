@@ -1,20 +1,24 @@
+import type { Id } from '@cirrus/core';
 import { AbortException, type PDFDocumentProxy, type PDFPageProxy, RenderingCancelledException, TextLayer } from 'pdfjs-dist';
 import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { externalUrlAllowed } from '../../../main/navigation.ts';
 import { type ViewRef, viewKey } from '../../files/kind.ts';
 import { CSS_PER_PT, destination, openPdf, type PdfDoc, pageSize, pdfFailure } from '../../files/pdf.ts';
 import {
   type Anchor, anchorAt, currentPage, fitWidthZoom, type PageSize, pageNumber, pageOffsets, placeAnchor, visiblePages, wheelSteps, zoomBy,
 } from '../../files/pdfLayout.ts';
 import { loading } from '../../files/read.ts';
+import { linkTarget } from '../latex/links.ts';
 import { keptView, Message, useKeptView, type ViewProps } from './common.tsx';
 
 /** Fitted to the width of the first page (a wider one overflows), or at a zoom of its own (1: the pages' real size). */
 type Mode = { fit: true } | { fit: false; zoom: number };
 /** A document point to put at the view's place (vx, vy) at the next layout: where the view is, or a zoom's centre. */
 interface Target { a: Anchor; vx: number; vy: number }
-/** A link of a page, in percents of the page: to an address (http, https, mailto: openUrl), or to a destination. */
-interface Link { box: CSSProperties; url?: string; dest?: unknown }
+/**
+ * A link of a page, in percents of the page: to an address (http, https, mailto: openUrl), to a destination, or to a
+ * node of the base (plan 4b, D7: `cirrus://node/<id>`, never handed to the system).
+ */
+interface Link { box: CSSProperties; url?: string; dest?: unknown; node?: Id }
 
 /** A canvas let go at once, not at the next collection: its pixels are the page's memory. */
 function free(canvas: HTMLCanvasElement): void {
@@ -31,14 +35,17 @@ function free(canvas: HTMLCanvasElement): void {
  * Ctrl+wheel (a notch a step, as the graph's scaleWheelStepPx), the « − » and « + » buttons and keys zoom by
  * pdfZoomStep between pdfMinZoom and pdfMaxZoom, around the cursor or the view's centre; « Largeur » fits it again; the
  * « page n / N » field goes to a page. A link inside the document leads to its destination; one to http:, https: or
- * mailto: goes to the system (openUrl, which the main process checks again); any other is not a link. Its page, the
+ * mailto: goes to the system (openUrl, which the main process checks again); one to a node of the base
+ * (`cirrus://node/<id>`, plan 4b) to `onNodeLink`, and is not a link without it; any other is not a link. Its page, the
  * place in it, the horizontal centre and the zoom (or the fit) are kept by its hash.
  * `live` (plan 4b, task 5): a compiled PDF, `file` changing with each compilation. A new file replaces the document in
  * place, at the same zoom and the same scroll, bounded by the new height; the pages drawn of the last one stay until
  * the new ones are drawn over them, without a white flash. Its place is kept under `live.keptAs` (its source's), not
  * by a hash that changes with each compilation. Otherwise its parent keys it by the file's hash.
+ * Drawn again only when its props change (memo): a parent that changes at each key typed (the .tex workbench) gives it
+ * the same `live` and `onNodeLink` (task 5 review).
  */
-export function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: string } }) {
+export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: string }; onNodeLink?(node: Id): void }) {
   const { file, params } = props;
   const box = useRef<HTMLDivElement>(null);
   const [opened, setOpened] = useState<PDFDocumentProxy | { message: string } | null>(null);
@@ -54,6 +61,10 @@ export function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: s
   const wheelRest = useRef(0);
   /** The document shown, held while it is. */
   const held = useRef<PdfDoc | null>(null);
+  /** A link to a node, the pages' own callback: the same while the view lives, `onNodeLink` read when clicked. */
+  const nodeLink = useRef(props.onNodeLink);
+  nodeLink.current = props.onNodeLink;
+  const onNode = useCallback((id: Id) => nodeLink.current?.(id), []);
 
   // The document, held while the view shows it; every page at the first one's size until it is read. A new one (live)
   // takes the place of the last, which is let go once the pages have moved to it.
@@ -225,6 +236,7 @@ export function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: s
         <PdfPage
           key={i} doc={doc} index={i} top={offsets[i]} left={(contentW - w) / 2} width={w} height={h} scale={scale}
           drawn={i >= range.first && i < range.last} maxPixels={maxPixels} onSize={onSize} onDest={onDest}
+          onNode={props.onNodeLink ? onNode : undefined}
         />,
       );
     }
@@ -284,22 +296,25 @@ export function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: s
       {message && <Message text={message} />}
     </div>
   );
-}
+});
 
-interface PageProps {
+export interface PageProps {
   doc: PDFDocumentProxy; index: number; top: number; left: number; width: number; height: number;
   /** CSS pixels per point. */
   scale: number;
   drawn: boolean; maxPixels: number;
-  onSize(index: number, size: PageSize): void; onDest(dest: unknown): void;
+  onSize(index: number, size: PageSize): void;
+  /** Where a link inside the document leads, and one to a node of the base; without them, those are not links. */
+  onDest?(dest: unknown): void; onNode?(node: Id): void;
 }
 
 /**
  * A page's box, at its place and size. While it is `drawn`: its canvas at the screen's density (at most `maxPixels`,
  * stretched past them), drawn again at each zoom (the last drawing stretched meanwhile), its text layer (pdf.js's
- * TextLayer, kept in step with the zoom) and its links. Left: the drawing under way stopped, the canvas let go.
+ * TextLayer, kept in step with the zoom) and its links. Left: the drawing under way stopped, the canvas let go. The
+ * reader's pages, and a compiled summary's (LatexSnippet, plan 4b).
  */
-const PdfPage = memo(function PdfPage(props: PageProps) {
+export const PdfPage = memo(function PdfPage(props: PageProps) {
   const { doc, index, drawn, scale } = props;
   const box = useRef<HTMLDivElement>(null);
   const textBox = useRef<HTMLDivElement>(null);
@@ -415,7 +430,9 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
         }}
       />
       {links.length > 0 && (
-        <div className="pdf-links">
+        // A link pressed keeps the focus where it was (plan 4b, task 6: a summary typed in; a link is drawn anew with
+        // each compilation, and the focus on it would be lost with it).
+        <div className="pdf-links" onMouseDown={(e) => { if ((e.target as Element).closest('a')) e.preventDefault(); }}>
           {links.map((l, i) => (
             l.url
               ? (
@@ -424,12 +441,19 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
                   onClick={(e) => { e.preventDefault(); void window.cirrus.openUrl(l.url!); }}
                 />
               )
-              : (
-                <a
-                  key={i} href="#" title="Lien vers une page du document" style={l.box} draggable={false}
-                  onClick={(e) => { e.preventDefault(); props.onDest(l.dest); }}
-                />
-              )
+              : l.node !== undefined
+                ? props.onNode && (
+                  <a
+                    key={i} href="#" title="Ouvrir le pop-up de ce nœud" style={l.box} draggable={false}
+                    onClick={(e) => { e.preventDefault(); props.onNode!(l.node!); }}
+                  />
+                )
+                : props.onDest && (
+                  <a
+                    key={i} href="#" title="Lien vers une page du document" style={l.box} draggable={false}
+                    onClick={(e) => { e.preventDefault(); props.onDest!(l.dest); }}
+                  />
+                )
           ))}
         </div>
       )}
@@ -438,17 +462,17 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
 });
 
 /**
- * A page's links, in percents of it (they follow the zoom by themselves): to an address pdf.js validated and
- * externalUrlAllowed takes, or to a destination of the document. Another scheme, an action, an attachment: not a link.
+ * A page's links, in percents of it (they follow the zoom by themselves), each where linkTarget says it leads: a node
+ * of the base, an address pdf.js validated and externalUrlAllowed takes, a destination of the document. Another
+ * scheme, an action, an attachment: not a link.
  */
-function linksOf(annotations: { subtype?: string; rect?: number[]; url?: string; dest?: unknown }[], page: PDFPageProxy): Link[] {
+function linksOf(annotations: { subtype?: string; rect?: number[]; url?: string; unsafeUrl?: string; dest?: unknown }[], page: PDFPageProxy): Link[] {
   const vp = page.getViewport({ scale: 1 });
   const out: Link[] = [];
   for (const a of annotations) {
     if (a.subtype !== 'Link' || !Array.isArray(a.rect) || a.rect.length !== 4) continue;
-    const url = typeof a.url === 'string' && externalUrlAllowed(a.url) ? a.url : undefined;
-    const dest = a.dest ?? undefined;
-    if (!url && (dest === undefined || dest === null)) continue;
+    const to = linkTarget(a);
+    if (to === null) continue;
     const [x1, y1] = vp.convertToViewportPoint(a.rect[0], a.rect[1]) as number[];
     const [x2, y2] = vp.convertToViewportPoint(a.rect[2], a.rect[3]) as number[];
     const pct = (v: number, of: number) => `${(100 * v) / of}%`;
@@ -456,7 +480,7 @@ function linksOf(annotations: { subtype?: string; rect?: number[]; url?: string;
       left: pct(Math.min(x1, x2), vp.width), top: pct(Math.min(y1, y2), vp.height),
       width: pct(Math.abs(x2 - x1), vp.width), height: pct(Math.abs(y2 - y1), vp.height),
     };
-    out.push({ box, url, dest: url ? undefined : dest });
+    out.push({ box, ...to });
   }
   return out;
 }

@@ -588,6 +588,131 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 6 : interface — résumé et relation compilés, liens `cirrus:`
 
+### Mesures
+
+- **Suite** : 722 tests sur 722 (705 avant la tâche), 17 de plus :
+
+  | Fichier | Tests ajoutés |
+  | --- | --- |
+  | `latexField.test.ts` | 8 : `nodeLinkOf`, `linkTarget`, `fieldReducer` (6) |
+  | `panels.test.ts` | 2 (`withLinked`, `linkedRect`) |
+  | `latexEditor.test.ts` | 2 (`lineStartOf`, `suggestionOptions`) |
+  | `compileScheduler.test.ts` | 2 (`PendingHold`, `viewsSettled`) |
+  | `texSave.test.ts` | 1 (la question « Fermer sans enregistrer ? ») |
+  | `latexCompiler.test.ts` | 1 (la profondeur d'un strut sous la dernière ligne) |
+  | `params.test.ts` (view) | 1 |
+
+  `latexLog.test.ts` vérifie en plus le strut dans le corps d'un snippet. `tsc` : `app`, `view` et `core` sans erreur.
+  - Une première suite complète a vu deux tests chronométrés échouer, la machine chargée par les captures et l'app menée à côté : `scale-perf.test.ts` (view, 21,1 ms pour un plafond de 20) et `scale.test.ts` (store). Relancés seuls, ils passent, le second trois fois sur trois ; la suite finale passe en entier.
+  - L'EPERM de `scale.test.ts` masque sa vraie cause : un `expect` qui échoue saute `store.close()`, et le nettoyage bute alors sur la base ouverte. Mesuré à part : `readSnapshot` 130 ms pour un plafond de 150, le commit 0,4 ms pour 5.
+- **App construite**, sur des copies de la base de test (`CIRRUS_DATA`), un profil à part et la TinyTeX du banc, menée par le protocole des outils de Chrome (`Emulation.setFocusEmulationEnabled`, voir les notes) :
+  - Entropie : le résumé est compilé et dessiné de 0,73 à 1,0 s après le clic, à la première ouverture. Ce temps comprend le pdfLaTeX préparé, le morceau de pdf.js et son worker. Le source est montré jusque-là.
+  - Réouverture du même pop-up : le snippet est dessiné en 23 ms, sans compilation (un seul PDF au cache), et le source n'est jamais montré (observé par un `MutationObserver`).
+  - Modification : le brouillon est compilé et dessiné environ 500 ms après la frappe, pause de 300 ms comprise.
+  - Échap rend la vue enregistrée, sans modification à l'historique. Le pop-up reste, et un second Échap le ferme. Entrée et F2 rouvrent l'éditeur. Quitter le champ enregistre (« 2 modifications »), et 150 ms après, la vue montre le PDF, sans le source entre les deux.
+  - « Déduction jointe » : « Ensemble, K(x) ≤ LMDL(x) + O(1). » compilé, modifié avec l'aperçu dessous, puis Échap.
+  - Aperçu de `complexité.tex` : cinq zones de liens vers des nœuds (le titre de MDL, coupé sur deux lignes, en donne deux) et une destination interne. Un clic sur le titre de MDL ouvre son pop-up, non épinglé, devant, à gauche de l'aperçu, faute de place à droite. Un second clic n'en ouvre pas d'autre.
+  - Le même `.tex` en plein écran : le lien dit « Lien vers « Minimum Description Length Principle (MDL) » : ferme le plein écran pour l’ouvrir. », et aucun panneau ne s'ouvre.
+  - LaTeX absent (`CIRRUS_TINYTEX` vers un dossier vide) : le source, puis « LaTeX n’est pas installé. ».
+  - Erreur : la ligne rouge « Erreur ligne 1 : Undefined control sequence. » et « Journal », sous le dernier PDF valide, dans l'éditeur comme dans la vue enregistrée. Le journal s'ouvre sans quitter le champ, et un clic sur l'erreur place l'éditeur à sa ligne.
+  - Après la sortie, aucun pdfLaTeX ne reste, et `%LOCALAPPDATA%\Cirrus` n'existe pas.
+- **Captures** (19 sur 19), avant de refaire les références :
+  - `reference-3c` : 10 sur 11 à 0 pixel, et `fenetre-connexion` à 1,474 % ;
+  - `plan4a` : 5 sur 8 à 0 pixel (`plein-ecran-*`, `popup-vignettes`), `popup-noeud` à 4,290 %, `import-noeud` à 4,424 % et `apercu-fichier` à 4,382 %.
+
+  Deux suites successives sont identiques au pixel près (19 sur 19). Après les nouvelles références : 11 sur 11 et 8 sur 8 à 0 pixel.
+
+### Décisions
+
+Fixées par le contrôleur avant la tâche :
+- P2 : le titre de la connexion garde son libellé ;
+- P3 : la relation vide garde l'aspect d'avant, avec le texte d'attente « Relation (LaTeX) » ;
+- en modification, le brouillon se compile sous `draft:<emplacement>`, la vue sous le sien, l'un des deux seulement à la fois, avec `params.latexTypingPauseMs` ;
+- trois points de la revue de la tâche 5 : les suggestions de CodeMirror deviennent des réglages ; dans « Fermer sans enregistrer ? », le focus et Entrée vont au choix qui ne perd rien ; l'aperçu de l'atelier ne se redessine pas à chaque frappe ;
+- les ambiguïtés :
+  - le snippet dessine toutes ses pages ;
+  - « quitter le champ et son aperçu », c'est sortir de l'élément du champ (éditeur, snippet, bouton « Journal ») ; un clic sur un lien de l'aperçu ne vaut pas sortie ;
+  - un lien du résumé vers son propre nœud fait passer son pop-up devant ;
+  - dans un plein écran, qui est modal, un lien vers un nœud n'ouvre rien et le dit dans son bandeau.
+
+- Ruling: **`reference-3c/fenetre-connexion` est refaite**, selon la règle de repli de P3 (« si c'est impossible, refaire cette capture avec un Ruling qui dit pourquoi »).
+  - Pourquoi : la prémisse de P3 était fausse. « Analogue bayésien » a une relation depuis le plan 2 (`build.ts`, l. 133), et l'image de référence la montre (« La priore universelle de l’induction de Solomonoff… »). Compilée, elle devient une carte blanche : 1,474 % des pixels.
+  - P3 vaut pour une relation vide, qui reste le champ d'avant. Le résumé vide de la publication le prouve : `popup-vignettes` est inchangée, à 0 pixel.
+  - Coût si faux : une image.
+- Ruling: **les captures refaites dans `plan4a`** : `popup-noeud`, `import-noeud` et `apercu-fichier`. Elles montrent le pop-up de MDL, dont le résumé est désormais compilé.
+  - `plein-ecran-code` et `plein-ecran-tableau` ouvrent ce pop-up sous un plein écran qui le couvre : à 0 pixel.
+  - `popup-vignettes` (la publication, sans résumé) et les autres plein écran : à 0 pixel.
+  - Coût si faux : trois images.
+- Ruling: **le snippet est dessiné sur une carte blanche, aux couleurs du document**. Le préambule choisit ses couleurs pour le papier (des liens `blue!50!black`), et les inverser changerait le rendu que D3 veut fidèle. Le blanc des pages vient de `.pdf-page`, comme dans le lecteur. La marge de la carte, `CARD_PAD_PX` (8 px), est une dimension de la feuille de style, comme `CELL_PAD_PX` du tableau. Coût si faux : du CSS.
+- Ruling: **un champ vide est la zone de texte d'avant**, en lecture seule, avec son texte d'attente : « Résumé, en LaTeX » sur 4 lignes, « Relation (LaTeX) » sur 3 (P3). `LatexField` reçoit pour cela `rows`. Un clic, Entrée ou F2 ouvrent l'éditeur. Un texte fait seulement de blancs compte pour vide : il n'est pas compilé. Coût si faux : un paramètre.
+- Ruling: **`onCommit(text)` rend `Promise<boolean>`**, et non `void` comme dans la tâche.
+  - Le champ montre le texte enregistré jusqu'à ce que la valeur l'ait, ou que l'enregistrement soit refusé. La valeur est alors remise.
+  - Pourquoi : sinon, après chaque modification, la vue montrerait l'ancien résumé pendant la pause de frappe. Le planificateur attend 300 ms avant une requête changée.
+  - `ConnectionPopup.onEdit` rend aussi `Promise<boolean>`.
+  - Coût si faux : un type.
+- Ruling: **`registry: LatexRegistry | null`** : c'est le registre d'`App`, nul tant qu'il n'est pas construit. Le champ montre alors le source, « Compilation… », et l'éditeur n'offre pas de suggestions. Coût si faux : nul.
+- Ruling: **aucun éclair du source entre les deux modes, ni à la réouverture** :
+  - chaque mode montre le dernier PDF de l'autre jusqu'à avoir le sien : l'éditeur part de celui de la vue ; après un enregistrement, la vue part de celui du brouillon ; après Échap, de celui de la vue d'avant ;
+  - une mémoire de la session garde, par emplacement, le dernier PDF montré et son texte (`shownBefore`, `LatexField.tsx`) ;
+  - les tailles de pages d'un PDF sont gardées tant que son enregistrement est tenu (`sizesOf`, une `WeakMap`, `LatexSnippet.tsx`). Un pop-up rouvert dessine alors ses pages blanches à leur taille, puis leur contenu : 23 ms, mesuré plus haut.
+
+  Coût si faux : deux petites tables.
+- Ruling: **la sortie du champ** :
+  - c'est un `focusout` dont la cible suivante est hors du champ ;
+  - sans cible, la sortie compte, sauf si le document a perdu le focus (`document.hasFocus()`) : la fenêtre quittée laisse le champ ouvert ;
+  - le champ lui-même prend le focus (`tabIndex` 0 en vue, −1 en modification), si bien qu'un clic sur une partie du champ qui n'en prend pas le garde dedans ;
+  - démonté en cours de saisie, il enregistre ce qui a changé : c'est le filet de sécurité, comme pour l'atelier.
+
+  Coût si faux : nul.
+- Ruling: **les clics qui n'ouvrent pas l'éditeur** : un clic qui finit une sélection dans le texte compilé (`getSelection()` non vide), et un clic sur un lien, sur un bouton (« Journal ») ou dans le journal. Coût si faux : une condition.
+- Ruling: **Échap remonte d'un cran à la fois** : il ferme le journal, puis abandonne le brouillon, puis ferme le pop-up.
+  - Le journal fermé rend le focus au champ, à son éditeur en modification.
+  - Un lien d'un PDF pressé laisse le focus où il était (`mousedown`, `PdfPage`).
+  - Le constat, dans l'app construite : l'Échap du journal laissait le focus au document, et l'Échap suivant fermait le pop-up, ce qui enregistrait le brouillon au démontage. Un lien du brouillon est redessiné à chaque compilation, et le focus posé sur lui se perdrait de même.
+  - Coût si faux : deux gestionnaires.
+- Ruling: **les états du champ que la tâche ne fixe pas** :
+  - une erreur sans PDF valide montre le source, la ligne rouge et « Journal » ;
+  - en modification, l'aperçu sous l'éditeur ne montre jamais le source, que l'éditeur montre déjà ;
+  - toujours en modification, une ligne d'état est toujours là (« Compilation… », l'erreur et « Journal », ou rien), pour que le brouillon ne bouge pas ;
+  - le curseur va à la fin du texte quand l'éditeur compact s'ouvre.
+
+  Coût si faux : nul.
+- Ruling: **un lien vers un nœud ne ferme aucun panneau** (`withLinked`) : celui où l'on a cliqué est en train d'être lu, et `withNode` le fermerait s'il est non épinglé. Le pop-up se place par `placeBeside`, à droite, sinon à gauche. Vu dans l'app : il couvre alors le pop-up de Kolmogorov, à gauche de l'aperçu. Coût si faux : une règle.
+- Ruling: **l'avis d'un plein écran est dans son en-tête**, pendant `toastMs`. Un nœud parti y dit « Ce nœud n’existe plus. ». La règle vaut pour tout plein écran : l'atelier d'un `.tex`, ou un PDF du magasin. Coût si faux : un état.
+- Ruling: **un lien `cirrus:` se lit dans `unsafeUrl`** (`linkTarget`, `links.ts`).
+  - Le constat : pdf.js ne valide que http, https, ftp, mailto et tel. L'ancien `linksOf` ne lisait que `url`, et perdait donc les liens `cirrus:`.
+  - Une adresse refusée ne retombe plus sur sa destination.
+  - Sans `onNodeLink`, un lien vers un nœud n'est pas un lien ; sans `onDest`, une destination non plus. Le snippet ignore ses destinations, comme la tâche le veut.
+  - Coût si faux : nul.
+- Ruling: **`PdfViewer` est mémorisé (`memo`)**. L'atelier et l'aperçu d'un `.tex` lui donnent un `live` et un `onNodeLink` stables (`useMemo`, et `useCallback` sur une référence) : une frappe ne le redessine plus. `PdfPage` est exporté pour `LatexSnippet`, et ses styles valent pour `:is(.viewer-pdf, .latex-snippet)`. Coût si faux : nul.
+- Ruling: **la page d'un snippet descend d'au moins la profondeur d'un strut sous sa dernière ligne** (`driver.ts`, `DRIVER_VERSION` 3).
+  - Le constat, dans l'app construite : « en bits. », dernière ligne de l'Entropie, avait sa ligne de base sur le bord de la page. Les lettres rondes y perdaient environ 1 px. La boîte de TeX n'a pas de profondeur sous une ligne sans jambage.
+  - Options :
+    - corriger dans l'interface est impossible, car pdf.js dessine dans la boîte de la page ;
+    - une marge fixe serait une constante de plus ;
+    - la profondeur du strut (0,3 `\baselineskip`, 4,08 pt sous `DEFAULT_PREAMBLE`) est celle des lignes du préambule lui-même : c'est le choix.
+  - Seul le bas est traité : voir les mineurs.
+  - C'est un fichier du principal, hors de la liste de la tâche. Coût si faux : une ligne et une version.
+- Ruling: **une capture attend les compilations demandées**, et ce qu'elles font dessiner :
+  - `PendingHold` (`useCompiled.ts`) est tenu pendant toute compilation en attente, pause comprise. Il est lâché après le rendu de la réponse, une fois lancés les effets des enfants, qui commencent la lecture du PDF ;
+  - `viewsSettled` attend un tour calme de 50 ms après la dernière lecture finie (`QUIET_MS`, `read.ts`). C'est une attente du banc de captures, et non un réglage ;
+  - la reconstruction du registre en attente compte aussi, dans `App`.
+
+  Le constat : une première suite a pris `fenetre-connexion` sur « Compilation… ». La retenue était lâchée à la réponse, avant que React ne dessine le snippet, et les 500 ms de marge du principal le cachaient d'ordinaire. Le test de `viewsSettled` reproduit le cas, et échouait avant le correctif. Coût si faux : 50 ms par attente de capture.
+- Ruling: **les suggestions de l'éditeur LaTeX sont deux réglages** (groupe « LaTeX ») :
+  - `latexSuggestionsMax`, « Suggestions de labels et de clés montrées dans l’éditeur LaTeX » : 100, de 10 à 1000, par pas de 10 (CodeMirror dessine chacune) ;
+  - `latexSuggestionDelayMs`, « Délai avant les suggestions de l’éditeur LaTeX (ms) » : 100, de 0 à 1000, par pas de 10.
+
+  Ce sont les valeurs de CodeMirror. Elles sont lues par `suggestionOptions`, et appliquées à nouveau quand elles changent, par un `Compartment`. Coût si faux : des bornes.
+- Ruling: **« Fermer sans enregistrer ? » donne le focus à « Annuler »** : c'est `Question.focusCancel`, que `focusedChoice` lit. La question est construite par `unsavedQuestion` (`saveScheduler.ts`), qu'un test vérifie. Cela règle le mineur reporté de la tâche 5. Coût si faux : un champ.
+- Ruling: **`captures.mjs` refuse de tourner sans la TinyTeX du banc** (`bin/windows/pdflatex.exe`), avec un message et le code 2. Il passe à chaque scène son chemin absolu dans `CIRRUS_TINYTEX`. Coût si faux : nul.
+- Ruling: **l'éditeur et le snippet ont leurs propres morceaux**, chargés à la demande. Le morceau principal ne porte donc ni CodeMirror ni pdf.js, ce que la construction confirme : `TextLayer` n'est que dans les morceaux du lecteur PDF, `cm-scroller` que dans celui de `TextViewer`. La première fois, le snippet attend son morceau en montrant le source. Coût si faux : nul.
+
+### Notes
+
+- Menée en arrière-plan par le protocole des outils de Chrome, la fenêtre n'a pas le focus du système : `document.hasFocus()` y vaut faux, et la sortie du champ passait pour la fenêtre quittée. `Emulation.setFocusEmulationEnabled` rend la situation d'une fenêtre au premier plan.
+- Points de la revue de la tâche 5 traités : les deux réglages des suggestions, le focus de « Fermer sans enregistrer ? », et l'aperçu stable de l'atelier.
+
 ## Tâche 7 : préambule, installation de LaTeX, paquets manquants
 
 ## Tâche 8 : mesures, captures, spec
@@ -607,6 +732,9 @@ Fixées par le contrôleur avant la tâche :
 | Construction du registre des labels, base du banc | 4 | de 4 à 14 ms ; de 104 à 160 ms avant `relationRows` | 50 000 nœuds, 549 189 connexions, sans `.tex` ; vitest, 12 constructions, une sur deux avec `previous` |
 | Échap pendant la pause d'un `.tex` : enregistré, puis fermé | 5 | 128 ms | app construite, base de test, `complexité.tex` + un paragraphe ; une mesure |
 | Fermeture de la fenêtre pendant la pause : enregistré, instantané, sortie | 5 | 655 ms | idem, `WM_CLOSE` jusqu'à la sortie du processus ; une mesure |
+| Pop-up de l'Entropie, première ouverture : du clic au résumé dessiné | 6 | de 0,73 à 1,0 s | app construite, base de test, TinyTeX du banc ; pdfLaTeX préparé, morceau de pdf.js et son worker compris |
+| Même pop-up rouvert, son résumé en cache : du clic au résumé dessiné | 6 | 23 ms (trois fois) | idem ; aucune compilation, le source jamais montré |
+| Brouillon d'un résumé : de la frappe au snippet dessiné | 6 | environ 500 ms | idem ; pause de frappe de 300 ms comprise |
 
 ## Mineurs reportés
 
@@ -652,11 +780,22 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 
 - L'enregistrement à la fermeture de la fenêtre doit tenir dans `snapshotQuitMs` (2 s), avec l'instantané. Passé ce délai, le principal ferme quand même, et un `.tex` dont l'enregistrement traîne (un disque lent) serait perdu. Mesuré : 655 ms en tout (`App.tsx`, `onQuit`).
 - Le plein écran gardé sur sa dernière cible, quand le `.tex` disparaît avec du texte en attente, ne peut arriver que par `receive` (plan 5). Il n'a pas été vu dans l'app ; un test couvre le refus (`App.tsx`, `lastFull`).
-- Dans la question « Fermer sans enregistrer ? », Entrée choisit de fermer sans enregistrer : c'est la règle d'`AskDialog`, dont le premier choix a le focus (`TexWorkbench.tsx`).
+- Dans la question « Fermer sans enregistrer ? », Entrée choisit de fermer sans enregistrer : c'est la règle d'`AskDialog`, dont le premier choix a le focus (`TexWorkbench.tsx`). Traité à la tâche 6 (`focusCancel`).
 - À chaque frappe, l'atelier analyse le texte deux fois (`buildRequest`, puis `diagnosticsFor` par `scanOf`), et l'éditeur le recopie en entier (`doc.toString()`). C'est négligeable pour un `.tex` ordinaire, sensible pour un `.tex` de quelques Mo (`TexWorkbench.tsx`, `LatexEditor.tsx`).
 - L'aperçu d'un `.tex` relit le fichier par `readHead`, alors qu'`App` a déjà son texte pour le registre (`Viewer.tsx`, `TexPreview`).
 - Pendant une frappe, « Compilation… » remplace dans le bandeau l'erreur de la compilation d'avant, qui revient si l'erreur reste (`TexWorkbench.tsx`).
 - Un PDF compilé sorti du cache entre la réponse et sa lecture (404) est dit « introuvable dans la base » par `readHead` ; l'aperçu garde alors le précédent (`read.ts`, `PdfViewer.tsx`).
+
+### Tâche 6
+
+- Le haut d'un snippet dont la première ligne n'a ni hampe ni capitale (« une … ») peut perdre environ 1 px du débord des lettres rondes. Le strut ne couvre que le bas (`driver.ts`, `jobBody`).
+- Le mineur de la tâche 3 sur `\nameref` reste ouvert : ni la tâche ni le contrôleur ne le portaient ici (`driver.ts`, `jobBody`).
+- Un lien vers un nœud parti n'a pas été vu dans l'app : la notification « Ce nœud n’existe plus. » n'y vient que d'un PDF compilé avant le départ du nœud, et gardé jusqu'à la compilation suivante. `App.tsx` ne s'importe pas dans un test (`App.tsx`, `nodeLink`).
+- Un pop-up ouvert par un lien passe à gauche du panneau d'où vient le clic quand la place manque à droite, et peut couvrir le pop-up du nœud dont le fichier portait le lien (`Panels.tsx`, `linkedRect`).
+- À la première ouverture d'un pop-up dans la session, le source se montre de 0,7 à 1 s, le temps de la première compilation : c'est la règle de la tâche (`LatexField.tsx`).
+- À chaque frappe, le champ analyse le brouillon deux fois (`buildRequest`, puis `diagnosticsFor` par `scanOf`), comme l'atelier (`LatexField.tsx`, `EditMode`).
+- `shownBefore` garde un enregistrement par résumé ou relation montré, pour toute la session (`LatexField.tsx`).
+- Le journal fermé par son ×, en vue, rend le focus au champ ; l'Échap suivant ferme alors le pop-up, comme avant d'ouvrir le journal (`LatexField.tsx`, `refocus`).
 
 ## Décisions du contrôleur (plan 4b)
 
@@ -667,6 +806,7 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - Ruling P1: T2 exports the base package list as `BASE_PACKAGES` (the list provision installs); T7's withPackage reads it — cost if wrong: a rename.
 - Ruling P2: T6 drops the « Titre court » relabel of the connection title (never asked, would change the frozen reference-3c capture fenetre-connexion) — cost if wrong: one label.
 - Ruling P3: T6 keeps the relation's empty-field look as today (placeholder « Relation (LaTeX) », same box) so reference-3c fenetre-connexion stays within tolerance — cost if wrong: one placeholder text.
+  - Appliquée à la tâche 6, avec son repli : « Analogue bayésien » a une relation (`build.ts`, l. 133), et `reference-3c/fenetre-connexion` a donc été refaite (Ruling sous la tâche 6).
 
 ### Tâche 2, revue (correctifs, tour 1)
 
@@ -720,4 +860,10 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 - Ruling : le brouillon d'un éditeur se compile sous `draft:<emplacement>`, la vue enregistrée sous le sien ; au plus un `useCompiled` par emplacement, avec `params.latexTypingPauseMs` — deux vues d'un emplacement s'annuleraient dans le principal — coût si faux : nul. Appliquée sous la tâche 5.
 - Ruling : l'éditeur marque « Clé de citation portée par plusieurs nœuds : x » — le pendant, dans l'éditeur, de `doubledCites` — coût si faux : un message. Appliquée sous la tâche 5.
 - Ruling : le regroupement est `run(build, { merge })` : les enregistrements regroupés reprennent l'identifiant de la première action, et toute autre action écrite, une annulation ou un rétablissement y met fin — D6, dans les mots de l'utilisateur — coût si faux : une option de la session. Appliquée sous la tâche 5.
+
+### Avant la tâche 6
+
+- Ruling : un `LatexField` en modification compile son brouillon sous `draft:<emplacement>`, en vue sous `<emplacement>`, l'un des deux seulement à la fois, avec `params.latexTypingPauseMs` — une source, un `useCompiled` — coût si faux : nul. Appliquée sous la tâche 6.
+- Ruling : trois points de la revue de la tâche 5 passent à la tâche 6 : les constantes des suggestions de CodeMirror deviennent des réglages du groupe « LaTeX » ; dans « Fermer sans enregistrer ? », le focus et Entrée vont au choix qui ne perd rien ; le `live` de l'aperçu de l'atelier devient stable — règle de l'utilisateur sur les constantes, et une frappe qui ne relance pas la mise en page du PDF — coût si faux : nul. Appliquée sous la tâche 6.
+- Ruling : le snippet dessine toutes ses pages ; « quitter le champ et son aperçu » veut dire sortir de l'élément du champ, et un clic sur un lien de l'aperçu n'enregistre rien à lui seul ; un lien du résumé vers son propre nœud fait passer son pop-up devant ; dans un plein écran, modal, un lien vers un nœud n'ouvre rien et le dit dans son bandeau, ailleurs il ouvre le pop-up — ambiguïtés de la tâche — coût si faux : nul. Appliquée sous la tâche 6.
 - Ruling : un enregistrement refusé à la fermeture laisse le plein écran ouvert avec son bandeau ; une seconde demande ferme après « Fermer sans enregistrer ? » — plus simple que de garder le texte pour la session — coût si faux : une question. Appliquée sous la tâche 5.

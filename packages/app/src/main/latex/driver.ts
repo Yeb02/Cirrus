@@ -7,8 +7,11 @@ import { type CompileRequest, type InjectedRef, safeLabel, titleToTex, withoutCo
  * links folder that TEXINPUTS names.
  */
 
-/** Part of the cache key: raised whenever the driver or a job's body changes what a compilation gives. 2: doubledCites. */
-export const DRIVER_VERSION = 2;
+/**
+ * Part of the cache key: raised whenever the driver or a job's body changes what a compilation gives. 2: doubledCites;
+ * 3: a snippet's page at least a strut deep under its last baseline.
+ */
+export const DRIVER_VERSION = 3;
 
 /**
  * The bench's driver (bench/latex/src/driver.ts), the preamble read by its relative name. Then the app's macros:
@@ -79,7 +82,7 @@ const label = (name: string, number: string, page: string, anchor = '') => `\\ci
  * unknown keys in red. Every text of the user goes through titleToTex; a label or a key that cannot be
  * injected is left out (the source then shows LaTeX's « ?? »). A label of another source shows « ? » as its page.
  * Then the source: as is in `page` mode; in `snippet` mode, set in a box `widthCm` wide, without indent, and shipped
- * alone on a page of the box's exact size (D3).
+ * alone on a page of the box's size (D3), at least a strut deep under the last baseline.
  */
 export function jobBody(req: CompileRequest, src: string, widthCm: number): string {
   const lines = ['\\makeatletter'];
@@ -103,7 +106,10 @@ export function jobBody(req: CompileRequest, src: string, widthCm: number): stri
       `\\setbox\\cirrus@box=\\vbox{\\hsize=${cm(widthCm)}\\relax\\linewidth=\\hsize\\textwidth=\\hsize\\columnwidth=\\hsize\\parindent=0pt\\relax`
         + `\\makeatother\\input{${src}}\\par}%`,
       '\\begingroup\\pdfhorigin=0pt\\pdfvorigin=0pt\\hoffset=0pt\\voffset=0pt',
-      '\\pdfpagewidth=\\wd\\cirrus@box\\pdfpageheight=\\dimexpr\\ht\\cirrus@box+\\dp\\cirrus@box\\relax',
+      // Under the last baseline, at least a strut's depth: a last line without descenders (« en bits. ») has none in
+      // TeX's box, and the round letters' ink under it was cut by the page's edge (plan 4b, task 6).
+      '\\dimen@=\\dp\\cirrus@box\\relax\\ifdim\\dimen@<\\dp\\strutbox\\dimen@=\\dp\\strutbox\\fi',
+      '\\pdfpagewidth=\\wd\\cirrus@box\\pdfpageheight=\\dimexpr\\ht\\cirrus@box+\\dimen@\\relax',
       '\\ifdim\\pdfpageheight<1pt \\pdfpageheight=1pt\\fi',
       '\\shipout\\box\\cirrus@box\\endgroup',
       '\\makeatother',

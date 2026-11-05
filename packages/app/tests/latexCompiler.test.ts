@@ -145,6 +145,20 @@ texTest('snippet : la page a la largeur réglée et la hauteur du contenu', asyn
   expect(statuses).toEqual([{ state: 'ready' }]);
 });
 
+texTest('snippet : sous la dernière ligne, au moins la profondeur d’un strut, même sans jambage (plan 4b, tâche 6)', async () => {
+  // DEFAULT_PREAMBLE is 11pt: \baselineskip 13.6pt, a strut 0.3 of it deep (4.08pt). « en bits. » has no descender:
+  // its baseline used to be the page's bottom, and the round letters' ink below it was cut.
+  const s = start();
+  const [page] = await pagesOf(await s.compile(req({ source: 'Pour une source $X$ :\\begin{equation}H(X)\\end{equation}en bits.' })));
+  expect(page.text).toContain('en bits.');
+  expect(Math.min(...page.baselines)).toBeGreaterThan(4);
+  expect(Math.min(...page.baselines)).toBeLessThan(4.2);
+  // A last line with a descender deeper than the strut keeps its own depth (\rule here, 6pt deep).
+  const [deep] = await pagesOf(await s.compile(req({ slot: 'summary:n2', source: 'Profond\\rule[-6pt]{1pt}{8pt}' })));
+  expect(Math.min(...deep.baselines)).toBeGreaterThan(5.9);
+  expect(Math.min(...deep.baselines)).toBeLessThan(6.1);
+});
+
 texTest('page : un fragment prend les pages du préambule', async () => {
   const pages = await pagesOf(await start().compile(req({ mode: 'page' })));
   expect(pages).toHaveLength(1);
