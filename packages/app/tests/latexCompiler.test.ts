@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,13 +13,15 @@ import { invalidRequest, LatexService } from '../src/main/latex/compiler.ts';
 import { findBinaries, type TexBinaries } from '../src/main/latex/tinytex.ts';
 import { readPdf } from './latexPdf.ts';
 
-/** Every process the service starts, to check that none is left (and that a cache hit starts none). */
+/** Every process the service starts, to check that none is left (and that a cache hit starts none), and its folder. */
 const spawned = vi.hoisted(() => [] as ChildProcess[]);
+const cwdOf = vi.hoisted(() => new Map<ChildProcess, string>());
 vi.mock('node:child_process', async (original) => {
   const cp = await original<typeof import('node:child_process')>();
   const spawn = ((...args: unknown[]) => {
     const p = (cp.spawn as (...a: unknown[]) => ChildProcess)(...args);
     spawned.push(p);
+    cwdOf.set(p, (args[2] as { cwd: string }).cwd);
     return p;
   }) as typeof cp.spawn;
   return { ...cp, spawn, default: { ...cp, spawn } };
@@ -43,6 +45,7 @@ const statuses: LatexStatus[] = [];
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), 'cirrus-é-latex-'));
   spawned.length = 0;
+  cwdOf.clear();
   statuses.length = 0;
 });
 afterEach(async () => {
@@ -51,8 +54,10 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true, maxRetries: 10 });
 });
 
+/** The settings of the service started last: a test may change them while it runs. */
+let params: RenderParams = DEFAULT_PARAMS;
 function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBinaries | null> = async () => bins): LatexService {
-  const params: RenderParams = { ...DEFAULT_PARAMS, ...over };
+  params = { ...DEFAULT_PARAMS, ...over };
   svc = new LatexService({
     binaries, root: join(base, 'latex'), store: base, params: () => params, status: (s) => statuses.push(s),
     cache: new PdfCache(join(base, 'latex', 'cache'), () => params.latexCacheMb * 2 ** 20),
@@ -69,6 +74,18 @@ const PUB = '0192f0c3-7a1b-7c2d-8e3f-000000000042';
 const MDL = 'Minimum Description Length Principle (MDL)';
 const LOOP = '\\loop\\iftrue\\repeat';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(cond: () => boolean, ms = 10_000): Promise<void> {
+  for (const t0 = performance.now(); !cond(); await sleep(20)) if (performance.now() - t0 > ms) throw new Error('attente trop longue');
+}
+const alive = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
+/** The preamble a spawned driver loads (read from its work folder, '' once the folder is gone). */
+function preambleOf(p: ChildProcess): string {
+  try {
+    return readFileSync(join(cwdOf.get(p)!, 'preamble.tex'), 'utf8');
+  } catch {
+    return '';
+  }
+}
 const sha = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
 function ok(a: CompileAnswer): Extract<CompileAnswer, { status: 'ok' }> {
@@ -247,6 +264,61 @@ texTest('préambule invalide : dit, et vite', async () => {
   expect(await s.compile(req({ slot: 'autre', preamble }))).toMatchObject({ status: 'error', error: { where: 'preamble' } });
   expect(spawned.length).toBe(n);
   ok(await s.compile(req({ slot: 'autre' })));
+});
+
+texTest('préambules alternés P1, P2, P1 : chaque requête a sa réponse, et aucun pdfLaTeX dédié ne reste', async () => {
+  // A waits for P1; B switches the pool to P2, so A gets a process of its own; C switches the pool back to P1.
+  const P1 = DEFAULT_PREAMBLE, P2 = `${DEFAULT_PREAMBLE}% brouillon\n`;
+  const s = start();
+  const [a, b, c] = await Promise.all([
+    s.compile(req({ slot: 'a', preamble: P1, source: 'Premier.' })),
+    s.compile(req({ slot: 'b', preamble: P2, source: 'Deuxième.' })),
+    s.compile(req({ slot: 'c', preamble: P1, source: 'Troisième.' })),
+  ]);
+  expect((await pagesOf(a))[0].text).toContain('Premier.');
+  expect((await pagesOf(b))[0].text).toContain('Deuxième.');
+  expect((await pagesOf(c))[0].text).toContain('Troisième.');
+  // Once all have settled, only the pool is left: at most latexWarmProcesses pdfLaTeX, all of the pool's preamble.
+  await until(() => spawned.filter(alive).every((p) => preambleOf(p) === P1) && spawned.filter(alive).length <= params.latexWarmProcesses)
+    .catch(() => undefined);
+  await sleep(500);
+  const left = spawned.filter(alive);
+  expect(left.length).toBeLessThanOrEqual(params.latexWarmProcesses);
+  for (const p of left) expect(preambleOf(p)).toBe(P1);
+  await s.dispose();
+  svc = null;
+  for (const p of spawned) expect(alive(p), `pid ${p.pid}`).toBe(false);
+});
+
+texTest('un pdfLaTeX dédié dépassé, dont le préambule échoue ensuite à se charger, ne touche pas la requête pour laquelle il était parti', async () => {
+  // P1 loads only once a file gate.tex is in its work folder: the test decides which process loads it. A's source runs
+  // until go.tex is there.
+  const waitFor = (name: string, file: string) =>
+    `\\newread\\${name}\\def\\${name}w{\\openin\\${name}=${file} \\ifeof\\${name}\\expandafter\\${name}w\\fi}\\${name}w\\closein\\${name} `;
+  const P1 = `${DEFAULT_PREAMBLE}${waitFor('cirrusgate', 'gate')}\n`, P2 = `${DEFAULT_PREAMBLE}% brouillon\n`;
+  const s = start({ latexTimeoutMs: 60_000 });
+  const a = s.compile(req({ slot: 'a', preamble: P1, source: `${waitFor('cirrusgo', 'go')}Fini.` }));
+  await until(() => spawned.length >= params.latexWarmProcesses);
+  // B: A gets a process of its own, which will never load (no gate) and fails at its timeout, 2 s.
+  params.latexTimeoutMs = 2000;
+  const before = spawned.length;
+  const b = s.compile(req({ slot: 'b', preamble: P2 }));
+  await until(() => spawned.slice(before).some((p) => preambleOf(p) === P1));
+  const own = spawned.slice(before).find((p) => preambleOf(p) === P1)!;
+  const tOwn = performance.now();
+  // C: the pool is P1's again, and its processes load (their gate opened); A takes one of them, C another.
+  params.latexTimeoutMs = 60_000;
+  const middle = spawned.length;
+  const c = s.compile(req({ slot: 'c', preamble: P1 }));
+  await until(() => spawned.slice(middle).filter((p) => preambleOf(p) === P1).length >= params.latexWarmProcesses);
+  for (const p of spawned.slice(middle)) if (preambleOf(p) === P1) writeFileSync(join(cwdOf.get(p)!, 'gate.tex'), '');
+  ok(await c);
+  ok(await b);
+  // A runs past the dedicated process's timeout, then is let go: its answer is its own compilation's.
+  await sleep(Math.max(0, 2600 - (performance.now() - tOwn)));
+  for (const p of spawned.filter(alive)) writeFileSync(join(cwdOf.get(p)!, 'go.tex'), '');
+  expect((await pagesOf(await a))[0].text).toContain('Fini.');
+  expect(alive(own)).toBe(false);
 });
 
 // Review Focus 2, as decided after TeX Live 2026 made openin_any a no-op: TeX writes only in its folder and runs nothing.

@@ -49,7 +49,10 @@ interface Warm {
   taken: boolean;
   /** Stopped on purpose (replaced, or its siblings failed): its exit says nothing. */
   dead: boolean;
-  /** Started for this waiter only, its preamble no longer the pool's. */
+  /**
+   * Started for this waiter only, its preamble no longer the pool's then; detached (null) once given to it, or once the
+   * waiter is given another process or settled, when it is stopped.
+   */
   waiter: Waiter | null;
 }
 
@@ -336,32 +339,26 @@ export class LatexService {
   }
 
   /**
-   * Gives each waiter, in order, a ready process of its preamble: the pool's, or for a waiter queued before the preamble
-   * changed, one started for it alone. Then tops the pool up to latexWarmProcesses, at the next turn of the event loop:
-   * starting a process takes about 10 ms of this thread, which the job just given should not wait for (measured).
+   * Gives each waiter, in order, a ready process of its preamble: the one started for it alone (a waiter queued before
+   * the preamble changed), once ready, whatever the pool's preamble has become since; else the pool's. Then tops the pool
+   * up to latexWarmProcesses, at the next turn of the event loop: starting a process takes about 10 ms of this thread,
+   * which the job just given should not wait for (measured).
    */
   private dispatch(): void {
     if (this.disposed) return;
     for (const w of [...this.queue]) {
-      let warm: Warm | null = null;
-      if (w.preamble === this.preamble) {
+      let warm: Warm | null = w.own?.ready ? w.own : null;
+      if (!warm && w.preamble === this.preamble) {
         const i = this.idle.findIndex((x) => x.ready);
         if (i >= 0) warm = this.idle.splice(i, 1)[0];
-      } else {
-        if (!w.own && this.bins) {
-          w.own = this.start(this.bins, w.preamble, w);
-          if (!w.own) {
-            this.settle(w.job, this.unprepared(w.job));
-            continue;
-          }
+      } else if (!warm && !w.own && this.bins) {
+        w.own = this.start(this.bins, w.preamble, w);
+        if (!w.own) {
+          this.settle(w.job, this.unprepared(w.job));
+          continue;
         }
-        if (w.own?.ready) warm = w.own;
       }
-      if (!warm) continue;
-      this.queue.splice(this.queue.indexOf(w), 1);
-      w.job.waiter = null;
-      warm.taken = true;
-      w.give(warm);
+      if (warm) this.hand(w, warm);
     }
     if (this.filling) return;
     this.filling = true;
@@ -369,6 +366,26 @@ export class LatexService {
       this.filling = false;
       this.fill();
     });
+  }
+
+  /** Gives `warm` to the waiter. Its own process, if it got another, is stopped and detached: it is nobody's any more. */
+  private hand(w: Waiter, warm: Warm): void {
+    this.queue.splice(this.queue.indexOf(w), 1);
+    w.job.waiter = null;
+    if (w.own !== warm) this.drop(w);
+    w.own = null;
+    warm.waiter = null;
+    warm.taken = true;
+    w.give(warm);
+  }
+
+  /** Stops the waiter's own process, if any, and detaches it: its exit or its failure no longer concerns the waiter's job. */
+  private drop(w: Waiter): void {
+    const own = w.own;
+    if (!own) return;
+    w.own = null;
+    own.waiter = null;
+    this.retire(own);
   }
 
   private fill(): void {
@@ -461,14 +478,19 @@ export class LatexService {
   }
 
   /**
-   * A process that could not load its preamble: its waiter if it was started for one; otherwise the requests waiting for
-   * the pool's preamble, when the failure is that preamble's (the pool stops, and the next requests get it at once) or
+   * A process that could not load its preamble. One started for a waiter fails that waiter, unless the pool has its
+   * preamble again: the pool then serves it, or fails it with the same error. Otherwise the requests waiting for the
+   * pool's preamble fail, when the failure is that preamble's (the pool stops, and the next requests get it at once) or
    * when no other process may still load it.
    */
   private prepFailed(warm: Warm, f: Failure, deterministic: boolean): void {
     this.idle = this.idle.filter((x) => x !== warm);
-    if (warm.waiter) {
-      this.settle(warm.waiter.job, this.failed(warm.waiter.job, f));
+    const w = warm.waiter;
+    if (w) {
+      warm.waiter = null;
+      if (w.own === warm) w.own = null;
+      if (w.preamble !== this.preamble) this.settle(w.job, this.failed(w.job, f));
+      else this.dispatch();
       return;
     }
     if (warm.preamble !== this.preamble) return;
@@ -557,7 +579,7 @@ export class LatexService {
     if (w) {
       job.waiter = null;
       this.queue = this.queue.filter((x) => x !== w);
-      if (w.own) this.retire(w.own);
+      this.drop(w);
       w.give(null);
     }
     job.running?.kill();

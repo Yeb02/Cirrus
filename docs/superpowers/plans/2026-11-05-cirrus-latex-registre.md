@@ -342,6 +342,19 @@ Fixées par le contrôleur avant la tâche :
 - `blobRequest` et `latexRequest` partagent la lecture de l'adresse (`parseUrl`) et la réponse avec ses plages (`served`). `fileResponse` choisit l'hôte du protocole.
 - Les extraits de journal des tests sont réels : `tests/latex-logs/*.log`, sortis de TinyTeX v2026.11 sous le pilote. Le chemin de TinyTeX y est raccourci. Une ligne n'en est retirée que si ses propres parenthèses ferment ce qu'elles ouvrent, si bien que la pile des fichiers reste la vraie.
 
+### Revue, tour 1
+
+- **Important corrigé : un pdfLaTeX dédié restait vivant.** Ce processus était parti pour une requête mise en attente avant un changement de préambule. Il restait vivant quand la réserve revenait au préambule de cette requête, et que la requête prenait un processus de la réserve (P1, P2 puis P1). Pire, son échec ultérieur au chargement réglait la requête : sa compilation en cours était tuée, avec « Compilation trop longue » et `where: 'preamble'`.
+  - Correctif (`compiler.ts`) :
+    - une requête prend son processus dédié dès qu'il est prêt, quel que soit devenu le préambule de la réserve ;
+    - quand elle reçoit un autre processus, ou quand elle est réglée, son processus dédié est arrêté et détaché ;
+    - un processus dédié qui échoue alors que la réserve a retrouvé le préambule de sa requête laisse la requête à la réserve. Celle-ci la sert, ou la fait échouer avec la même erreur.
+  - Deux tests :
+    - « préambules alternés P1, P2, P1 » : chaque requête a sa réponse, il ne reste que la réserve, puis rien après `dispose()` ;
+    - « un pdfLaTeX dédié dépassé… » : le préambule P1 attend un fichier `gate.tex` que le test ne donne qu'à la réserve.
+
+    Avant le correctif, ils échouaient sur 3 processus vivants pour 2 attendus, et sur « Compilation trop longue (plus de 2 s) : arrêtée. ».
+
 ## Tâche 4 : interface — registre des labels et des citations, requêtes, compilation à la pause
 
 ## Tâche 5 : interface — éditeur LaTeX, plein écran d'un `.tex`, enregistrement
