@@ -892,21 +892,24 @@ Fixées par le contrôleur avant la tâche :
 - **Méthode** (le détail est dans `docs/bancs/latex-app-2026-11-05.md`) :
   - l'app construite, une copie neuve de la base de test à chaque session, un profil à part, la TinyTeX du banc (`CIRRUS_TINYTEX`), menée par le protocole des outils de Chrome avec de vraies entrées ;
   - rien de l'app n'est modifié pour mesurer (décision plus bas). La fin de la pause est le déclenchement de la minuterie de `latexTypingPauseMs` (300 ms) ; l'image dessinée est le canevas de la première page du nouveau PDF, mis dans la page, puis l'image suivante ;
-  - une frappe (« ␣a », « ␣b »…) à la fin du résumé de l'entropie, dans son éditeur compact, ou à la fin de `complexité.tex`, dans son plein écran, puis 1,2 s de repos. Une première frappe non comptée, puis 20 ; trois sessions, soit 60 par cas ;
-  - p50 et p95 au rang le plus proche.
-- **De la fin de la pause à l'aperçu dessiné** (la cible de la spec 13 est de 300 ms) :
+  - une frappe (« ␣a », « ␣b »…) à la fin du résumé de l'entropie, dans son éditeur compact, ou à la fin de `complexité.tex`, dans son plein écran, puis 1,2 s de repos. Chaque session commence par une frappe non comptée ;
+  - toutes les frappes de cette condition sont comptées : trois sessions de 20, plus les essais faits avec la même construction et les mêmes scripts (un essai de 3 pour le résumé ; deux, de 6 et de 3, pour le `.tex`). Soit 63 frappes pour le résumé, et 69 pour le `.tex` (revue, tour 1) ;
+  - un balayage du repos (0,8, 1,2, 2, 3 et 5 s, une session de 6 frappes chacun), et un essai de 5 frappes à 3 s, sont donnés à part. La session de 1,2 s du balayage est l'essai de 6 compté plus haut ;
+  - p50 et p95 au rang le plus proche ; « canevas » et « image suivante » nomment l'instant où la mesure s'arrête.
+- **De la fin de la pause à l'aperçu dessiné** (la cible de la spec 13 est de 300 ms), repos de 1,2 s :
 
-  | Cas | p50 | p95 | max | Image suivante p50 / p95 |
-  | --- | --- | --- | --- | --- |
-  | Résumé de l'entropie, dans son pop-up | 176 ms | 239 ms | 257 ms | 180 / 242 ms |
-  | `complexité.tex`, dans son plein écran | 214 ms | 282 ms | 292 ms | 216 / 287 ms (max 298) |
+  | Cas | Frappes | Canevas p50 | p95 | max | Image suivante p50 | p95 | max |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Résumé de l'entropie, dans son pop-up | 63 | 176 ms | 243 ms | 257 ms | 180 ms | 246 ms | 267 ms |
+  | `complexité.tex`, dans son plein écran | 69 | 254 ms | 288 ms | 329 ms | 261 ms | 291 ms | 331 ms |
 
-  - La cible est tenue dans les deux cas, en médiane comme au p95. Pour le `.tex`, la marge est mince dans une session lente.
-  - D'une session à l'autre, les p50 vont de 168 à 226 ms pour le résumé et de 198 à 266 ms pour le `.tex`. La session lente l'est partout, compilation et pdf.js : c'est la machine.
-- **Où va le temps** (p50 / p95, résumé puis `.tex`) :
-  - la compilation dans le principal, de l'arrivée de l'IPC à sa réponse : 137 / 188 ms, puis 155 / 206 ms, soit les trois quarts ;
-  - l'IPC, le retour, le rendu de React et la première réponse du PDF : environ 5 ms ;
-  - pdf.js, de la première réponse du PDF au canevas : 35 / 46 ms, puis 53 / 72 ms.
+  - La cible est tenue au p95 dans les deux cas, mais pas à chaque frappe. Une frappe du `.tex` sur 69 l'a dépassée : 329 ms au canevas, 331 ms à l'image suivante, la première comptée de l'essai de 6. Dans le balayage, une frappe du `.tex` avec un repos de 0,8 s a pris 306 ms (308 ms à l'image suivante). Sur les 98 frappes du `.tex`, tout repos confondu : canevas p50 212, p95 288, max 329 ms.
+  - Les sessions du `.tex` se rangent vers 200 ms (la session 3, la première moitié de la session 1) ou vers 260 ms (la session 2, la seconde moitié de la session 1, les deux essais). La médiane dépend donc des sessions comptées : 214 ms pour les trois sessions de 20 seules, 254 ms avec les essais. La compilation et pdf.js varient ensemble, mais la cause n'est pas établie.
+  - Le balayage du repos donne des p50 de 238,5, 262,5, 196,8, 195,2 et 204,9 ms pour 0,8, 1,2, 2, 3 et 5 s. Avec une seule session par repos, l'effet du repos ne se sépare pas de l'écart d'une session à l'autre.
+- **Où va le temps** (p50 / p95, puis min et max ; résumé puis `.tex`, repos de 1,2 s) :
+  - la compilation dans le principal, de l'arrivée de l'IPC à sa réponse : 138 / 188 ms (de 118 à 208), puis 188 / 207 ms (de 131 à 239), soit environ les trois quarts ;
+  - pdf.js, de la première réponse du PDF au canevas : 35 / 46 ms (de 25 à 56, sur 60 frappes : l'essai de 3 du résumé ne relevait pas la lecture du PDF), puis 57 / 79 ms (de 41 à 95) ;
+  - le reste, l'IPC, le retour, le rendu de React et la première réponse du PDF : environ 5 ms (de 4 à 8).
   - Le levier suivant, si la marge venait à manquer : pdfLaTeX lui-même (113 ms des 138 ms d'une compilation de `complexité.tex` à la tâche 3), puis le dessin de pdf.js, chacun à mesurer. `mylatexformat` n'y changerait rien, le préambule étant déjà chargé d'avance.
 - **Ouvrir le pop-up de l'entropie**, du relâchement du clic au résumé dessiné :
   - rouvert dans la session, son résumé en cache : p50 17 ms, p95 20 ms (20 fois), sans compilation ;
@@ -932,7 +935,8 @@ Fixées par le contrôleur avant la tâche :
   - Le pilote enveloppe `window.setTimeout` pour noter le déclenchement de la pause, et pose un `MutationObserver` sur les canevas des pages PDF. Un lanceur du principal, jetable, enveloppe le gestionnaire de `cirrus:latex:compile` avant que l'app ne l'enregistre.
   - Coût si faux : nul ; les scripts sont jetables (bloc-notes de la session).
 - Ruling: **trois sessions de 20 frappes, et une frappe non comptée en tête de chacune**, plutôt qu'une seule série.
-  - Pourquoi : une première série a montré des écarts de 50 ms d'une session à l'autre, que la machine explique. Le p95 de 60 frappes dit mieux la marge.
+  - Pourquoi : une première série a montré des écarts de 50 ms d'une session à l'autre, dont la cause n'est pas établie. Le p95 de 60 frappes dit mieux la marge.
+  - Revue, tour 1 : les essais faits dans la même condition (repos de 1,2 s) sont comptés aussi, et le balayage du repos est publié à part (plus haut).
   - Coût si faux : nul.
 - Ruling: **une capture ne dessine pas le curseur du texte** : `.capture * { caret-color: transparent !important; }` (`styles.css`).
   - Pourquoi : `plein-ecran-tex`, `tex-erreur` et `preambule` ont un éditeur qui a le focus, et le curseur de Chromium clignote. L'image dépendrait de l'instant où elle est prise. C'est ce que font Playwright et Puppeteer.
@@ -985,10 +989,13 @@ Fixées par le contrôleur avant la tâche :
 | Résumé ouvert pendant l’installation : compilé après « installé » | 7 | 1,6 s puis 1,5 s | idem ; sans frappe (`latexChanged`) |
 | `tikz-cd` à la demande, du préambule tapé à l’aperçu recompilé | 7 | 18,4 s ; 154,3 s une fois (miroir lent) | idem ; `search --global`, `install`, réserve refaite |
 | `tlmgr --repository ctan search --global --file` | 7 | de 10,2 à 11,9 s, quatre fois | installation neuve ; un miroir différent chaque fois |
-| Résumé de l’entropie modifié : de la fin de la pause de frappe au canevas du nouveau PDF | 8 | p50 176 ms, p95 239 ms, max 257 (60) ; image suivante 180 / 242 ms | app construite, base de test, TinyTeX du banc ; trois sessions de 20 frappes, 1,2 s de repos |
-| `complexité.tex` modifié dans son plein écran : idem | 8 | p50 214 ms, p95 282 ms, max 292 (60) ; image suivante 216 / 287 ms, max 298 | idem |
-| Part de la compilation (principal), résumé puis `.tex` | 8 | p50 137 et 155 ms ; p95 188 et 206 ms | l’IPC chronométrée dans le principal |
-| Part de pdf.js, résumé puis `.tex` | 8 | p50 35 et 53 ms ; p95 46 et 72 ms | de la première réponse du PDF au canevas |
+| Résumé de l’entropie modifié : de la fin de la pause de frappe au canevas du nouveau PDF | 8 | canevas p50 176 ms, p95 243 ms, max 257 (63) ; image suivante p50 180, p95 246, max 267 | app construite, base de test, TinyTeX du banc ; 1,2 s de repos ; trois sessions de 20 et un essai de 3 |
+| `complexité.tex` modifié dans son plein écran : idem | 8 | canevas p50 254 ms, p95 288 ms, max 329 (69) ; image suivante p50 261, p95 291, max 331 ; une frappe sur 69 au-delà de 300 ms | idem ; trois sessions de 20 et deux essais, de 6 et de 3 ; les sessions se rangent vers 200 ou vers 260 ms |
+| `complexité.tex`, toutes les frappes, tout repos | 8 | canevas p50 212 ms, p95 288 ms, max 329 (98) ; deux frappes au-delà de 300 ms (329, et 306 à 0,8 s de repos) | les 69 ci-dessus, le balayage et un essai de 5 à 3 s |
+| Balayage du repos entre deux frappes (`.tex`) | 8 | canevas p50 238,5 / 262,5 / 196,8 / 195,2 / 204,9 ms ; max 306 / 329 / 212 / 205 / 223 | 0,8 / 1,2 / 2 / 3 / 5 s de repos ; une session de 6 frappes chacun |
+| Part de la compilation (principal), résumé puis `.tex` | 8 | p50 138 et 188 ms ; p95 188 et 207 ms ; de 118 à 208, de 131 à 239 | l’IPC chronométrée dans le principal ; 1,2 s de repos |
+| Part de pdf.js, résumé puis `.tex` | 8 | p50 35 et 57 ms ; p95 46 et 79 ms ; de 25 à 56, de 41 à 95 | de la première réponse du PDF au canevas |
+| Le reste : IPC, rendu de React, première réponse du PDF | 8 | environ 5 ms (de 4 à 8) | idem |
 | Pop-up de l’entropie rouvert, son résumé en cache : du clic au résumé dessiné | 8 | p50 17 ms, p95 20 ms (20) | une session ; sans compilation |
 | Première ouverture après un redémarrage, le résumé dans le cache du disque | 8 | p50 488 ms, p95 506 ms (5) | 3 ms de réponse du cache, 475 ms de pdf.js |
 | Première compilation après le démarrage : du clic au résumé dessiné | 8 | p50 622 ms, p95 646 ms (10) ; 579 ms dès que le graphe paraît (5) | une base neuve par session ; 154 ms de compilation, 463 ms de pdf.js |
@@ -1076,7 +1083,7 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 ### Tâche 8
 
 - Le premier résumé compilé d'une session attend environ 0,45 s le chargement de pdf.js et de son travailleur, en plus de la compilation. Les charger d'avance, au repos après le démarrage, l'enlèverait (`LatexField.tsx`, `LatexSnippet.tsx`). Le mineur de la tâche 6 sur le source montré à la première ouverture en est la mesure.
-- Pour un `.tex`, la cible de 300 ms est tenue de peu dans une session lente : p95 de 288 ms, et 298 ms au plus jusqu'à l'image suivante. Un `.tex` plus long, ou une figure TikZ, la dépassera (la spec 13 l'accepte).
+- Pour un `.tex`, la cible de 300 ms est tenue au p95 (288 ms au canevas), mais pas à chaque frappe : une sur 69 a pris 329 ms, et une autre 306 ms avec un repos de 0,8 s. Un `.tex` plus long, ou une figure TikZ, la dépassera (la spec 13 l'accepte). La cause des deux groupes de sessions (vers 200 et vers 260 ms) n'est pas établie.
 - Les mesures sont celles du portable principal. Le petit PC, qui fixe le plancher, n'est pas mesuré (spec 21).
 - L'entrée `type:` de `CIRRUS_CLICK` passe par `document.execCommand`, que les navigateurs déclarent obsolète (`App.tsx`).
 

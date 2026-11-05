@@ -122,7 +122,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
    - une base dont le chemin porte des accents.
 
    L'aperçu montre le texte tel qu'il est écrit. Rien n'est interprété ni exécuté, et la compilation ne casse pas. Testé dans les tâches 1 et 3.
-2. **Un `.tex` qui tente de sortir de son dossier :** `\input{C:/Windows/win.ini}`, `\IfFileExists` sur un chemin absolu, `\input{../…}`, un `\openout` vers un fichier du nœud, `\write18`. Tout est refusé, et le magasin reste intact, octet pour octet. Testé dans la tâche 3.
+2. **Un `.tex` qui tente de sortir de son dossier :** un `\openout` hors du dossier de travail (un nom absolu, ou qui remonte par `..`) et `\write18` sont refusés. Aucune écriture n'atteint un fichier du nœud : par son seul nom, `\openout` écrit un nouveau fichier dans le dossier de travail. Le magasin reste intact, octet pour octet. Les lectures (`\input{C:/Windows/win.ini}`, `\IfFileExists` sur un chemin absolu, `\input{../…}`) sont permises, par décision de l'utilisateur (D4 amendée). Testé dans la tâche 3.
 3. **Une compilation qui tourne mal :**
    - une frappe rapide ;
    - une boucle infinie ;
