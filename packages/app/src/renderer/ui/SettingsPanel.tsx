@@ -1,4 +1,4 @@
-import { DEFAULT_PARAMS, hexToRgb, PARAM_SPECS, type ParamSpec, type RenderParams, rgbToHex, type Rgb } from '@cirrus/view';
+import { DEFAULT_PARAMS, hexToRgb, PARAM_SPECS, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
 
 type Value = RenderParams[keyof RenderParams];
@@ -23,6 +23,18 @@ function ListField(props: { value: number[]; onChange(v: number[]): void }) {
     const v = text.split(',').map((x) => Number(x.trim()));
     if (v.length > 0 && v.every(Number.isFinite)) props.onChange(v);
     else setText(props.value.join(', '));
+  };
+  return <input type="text" className="list" value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => { if (e.key === 'Enter') apply(); }} />;
+}
+
+/** Words separated by spaces, applied like a list; a word outside WORD puts the text back. */
+function WordsField(props: { value: string[]; onChange(v: string[]): void }) {
+  const [text, setText] = useState(props.value.join(' '));
+  useEffect(() => { setText(props.value.join(' ')); }, [props.value]);
+  const apply = () => {
+    const v = [...new Set(text.split(/\s+/).filter((w) => w !== ''))];
+    if (v.every((w) => WORD.test(w))) props.onChange(v);
+    else setText(props.value.join(' '));
   };
   return <input type="text" className="list" value={text} onChange={(e) => setText(e.target.value)} onBlur={apply} onKeyDown={(e) => { if (e.key === 'Enter') apply(); }} />;
 }
@@ -59,6 +71,8 @@ function Control(props: { spec: ParamSpec; value: Value; onChange(v: Value): voi
       );
     case 'list':
       return <div className="control"><ListField value={value as number[]} onChange={props.onChange} /></div>;
+    case 'words':
+      return <div className="control"><WordsField value={value as string[]} onChange={props.onChange} /></div>;
   }
 }
 

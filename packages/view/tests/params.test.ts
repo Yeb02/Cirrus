@@ -118,6 +118,22 @@ test('lecteur PDF : pages d’avance, pas et bornes du zoom, documents gardés, 
   }
 });
 
+test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage avancé du groupe « LaTeX » (plan 4b, tâche 2)', () => {
+  expect(DEFAULT_PARAMS.latexPackages).toEqual([]);
+  expect(PARAM_SPECS.find((s) => s.key === 'latexPackages')).toEqual({
+    key: 'latexPackages', label: 'Paquets LaTeX ajoutés (installés sur chaque PC)', section: 'avancé', group: 'LaTeX', kind: 'words',
+  });
+  expect(withOverrides({ latexPackages: ['tikz-cd'] }).latexPackages).toEqual(['tikz-cd']);
+  expect(withOverrides({ latexPackages: ['siunitx', 'l3kernel', 'babel-french', 'ms.x_y'] }).latexPackages).toEqual(['siunitx', 'l3kernel', 'babel-french', 'ms.x_y']);
+  // Only words of [A-Za-z0-9._-]: they reach tlmgr's command line.
+  for (const bad of [['a b'], [3], ['tikz-cd', 3], [''], ['a&b'], ['é'], 'tikz-cd', null]) {
+    expect(withOverrides({ latexPackages: bad }).latexPackages, JSON.stringify(bad)).toEqual([]);
+  }
+  const p = { ...DEFAULT_PARAMS, latexPackages: ['tikz-cd', 'siunitx'] };
+  expect(diffFromDefaults(p)).toEqual({ latexPackages: ['tikz-cd', 'siunitx'] });
+  expect(withOverrides(diffFromDefaults(p))).toEqual(p);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

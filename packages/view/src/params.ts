@@ -179,6 +179,9 @@ export interface RenderParams {
   panelGapPx: number;
   /** The registry's keys or values offered while a tag is typed. */
   tagSuggestions: number;
+  // LaTeX (plan 4b)
+  /** The packages installed on demand, which every PC installs at its start (D1). */
+  latexPackages: string[];
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -323,6 +326,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   panelMinPx: 200,
   panelGapPx: 12,
   tagSuggestions: 8,
+  latexPackages: [],
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -352,7 +356,9 @@ export const DEFAULT_PARAMS: RenderParams = {
   intruderColor: hexToRgb('#ff9a3c'),
 };
 
-export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list';
+/** `words`: a list of words of WORD, such as package names (they reach tlmgr's command line). */
+export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list' | 'words';
+export const WORD = /^[A-Za-z0-9._-]+$/;
 
 export interface ParamSpec {
   key: keyof RenderParams;
@@ -492,6 +498,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('panelMinPx', 'Côté minimal d’un panneau flottant (px)', A, 'Pop-ups', 120, 600, 1),
   num('panelGapPx', 'Écart entre le clic et le pop-up qu’il ouvre (px)', A, 'Pop-ups', 0, 60, 1),
   num('tagSuggestions', 'Suggestions montrées pendant la saisie d’un tag', A, 'Pop-ups', 1, 50, 1),
+  { key: 'latexPackages', label: 'Paquets LaTeX ajoutés (installés sur chaque PC)', section: A, group: 'LaTeX', kind: 'words' },
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
@@ -534,6 +541,7 @@ function valid(spec: ParamSpec, v: unknown): boolean {
     case 'color': return Array.isArray(v) && v.length === 3 && v.every((c) => finite(c) && c >= 0 && c <= 1);
     case 'list': return Array.isArray(v) && v.length > 0 && v.every(finite);
     case 'choice': return typeof v === 'string' && spec.choices!.some((c) => c.value === v);
+    case 'words': return Array.isArray(v) && v.every((w) => typeof w === 'string' && WORD.test(w));
   }
 }
 

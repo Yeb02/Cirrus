@@ -86,6 +86,81 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 2 : principal — TinyTeX : emplacement, installation épinglée, paquets
 
+### Mesures
+
+- **Asset épinglé** : `TinyTeX-1-windows-v2026.11.exe`, de la version v2026.11, publiée le 2026-11-01. La version existe : aucun repli n'a été nécessaire.
+  - URL : `https://github.com/rstudio/tinytex-releases/releases/download/v2026.11/TinyTeX-1-windows-v2026.11.exe` ;
+  - taille : 73 710 178 octets ;
+  - SHA-256 : `375e8adec0177cd9ec6a1f8c76efe0c22b1a0c260e76a00386bcea52d88e5354` ;
+  - téléchargé et haché le 2026-11-05. L'empreinte calculée est celle que GitHub affiche pour l'asset (`digest`).
+- **Vérification manuelle de `provision`** : un script jetable, avec le `fetch` de Node à la place de `net.fetch`, et le reste du module tel quel (`fetchDownload`, `runFile`).
+  - `CIRRUS_TINYTEX` désignait un dossier temporaire neuf, créé vide d'avance, et dont le chemin porte une espace (`%TEMP%\cirrus provision-…\TinyTeX`) ;
+  - deux passes, chacune dans un dossier neuf : avant et après la correction du code de sortie (plus bas).
+
+  | Passe | Total | Téléchargement | Extraction | `tlmgr` (mise à jour, 9 paquets) et renommage | Taille installée |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | 75,7 s | 17,9 s | 36,5 s | 21,3 s | 313,5 Mo |
+  | 2 (code final) | 73,0 s | 18,8 s | 34,1 s | 20,2 s | 313,5 Mo |
+
+  - `pdflatex --version` : « pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026) », la version du banc. Il ne reste que `<root>`, ni `.partial` ni `.download` ;
+  - sur cette installation, avec le vrai `tlmgr` :
+    - `installed()` compte 126 paquets, dont les huit de `BASE_PACKAGES` et `tikz-cd` ;
+    - la sortie de `tlmgr search --global --file /siunitx.sty` a la forme que `packageOf` lit (`siunitx:` puis le chemin, après une tabulation). `installFor('siunitx.sty')` rend `siunitx`, en 10,4 s puis en 9,2 s ;
+    - `installFor` d'un fichier qu'aucun paquet ne contient rend null, et `ensure(['siunitx', 'tikz-cd'])` rend `[]` ;
+  - `DEFAULT_PREAMBLE` compile sur l'installation neuve, sous `texEnv`, avec les seuls paquets de `BASE_PACKAGES` (PDF de 50 627 octets) ;
+  - dépôt : TinyTeX règle `tlmgr` sur `https://tlnet.yihui.org`, un miroir de tlnet. `tlmgr` en vérifie la signature (« verified ») ;
+  - les deux dossiers temporaires sont effacés. `%LOCALAPPDATA%\Cirrus` n'a jamais été créé.
+- **Défaut trouvé à la première passe, et corrigé** : un `tlmgr install` d'un paquet inconnu rendait le code 0.
+  - Cause : `tlmgr.bat` finit par `goto :eof` après `tlmgr.pl`. Lancé seul par `cmd /c`, un tel fichier perd son code de sortie. `perl tlmgr.pl` rend 25, par `call` 1, et sans `call` 0.
+  - Correction : `runFile` passe par `cmd /d /s /c "call "<bat>" <args>"`. Un test refait la fin de `tlmgr.bat` : il échouait avant la correction et passe depuis.
+  - À la seconde passe, le même `tlmgr install` rend 1.
+- Suite : 601 tests sur 601 (581 avant la tâche) : 19 dans `tinytex.test.ts`, et un de plus dans `params.test.ts`. `tsc` : `app` et `view` sans erreur. Les deux tests qui ont besoin de la TinyTeX du banc sont sautés, avec leur raison, si elle manque (vérifié avec `CIRRUS_TINYTEX=C:\nulle-part`).
+
+### Décisions
+
+- Ruling: **`provision` prend un cinquième paramètre facultatif, `release`** (`TINYTEX_RELEASE` par défaut).
+  - Pourquoi : on ne fabrique pas un fichier qui ait l'empreinte du vrai asset. Sans ce paramètre, le bon chemin ne se testerait qu'en téléchargeant, ce que les tests ne font jamais.
+  - Coût si faux : un paramètre.
+- Ruling: **`findBinaries(root, run = runFile)`** : un second paramètre facultatif. `provision` vérifie ainsi pdfLaTeX dans `.partial`, par `deps.run`, avant de renommer, et `<root>` n'apparaît qu'une fois l'installation complète. Le renommage est la dernière étape. Coût si faux : nul.
+- Ruling: **un `<root>` déjà là** : vide, il est retiré (`rmdirSync`, qui échoue sur un dossier non vide). Non vide, il est refusé avant tout téléchargement, et n'est jamais effacé.
+  - Message : « Le dossier <root> existe déjà mais ne contient pas de TinyTeX qui fonctionne : supprime-le pour réinstaller LaTeX. »
+  - Pourquoi : `CIRRUS_TINYTEX` peut désigner un dossier de l'utilisateur. Renommer sur un dossier existant échouerait sous Windows, mais seulement après 70 s de travail.
+  - Coût si faux : l'utilisateur efface lui-même une TinyTeX cassée.
+- Ruling: **les dépendances de production sont dans `tinytex.ts`, sans Electron** :
+  - `runFile` (`execFile`, `windowsHide`) ;
+  - `fetchDownload(fetchFn)`, qui écrit la réponse dans le fichier au fil du flux.
+
+  La tâche 7 passera `fetchDownload(net.fetch)`. La vérification manuelle a pris `fetchDownload(fetch)`, c'est-à-dire le même code. `onBytes(n)` reçoit le total écrit jusque-là, qui devient `done`. Une erreur de réseau ou de disque devient « Le téléchargement de TinyTeX a échoué (<raison>). ». Coût si faux : nul.
+- Ruling: **un `.bat` passe par `cmd.exe /d /s /c "call …"`, avec une ligne de commande que `runFile` construit lui-même.**
+  - Node refuse de lancer un `.bat` sans interpréteur (EINVAL), et `shell: true` avec des arguments est déprécié (DEP0190).
+  - Chaque argument doit être un mot de `[A-Za-z0-9._/=-]`, et le chemin du `.bat` ne doit porter ni `"`, ni `%`, ni `^`. Sinon, l'appel est refusé avant de lancer quoi que ce soit (« Argument refusé pour tlmgr.bat : … »).
+  - Pourquoi : `cmd.exe` lirait `&`, `|`, `%…%` comme des commandes ou des variables. Or le nom d'un fichier manquant vient du journal d'un `.tex`, qui peut venir d'ailleurs.
+  - Coût si faux : un paquet dont le nom porterait `+` serait refusé. Aucun n'est apparu.
+- Ruling: **`missingFile` ne rend qu'un nom de `[A-Za-z0-9._-]`** : il va sur la ligne de commande de `tlmgr`. Ce sont les caractères de `latexPackages`. Coût si faux : un paquet au nom exotique ne s'installe pas de lui-même.
+- Ruling: **`texEnv` retire aussi les variantes de ses sept variables** : `TEXMFOUTPUT`, `TEXINPUTS`, `TEXMFHOME` et `TEXMFCNF`, qu'il enlève, et `openin_any`, `openout_any` et `shell_escape`, qu'il fixe.
+  - Les variantes : les autres casses (Windows ignore la casse d'un nom), ainsi que `VAR.progname` et `VAR_progname`, que kpathsea lit avant `VAR`.
+  - Pourquoi : sans cela, un `openin_any_pdflatex=a` dans l'environnement de l'utilisateur déferait D4.
+  - Coût si faux : nul.
+- Ruling: **`runFile` donne aux outils (`tlmgr`, `pdflatex --version`) l'environnement privé des quatre chemins de l'utilisateur et de leurs variantes**, mais sans les réglages paranoïaques.
+  - Pourquoi : un `TEXMFCNF` laissé par une autre distribution ferait lire à `tlmgr` les arbres d'une autre TeX. `fmtutil` et `updmap`, lancés par `tlmgr`, écrivent dans les arbres de TinyTeX, ce que `openout_any=p` pourrait gêner.
+  - Coût si faux : nul.
+- Ruling: **`Packages` met `tlmgr` à jour si le dépôt l'exige**, puis réessaie l'installation une fois.
+  - Le signal : la sortie de l'installation contient « tlmgr itself needs to be updated ».
+  - Pourquoi : TeX Live met à jour `tlmgr` lui-même en cours d'année. Un `tlmgr` plus ancien refuse alors toute installation (`tlmgr.pl`, `check_for_critical_updates`). Sans cela, les paquets à la demande cesseraient de s'installer quelques semaines après l'installation.
+  - Coût si faux : une dizaine de lignes.
+- Ruling: **`ensure` est un seul tour de la file** : la liste des paquets installés, puis leur installation, sans autre appel entre les deux. Coût si faux : nul.
+- Ruling: **la sortie de `run` (`out`) est la sortie standard, suivie de la sortie d'erreur.** `tlmgr` écrit ses erreurs dans la seconde, et un échec rend sa dernière ligne non vide : « tlmgr install a échoué (code 1) : … ». `installed()` ne garde que les lignes sans espace. Coût si faux : nul.
+- Ruling: **l'étape `packages` est annoncée avant `tlmgr update --self`**, avec la liste qui sera installée : `BASE_PACKAGES`, puis `packages`, sans doublon. Coût si faux : nul.
+- Ruling: **le renommage final est réessayé** sur EPERM, EACCES et EBUSY : jusqu'à vingt fois, toutes les 250 ms.
+  - Pourquoi : un antivirus qui lit encore les binaires frais empêche Windows de déplacer le dossier.
+  - Le nettoyage (`rmSync`, `maxRetries: 10`) ne masque jamais l'erreur qui l'a causé. Ce qui reste, la passe suivante l'efface d'abord.
+  - Coût si faux : nul.
+- Ruling: **la sorte `words` porte ses caractères** (`WORD`, exporté par `@cirrus/view`), plutôt qu'un motif propre à chaque fiche.
+  - Pourquoi : `latexPackages` est le seul réglage de cette sorte.
+  - Le champ du panneau sépare les mots par des espaces et retire les doublons. Un mot invalide y remet le texte précédent, comme le champ des listes.
+  - Coût si faux : un champ `pattern` dans `ParamSpec`.
+- Ruling: **le dépôt de TinyTeX est gardé** (`tlnet.yihui.org`, un miroir de tlnet signé par TeX Live). D1 dit « le dépôt de TeX Live » : c'en est un miroir, dont `tlmgr` vérifie la signature. Coût si faux : un `tlmgr option repository ctan` dans `provision`.
+
 ## Tâche 3 : principal — compilation préchauffée, cloisonnée, en cache
 
 ## Tâche 4 : interface — registre des labels et des citations, requêtes, compilation à la pause
@@ -102,6 +177,10 @@ Fixées par le contrôleur avant la tâche :
 
 | Mesure | Tâche | Valeur | Conditions |
 | --- | --- | --- | --- |
+| Téléchargement de TinyTeX v2026.11 (TinyTeX-1, Windows) | 2 | 73,7 Mo ; 17,9 s puis 18,8 s | `fetch` de Node, réseau de la machine de développement |
+| Installation complète par `provision` | 2 | 75,7 s puis 73,0 s ; 313,5 Mo installés | téléchargement, extraction (34 à 37 s), `tlmgr update --self`, 9 paquets, renommage |
+| `installFor` d'un paquet absent (`siunitx`) | 2 | 10,4 s puis 9,2 s | `search --global`, puis `install`, depuis `tlnet.yihui.org` |
+| `Packages.installed()` (`tlmgr info --list --only-installed`) | 2 | 1,6 s | TinyTeX du banc, sans réseau |
 
 ## Mineurs reportés
 
@@ -114,6 +193,13 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
   - sous un préambule sans T1 (OT1), `<`, `>` et `|` deviennent d'autres glyphes.
 
   Rien n'est exécuté, et la compilation ne casse pas. Briser les ligatures (`-{}`, `'{}`, `<{}`) changerait la sortie que la tâche 1 fixe (latex.ts, `titleToTex`).
+
+### Tâche 2
+
+- Pour la tâche 7 : `runFile` n'a pas de délai maximal. Un `tlmgr` suspendu au réseau bloquerait la file de `Packages`, et tous les appels suivants. Un délai serait un réglage avancé du groupe « LaTeX » (`packages/app/src/main/latex/tinytex.ts`, `runFile`).
+- Pour la tâche 7 : `BASE_PACKAGES` est dans le principal (décision P1). Si `withPackage` vit dans l'interface, elle ne pourra pas importer `tinytex.ts`, qui tire `node:child_process`. La liste irait alors dans `@cirrus/core` (`latex.ts`).
+- Une installation dans un chemin accentué (un nom d'utilisateur Windows accentué, dans `LOCALAPPDATA`) n'a pas été essayée. Un chemin avec une espace l'a été. `tlmgr.bat` et le Perl de TeX Live sont connus pour mal vivre les chemins non ASCII (`tinytex.ts`, `provision`).
+- `texEnv` laisse les autres variables d'arbres de kpathsea (`TEXMF`, `TEXMFAUXTREES`, `TEXMFLOCAL`…). Elles ne viennent que de l'environnement de l'utilisateur, mais pourraient ajouter des arbres que TeX lirait. La tâche en nomme quatre (`tinytex.ts`, `TEX_PATHS`).
 
 ## Décisions du contrôleur (plan 4b)
 
