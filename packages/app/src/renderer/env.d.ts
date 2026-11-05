@@ -29,6 +29,11 @@ export interface CirrusBridge {
   /** The same for files chosen in the system's dialog; empty lists when nothing is chosen. */
   pickFiles(): Promise<ImportResult>;
   /**
+   * A text stored as the file `name` (plan 4b, D6: a .tex saved from its full screen), in UTF-8 without a BOM: its
+   * reference. Rejects with the reason, in French, for a name checkFileName refuses or a text over maxImportMb.
+   */
+  storeText(name: string, text: string): Promise<FileRef>;
+  /**
    * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
    * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.
    */

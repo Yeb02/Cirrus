@@ -7,7 +7,7 @@ import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
   scaleMoves, type SceneIndex,
 } from '@cirrus/view';
-import { checkFileName, type Merge, mergeFiles } from './files/merge.ts';
+import { checkFileName, type Merge, mergeFiles, sameName } from './files/merge.ts';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -330,6 +330,29 @@ export function filesBuild(s: State, node: Id, incoming: FileRef[]): Build {
     const label = m.added.length === 0 && m.replaced.length === 1 ? `Remplacer « ${m.replaced[0]} »` : `Ajouter des fichiers à « ${now.title} »`;
     return combine(st, label, [(x) => editNode(x, node, { files: m.files })]);
   };
+}
+
+/**
+ * A new version of a node's .tex, saved from its full screen (plan 4b, D6) and already in the store (`ref`, under the
+ * file's name): filesBuild, which replaces it in its place, labelled « Modifier « name » ». Null when the node holds
+ * that very content already. Refused when the action is computed if the node is gone or in the trash, or the file no
+ * longer in it: a save never brings back what was removed meanwhile (Review Focus 4).
+ */
+export function texSaveBuild(s: State, node: Id, ref: FileRef): Build {
+  const replace = filesBuild(s, node, [ref]);
+  if (!replace) return null;
+  return (st) => {
+    const why = texSaveRefusal(st, node, ref.name);
+    if (why) throw new CommandError(why);
+    return { ...replace(st), label: `Modifier « ${ref.name} »` };
+  };
+}
+
+/** Why the .tex `name` of `node` cannot be saved in `s`, in French: the node gone or in the trash, the file no longer in it; null when it can. */
+export function texSaveRefusal(s: State, node: Id, name: string): string | null {
+  const n = s.nodes.get(node);
+  if (!n || n.trashedAt !== undefined) return 'Ce nœud n’existe plus.';
+  return n.files.some((f) => sameName(f.name, name)) ? null : `« ${name} » n’est plus dans ce nœud.`;
 }
 
 /** A node's file renamed in its place, its content kept; a name checkFileName refuses is refused when the action is computed. */

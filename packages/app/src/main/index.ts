@@ -9,7 +9,7 @@ import { type RenderParams, withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
-import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget } from './files.ts';
+import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText } from './files.ts';
 import { PdfCache } from './latex/cache.ts';
 import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
 import { findBinaries, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
@@ -210,6 +210,9 @@ ipcMain.handle('cirrus:files:pick', async (e) => {
   const chosen = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile', 'multiSelections'] });
   return chosen.canceled ? { refs: [], refused: [] } : importPaths(dir, chosen.filePaths, maxImportBytes());
 });
+// A .tex typed in its full screen (plan 4b, D6), stored before the action that refers to it; a name or a size refused
+// rejects with its reason, in French.
+ipcMain.handle('cirrus:files:store-text', (_e, name: unknown, text: unknown) => storeText(dir, name, text, maxImportBytes()));
 // A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
 // instead, never run (plan 4a, D5). Failures reach the user in French, their cause in the console.
 ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {

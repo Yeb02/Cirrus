@@ -1,10 +1,23 @@
-import type { FileRef, NodeRec } from '@cirrus/core';
+import type { FileRef, NodeRec, State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
-import { useEffect, useRef } from 'react';
+import { lazy, type RefObject, Suspense, useEffect, useRef } from 'react';
+import { fileKind } from '../files/kind.ts';
 import { offersSystem } from '../files/nodeFiles.ts';
+import { loading } from '../files/read.ts';
 import type { ViewStates } from '../files/viewState.ts';
+import type { LatexRegistry } from '../latex/registry.ts';
+import type { SaveAnswer } from './latex/saveScheduler.ts';
+import type { WorkbenchHandle } from './latex/TexWorkbench.tsx';
 import { Notice } from './viewers/common.tsx';
 import { Viewer } from './viewers/Viewer.tsx';
+
+/** The .tex workbench, with CodeMirror and pdf.js, in its own chunk (as the views are: Viewer.tsx). */
+const TexWorkbench = lazy(() => loading(import('./latex/TexWorkbench.tsx')).then((m) => ({ default: m.TexWorkbench })));
+
+/** What the full screen of a .tex needs (plan 4b, task 5): the state and the registry for its compilation, its save, its handle for App. */
+export interface TexContext {
+  state: State; registry: LatexRegistry | null; onSave(text: string): Promise<SaveAnswer>; workbench: RefObject<WorkbenchHandle | null>;
+}
 
 /**
  * Where Tab goes inside a modal holding `count` focusable elements, the focus on the one at `at` (−1: on none of them,
@@ -19,7 +32,7 @@ export function tabTarget(count: number, at: number, back: boolean): number | nu
   return null;
 }
 
-const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
+const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]';
 
 /**
  * A file in full screen (spec 12; plan 4a, task 5): over the whole window, tabs included, its Viewer under a header
@@ -29,12 +42,23 @@ const FOCUSABLE = 'button, input, select, textarea, a[href], [tabindex]';
  * A modal (Minor 5 of the task 5 review): it takes the focus and keeps it — Tab goes round inside it (tabTarget), and
  * a focus gone elsewhere comes back —, so that no key reaches the graph or the panels under it; App leaves its
  * shortcuts (Ctrl+Z, Ctrl+Y) while it is open. It gives the focus back as it leaves.
+ * A .tex (plan 4b, D6) opens its workbench instead of a view (`tex`): the editor and the compiled preview, followed by
+ * its name (a save changes its hash, the workbench stays). Escape and × then go through the workbench, which saves
+ * what is typed before leaving (requestClose).
  */
-export function FullScreen(props: { node: NodeRec; file: FileRef; params: RenderParams; views: ViewStates; onClose(): void; onSystem(file: FileRef): void }) {
-  const { node, file } = props;
+export function FullScreen(props: {
+  node: NodeRec; file: FileRef; params: RenderParams; views: ViewStates; onClose(): void; onSystem(file: FileRef): void; tex?: TexContext;
+}) {
+  const { node, file, tex } = props;
   const root = useRef<HTMLDivElement>(null);
-  const close = useRef(props.onClose);
-  close.current = props.onClose;
+  const isTex = tex !== undefined && fileKind(file.name) === 'tex';
+  const leave = () => {
+    const bench = isTex ? tex.workbench.current : null;
+    if (bench) bench.requestClose();
+    else props.onClose();
+  };
+  const close = useRef(leave);
+  close.current = leave;
   useEffect(() => {
     const el = root.current!;
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -66,9 +90,18 @@ export function FullScreen(props: { node: NodeRec; file: FileRef; params: Render
         <span className="node" title={node.title}>{node.title}</span>
         <span className="spacer" />
         {offersSystem(file.name) && <button className="system" onClick={() => props.onSystem(file)}>Ouvrir avec l’application du système</button>}
-        <button className="close" title="Quitter le plein écran (Échap)" onClick={() => props.onClose()}>×</button>
+        <button className="close" title="Quitter le plein écran (Échap)" onClick={() => leave()}>×</button>
       </header>
-      <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} />
+      {!isTex ? <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} />
+        : !tex.registry ? <Notice text="Lecture…" />
+        : (
+          <Suspense fallback={<Notice text="Lecture…" />}>
+            <TexWorkbench
+              ref={tex.workbench} node={node} file={file} state={tex.state} registry={tex.registry} params={props.params} views={props.views}
+              onSave={tex.onSave} onClose={props.onClose}
+            />
+          </Suspense>
+        )}
     </div>
   );
 }

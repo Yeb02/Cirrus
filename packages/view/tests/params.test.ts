@@ -159,6 +159,15 @@ test('pause de frappe avant de compiler : 300 ms, de 50 à 3000, réglage avanc�
   expect(withOverrides({ latexTypingPauseMs: 9000 }).latexTypingPauseMs).toBe(3000);
 });
 
+test('pause de frappe avant l’enregistrement d’un .tex : 10 s, de 1 s à 10 min, réglage avancé du groupe « LaTeX » (plan 4b, tâche 5)', () => {
+  expect(DEFAULT_PARAMS.texSaveIdleMs).toBe(10_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'texSaveIdleMs')).toEqual({
+    key: 'texSaveIdleMs', label: 'Pause de frappe avant l’enregistrement d’un .tex (ms)', section: 'avancé', group: 'LaTeX', kind: 'number', min: 1000, max: 600_000, step: 500,
+  });
+  expect(withOverrides({ texSaveIdleMs: 10 }).texSaveIdleMs).toBe(1000);
+  expect(withOverrides({ texSaveIdleMs: 9e9 }).texSaveIdleMs).toBe(600_000);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

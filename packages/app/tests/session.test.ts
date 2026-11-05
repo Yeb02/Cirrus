@@ -340,3 +340,50 @@ test('addImported : les refus d’abord, puis ce que fait le dépôt ; « Déjà
   expect(await addImported(session, 'absent', { refs: [{ name: 'a.txt', hash: '7'.repeat(64), size: 1 }], refused: [] })).toEqual(['Nœud introuvable.']);
   expect(written).toHaveLength(1);
 });
+
+test('merge : des actions successives de même clé, rien d’écrit entre elles, prennent l’identifiant de la première et un seul pas d’annulation (D6)', async () => {
+  const { s, plan } = world();
+  const written: Action[] = [];
+  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const a = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }), { merge: 'k' });
+  const b = await session.run((st) => createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 }), { merge: 'k' });
+  // A refused command writes nothing: it does not end the merge.
+  expect((await session.run((st) => editNode(st, 'inconnu', { title: 'x' }))).ok).toBe(false);
+  const c = await session.run((st) => createNode(st, { plan, title: 'C', x: 0, y: 0, k: 0 }), { merge: 'k' });
+  expect(written.map((w) => w.id)).toEqual([written[0].id, written[0].id, written[0].id]);
+  expect([a, b, c].map((r) => r.ok && r.action.id)).toEqual([written[0].id, written[0].id, written[0].id]);
+  expect(session.state.nodes.size).toBe(3);
+  // One step: the three undone at once, by one action.
+  expect((await session.undo()).ok).toBe(true);
+  expect(session.state.nodes.size).toBe(0);
+  expect(written).toHaveLength(4);
+  expect(written[3].ops).toHaveLength(written.slice(0, 3).reduce((n, w) => n + w.ops.length, 0));
+  expect(await session.undo()).toEqual({ ok: false, message: 'Rien à annuler.' });
+  // Redone as one step too; then a new action of that key no longer joins it (the redo was written in between).
+  expect((await session.redo()).ok).toBe(true);
+  expect(session.state.nodes.size).toBe(3);
+  const d = await session.run((st) => createNode(st, { plan, title: 'D', x: 0, y: 0, k: 0 }), { merge: 'k' });
+  expect(d.ok && d.action.id).not.toBe(written[0].id);
+});
+
+test('merge : une autre clé, une action sans clé, une annulation ou un changement reçu entre deux actions les séparent', async () => {
+  const { s, plan } = world();
+  const written: Action[] = [];
+  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const make = (title: string, merge?: string) => session.run((st) => createNode(st, { plan, title, x: 0, y: 0, k: 0 }), merge === undefined ? {} : { merge });
+  await make('A', 'k');
+  await make('B', 'autre');
+  await make('C', 'k');
+  await make('D');
+  await make('E', 'k');
+  await session.undo();
+  await make('F', 'k');
+  session.receive(createNode(s, { plan, title: 'G', x: 0, y: 0, k: 0 }), 99);
+  await make('H', 'k');
+  const ids = written.map((w) => w.id);
+  // A, B, C, D, E, the undo of E, F, H: each an action of its own.
+  expect(new Set(ids).size).toBe(ids.length);
+  // Undo takes back H only, then F.
+  await session.undo();
+  expect([...session.state.nodes.values()].map((n) => n.title).sort()).toEqual(['A', 'B', 'C', 'D', 'F', 'G']);
+});

@@ -5,6 +5,7 @@ import type { Build } from '../../actions.ts';
 import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
 import type { ViewStates } from '../../files/viewState.ts';
+import type { LatexRegistry } from '../../latex/registry.ts';
 import { NodePopup } from '../NodePopup.tsx';
 import { PanelBoundary } from '../PanelBoundary.tsx';
 import { FilePreview } from './FilePreview.tsx';
@@ -135,13 +136,14 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), the panels are under it:
  * Escape and a press there are its own, and a preview of that file leaves its view to it. Each panel has its own
  * PanelBoundary: one that fails says so in its frame, which still moves and closes; the others and the window stay.
+ * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
   /** The state, changed in place: `rev` counts the actions, `action` is the last one (App's Shown). */
   state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
-  views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void;
+  views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -231,6 +233,7 @@ export function Panels(props: {
               <FilePreview
                 frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
                 covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
+                latex={{ state: props.state, registry: props.registry }}
                 onFull={() => { if (file) props.onFullScreen(node, file.name); }}
               />
             </PanelBoundary>

@@ -194,6 +194,8 @@ export interface RenderParams {
   latexLogMaxKb: number;
   /** A source changed is compiled once typing has paused this long; the labels' registry is rebuilt at most this often. */
   latexTypingPauseMs: number;
+  /** A .tex typed in its full screen is saved once typing has paused this long (D6), and at Ctrl+S and closing. */
+  texSaveIdleMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -345,6 +347,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexCacheMb: 500,
   latexLogMaxKb: 256,
   latexTypingPauseMs: 300,
+  texSaveIdleMs: 10_000,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -526,6 +529,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'LaTeX', 16, 4096, 16),
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'LaTeX', 50, 3000, 10),
+  num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'LaTeX', 1000, 600_000, 500),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

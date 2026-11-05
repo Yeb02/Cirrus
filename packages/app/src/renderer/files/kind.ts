@@ -38,9 +38,21 @@ export function fileKind(name: string): FileKind {
   return KINDS.get(ext) ?? 'other';
 }
 
-/** The file's address under the main process's cirrus-file: protocol (FILE_SCHEME, plan 4a, D1); the name only gives its type. */
-export function fileUrl(ref: FileRef): string {
-  return `cirrus-file://blob/${ref.hash}/${encodeURIComponent(ref.name)}`;
+/**
+ * A file a view shows: one of the store's (plan 4a), or a PDF the main process compiled (`store: 'latex'`, plan 4b,
+ * D2), its hash then the key of the compile cache.
+ */
+export type ViewRef = FileRef & { store?: 'latex' };
+
+/** Where the views keep what they opened of a file (pdf.ts's documents): its store, then its hash. */
+export const viewKey = (ref: ViewRef): string => `${ref.store ?? 'blob'}:${ref.hash}`;
+
+/**
+ * The file's address under the main process's cirrus-file: protocol (FILE_SCHEME, plan 4a, D1): the store's blobs, or
+ * the compiled PDFs (`latex`); the name only gives its type.
+ */
+export function fileUrl(ref: ViewRef): string {
+  return `cirrus-file://${ref.store === 'latex' ? 'latex' : 'blob'}/${ref.hash}/${encodeURIComponent(ref.name)}`;
 }
 
 const UNITS = ['o', 'Ko', 'Mo', 'Go', 'To'];

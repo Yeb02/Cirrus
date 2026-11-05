@@ -1,4 +1,4 @@
-import { type Action, type Id, preambleText, type State } from '@cirrus/core';
+import { type Action, type FileRef, type Id, type NodeRec, preambleText, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
@@ -12,6 +12,8 @@ import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
+import { saveTex } from './ui/latex/saveScheduler.ts';
+import type { WorkbenchHandle } from './ui/latex/TexWorkbench.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
@@ -85,6 +87,10 @@ export function App() {
   const [full, setFull] = useState<PanelTarget | null>(null);
   const fullRef = useRef(full);
   fullRef.current = full;
+  /** The .tex workbench open in full screen (plan 4b, D6): its text is saved before the window closes. */
+  const workbench = useRef<WorkbenchHandle | null>(null);
+  /** What the full screen last showed: kept while its .tex has unsaved text, should its file go meanwhile. */
+  const lastFull = useRef<{ node: NodeRec; file: FileRef } | null>(null);
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
   const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
   /** The texts of the .tex, by hash, that the registry reads (plan 4b, D8), and the ceiling (textViewMaxMb) they were read under. */
@@ -151,11 +157,14 @@ export function App() {
     return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); };
   }, []);
 
-  // Closing: the last snapshot, if anything changed since the one before, then the main process may close the window.
-  // The views still open keep their place too.
+  // Closing: what is typed in a .tex's full screen saved first (D6), then the last snapshot, if anything changed since
+  // the one before; then the main process may close the window. The views still open keep their place too.
   useEffect(() => window.cirrus.onQuit(() => {
     keepOpenViews();
-    void (saver.current?.flush() ?? Promise.resolve()).finally(() => window.cirrus.quitReady());
+    void (workbench.current?.flush() ?? Promise.resolve())
+      .catch((e: unknown) => console.error('Enregistrement du .tex à la fermeture :', e))
+      .then(() => saver.current?.flush())
+      .finally(() => window.cirrus.quitReady());
   }), []);
 
   useEffect(() => {
@@ -289,8 +298,11 @@ export function App() {
     return null;
   }
   // The file in full screen: a new version of it stays; gone — removed, renamed, its addition undone, its node deleted —
-  // the full screen closes (Review Focus 5).
-  const fullNow = full && resolveTarget(state, full);
+  // the full screen closes (Review Focus 5). A .tex whose typed text is not saved yet stays, as it last was: its save is
+  // then refused, and says why (Review Focus 4).
+  const found = full && resolveTarget(state, full);
+  if (found?.file) lastFull.current = { node: found.node, file: found.file };
+  const fullNow = found?.file ? found : full && workbench.current?.dirty ? lastFull.current : null;
   if (full && !fullNow) {
     setFull(null);
     return null;
@@ -354,7 +366,7 @@ export function App() {
         {panel && <SettingsPanel params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} />}
         <Panels
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
-          views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })}
+          views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
         />
         <Toasts toasts={toasts} />
       </div>
@@ -365,6 +377,10 @@ export function App() {
         >
           <FullScreen
             node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
+            tex={{
+              state, registry, workbench,
+              onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),
+            }}
           />
         </PanelBoundary>
       )}

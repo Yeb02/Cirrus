@@ -15,7 +15,7 @@ export function plansOf(a: Action): Id[] {
 }
 
 /** The message of an error coming back from IPC ("Error invoking remote method 'x': Error: message"). */
-const messageOf = (e: unknown): string => {
+export const messageOf = (e: unknown): string => {
   const m = e instanceof Error ? e.message : String(e);
   const i = m.lastIndexOf('Error: ');
   return i >= 0 ? m.slice(i + 'Error: '.length) : m;
@@ -57,6 +57,8 @@ export async function openState(load: (fromTables: boolean) => Promise<Loaded>):
  * command or a failed write changes nothing. Calls are queued, so two quick actions never interleave. The state object
  * stays the same: `rev` counts the actions applied, and tells React it changed. `seq` is the journal number the copy
  * covers: the one the main process gave the last action applied (plan 3c), which a snapshot of the copy is saved with.
+ * Successive actions run with the same `merge` key, nothing written between them, are one (plan 4b, D6): the saves of
+ * a .tex. This memory lasts as long as the session.
  */
 export class EditSession {
   private readonly s: State;
@@ -68,6 +70,8 @@ export class EditSession {
   private readonly commit: (a: Action) => Promise<number>;
   private readonly onChange: (s: State, a: Action, rev: number) => void;
   private guard: () => string | null = () => null;
+  /** The last action written, when it ran with a `merge` key: the next one of that key joins it. */
+  private merging: { key: string; id: Id } | null = null;
 
   constructor(state: State, commit: (a: Action) => Promise<number>, onChange: (s: State, a: Action, rev: number) => void, seq = 0) {
     this.s = state;
@@ -98,8 +102,14 @@ export class EditSession {
     return this.diverged;
   }
 
-  /** `extend`: the action completes that earlier one, which stays a single undo step if nothing came in between. */
-  run(build: (s: State) => Action, opts: { extend?: Id } = {}): Promise<Result> {
+  /**
+   * `extend`: the action completes that earlier one, which stays a single undo step if nothing came in between.
+   * `merge`: when the last action written by the session ran with the same key, and nothing has been written since (no
+   * other action, no undo, no redo, no change received), this one takes its identifier — its journal lines carry the
+   * same action id, so the history counts one modification — and extends its undo step (UndoStack.extend); otherwise it
+   * is a new action. A refused command writes nothing, and ends nothing.
+   */
+  run(build: (s: State) => Action, opts: { extend?: Id; merge?: string } = {}): Promise<Result> {
     return this.enqueue(async () => {
       let a: Action;
       try {
@@ -108,10 +118,14 @@ export class EditSession {
         if (e instanceof CommandError) return { ok: false, message: e.message };
         throw e;
       }
+      const joined = opts.merge !== undefined && this.merging?.key === opts.merge ? this.merging.id : null;
+      if (joined !== null) a = { ...a, id: joined };
       const r = await this.write(a);
       if (r.ok) {
-        if (opts.extend) this.stack.extend(opts.extend, a);
+        if (joined !== null) this.stack.extend(joined, a);
+        else if (opts.extend) this.stack.extend(opts.extend, a);
         else this.stack.record(a);
+        this.merging = opts.merge !== undefined ? { key: opts.merge, id: a.id } : null;
       }
       return r;
     });
@@ -138,7 +152,10 @@ export class EditSession {
       }
       if (!a) return { ok: false, message: 'Rien à annuler.' };
       const r = await this.write(a);
-      if (r.ok) this.stack.confirmUndo();
+      if (r.ok) {
+        this.stack.confirmUndo();
+        this.merging = null;
+      }
       return r;
     });
   }
@@ -156,13 +173,17 @@ export class EditSession {
       }
       if (!a) return { ok: false, message: 'Rien à rétablir.' };
       const r = await this.write(a);
-      if (r.ok) this.stack.confirmRedo();
+      if (r.ok) {
+        this.stack.confirmRedo();
+        this.merging = null;
+      }
       return r;
     });
   }
 
   /** A change written elsewhere (another PC, plan 5), already in the journal at `seq`: applied to the copy, not undoable here. */
   receive(a: Action, seq: number): void {
+    this.merging = null;
     this.apply(a, seq);
   }
 

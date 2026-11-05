@@ -40,12 +40,41 @@ export function importFile(storeDir: string, srcPath: string): FileRef {
   fsyncSync(out);
   closeSync(out);
   const ref: FileRef = { name: basename(srcPath), hash: hash.digest('hex'), size };
+  place(storeDir, ref, tmp);
+  return ref;
+}
+
+/** The temporary file `tmp`, written and synced, renamed into place as the blob of `ref`; dropped when that blob is stored already. */
+function place(storeDir: string, ref: FileRef, tmp: string): void {
   const dest = filePath(storeDir, ref);
   if (existsSync(dest)) {
     rmSync(tmp);
   } else {
-    mkdirSync(join(filesDir, ref.hash.slice(0, 2)), { recursive: true });
+    mkdirSync(join(storeDir, 'files', ref.hash.slice(0, 2)), { recursive: true });
     renameSync(tmp, dest);
   }
+}
+
+/**
+ * Bytes made by the app (plan 4b: a .tex saved from its editor) stored as `name`, with importFile's guarantees: a
+ * temporary file synced to the disk then renamed into place, nothing written when the same content is stored already.
+ */
+export function storeBytes(storeDir: string, name: string, bytes: Uint8Array): FileRef {
+  const ref: FileRef = { name, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+  if (existsSync(filePath(storeDir, ref))) return ref;
+  const filesDir = join(storeDir, 'files');
+  mkdirSync(filesDir, { recursive: true });
+  const tmp = join(filesDir, `.import-${randomBytes(8).toString('hex')}`);
+  const out = openSync(tmp, 'w');
+  try {
+    for (let at = 0; at < bytes.length; ) at += writeSync(out, bytes, at, bytes.length - at);
+    fsyncSync(out);
+  } catch (e) {
+    closeSync(out);
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+  closeSync(out);
+  place(storeDir, ref, tmp);
   return ref;
 }

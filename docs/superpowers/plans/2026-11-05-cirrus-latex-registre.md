@@ -469,6 +469,123 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 5 : interface — éditeur LaTeX, plein écran d'un `.tex`, enregistrement
 
+### Mesures
+
+- **Suite** : 705 tests sur 705 (683 avant la tâche), 22 de plus :
+
+  | Fichier | Tests ajoutés |
+  | --- | --- |
+  | `latexEditor.test.ts` | 5 (`refContext`, `completionsFor`, `diagnosticsFor`) |
+  | `texSave.test.ts` | 13 : `SaveScheduler` (5), le regroupement sur une base de test (5), `texMergeKey`, `storeText`, une compilation réelle |
+  | `session.test.ts` | 2 (l'option `merge`) |
+  | `files.test.ts` (store) | 1 (`storeBytes`) |
+  | `params.test.ts` (view) | 1 |
+
+  `fileLogic.test.ts` vérifie en plus l'hôte `latex` de `fileUrl`. `tsc` : `app`, `store` et `view` sans erreur. Une première suite complète a vu `scale.test.ts` (store) échouer sur son chronomètre, la machine chargée : l'EPERM du nettoyage, mineur reporté de la tâche 3. Relancé seul, il passe, et la suite finale passe en entier.
+- **Compilation réelle** de la requête de `complexité.tex` (`buildRequest`, emplacement `draft:`) : le PDF montre le titre de MDL ; 1,2 s, la base de test et le pdfLaTeX à froid compris.
+- **App construite**, sur des copies de la base de test (`CIRRUS_DATA`), un profil à part (`--user-data-dir`) et la TinyTeX du banc (`CIRRUS_TINYTEX`), menée par le protocole des outils de Chrome (`--remote-debugging-port`) :
+  - Échap pendant la pause : le texte est enregistré, puis le plein écran se ferme, en 128 ms ;
+  - fermeture de la fenêtre pendant la pause, comme par son × (`WM_CLOSE`, `taskkill` sans `/F`) : le texte est au journal, et l'app sort en 655 ms ;
+  - aucun pdfLaTeX ne reste, `%LOCALAPPDATA%\Cirrus` n'existe pas, et le profil comme la base de l'utilisateur n'ont pas changé.
+- **Captures**, une suite neuve : 11 sur 11 à 0 pixel contre `reference-3c`, 8 sur 8 à 0 pixel contre `plan4a`. Aucune capture du plan 4a ne montre un `.tex` : rien n'est refait.
+
+### Décisions
+
+Fixées par le contrôleur avant la tâche :
+- le brouillon d'un éditeur se compile sous son propre emplacement, `draft:<emplacement>` ; la vue enregistrée garde le sien. Au plus un `useCompiled` par emplacement, et la pause est toujours `params.latexTypingPauseMs` ;
+- `diagnosticsFor` marque « Clé de citation portée par plusieurs nœuds : x » ;
+- le regroupement (D6, tel que l'utilisateur l'a dit) : `run(build, { merge })` ; les enregistrements regroupés reprennent l'identifiant de la première action au journal et prolongent son pas d'annulation ; toute autre action écrite y met fin ;
+- le texte de l'éditeur part du texte décodé du fichier, qui est le `saved` du planificateur, puis le texte de chaque enregistrement réussi ;
+- le brouillon se compile par `buildRequest` sur le texte tapé, la première fois aussitôt ;
+- l'aperçu d'un `.tex` ouvert sous le plein écran garde son emplacement et le texte enregistré ;
+- le plein écran d'un `.tex` suit son fichier par son nom (R19 du plan 4a) : un enregistrement change l'empreinte, la vue reste ;
+- un enregistrement refusé à la fermeture laisse le plein écran ouvert avec son bandeau ; une seconde demande (Échap, ×) ferme après la question « Fermer sans enregistrer ? ».
+
+- Ruling: **le store accepte plusieurs commits du même identifiant d'action** : `changes.action_id` n'a qu'un index (`changes_action`), sans contrainte d'unicité, et `historySummary` compte les identifiants distincts. Annuler le pas regroupé écrit une seule action inverse, faite de toutes les opérations regroupées, de la dernière à la première : vérifié sur une base de test (trois lignes, un identifiant ; puis trois lignes d'annulation, un identifiant). Coût si faux : nul.
+- Ruling: **la mémoire du regroupement s'arrête aussi à un changement reçu** (`receive`, plan 5) : « rien n'a été écrit depuis » vaut pour ce qui vient d'ailleurs. Une commande refusée, ou une écriture qui échoue, n'écrit rien et n'y met donc pas fin. Coût si faux : une ligne.
+- Ruling: **un enregistrement ne ramène jamais ce qui est parti** (`texSaveRefusal`, `actions.ts`).
+  - Le constat : `filesBuild` ajouterait à la fin un fichier retiré entre-temps, ou écrirait dans un nœud à la corbeille.
+  - La règle : l'action est refusée, à son calcul, si le nœud est absent ou à la corbeille (« Ce nœud n’existe plus. ») ou si le fichier n'y est plus (« « x.tex » n’est plus dans ce nœud. »). `saveTex` le vérifie aussi avant de confier le texte au principal, pour ne rien stocker en vain.
+  - Un texte que le fichier a déjà (`filesBuild` nul, ou « Déjà à jour. » au calcul) compte comme enregistré, sans rien écrire.
+  - Le libellé « Modifier « x.tex » » remplace celui de `filesBuild` (« Remplacer « x » »).
+  - Coût si faux : une fonction.
+- Ruling: **un plein écran dont le `.tex` disparaît alors que son texte n'est pas enregistré reste ouvert**, sur sa dernière cible (`App`, `lastFull`). L'enregistrement suivant est alors refusé et le dit, et la fermeture pose la question. Sans texte en attente, il se ferme comme avant (Review Focus 5).
+  - Pourquoi : Review Focus 4 veut que le texte reste dans l'éditeur. Sous le plein écran, qui est modal, rien dans l'app ne peut supprimer le nœud : seul `receive` (plan 5) le pourra.
+  - Coût si faux : une référence dans `App`.
+- Ruling: **`TexWorkbench` reçoit aussi `views` et une `ref`** (`WorkbenchHandle` : `dirty`, `flush`, `requestClose`).
+  - Pourquoi : `PdfViewer` garde sa place dans `views`. `App` attend `flush` avant l'instantané à la fermeture de la fenêtre, et `FullScreen` passe Échap et × par `requestClose`.
+  - Le plein écran d'un `.tex` reçoit `tex: { state, registry, onSave, workbench }`, et l'atelier vit dans son propre morceau, chargé à la demande comme les vues.
+  - Coût si faux : deux props.
+- Ruling: **les fins de ligne sont celles de l'éditeur** : le texte lu est normalisé en « \n », comme CodeMirror le lit, et c'est ce texte qui sert de `saved`. Un fichier en CRLF passe donc en LF à son premier vrai enregistrement, et l'ouvrir sans rien taper n'enregistre rien. Coût si faux : les fins de ligne d'un fichier changent, ce que TeX ignore.
+- Ruling: **le mode `live` de `PdfViewer` est `live: { keptAs }`** : la place du PDF compilé est gardée sous la clé de sa source (`latex:<emplacement enregistré>`), et non sous une empreinte qui change à chaque compilation. L'aperçu et l'atelier la partagent : ils ne se montrent jamais ensemble. Dans l'atelier, le lecteur est en mode `preview` et ne prend pas le focus, qui reste à l'éditeur. Coût si faux : une clé.
+- Ruling: **le remplacement sur place** (mode `live`) :
+  - le nouveau document prend la place de l'ancien une fois sa première page lue ;
+  - le défilement reste tel quel, et le navigateur le borne à la nouvelle hauteur ; le zoom ou l'ajustement restent aussi ;
+  - chaque page garde son dessin jusqu'à ce que celui de la nouvelle page le remplace ; son canevas n'est libéré que si la page quitte la zone dessinée ;
+  - l'ancien document est lâché au tour suivant ;
+  - un PDF compilé illisible alors qu'un autre est affiché laisse celui-ci, la cause dans la console.
+
+  Coût si faux : nul.
+- Ruling: **Échap ne ferme les suggestions que si elles sont affichées**. Le `completionKeymap` de CodeMirror prend Échap pendant toute requête en cours, c'est-à-dire 100 ms après chaque touche. Le plein écran manquait alors l'Échap tapé juste après une frappe : c'est l'app construite qui l'a montré. `LatexEditor` reprend ce keymap, avec son propre Échap (`completionStatus === 'active'`). Coût si faux : une liaison.
+- Ruling: **Tab, dans le plein écran, compte l'éditeur** : `[contenteditable="true"]` rejoint la liste des éléments focalisables du piège. Sinon, Tab depuis l'éditeur partait vers le premier bouton, et le cycle ne revenait plus à l'éditeur. Tab n'est pas lié dans l'éditeur, pour l'accessibilité. Coût si faux : un sélecteur.
+- Ruling: **l'éditeur coupe les longues lignes, compact ou non** (`EditorView.lineWrapping`) : un `.tex` est de la prose. Il a son propre historique : Ctrl+Z et Ctrl+Y y agissent sur le texte, et le Ctrl+Z de l'app ne part pas d'un champ modifiable. Coût si faux : une extension.
+- Ruling: **les suggestions** :
+  - un préfixe se compare par « commence par », sans accents (NFD, marques retirées) ni casse ;
+  - l'ordre est le français (`Intl.Collator('fr')`), ce qui règle le mineur reporté de la tâche 4 sur `labels()` ;
+  - chaque label ou clé n'apparaît qu'une fois : le titre de la première définition, la citation du premier nœud par identifiant ;
+  - CodeMirror ne filtre ni ne trie (`filter: false`), et n'en dessine que 100 (`maxRenderedOptions`, sa valeur) ;
+  - `refContext` ne lit que la ligne du curseur : une ref coupée par un commentaire n'a pas de suggestion.
+
+  Coût si faux : un comparateur.
+- Ruling: **`diagnosticsFor`, les cas que la tâche ne fixe pas** :
+  - une clé en double vient de `req.doubledCites`, soit `citeNodes(key)` parmi les nœuds vivants, celle de l'aperçu ;
+  - un label défini ici deux fois et ailleurs aussi dit « Ce label existe déjà dans « titre » » ;
+  - une erreur du préambule, ou sans ligne, n'est pas un diagnostic de l'éditeur : le bandeau la dit ;
+  - tous sont des erreurs, en rouge ;
+  - `lineStart` rend la longueur + 1 après la dernière ligne, si bien que l'erreur de la dernière ligne la couvre jusqu'au bout ;
+  - l'éditeur n'applique les diagnostics que s'ils sont ceux de son texte, pour ne pas en montrer à des positions périmées.
+
+  Coût si faux : nul.
+- Ruling: **le journal (`CompileLog`)** :
+  - l'erreur cliquable est la première de TeX, celle de la réponse (la seule, sous `-halt-on-error`), quand elle est sur une ligne de la source ; le clic ferme le journal et place l'éditeur à la ligne ;
+  - le journal suit tel quel, ses lignes « ! » en rouge ;
+  - les avertissements « on input line N » ne sont pas des liens, car leur fichier (préambule, pilote ou source) n'est pas connu ;
+  - Échap ferme le journal seul.
+
+  Coût si faux : nul.
+- Ruling: **le bandeau** :
+  - côté compilation : « Compilation… », « Erreur ligne 12 : … », et le message de l'indisponibilité de LaTeX ; une erreur du préambule montre son message tel quel (« Le préambule ne compile pas : … »), une erreur sans ligne « Erreur : … » ;
+  - côté enregistrement : « Non enregistré : … », « Enregistrement… » pendant un enregistrement, « Enregistré » ; rien pendant la pause.
+
+  Coût si faux : des textes.
+- Ruling: **un `.tex` plus long que `textViewMaxMb`, ou binaire** :
+  - dans l'aperçu, il montre son source (`TextViewer`, qui dit pourquoi) : le principal refuse de toute façon une source de plus de `textViewMaxMb` ;
+  - dans le plein écran, il s'affiche en lecture seule, avec « Plus de N Mo : ce fichier ne se modifie pas dans Cirrus. », sans aperçu ;
+  - un binaire y montre la phrase du plan 4a.
+
+  L'aperçu attend le registre avec « Compilation… », et montre une erreur au-dessus d'un PDF valide en bandeau. Coût si faux : nul.
+- Ruling: **`storeText`, côté principal** :
+  - il reprend `checkFileName` de l'interface, une fonction pure, avec une liste vide : seules les règles du nom comptent ;
+  - il retire un U+FEFF de tête ;
+  - la limite compte les octets UTF-8 ;
+  - les arguments de l'IPC sont typés `unknown` et vérifiés.
+
+  Coût si faux : nul.
+- Ruling: **la première requête du brouillon porte les `known` de l'emplacement enregistré** (`knownLabels(slot)`), jusqu'à ce que le brouillon ait les siens. Le PDF compilé est adressé sous le nom du `.tex` en `.pdf`, qui ne sert qu'au type. Coût si faux : nul.
+- Ruling: **l'atelier enregistre aussi quand il se démonte autrement que par `requestClose`**, par filet de sécurité : `App` le ferme quand son fichier part sans texte en attente. Il ne le fait pas après « Fermer sans enregistrer ». Coût si faux : nul.
+- Ruling: **le pas de `texSaveIdleMs` est de 500 ms.** La tâche n'en fixe pas. Coût si faux : un nombre.
+
+### Notes
+
+- `window.close()` depuis la page ferme la fenêtre sans l'événement `close` d'Electron. L'enregistrement à la fermeture ne se vérifie donc qu'en fermant la fenêtre comme le fait l'utilisateur : son ×, ou `WM_CLOSE`.
+- Le nettoyage des canevas d'une page PDF démontée lit désormais l'élément saisi à son montage : React détache les références avant les nettoyages passifs, et `box.current` y valait déjà null.
+- Mineurs de la tâche 4 traités ici :
+  - la clé portée par deux nœuds est marquée dans l'éditeur ;
+  - une source n'a qu'un `useCompiled` : le brouillon a son emplacement, et l'aperçu est couvert pendant le plein écran ;
+  - les requêtes sont mémorisées (`useMemo`) ;
+  - les suggestions suivent l'ordre français ;
+  - le commentaire de `TexMark` dit qu'un nom coupé par un commentaire l'inclut dans sa portée.
+
 ## Tâche 6 : interface — résumé et relation compilés, liens `cirrus:`
 
 ## Tâche 7 : préambule, installation de LaTeX, paquets manquants
@@ -488,6 +605,8 @@ Fixées par le contrôleur avant la tâche :
 | Compilation préchauffée de `complexité.tex` (de la requête à la réponse) | 3 | p50 138 ms sur 20 (min 130, max 144) ; 156 ms avant les optimisations | `DEFAULT_PREAMBLE`, mode `page`, image, 3 références, 1 citation, 1 label cassé, une passe ; TinyTeX du banc |
 | pdfLaTeX seul, préchauffé (du nom du job à la sortie) | 3 | 113 ms pour `complexité.tex` ; 89 ms pour `Bonjour $x^2$.` | p50 sur 9, hors du service |
 | Construction du registre des labels, base du banc | 4 | de 4 à 14 ms ; de 104 à 160 ms avant `relationRows` | 50 000 nœuds, 549 189 connexions, sans `.tex` ; vitest, 12 constructions, une sur deux avec `previous` |
+| Échap pendant la pause d'un `.tex` : enregistré, puis fermé | 5 | 128 ms | app construite, base de test, `complexité.tex` + un paragraphe ; une mesure |
+| Fermeture de la fenêtre pendant la pause : enregistré, instantané, sortie | 5 | 655 ms | idem, `WM_CLOSE` jusqu'à la sortie du processus ; une mesure |
 
 ## Mineurs reportés
 
@@ -528,6 +647,16 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - `labels()` trie les labels par unités de code, et non à la française. Les suggestions de la tâche 5 voudront peut-être `localeCompare` (`registry.ts`).
 - Le registre se reconstruit en entier à chaque changement, au plus une fois par pause : de 4 à 14 ms sur la base du banc. Une mise à jour par les opérations de l'action ne viendra que si la vraie base grossit (`registry.ts`).
 - Une action pendant la lecture des `.tex` l'abandonne. La lecture suivante reprend tout ce qui n'était pas fini (`App.tsx`).
+
+### Tâche 5
+
+- L'enregistrement à la fermeture de la fenêtre doit tenir dans `snapshotQuitMs` (2 s), avec l'instantané. Passé ce délai, le principal ferme quand même, et un `.tex` dont l'enregistrement traîne (un disque lent) serait perdu. Mesuré : 655 ms en tout (`App.tsx`, `onQuit`).
+- Le plein écran gardé sur sa dernière cible, quand le `.tex` disparaît avec du texte en attente, ne peut arriver que par `receive` (plan 5). Il n'a pas été vu dans l'app ; un test couvre le refus (`App.tsx`, `lastFull`).
+- Dans la question « Fermer sans enregistrer ? », Entrée choisit de fermer sans enregistrer : c'est la règle d'`AskDialog`, dont le premier choix a le focus (`TexWorkbench.tsx`).
+- À chaque frappe, l'atelier analyse le texte deux fois (`buildRequest`, puis `diagnosticsFor` par `scanOf`), et l'éditeur le recopie en entier (`doc.toString()`). C'est négligeable pour un `.tex` ordinaire, sensible pour un `.tex` de quelques Mo (`TexWorkbench.tsx`, `LatexEditor.tsx`).
+- L'aperçu d'un `.tex` relit le fichier par `readHead`, alors qu'`App` a déjà son texte pour le registre (`Viewer.tsx`, `TexPreview`).
+- Pendant une frappe, « Compilation… » remplace dans le bandeau l'erreur de la compilation d'avant, qui revient si l'erreur reste (`TexWorkbench.tsx`).
+- Un PDF compilé sorti du cache entre la réponse et sa lecture (404) est dit « introuvable dans la base » par `readHead` ; l'aperçu garde alors le précédent (`read.ts`, `PdfViewer.tsx`).
 
 ## Décisions du contrôleur (plan 4b)
 
@@ -585,3 +714,10 @@ Chaque décision du contrôleur (`Ruling:`) du suivi de l'exécution, qui dispar
 
 - Ruling : une clé de citation portée par plusieurs nœuds est rouge dans l'aperçu, avec la citation courte du premier nœud (champ `doubledCites` de la requête), comme un label en double — Review Focus 5 le demandait, la tâche 4 ne le portait pas — coût si faux : un champ.
   - Appliquée sous la tâche 4 (« Revue, tour 1 ») : `CompileRequest.doubledCites`, `buildRequest`, `jobBody`, `DRIVER_VERSION` à 2, la clé du cache et la validation de la requête par le principal.
+
+### Avant la tâche 5
+
+- Ruling : le brouillon d'un éditeur se compile sous `draft:<emplacement>`, la vue enregistrée sous le sien ; au plus un `useCompiled` par emplacement, avec `params.latexTypingPauseMs` — deux vues d'un emplacement s'annuleraient dans le principal — coût si faux : nul. Appliquée sous la tâche 5.
+- Ruling : l'éditeur marque « Clé de citation portée par plusieurs nœuds : x » — le pendant, dans l'éditeur, de `doubledCites` — coût si faux : un message. Appliquée sous la tâche 5.
+- Ruling : le regroupement est `run(build, { merge })` : les enregistrements regroupés reprennent l'identifiant de la première action, et toute autre action écrite, une annulation ou un rétablissement y met fin — D6, dans les mots de l'utilisateur — coût si faux : une option de la session. Appliquée sous la tâche 5.
+- Ruling : un enregistrement refusé à la fermeture laisse le plein écran ouvert avec son bandeau ; une seconde demande ferme après « Fermer sans enregistrer ? » — plus simple que de garder le texte pour la session — coût si faux : une question. Appliquée sous la tâche 5.

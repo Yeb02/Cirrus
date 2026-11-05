@@ -6,7 +6,8 @@ import {
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { FileRef } from '@cirrus/core';
-import { type ChangeRow, filePath, importFile } from '@cirrus/store';
+import { type ChangeRow, filePath, importFile, storeBytes } from '@cirrus/store';
+import { checkFileName } from '../renderer/files/merge.ts';
 
 /**
  * The nodes' files on the main process's side (plan 4a, D1, D5, D6): the store's blobs served read-only to the
@@ -164,6 +165,23 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
     }
   }
   return out;
+}
+
+/**
+ * A text saved from the app (plan 4b, D6: a .tex typed in its full screen) stored as `name` (storeBytes), in UTF-8
+ * without a BOM (one leading the text is dropped). Refused, in French, whatever the interface did: a name that
+ * checkFileName refuses (a separator, « .. », a name Windows reserves…), a text of more than `maxBytes` (maxImportMb),
+ * what is not a string.
+ */
+export function storeText(storeDir: string, name: unknown, text: unknown, maxBytes: number): FileRef {
+  if (typeof name !== 'string' || typeof text !== 'string') throw new Error('Enregistrement refusé : nom ou texte invalide.');
+  const why = checkFileName(name, []);
+  if (why) throw new Error(why);
+  const bytes = Buffer.from(text.startsWith('\uFEFF') ? text.slice(1) : text, 'utf8');
+  if (bytes.length > maxBytes) {
+    throw new Error(`Le texte fait plus de ${(maxBytes / 2 ** 20).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo : il n’est pas enregistré.`);
+  }
+  return storeBytes(storeDir, name, bytes);
 }
 
 /**

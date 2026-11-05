@@ -1,5 +1,4 @@
-import type { FileRef } from '@cirrus/core';
-import { fileUrl } from './kind.ts';
+import { fileUrl, type ViewRef } from './kind.ts';
 
 /** A mebibyte: the « Mo » of the settings (textViewMaxMb, tableViewMaxMb), as formatSize counts them. */
 export const MB = 2 ** 20;
@@ -22,7 +21,7 @@ export class ReadError extends Error {}
  * (404) or an answer in error rejects with a ReadError, in French; `signal` gives the reading up (a view closed
  * meanwhile).
  */
-export async function readHead(ref: FileRef, maxBytes: number, signal?: AbortSignal): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSignal): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   const range = rangeHeader(ref.size, maxBytes);
   const res = await fetch(fileUrl(ref), { headers: range ? { Range: range } : {}, signal });
   if (res.status === 404) throw new ReadError(`« ${ref.name} » est introuvable dans la base.`);

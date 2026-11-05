@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('cirrus', {
     return { refs: r.refs, refused: [...r.refused, ...others] };
   },
   pickFiles: () => ipcRenderer.invoke('cirrus:files:pick'),
+  storeText: (name: string, text: string) => ipcRenderer.invoke('cirrus:files:store-text', name, text),
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
   openUrl: (url: string) => ipcRenderer.invoke('cirrus:open-url', url),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),

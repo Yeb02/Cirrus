@@ -41,4 +41,7 @@ export const PHRASES_FR: Record<string, string> = {
   'Go to line': 'Aller à la ligne',
   'go': 'aller',
   'Control character': 'Caractère de contrôle',
+  // The LaTeX editor's diagnostics (plan 4b): their panel (Ctrl+Maj+M).
+  'Diagnostics': 'Diagnostics',
+  'No diagnostics': 'Aucun diagnostic',
 };

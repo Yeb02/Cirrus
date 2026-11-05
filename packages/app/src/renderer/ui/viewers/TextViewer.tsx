@@ -13,9 +13,9 @@ import { truncationNotice } from './views.ts';
 
 /**
  * The editor's look, in the palette of styles.css (its variables); the tokens' colours are there too, by the classes of
- * classHighlighter (`.tok-keyword`…).
+ * classHighlighter (`.tok-keyword`…). The LaTeX editor (plan 4b) takes it too.
  */
-const THEME = EditorView.theme({
+export const THEME = EditorView.theme({
   '&': { height: '100%', color: 'var(--ink)', backgroundColor: 'transparent' },
   '&.cm-focused': { outline: 'none' },
   '.cm-scroller': { fontFamily: 'Consolas, monospace', fontSize: '12.5px', lineHeight: '1.45' },

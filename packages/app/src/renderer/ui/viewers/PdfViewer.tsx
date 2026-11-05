@@ -1,6 +1,7 @@
 import { AbortException, type PDFDocumentProxy, type PDFPageProxy, RenderingCancelledException, TextLayer } from 'pdfjs-dist';
 import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { externalUrlAllowed } from '../../../main/navigation.ts';
+import { type ViewRef, viewKey } from '../../files/kind.ts';
 import { CSS_PER_PT, destination, openPdf, type PdfDoc, pageSize, pdfFailure } from '../../files/pdf.ts';
 import {
   type Anchor, anchorAt, currentPage, fitWidthZoom, type PageSize, pageNumber, pageOffsets, placeAnchor, visiblePages, wheelSteps, zoomBy,
@@ -32,8 +33,12 @@ function free(canvas: HTMLCanvasElement): void {
  * « page n / N » field goes to a page. A link inside the document leads to its destination; one to http:, https: or
  * mailto: goes to the system (openUrl, which the main process checks again); any other is not a link. Its page, the
  * place in it, the horizontal centre and the zoom (or the fit) are kept by its hash.
+ * `live` (plan 4b, task 5): a compiled PDF, `file` changing with each compilation. A new file replaces the document in
+ * place, at the same zoom and the same scroll, bounded by the new height; the pages drawn of the last one stay until
+ * the new ones are drawn over them, without a white flash. Its place is kept under `live.keptAs` (its source's), not
+ * by a hash that changes with each compilation. Otherwise its parent keys it by the file's hash.
  */
-export function PdfViewer(props: ViewProps) {
+export function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: string } }) {
   const { file, params } = props;
   const box = useRef<HTMLDivElement>(null);
   const [opened, setOpened] = useState<PDFDocumentProxy | { message: string } | null>(null);
@@ -43,31 +48,46 @@ export function PdfViewer(props: ViewProps) {
   const [range, setRange] = useState({ first: 0, last: 0 });
   const [current, setCurrent] = useState(0);
   const [draft, setDraft] = useState<string | null>(null);
-  const kept = useKeptView(props.views, file.hash);
+  const kept = useKeptView(props.views, props.live?.keptAs ?? file.hash);
   const target = useRef<Target | null>(null);
   const placed = useRef(false);
   const wheelRest = useRef(0);
+  /** The document shown, held while it is. */
+  const held = useRef<PdfDoc | null>(null);
 
-  // The document, held while the view is open; every page at the first one's size until it is read.
+  // The document, held while the view shows it; every page at the first one's size until it is read. A new one (live)
+  // takes the place of the last, which is let go once the pages have moved to it.
   useEffect(() => {
-    let live = true, held: PdfDoc | null = null;
+    let live = true;
     void loading((async () => {
       try {
         const h = await openPdf(file, params.pdfDocsKept);
         if (!live) { h.release(); return; }
-        held = h;
         // Its bytes no longer readable: said in its place (its pages would wait for ever).
-        h.failure.catch((e: unknown) => { if (live) setOpened({ message: pdfFailure(file.name, e) }); });
+        h.failure.catch((e: unknown) => { if (held.current === h) setOpened({ message: pdfFailure(file.name, e) }); });
         const size = pageSize(await Promise.race([h.doc.getPage(1), h.failure]));
-        if (!live) return;
+        if (!live) { h.release(); return; }
+        const before = held.current;
+        held.current = h;
+        // The scroll stays as it is, bounded by the new height (the browser's); the zoom, or the fit, too.
+        target.current = null;
         setSizes(Array.from({ length: h.doc.numPages }, () => size));
         setOpened(h.doc);
+        if (before) setTimeout(() => before.release(), 0);
       } catch (e) {
-        if (live) setOpened({ message: pdfFailure(file.name, e) });
+        // A compiled PDF that cannot be read while another is shown: that one stays, the cause in the console.
+        if (!live) return;
+        if (held.current) console.error(`PDF « ${file.name} » :`, e);
+        else setOpened({ message: pdfFailure(file.name, e) });
       }
     })());
-    // After the pages' own cleanups (React runs this one first): their drawings stop before the document may close.
-    return () => { live = false; queueMicrotask(() => held?.release()); };
+    return () => { live = false; };
+  }, [viewKey(file)]);
+  // After the pages' own cleanups (React runs this one first): their drawings stop before the document may close.
+  useEffect(() => () => {
+    const h = held.current;
+    held.current = null;
+    queueMicrotask(() => h?.release());
   }, []);
 
   useLayoutEffect(() => {
@@ -112,7 +132,7 @@ export function PdfViewer(props: ViewProps) {
     const el = box.current!;
     if (!placed.current) {
       placed.current = true;
-      const k = keptView(props.views, file.hash);
+      const k = keptView(props.views, props.live?.keptAs ?? file.hash);
       if (props.mode === 'full') el.focus({ preventScroll: true });
       if (k && Number.isFinite(k.page)) {
         const page = Math.min(sizes.length - 1, Math.max(0, Math.round(k.page)));
@@ -289,7 +309,8 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
   scaleNow.current = scale;
   const text = useRef<{ layer: TextLayer; rendered: boolean } | null>(null);
 
-  // The page while it is drawn: its real size for the layout, its links.
+  // The page while it is drawn: its real size for the layout, its links. A new document's (live) replaces the last
+  // one's once read, so that its drawing stays meanwhile.
   useEffect(() => {
     if (!drawn) return;
     let live = true;
@@ -299,13 +320,18 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
         if (!live) return;
         props.onSize(index, pageSize(p));
         setPage(p);
+        setLinks([]);
         const annotations = await p.getAnnotations({ intent: 'display' });
         if (live) setLinks(linksOf(annotations, p));
       } catch (e) {
         if (live) console.error(`Page ${index + 1} du PDF :`, e);
       }
     })());
-    return () => { live = false; setPage(null); setLinks([]); };
+    return () => { live = false; };
+  }, [drawn, doc]);
+  useEffect(() => {
+    if (!drawn) return;
+    return () => { setPage(null); setLinks([]); };
   }, [drawn]);
 
   // Drawn at this zoom, into a new canvas that replaces the last one once complete.
@@ -365,12 +391,17 @@ const PdfPage = memo(function PdfPage(props: PageProps) {
     if (page && t?.rendered) t.layer.update({ viewport: page.getViewport({ scale }) });
   }, [scale]);
 
-  // Left: its canvas goes, and what pdf.js keeps of the page — after the cleanups above (React runs them in order):
-  // a page whose drawing is under way would keep it.
-  useEffect(() => () => {
-    box.current?.querySelectorAll('canvas').forEach(free);
-    page?.cleanup();
+  // A page let go: what pdf.js keeps of it — after the cleanups above (React runs them in order): a page whose drawing
+  // is under way would keep it. Its canvas goes once the page is left (no page), not when a new document's page takes
+  // its place (live): that drawing stays until the new one replaces it.
+  useEffect(() => {
+    if (page === null) box.current?.querySelectorAll('canvas').forEach(free);
+    return () => { page?.cleanup(); };
   }, [page]);
+  useEffect(() => {
+    const el = box.current!;
+    return () => el.querySelectorAll('canvas').forEach(free);
+  }, []);
 
   const style = { top: props.top, left: props.left, width: props.width, height: props.height, '--total-scale-factor': scale } as CSSProperties;
   return (

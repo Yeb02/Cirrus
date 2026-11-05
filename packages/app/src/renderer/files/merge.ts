@@ -4,11 +4,11 @@ import type { FileRef } from '@cirrus/core';
 export interface Merge { files: FileRef[]; added: string[]; replaced: string[]; unchanged: string[] }
 
 /** What two names are compared by: Unicode NFC (an « é » an archive decomposed is the composed one), then the case, the French way. */
-const keyOf = (name: string): string => name.normalize('NFC').toLocaleLowerCase('fr');
+export const nameKey = (name: string): string => name.normalize('NFC').toLocaleLowerCase('fr');
 
 /** Whether two names are one file's (Review Focus 1): Windows ignores the case, and the user sees no normalization. */
 export function sameName(a: string, b: string): boolean {
-  return keyOf(a) === keyOf(b);
+  return nameKey(a) === nameKey(b);
 }
 
 /** « a.txt » numbered n: « a (n).txt », before the extension; a name whose only dot leads it (« .env ») has none. */
@@ -26,15 +26,15 @@ function numbered(name: string, n: number): string {
 export function mergeFiles(existing: FileRef[], incoming: FileRef[]): Merge {
   const out: Merge = { files: [...existing], added: [], replaced: [], unchanged: [] };
   const at = new Map<string, number>();
-  for (let i = existing.length - 1; i >= 0; i--) at.set(keyOf(existing[i].name), i); // the first of two alike, should there be
-  const dropped = new Set(incoming.map((f) => keyOf(f.name)));
+  for (let i = existing.length - 1; i >= 0; i--) at.set(nameKey(existing[i].name), i); // the first of two alike, should there be
+  const dropped = new Set(incoming.map((f) => nameKey(f.name)));
   const given = new Set<string>();
   for (const f of incoming) {
-    let name = f.name, key = keyOf(name);
+    let name = f.name, key = nameKey(name);
     if (given.has(key)) {
       for (let n = 2; ; n++) {
         name = numbered(f.name, n);
-        key = keyOf(name);
+        key = nameKey(name);
         if (!given.has(key) && !dropped.has(key)) break;
       }
     }

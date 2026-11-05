@@ -5,10 +5,10 @@ import { applyOps, CommandError, type FileRef, invertAction, type State } from '
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { blobRequest } from '../src/main/files.ts';
+import { blobRequest, latexRequest } from '../src/main/files.ts';
 import { filesBuild, removeFileBuild, renameFileBuild } from '../src/renderer/actions.ts';
 import { decodeText, delimiterFor, parseDelimited } from '../src/renderer/files/decode.ts';
-import { type FileKind, fileKind, fileUrl, formatSize } from '../src/renderer/files/kind.ts';
+import { type FileKind, fileKind, fileUrl, formatSize, type ViewRef, viewKey } from '../src/renderer/files/kind.ts';
 import { checkFileName, mergeFiles, sameName } from '../src/renderer/files/merge.ts';
 import { ViewStates } from '../src/renderer/files/viewState.ts';
 
@@ -58,6 +58,12 @@ test('fileUrl : le format du protocole, que le principal relit jusqu’au fichie
   const csv = refOf('mesures_compression.csv');
   const answer = blobRequest(dir, fileUrl(csv), null);
   expect(answer).toMatchObject({ status: 200, path: filePath(dir, csv), start: 0, end: csv.size - 1 });
+  // A compiled PDF (plan 4b, task 5): the host `latex`, which the main process serves from its cache; its views keep
+  // it apart from a blob of the same hash.
+  const pdf: ViewRef = { name: 'complexité.pdf', hash: sha('a'), size: 10, store: 'latex' };
+  expect(fileUrl(pdf)).toBe(`cirrus-file://latex/${sha('a')}/complexit%C3%A9.pdf`);
+  expect(latexRequest(join(dir, 'cache'), fileUrl(pdf), null)).toMatchObject({ status: 404 });
+  expect(viewKey(pdf)).not.toBe(viewKey({ ...pdf, store: undefined }));
 });
 
 test('formatSize : base 1024, une décimale sous 100, à la française', () => {

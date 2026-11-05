@@ -1,14 +1,17 @@
 import { isStandalone } from '@cirrus/core';
 
-/** from, to: the name's offsets inside its braces; line: 1-based. */
+/**
+ * name: as TeX reads it; from, to: the offsets of its first and last character inside its braces, a comment between
+ * them included (`\ref{kc%⏎:def}`: text.slice(from, to) is then not the name); line: 1-based, its first character's.
+ */
 export interface TexMark { name: string; from: number; to: number; line: number }
 export interface TexScan { labels: TexMark[]; refs: TexMark[]; cites: TexMark[]; standalone: boolean }
 
 /** The commands that refer to a label (the kernel, amsmath, hyperref, nameref, varioref, cleveref): cleveref's take a list. */
-const REFS = new Set(['ref', 'eqref', 'pageref', 'autoref', 'cref', 'Cref', 'nameref', 'vref']);
-const REF_LISTS = new Set(['cref', 'Cref']);
+export const REFS: ReadonlySet<string> = new Set(['ref', 'eqref', 'pageref', 'autoref', 'cref', 'Cref', 'nameref', 'vref']);
+export const REF_LISTS: ReadonlySet<string> = new Set(['cref', 'Cref']);
 /** The citation commands (the kernel, natbib, biblatex): up to two optional arguments, then a list of keys. */
-const CITES = new Set(['cite', 'citep', 'citet', 'citealp', 'citealt', 'citeauthor', 'citeyear', 'nocite', 'parencite', 'textcite']);
+export const CITES: ReadonlySet<string> = new Set(['cite', 'citep', 'citet', 'citealp', 'citealt', 'citeauthor', 'citeyear', 'nocite', 'parencite', 'textcite']);
 /** The environments whose content is not LaTeX, read up to their \end whatever it holds; their starred forms too. */
 const VERBATIM = new Set(['verbatim', 'verbatim*', 'Verbatim', 'Verbatim*', 'lstlisting']);
 

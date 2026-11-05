@@ -1,10 +1,9 @@
-import type { FileRef } from '@cirrus/core';
 import {
   getDocument, InvalidPDFException, PasswordException, PDFDataRangeTransport, type PDFDocumentLoadingTask, type PDFDocumentProxy, type PDFPageProxy,
   PDFWorker,
 } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { fileUrl } from './kind.ts';
+import { fileUrl, type ViewRef, viewKey } from './kind.ts';
 import type { PageSize } from './pdfLayout.ts';
 import { ReadError, readHead } from './read.ts';
 
@@ -66,7 +65,7 @@ class StoreRanges extends PDFDataRangeTransport {
   /** Called once, at the first range that fails or would go past the budget; none is fetched after it. */
   failed: (e: unknown) => void = () => {};
 
-  constructor(ref: FileRef, head: Uint8Array, budget: number) {
+  constructor(ref: ViewRef, head: Uint8Array, budget: number) {
     super(ref.size, head, head.length >= ref.size);
     this.url = fileUrl(ref);
     this.budget = budget;
@@ -115,16 +114,16 @@ class StoreRanges extends PDFDataRangeTransport {
  * would wait for ever (a document closed while it opens, or while a page is read, never settles), so its users race it.
  */
 interface Entry { doc: Promise<PDFDocumentProxy>; failure: Promise<never>; users: number; destroy(): void; unbound(): void }
-/** The documents open, by hash, the one used longest ago first (a Map keeps its insertion order). */
+/** The documents open, by store and hash (viewKey), the one used longest ago first (a Map keeps its insertion order). */
 const docs = new Map<string, Entry>();
 
 /** Closes the documents used longest ago that no view holds, until at most `kept` stay open. */
 function trim(kept: number): void {
   let open = docs.size;
-  for (const [hash, e] of docs) {
+  for (const [key, e] of docs) {
     if (open <= kept) break;
     if (e.users > 0) continue;
-    docs.delete(hash);
+    docs.delete(key);
     open--;
     e.destroy();
   }
@@ -142,13 +141,14 @@ export interface PdfDoc { doc: PDFDocumentProxy; failure: Promise<never>; releas
  * bytes a thumbnail may read (StoreRanges); a view, which reads what it shows, gives none, and lifts the budget of a
  * document a thumbnail is opening.
  */
-export async function openPdf(ref: FileRef, kept: number, budget = Infinity): Promise<PdfDoc> {
-  let e = docs.get(ref.hash);
-  if (e) docs.delete(ref.hash);
+export async function openPdf(ref: ViewRef, kept: number, budget = Infinity): Promise<PdfDoc> {
+  const key = viewKey(ref);
+  let e = docs.get(key);
+  if (e) docs.delete(key);
   else e = opening(ref, budget);
   if (budget === Infinity) e.unbound();
   const entry = e;
-  docs.set(ref.hash, entry);
+  docs.set(key, entry);
   entry.users++;
   try {
     const doc = await entry.doc;
@@ -158,14 +158,14 @@ export async function openPdf(ref: FileRef, kept: number, budget = Infinity): Pr
   } catch (err) {
     // Not kept: the next view tries again.
     entry.users--;
-    if (docs.get(ref.hash) === entry) docs.delete(ref.hash);
+    if (docs.get(key) === entry) docs.delete(key);
     entry.destroy();
     throw err;
   }
 }
 
 /** A document opening: its head read, then pdf.js asks the rest by ranges, none ahead, within `budget` bytes. */
-function opening(ref: FileRef, budget: number): Entry {
+function opening(ref: ViewRef, budget: number): Entry {
   let task: PDFDocumentLoadingTask | null = null, range: StoreRanges | null = null, closed = false, limit = budget;
   let fail: (e: unknown) => void = () => {};
   const failure = new Promise<never>((_, reject) => { fail = reject; });
@@ -189,7 +189,7 @@ function opening(ref: FileRef, budget: number): Entry {
       r.failed = (err) => {
         if (err instanceof BudgetError) console.info(`Vignette de « ${ref.name} » : ${err.message}, son icône à la place.`);
         else console.error(`Lecture de « ${ref.name} » par plages :`, err);
-        if (docs.get(ref.hash) === entry) docs.delete(ref.hash);
+        if (docs.get(viewKey(ref)) === entry) docs.delete(viewKey(ref));
         fail(err);
         void t.destroy();
       };
@@ -238,7 +238,7 @@ export async function destination(doc: PDFDocumentProxy, dest: unknown): Promise
   }
 }
 
-/** The thumbnails drawn, by hash, size, density and budget: blob: URLs, kept for the session (a failure too). */
+/** The thumbnails drawn, by store and hash, size, density and budget: blob: URLs, kept for the session (a failure too). */
 const thumbs = new Map<string, Promise<string>>();
 /** One thumbnail drawn at a time: a pop-up of many PDFs does not open them all at once. */
 let queue: Promise<unknown> = Promise.resolve();
@@ -248,9 +248,9 @@ let queue: Promise<unknown> = Promise.resolve();
  * thumbnail. Only what that page needs is read (openPdf: by ranges, nothing ahead), whatever the file's size, and at
  * most `budget` bytes (thumbMaxMb): past them, it is given up (BudgetError).
  */
-export function pageThumbnail(ref: FileRef, px: number, kept: number, budget: number): Promise<string> {
+export function pageThumbnail(ref: ViewRef, px: number, kept: number, budget: number): Promise<string> {
   const density = window.devicePixelRatio || 1;
-  const key = `${ref.hash}/${px}/${density}/${budget}`;
+  const key = `${viewKey(ref)}/${px}/${density}/${budget}`;
   let p = thumbs.get(key);
   if (!p) {
     p = queue.then(() => drawThumbnail(ref, px * density, kept, budget));
@@ -260,7 +260,7 @@ export function pageThumbnail(ref: FileRef, px: number, kept: number, budget: nu
   return p;
 }
 
-async function drawThumbnail(ref: FileRef, px: number, kept: number, budget: number): Promise<string> {
+async function drawThumbnail(ref: ViewRef, px: number, kept: number, budget: number): Promise<string> {
   const held = await openPdf(ref, kept, budget);
   try {
     return await Promise.race([firstPage(held.doc, px), held.failure]);
