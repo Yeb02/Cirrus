@@ -4,10 +4,11 @@ import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isStandalone, type KnownLabel, type TexError } from '@cirrus/core';
 import { filePath } from '@cirrus/store';
-import type { RenderParams } from '@cirrus/view';
+import { PARAM_SPECS, type RenderParams } from '@cirrus/view';
 import { plainName } from '../files.ts';
 import type { PdfCache } from './cache.ts';
 import { citedLabels, driverSource, jobBody } from './driver.ts';
+import { killTree } from './kill.ts';
 import { parseLog, readAux } from './log.ts';
 import { missingFile, texEnv, type TexBinaries } from './tinytex.ts';
 
@@ -16,7 +17,9 @@ import { missingFile, texEnv, type TexBinaries } from './tinytex.ts';
  * as on the bench (bench/latex/src/warmCompiler.ts); the PDFs in a local cache. Each process has its folders,
  * <root>/work/p<n> (its current directory: the driver, the preamble, the jobs) and <root>/links/p<n> (the node's files,
  * hard links to the store, which TEXINPUTS names); both are removed once it is done, and emptied at the service's
- * start. TeX writes only in its work folder and runs nothing: openout_any=p, shell escape off (texEnv). It can read what
+ * start. TeX writes, for the document, only in its work folder, and runs no command of it: openout_any=p, shell escape
+ * off (texEnv). kpathsea may still run TeX Live's font tools (mktexpk, mktextfm, mf) for a missing font, which write
+ * into TinyTeX's texmf-var (final review, I2): a pdfLaTeX is always stopped with them (killTree). TeX can read what
  * the Windows account can read: TeX Live 2026 made openin_any a no-op (ruling of task 3). LaTeX's state, its
  * installation and its missing packages are LatexSetup's (setup.ts, task 7), which stands in front of this service.
  */
@@ -177,15 +180,20 @@ export class LatexService {
     this.switchPool(this.preamble);
   }
 
-  /** Kills every pdfLaTeX and waits for their exit (closing the app: none survives it); the requests are cancelled. */
+  /**
+   * Kills every pdfLaTeX, with what each started (killTree), and waits for their exit (closing the app: none survives
+   * it); the requests are cancelled.
+   */
   async dispose(): Promise<void> {
     this.disposed = true;
     for (const job of [...this.jobs.values()]) this.settle(job, { status: 'cancelled' });
     for (const w of this.idle) w.dead = true;
     this.idle = [];
     const all = [...this.live];
-    for (const { child } of all) child.kill();
-    await Promise.all(all.map((p) => p.exited));
+    await Promise.all(all.map(async (p) => {
+      await killTree(p.child);
+      await p.exited;
+    }));
   }
 
   private async texBinaries(): Promise<TexBinaries | null> {
@@ -203,7 +211,7 @@ export class LatexService {
     const bins = await this.texBinaries();
     if (job.done) return;
     if (!bins) return this.settle(job, { status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
-    const key = this.opts.cache.key(job.req, bins.version, this.opts.params().latexSnippetWidthCm);
+    const key = this.opts.cache.key(job.req, bins.version);
     const hit = this.opts.cache.get(key);
     if (hit) return this.settle(job, { status: 'ok', ...hit, ms: this.ms(job), cached: true });
     if (isStandalone(job.req.source)) return this.runStandalone(job, bins, key);
@@ -265,15 +273,15 @@ export class LatexService {
     const { n, work } = warm.dirs;
     const src = `job-${n}-src.tex`, body = `job-${n}-body.tex`;
     if (job.done) {
-      warm.child.kill();
+      void killTree(warm.child);
       return { ok: false, answer: { status: 'cancelled' } };
     }
     try {
       this.link(warm.dirs, req.resources);
       writeFileSync(join(work, src), req.source, 'utf8');
-      writeFileSync(join(work, body), jobBody(req, src, this.opts.params().latexSnippetWidthCm), 'utf8');
+      writeFileSync(join(work, body), jobBody(req, src), 'utf8');
     } catch (e) {
-      warm.child.kill();
+      void killTree(warm.child);
       return { ok: false, answer: this.error(job, { message: `La compilation n’a pas pu être préparée : ${(e as Error).message}`, line: null, where: 'source' }) };
     }
     job.running = warm.child;
@@ -281,13 +289,16 @@ export class LatexService {
     return this.finish(job, warm.child, warm.exited, warm.dirs, src);
   }
 
-  /** Waits for the process's exit, latexTimeoutMs at most, then reads its log, its .aux and its PDF. */
+  /**
+   * Waits for the process's exit, latexTimeoutMs at most (then killed with what it started), then reads its log, its .aux
+   * and its PDF.
+   */
   private async finish(job: Job, child: ChildProcess, exited: Promise<number | null>, dirs: Dirs, src: string): Promise<Outcome> {
     const timeoutMs = this.opts.params().latexTimeoutMs;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      void killTree(child);
     }, timeoutMs);
     const code = await exited;
     clearTimeout(timer);
@@ -425,7 +436,7 @@ export class LatexService {
 
   private retire(w: Warm): void {
     w.dead = true;
-    w.child.kill();
+    void killTree(w.child);
   }
 
   /**
@@ -576,7 +587,7 @@ export class LatexService {
       this.drop(w);
       w.give(null);
     }
-    job.running?.kill();
+    if (job.running) void killTree(job.running);
     job.resolve(a);
   }
 
@@ -614,9 +625,13 @@ export const INVALID_REQUEST: CompileAnswer = {
   status: 'error', error: { message: 'Requête de compilation invalide.', line: null, where: 'source' }, labels: [], log: '', ms: 0,
 };
 
+/** latexSnippetWidthCm's bounds: a snippet's width outside them never reaches TeX. */
+const WIDTH = PARAM_SPECS.find((p) => p.key === 'latexSnippetWidthCm')!;
+
 /**
  * Why a request from the interface is refused, or null: every field of the form CompileRequest says, a source of
- * `maxSourceBytes` at most (textViewMaxMb), resources of plain names whose hash is in the store.
+ * `maxSourceBytes` at most (textViewMaxMb), a snippet's width within latexSnippetWidthCm's bounds (none for a page),
+ * resources of plain names whose hash is in the store.
  */
 export function invalidRequest(x: unknown, store: string, maxSourceBytes: number): string | null {
   if (!isRecord(x)) return 'pas un objet';
@@ -625,6 +640,7 @@ export function invalidRequest(x: unknown, store: string, maxSourceBytes: number
   if (!isText(x.source)) return 'source';
   if (Buffer.byteLength(x.source, 'utf8') > maxSourceBytes) return `source de plus de ${maxSourceBytes} octets`;
   if (!isText(x.preamble)) return 'préambule';
+  if (x.mode === 'page' ? x.widthCm !== null : typeof x.widthCm !== 'number' || !(x.widthCm >= WIDTH.min! && x.widthCm <= WIDTH.max!)) return 'largeur';
   if (!listOf(x.refs, isRef)) return 'refs';
   if (!listOf(x.broken, isText)) return 'broken';
   if (!listOf(x.doubled, isRef)) return 'doubled';

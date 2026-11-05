@@ -85,7 +85,7 @@ test('diagnosticsFor : complexité.tex — un label inconnu à sa place, un labe
   const tex = s.nodes.get(ids.nodes.kolmogorov)!.files.find((f) => f.name === 'complexité.tex')!;
   const text = texts.get(tex.hash)!;
   const own: Origin = { kind: 'file', node: ids.nodes.kolmogorov, name: tex.name };
-  const req = buildRequest({ origin: own, source: text, s, registry, known: [] });
+  const req = buildRequest({ origin: own, source: text, s, registry, known: [], widthCm: 9 });
   const lineStart = lineStarts(text);
   const absent = text.indexOf('absent:label'), kcDef = text.indexOf('\\label{kc:def}') + '\\label{'.length;
   expect(diagnosticsFor(scanTex(text), req, registry, own, null, lineStart)).toEqual([
@@ -110,7 +110,7 @@ test('diagnosticsFor : un label en double ici ou ailleurs, une clé inconnue, un
   const registry = LatexRegistry.build(s, textsOf(s));
   const own: Origin = { kind: 'summary', node: ids.nodes.occam };
   const text = '\\label{deux}\\label{deux} \\ref{ent:def} \\cite{li2008, inconnue} \\ref{solomonoff}';
-  const req = buildRequest({ origin: own, source: text, s, registry, known: [] });
+  const req = buildRequest({ origin: own, source: text, s, registry, known: [], widthCm: 9 });
   const span = (name: string, nth = 0) => {
     let i = -1;
     for (let k = 0; k <= nth; k++) i = text.indexOf(name, i + 1);
@@ -129,7 +129,7 @@ test('diagnosticsFor : un nom coupé par un commentaire est marqué sur toute sa
   const s = store.loadState(), registry = LatexRegistry.build(s, textsOf(s));
   const own: Origin = { kind: 'summary', node: ids.nodes.occam };
   const text = '\\ref{abs%\n  ent}';
-  const req = buildRequest({ origin: own, source: text, s, registry, known: [] });
+  const req = buildRequest({ origin: own, source: text, s, registry, known: [], widthCm: 9 });
   expect(diagnosticsFor(scanTex(text), req, registry, own, null, lineStarts(text))).toEqual([
     { from: 5, to: text.length - 1, severity: 'error', message: 'Label inconnu : absent' },
   ]);

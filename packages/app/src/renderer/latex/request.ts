@@ -10,9 +10,12 @@ import { type LatexRegistry, type Origin, shortCitation, slotOf } from './regist
  * holding it, in `doubledCites` with the first's, by identifier, when several do (shown in red, Review Focus 5), in
  * `unknownCites` when none does. Each label or key once, in the order the source first cites it. `resources`: the
  * node's files, the source itself left out; none for a relation. `known`: the hint of the slot's last compilation,
- * given as is.
+ * given as is. `widthCm`: latexSnippetWidthCm, a summary's or a relation's width (a .tex is a page, null): in the
+ * request, so that a view asks again once it changes, and the main process reads it nowhere else (final review, M1).
  */
-export function buildRequest(a: { origin: Origin; source: string; s: State; registry: LatexRegistry; known: KnownLabel[] }): CompileRequest {
+export function buildRequest(a: {
+  origin: Origin; source: string; s: State; registry: LatexRegistry; known: KnownLabel[]; widthCm: number;
+}): CompileRequest {
   const { origin, source, s, registry } = a;
   const slot = slotOf(origin), scan = registry.scanOf(origin, source);
   const own = new Set(scan.labels.map((m) => m.name)), seen = new Set<string>();
@@ -34,9 +37,11 @@ export function buildRequest(a: { origin: Origin; source: string; s: State; regi
     else (recs.length === 1 ? cites : doubledCites).push({ key: name, text: shortCitation(recs[0]!), node: recs[0]!.id });
   }
   const files = origin.kind === 'relation' ? [] : s.nodes.get(origin.node)?.files ?? [];
+  const page = origin.kind === 'file';
   return {
-    slot, mode: origin.kind === 'file' ? 'page' : 'snippet', source, preamble: preambleText(s), refs, broken, doubled, cites, doubledCites, unknownCites,
+    slot, mode: page ? 'page' : 'snippet', source, preamble: preambleText(s), refs, broken, doubled, cites, doubledCites, unknownCites,
     known: a.known,
-    resources: origin.kind === 'file' ? files.filter((f) => !sameName(f.name, origin.name)) : files,
+    resources: page ? files.filter((f) => !sameName(f.name, origin.name)) : files,
+    widthCm: page ? null : a.widthCm,
   };
 }

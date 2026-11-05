@@ -194,6 +194,21 @@ test('délai de tlmgr : un réglage avancé du groupe « LaTeX » (plan 4b, tâc
   expect(withOverrides({ latexTlmgrTimeoutMs: 1 }).latexTlmgrTimeoutMs).toBe(10_000);
 });
 
+test('cache des PDF ramené sous son plafond, téléchargement de TinyTeX bloqué, recherche d’un paquet après un échec de tlmgr : réglages avancés du groupe « LaTeX » (plan 4b, revue finale)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['latexCacheTrimPercent', 90, 'Taille du cache des PDF compilés après un nettoyage (% de son plafond)', 50, 100, 1],
+    ['latexDownloadStallMs', 60_000, 'Attente maximale de données pendant le téléchargement de TinyTeX (ms)', 5000, 600_000, 1000],
+    ['latexLookupRetryMs', 60_000, 'Délai avant de chercher à nouveau un paquet manquant après un échec de tlmgr (ms)', 10_000, 3_600_000, 1000],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'LaTeX', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ latexCacheTrimPercent: 10, latexDownloadStallMs: 1, latexLookupRetryMs: 1 })).toMatchObject({
+    latexCacheTrimPercent: 50, latexDownloadStallMs: 5000, latexLookupRetryMs: 10_000,
+  });
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

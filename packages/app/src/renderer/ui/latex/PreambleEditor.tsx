@@ -11,7 +11,7 @@ import { PdfViewer } from '../viewers/PdfViewer.tsx';
 import { CompileLog, errorText } from './CompileLog.tsx';
 import { type Diag, lineStartOf } from './editorLogic.ts';
 import { LatexEditor } from './LatexEditor.tsx';
-import { brokenPreambleQuestion, discardPreambleQuestion, PREAMBLE_SLOT, preambleRequest, saveStep } from './preamble.ts';
+import { brokenPreambleQuestion, discardPreambleQuestion, leaveUnsaved, PREAMBLE_SLOT, preambleRequest, saveStep } from './preamble.ts';
 
 /**
  * The compilation's error as the editor shows it: the preamble's is the draft's own, on its line; the sample's is
@@ -30,7 +30,8 @@ const LIVE = { keptAs: `latex:${PREAMBLE_SLOT}` };
  * (slot `preamble`, mode `page`), its last good PDF kept, with the compilation's state and its log. « Préambule par
  * défaut » puts DEFAULT_PREAMBLE in the draft. « Enregistrer » (and Ctrl+S) saves it by `onSave` (preambleBuild: one
  * action, undone by Ctrl+Z), once the draft's compilation is in: a draft that does not compile asks first
- * (saveStep); unchanged, it closes. « Annuler » closes without saving; Escape or ×, with changes, ask first.
+ * (saveStep); unchanged, it closes. « Annuler » closes without saving; Escape or ×, with changes, ask first. Closed
+ * without saving, the prepared pdfLaTeX go back to the saved preamble (leaveUnsaved).
  */
 export function PreambleEditor(props: { state: State; params: RenderParams; views: ViewStates; onSave(text: string): Promise<boolean>; onClose(): void }) {
   const { params } = props;
@@ -51,10 +52,14 @@ export function PreambleEditor(props: { state: State; params: RenderParams; view
     const { draft: text, props: p } = latest.current;
     if (await p.onSave(text)) p.onClose();
   };
+  const closeUnsaved = () => {
+    const { saved: s, props: p } = latest.current;
+    leaveUnsaved(s, (preamble) => window.cirrus.latexWarm(preamble), () => p.onClose());
+  };
   const save = () => {
-    const { draft: d, saved: s, view: v, props: p } = latest.current;
+    const { draft: d, saved: s, view: v } = latest.current;
     const step = saveStep(d, s, v);
-    if (step === 'close') p.onClose();
+    if (step === 'close') closeUnsaved();
     else if (step === 'wait') setSaving(true);
     else if (step === 'ask') setQuestion(brokenPreambleQuestion(() => { void commit(); }));
     else void commit();
@@ -65,9 +70,9 @@ export function PreambleEditor(props: { state: State; params: RenderParams; view
     save();
   }, [saving, view.pending]);
   const leave = () => {
-    const { draft: d, saved: s, props: p } = latest.current;
-    if (d === s) p.onClose();
-    else setQuestion(discardPreambleQuestion(() => p.onClose()));
+    const { draft: d, saved: s } = latest.current;
+    if (d === s) closeUnsaved();
+    else setQuestion(discardPreambleQuestion(closeUnsaved));
   };
   const close = useRef(leave);
   close.current = leave;
@@ -91,7 +96,7 @@ export function PreambleEditor(props: { state: State; params: RenderParams; view
         <span className="node">commun à tous les nœuds</span>
         <span className="spacer" />
         <button className="system" onClick={() => setDraft(DEFAULT_PREAMBLE)}>Préambule par défaut</button>
-        <button className="system" onClick={() => props.onClose()}>Annuler</button>
+        <button className="system" onClick={() => closeUnsaved()}>Annuler</button>
         <button className="system save" disabled={saving} onClick={() => save()}>Enregistrer</button>
         <button className="close" title="Quitter le préambule (Échap)" onClick={() => leave()}>×</button>
       </header>

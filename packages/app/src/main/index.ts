@@ -358,16 +358,19 @@ void app.whenReady().then(() => {
   }
   markNow('baseOpened');
   const latexRoot = join(dir, 'latex'), latexCache = join(latexRoot, 'cache');
-  latex = new LatexService({
-    binaries: texBinaries, root: latexRoot, store: dir, params: currentParams,
-    cache: new PdfCache(latexCache, () => currentParams().latexCacheMb * 2 ** 20),
-  });
+  const cacheBytes = () => currentParams().latexCacheMb * 2 ** 20;
+  const cache = new PdfCache(latexCache, cacheBytes, () => (cacheBytes() * currentParams().latexCacheTrimPercent) / 100);
+  // The cache's folder listed in the background, while the window loads (final review, I3).
+  void cache.load().catch((e: unknown) => console.warn('Cache LaTeX non listé :', e));
+  latex = new LatexService({ binaries: texBinaries, root: latexRoot, store: dir, params: currentParams, cache });
   // tlmgr, TinyTeX's installer and pdflatex --version under latexTlmgrTimeoutMs: a network that hangs never holds the
   // packages' queue (task 7). The download goes through Electron's network stack (its proxy, its certificates).
   const toolRun: Deps['run'] = (file, args) => runFile(file, args, currentParams().latexTlmgrTimeoutMs);
   latexSetup = new LatexSetup({
     service: latex, binaries: texBinaries, params: currentParams,
-    provision: async (onProgress) => provision(tinyTexRoot(process.env), { download: fetchDownload((url) => net.fetch(url)), run: toolRun }, onProgress),
+    provision: async (onProgress) => provision(tinyTexRoot(process.env), {
+      download: fetchDownload((url, init) => net.fetch(url, init), () => currentParams().latexDownloadStallMs), run: toolRun,
+    }, onProgress),
     packages: (bins) => new Packages(bins, toolRun),
     status: (s) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('cirrus:latex:status', s); },
   });

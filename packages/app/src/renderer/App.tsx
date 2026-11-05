@@ -12,6 +12,7 @@ import { withPackage } from './latex/install.ts';
 import { LatexRegistry } from './latex/registry.ts';
 import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
+import { quitInOrder, typedFields } from './quit.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -172,14 +173,18 @@ export function App() {
     return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); };
   }, []);
 
-  // Closing: what is typed in a .tex's full screen saved first (D6), then the last snapshot, if anything changed since
-  // the one before; then the main process may close the window. The views still open keep their place too.
+  // Closing: what is typed in a .tex's full screen saved first (D6), then what is typed in a summary or a relation being
+  // edited (final review, I1), then the last snapshot, if anything changed since the one before; then the main process
+  // may close the window (quitInOrder). The views still open keep their place too.
   useEffect(() => window.cirrus.onQuit(() => {
     keepOpenViews();
-    void (workbench.current?.flush() ?? Promise.resolve())
-      .catch((e: unknown) => console.error('Enregistrement du .tex à la fermeture :', e))
-      .then(() => saver.current?.flush())
-      .finally(() => window.cirrus.quitReady());
+    void quitInOrder({
+      workbench: () => workbench.current?.flush() ?? Promise.resolve(),
+      fields: () => typedFields.commitAll(),
+      snapshot: () => saver.current?.flush() ?? Promise.resolve(),
+      ready: () => window.cirrus.quitReady(),
+      error: (what, e) => console.error(what, e),
+    });
   }), []);
 
   useEffect(() => {

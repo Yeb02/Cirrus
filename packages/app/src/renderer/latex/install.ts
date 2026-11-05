@@ -1,5 +1,9 @@
 import { BASE_PACKAGES, type LatexStatus } from '@cirrus/core';
 import { type RenderParams, WORD } from '@cirrus/view';
+import { LATEX_SOURCES } from '../../main/latex/sources.ts';
+
+/** The pinned installer's size, in whole Mo (decimal, as a download is told): 74 for TinyTeX v2026.11 (final review, M4). */
+const DOWNLOAD_MO = Math.round(LATEX_SOURCES.tinytex.bytes / 1e6);
 
 /**
  * The settings with `name` added to `latexPackages`, the shared list every PC installs at its start (D1): null when
@@ -35,7 +39,7 @@ export function noticeFor(s: LatexStatus | null, seen: { dismissed: boolean; jus
   switch (s.state) {
     case 'absent':
       return seen.dismissed ? null : {
-        text: 'LaTeX n’est pas installé : les résumés et les .tex s’affichent en source. Cirrus peut installer TinyTeX (environ 100 Mo à télécharger).',
+        text: `LaTeX n’est pas installé : les résumés et les .tex s’affichent en source. Cirrus peut installer TinyTeX (environ ${DOWNLOAD_MO} Mo à télécharger).`,
         actions: ['install', 'later'],
       };
     case 'installing': {

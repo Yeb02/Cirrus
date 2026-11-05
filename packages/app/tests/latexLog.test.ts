@@ -91,7 +91,7 @@ test('readAux : les labels du .aux, numéro, page et ancre', () => {
 
 const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
   slot: 'summary:n1', mode: 'page', source: 'x', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [], doubledCites: [], unknownCites: [],
-  known: [], resources: [], ...over,
+  known: [], resources: [], widthCm: null, ...over,
 });
 const NODE = '0192f0c3-7a1b-7c2d-8e3f-a1b2c3d4e5f6';
 
@@ -118,7 +118,7 @@ test('jobBody : les labels connus, puis les références, les cassés, les doubl
     // A key held by several nodes: the first's citation, in red and linked to it, as a doubled label.
     doubledCites: [{ key: 'deux', text: 'Li, 2008', node: NODE }],
     unknownCites: ['li2009'],
-  }), SRC, 9);
+  }), SRC);
   const parts = [
     '\\cirrus@label{\\detokenize{a}}{1}{1}{equation.1}',
     `\\cirrus@label{\\detokenize{mdl:enonce}}{\\cirrus@link{${NODE}}{Minimum Description Length Principle (MDL)}}`,
@@ -143,7 +143,7 @@ test('jobBody : un titre passe par titleToTex ; un label refusé par safeLabel, 
     ],
     broken: ['c%d'], cites: [{ key: 'k#1', text: 'Jamais', node: NODE }], doubledCites: [{ key: 'x^^7b', text: 'Jamais', node: NODE }], unknownCites: ['u{'],
     known: [{ label: 'k', number: '1}', page: '1', anchor: 'x' }, { label: 'k2', number: '#1', page: '1', anchor: 'x' }],
-  }), SRC, 9);
+  }), SRC);
   expect(body).toContain(`\\cirrus@link{${NODE}}{50 \\% \\& co\\_x \\#1 \\{a\\} \\textbackslash{}input\\{x\\}}`);
   expect(body).not.toContain('Jamais');
   expect(body).not.toMatch(/c%d|u\{|k#1|\{k\}|\{k2\}/);
@@ -152,11 +152,11 @@ test('jobBody : un titre passe par titleToTex ; un label refusé par safeLabel, 
 });
 
 test('jobBody : en mode snippet, la source composée dans une boîte de la largeur réglée, émise seule sur une page à sa taille', () => {
-  const body = jobBody(req({ mode: 'snippet' }), SRC, 9.5);
+  const body = jobBody(req({ mode: 'snippet', widthCm: 9.5 }), SRC);
   for (const s of ['\\hsize=9.5cm', '\\parindent=0pt', `\\input{${SRC}}`, '\\pdfpagewidth=\\wd', '\\pdfpageheight=', '\\shipout']) expect(body, s).toContain(s);
   // At least a strut's depth under the last baseline (plan 4b, task 6): a last line without descenders keeps its ink.
   expect(body).toContain('\\ifdim\\dimen@<\\dp\\strutbox\\dimen@=\\dp\\strutbox\\fi');
-  const page = jobBody(req({ mode: 'page' }), SRC, 9.5);
+  const page = jobBody(req({ mode: 'page' }), SRC);
   expect(page).toContain(`\\input{${SRC}}`);
   expect(page).not.toContain('\\shipout');
   expect(page).not.toContain('\\hsize');

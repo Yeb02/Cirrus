@@ -188,12 +188,18 @@ export interface RenderParams {
   latexTimeoutMs: number;
   /** A run of tlmgr (or of TinyTeX's installer) longer than this is stopped with what it started (task 7): never a queue held. */
   latexTlmgrTimeoutMs: number;
+  /** TinyTeX's download receiving nothing for this long is stopped, and fails (final review): « Réessayer » then shows. */
+  latexDownloadStallMs: number;
+  /** A missing file's package that tlmgr could not look up (offline, too slow) is looked up again after this long (final review). */
+  latexLookupRetryMs: number;
   /** A summary or a relation is compiled this wide, its height following its content (D3), */
   latexSnippetWidthCm: number;
   /** and drawn at its pop-up's width, enlarged no more than this (plan 4b, task 6). */
   latexSnippetMaxZoom: number;
   /** The local cache of the compiled PDFs (D2), the one used longest ago removed first, */
   latexCacheMb: number;
+  /** down to this share of it once over it (final review, I3), so that the next ones find room without trimming again, */
+  latexCacheTrimPercent: number;
   /** each with the end of its log, this long at most. */
   latexLogMaxKb: number;
   /** A source changed is compiled once typing has paused this long; the labels' registry is rebuilt at most this often. */
@@ -351,9 +357,12 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexWarmProcesses: 2,
   latexTimeoutMs: 10_000,
   latexTlmgrTimeoutMs: 600_000,
+  latexDownloadStallMs: 60_000,
+  latexLookupRetryMs: 60_000,
   latexSnippetWidthCm: 9,
   latexSnippetMaxZoom: 1.6,
   latexCacheMb: 500,
+  latexCacheTrimPercent: 90,
   latexLogMaxKb: 256,
   latexTypingPauseMs: 300,
   texSaveIdleMs: 10_000,
@@ -537,9 +546,12 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexWarmProcesses', 'pdfLaTeX préparés d’avance', A, 'LaTeX', 1, 4, 1),
   num('latexTimeoutMs', 'Durée maximale d’une compilation (ms)', A, 'LaTeX', 1000, 120_000, 100),
   num('latexTlmgrTimeoutMs', 'Durée maximale d’un appel à tlmgr ou à l’installateur de TinyTeX (ms)', A, 'LaTeX', 10_000, 3_600_000, 1000),
+  num('latexDownloadStallMs', 'Attente maximale de données pendant le téléchargement de TinyTeX (ms)', A, 'LaTeX', 5000, 600_000, 1000),
+  num('latexLookupRetryMs', 'Délai avant de chercher à nouveau un paquet manquant après un échec de tlmgr (ms)', A, 'LaTeX', 10_000, 3_600_000, 1000),
   num('latexSnippetWidthCm', 'Largeur du résumé et de la relation compilés (cm)', A, 'LaTeX', 4, 20, 0.5),
   num('latexSnippetMaxZoom', 'Agrandissement maximal du résumé compilé', A, 'LaTeX', 0.5, 4, 0.1),
   num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),
+  num('latexCacheTrimPercent', 'Taille du cache des PDF compilés après un nettoyage (% de son plafond)', A, 'LaTeX', 50, 100, 1),
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'LaTeX', 16, 4096, 16),
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'LaTeX', 50, 3000, 10),
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'LaTeX', 1000, 600_000, 500),

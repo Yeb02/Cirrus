@@ -28,7 +28,7 @@ export const PREAMBLE_SLOT = 'preamble';
 export function preambleRequest(draft: string): CompileRequest {
   return {
     slot: PREAMBLE_SLOT, mode: 'page', source: PREAMBLE_SAMPLE, preamble: draft, refs: [], broken: [], doubled: [], cites: [], doubledCites: [],
-    unknownCites: [], known: knownLabels(PREAMBLE_SLOT), resources: [],
+    unknownCites: [], known: knownLabels(PREAMBLE_SLOT), resources: [], widthCm: null,
   };
 }
 
@@ -61,4 +61,15 @@ export function discardPreambleQuestion(close: () => void): Question {
     focusCancel: true,
     answer: (v) => { if (v === 'drop') close(); },
   };
+}
+
+/**
+ * Leaving without saving — « Annuler », Escape or × once nothing is to be saved or the draft is dropped, « Enregistrer »
+ * on an unchanged draft —: the prepared pdfLaTeX are set back to `saved`, the preamble in effect, which the draft's
+ * compilations had taken them from (the next summary would otherwise wait for a cold one; final review), then the full
+ * screen closes. Saving needs none: App prepares them with the new preamble.
+ */
+export function leaveUnsaved(saved: string, warm: (preamble: string) => void, close: () => void): void {
+  warm(saved);
+  close();
 }

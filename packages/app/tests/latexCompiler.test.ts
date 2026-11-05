@@ -65,7 +65,7 @@ function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBina
 
 const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
   slot: 'summary:n1', mode: 'snippet', source: 'Bonjour $x^2$.', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [],
-  doubledCites: [], unknownCites: [], known: [], resources: [], ...over,
+  doubledCites: [], unknownCites: [], known: [], resources: [], widthCm: DEFAULT_PARAMS.latexSnippetWidthCm, ...over,
 });
 const NODE = '0192f0c3-7a1b-7c2d-8e3f-a1b2c3d4e5f6';
 const PUB = '0192f0c3-7a1b-7c2d-8e3f-000000000042';
@@ -116,8 +116,14 @@ test('invalidRequest : une requête bien formée passe ; une forme fausse, une s
     ['une ressource absente du magasin', { ...good, resources: [{ ...png, hash: 'f'.repeat(64) }] }],
     ['une empreinte mal formée', { ...good, resources: [{ ...png, hash: '../../x' }] }],
     ...['a/b.png', 'a\\b.png', 'c:x.png', '.', '..', ''].map((name): [string, unknown] => [`le nom ${name}`, { ...good, resources: [{ ...png, name }] }]),
+    // The snippet's width (final review, M1): a number within latexSnippetWidthCm's bounds; none for a page.
+    ['sans largeur', { ...good, widthCm: undefined }], ['une largeur trop petite', { ...good, widthCm: 3.9 }], ['une largeur trop grande', { ...good, widthCm: 20.5 }],
+    ['une largeur NaN', { ...good, widthCm: Number.NaN }], ['une largeur en texte', { ...good, widthCm: '9' }], ['une page avec une largeur', { ...good, mode: 'page', widthCm: 9 }],
   ];
   for (const [what, x] of bad) expect(invalidRequest(x, base, 1000), what).toEqual(expect.any(String));
+  expect(invalidRequest({ ...good, mode: 'page', widthCm: null }, base, 1000)).toBeNull();
+  expect(invalidRequest({ ...good, widthCm: 4 }, base, 1000)).toBeNull();
+  expect(invalidRequest({ ...good, widthCm: 20 }, base, 1000)).toBeNull();
 });
 
 test('sans pdfLaTeX : unavailable, avec reason « absent », et rien n’est lancé (le statut est celui de LatexSetup, tâche 7)', async () => {
@@ -138,6 +144,12 @@ texTest('snippet : la page a la largeur réglée et la hauteur du contenu', asyn
   expect(Math.abs(page.width - 255.1)).toBeLessThan(1);
   expect(page.height).toBeLessThan(40);
   expect(page.text).toContain('Bonjour');
+});
+
+texTest('snippet : la largeur est celle de la requête, que le principal ne relit pas dans ses réglages (revue finale, M1)', async () => {
+  const s = start({ latexSnippetWidthCm: 4 });
+  const [page] = await pagesOf(await s.compile(req({ widthCm: 12 })));
+  expect(Math.abs(page.width - 340.2)).toBeLessThan(1);
 });
 
 texTest('restart : la réserve est refaite avec son préambule, et un préambule en échec réessayé (un paquet vient d’être installé, tâche 7)', async () => {

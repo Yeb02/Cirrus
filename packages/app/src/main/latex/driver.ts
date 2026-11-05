@@ -81,10 +81,10 @@ const label = (name: string, number: string, page: string, anchor = '') => `\\ci
  * node; the keys held by several nodes in red, with the first's short text, linked to it, as a doubled label is; the
  * unknown keys in red. Every text of the user goes through titleToTex; a label or a key that cannot be
  * injected is left out (the source then shows LaTeX's « ?? »). A label of another source shows « ? » as its page.
- * Then the source: as is in `page` mode; in `snippet` mode, set in a box `widthCm` wide, without indent, and shipped
- * alone on a page of the box's size (D3), at least a strut deep under the last baseline.
+ * Then the source: as is in `page` mode; in `snippet` mode, set in a box the request's `widthCm` wide, without indent,
+ * and shipped alone on a page of the box's size (D3), at least a strut deep under the last baseline.
  */
-export function jobBody(req: CompileRequest, src: string, widthCm: number): string {
+export function jobBody(req: CompileRequest, src: string): string {
   const lines = ['\\makeatletter'];
   for (const k of req.known) {
     if (injectable(k.label) && [k.number, k.page, k.anchor].every(texField)) lines.push(label(k.label, k.number, k.page, k.anchor));
@@ -103,7 +103,7 @@ export function jobBody(req: CompileRequest, src: string, widthCm: number): stri
   } else {
     // The source is read with « @ » a letter no more (\makeatother, local to the box); the page's origin is its corner.
     lines.push(
-      `\\setbox\\cirrus@box=\\vbox{\\hsize=${cm(widthCm)}\\relax\\linewidth=\\hsize\\textwidth=\\hsize\\columnwidth=\\hsize\\parindent=0pt\\relax`
+      `\\setbox\\cirrus@box=\\vbox{\\hsize=${cm(req.widthCm!)}\\relax\\linewidth=\\hsize\\textwidth=\\hsize\\columnwidth=\\hsize\\parindent=0pt\\relax`
         + `\\makeatother\\input{${src}}\\par}%`,
       '\\begingroup\\pdfhorigin=0pt\\pdfvorigin=0pt\\hoffset=0pt\\voffset=0pt',
       // Under the last baseline, at least a strut's depth: a last line without descenders (« en bits. ») has none in

@@ -7,7 +7,8 @@ import { BASE_PACKAGES } from '@cirrus/core';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { LATEX_SOURCES } from '../src/main/latex/sources.ts';
 import {
-  type Deps, findBinaries, missingFile, packageOf, Packages, type Progress, provision, runFile, texEnv, type TexBinaries, TINYTEX_RELEASE, tinyTexRoot,
+  type Deps, fetchDownload, findBinaries, missingFile, packageOf, Packages, type Progress, provision, runFile, texEnv, type TexBinaries, TINYTEX_RELEASE,
+  tinyTexRoot,
 } from '../src/main/latex/tinytex.ts';
 
 // The bench's TinyTeX, read only (pdflatex --version, tlmgr info): the tests never download anything.
@@ -252,6 +253,53 @@ test('provision : hors de Windows, rien n’est téléchargé', async () => {
   } finally {
     Object.defineProperty(process, 'platform', platform);
   }
+});
+
+// --- the download, with a fake fetch ---
+
+test('fetchDownload : la réponse écrite dans le fichier, les octets dits au fur et à mesure', async () => {
+  const dest = join(parent, 'TinyTeX.exe');
+  const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); c.enqueue(new Uint8Array([4, 5])); c.close(); } });
+  const seen: number[] = [];
+  await fetchDownload(async () => new Response(body), () => 1000)('https://example.invalid/t.exe', dest, (n) => seen.push(n));
+  expect([...readFileSync(dest)]).toEqual([1, 2, 3, 4, 5]);
+  expect(seen).toEqual([3, 5]);
+  await expect(fetchDownload(async () => new Response('non', { status: 503 }), () => 1000)('https://example.invalid/t.exe', dest, () => {}))
+    .rejects.toThrow('Le téléchargement de TinyTeX a échoué (HTTP 503).');
+});
+
+test('fetchDownload : plus rien pendant latexDownloadStallMs, le téléchargement s’arrête et l’échec le dit en français ; « Réessayer » peut alors paraître (revue finale)', async () => {
+  const dest = join(parent, 'TinyTeX.exe');
+  // A connection that stalls after its first bytes.
+  let cancelled = false;
+  const stalled = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); }, cancel() { cancelled = true; } });
+  const seen: number[] = [];
+  let t0 = performance.now();
+  await expect(fetchDownload(async () => new Response(stalled), () => 200)('https://example.invalid/t.exe', dest, (n) => seen.push(n)))
+    .rejects.toThrow(/^Le téléchargement de TinyTeX a échoué \(aucune donnée depuis 0,2 s\)\.$/);
+  expect(performance.now() - t0).toBeLessThan(2000);
+  expect(seen).toEqual([3]);
+  expect(cancelled).toBe(true);
+  // A response that never comes: the same, its request aborted.
+  let aborted = false;
+  const never = (_url: string, init: { signal: AbortSignal }) => new Promise<Response>((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => { aborted = true; reject(new DOMException('This operation was aborted', 'AbortError')); });
+  });
+  t0 = performance.now();
+  await expect(fetchDownload(never, () => 200)('https://example.invalid/t.exe', dest, () => {})).rejects.toThrow('(aucune donnée depuis 0,2 s).');
+  expect(performance.now() - t0).toBeLessThan(2000);
+  expect(aborted).toBe(true);
+  // Slow but never idle that long: it goes to its end, longer in all than the delay.
+  let i = 0;
+  const slow = new ReadableStream<Uint8Array>({
+    async pull(c) {
+      await new Promise((r) => setTimeout(r, 60));
+      if (i++ < 6) c.enqueue(new Uint8Array([i]));
+      else c.close();
+    },
+  });
+  await fetchDownload(async () => new Response(slow), () => 200)('https://example.invalid/t.exe', dest, () => {});
+  expect([...readFileSync(dest)]).toEqual([1, 2, 3, 4, 5, 6]);
 });
 
 // --- missing files and packages ---

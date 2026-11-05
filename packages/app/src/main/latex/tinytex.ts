@@ -1,9 +1,10 @@
-import { type ChildProcess, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, statSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
 import { BASE_PACKAGES, type InstallProgress } from '@cirrus/core';
+import { killTree } from './kill.ts';
 import { LATEX_SOURCES, type TinyTexRelease } from './sources.ts';
 
 /**
@@ -70,9 +71,10 @@ function copyEnv(env: Record<string, string | undefined>, drop: RegExp[]): Recor
 }
 
 /**
- * The environment of a TeX process (D4, as ruled in task 3): it writes only in its folder (names absolute or going up
- * refused) and runs nothing; it reads what the Windows account can read, TEXINPUTS (the compiler sets it) naming the
- * node's files.
+ * The environment of a TeX process (D4, as ruled in task 3 and in the final review): for the document, it writes only
+ * in its folder (names absolute or going up refused) and runs no command (\write18 refused); it reads what the Windows
+ * account can read, TEXINPUTS (the compiler sets it) naming the node's files. TeX Live's own font tools (mktexpk,
+ * mktextfm, mf) stay allowed: kpathsea runs them for a missing font, and they write into TinyTeX's texmf-var.
  */
 export function texEnv(env: Record<string, string | undefined>): Record<string, string> {
   return { ...copyEnv(env, [TEX_PATHS, SANDBOX_VARS]), ...SANDBOX };
@@ -83,13 +85,6 @@ export function texEnv(env: Record<string, string | undefined>): Record<string, 
  * means nothing to it inside an argument, and lets a repository's address through (LATEX_SOURCES).
  */
 const SHELL_SAFE = /^[A-Za-z0-9._/:=-]+$/;
-
-/** A process and every one it started: Windows kills a process alone, and tlmgr.bat's perl would go on without it. */
-function killTree(child: ChildProcess): void {
-  if (process.platform === 'win32' && child.pid !== undefined) {
-    execFile('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }, () => {});
-  } else child.kill();
-}
 
 const seconds = (ms: number) => `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s`;
 
@@ -117,27 +112,60 @@ export function runFile(file: string, args: string[], timeoutMs = Infinity): Pro
       else if (e && typeof e.code !== 'number') fail(e);
       else done({ code: e ? (e.code as number) : 0, out: `${stdout}${stderr}` });
     });
-    const timer = Number.isFinite(timeoutMs) ? setTimeout(() => { late = true; killTree(child); }, timeoutMs) : undefined;
+    const timer = Number.isFinite(timeoutMs) ? setTimeout(() => { late = true; void killTree(child); }, timeoutMs) : undefined;
   });
 }
 
-/** The production `download`: the response streamed to the file, `fetchFn` being Electron's net.fetch in the app. */
-export function fetchDownload(fetchFn: (url: string) => Promise<Response>): Deps['download'] {
+/**
+ * The production `download`: the response streamed to the file, `fetchFn` being Electron's net.fetch in the app. A
+ * connection that brings nothing for `stallMs()` (latexDownloadStallMs) — no response, or no bytes since the last
+ * ones — is stopped, its request aborted, and the download fails: « Le téléchargement de TinyTeX a échoué (aucune
+ * donnée depuis 60 s). », after which the notice offers « Réessayer » (final review). Without it, a stalled connection
+ * kept the installation, and every compilation, waiting until the app was restarted.
+ */
+export function fetchDownload(
+  fetchFn: (url: string, init: { signal: AbortSignal }) => Promise<Response>, stallMs: () => number,
+): Deps['download'] {
   return async (url, dest, onBytes) => {
     const file = await open(dest, 'w');
+    const abort = new AbortController();
+    const ms = stallMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stall: (e: Error) => void = () => {};
+    const stalled = new Promise<never>((_resolve, reject) => { stall = reject; });
+    stalled.catch(() => {});
+    /** The watchdog, started again at each piece received. */
+    const watch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const e = new Error(`aucune donnée depuis ${seconds(ms)}`);
+        abort.abort(e);
+        stall(e);
+      }, ms);
+    };
     try {
-      const res = await fetchFn(url);
+      watch();
+      const res = await Promise.race([fetchFn(url, { signal: abort.signal }), stalled]);
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
-      for (let n = 0; ;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        await file.write(value);
-        onBytes((n += value.byteLength));
+      try {
+        for (let n = 0; ;) {
+          const { done, value } = await Promise.race([reader.read(), stalled]);
+          if (done) break;
+          watch();
+          await file.write(value);
+          onBytes((n += value.byteLength));
+        }
+      } finally {
+        // Not waited for: a stalled source may never answer it.
+        void reader.cancel().catch(() => {});
       }
     } catch (e) {
-      throw new Error(`Le téléchargement de TinyTeX a échoué (${(e as Error).message}).`);
+      // Stopped by the watchdog: its reason, whatever the request's own error says.
+      const why = abort.signal.aborted ? (abort.signal.reason as Error) : (e as Error);
+      throw new Error(`Le téléchargement de TinyTeX a échoué (${why.message}).`);
     } finally {
+      clearTimeout(timer);
       await file.close();
     }
   };

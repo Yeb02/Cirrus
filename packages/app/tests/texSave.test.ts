@@ -110,6 +110,35 @@ test('SaveScheduler : un refus garde dirty et le dit ; le suivant réessaie', as
   expect(last).toEqual({ dirty: false, saving: false, saved: true, failure: null });
 });
 
+test('SaveScheduler : revenu, pendant un enregistrement, au texte d’avant, ce texte s’enregistre à la pause qui suit la fin de l’enregistrement (revue finale)', async () => {
+  vi.useFakeTimers();
+  let release: () => void = () => {};
+  const saves: string[] = [];
+  const s = new SaveScheduler('v0', async (text) => {
+    saves.push(text);
+    await new Promise<void>((r) => { release = r; });
+    return { ok: true };
+  }, { set: (fn, ms) => setTimeout(fn, ms), clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) }, () => 10_000);
+  s.edit('v1');
+  const first = s.saveNow();
+  await vi.advanceTimersByTimeAsync(0);
+  // Back to v0 while v1 is saved: no different from the text saved then, so no pause was armed.
+  s.edit('v0');
+  release();
+  await first;
+  // v1 saved: v0 now differs from it, and waits for a pause from the save's end.
+  expect(s.dirty).toBe(true);
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(saves).toEqual(['v1']);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(saves).toEqual(['v1', 'v0']);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(s.dirty).toBe(false);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(saves).toHaveLength(2);
+});
+
 test('SaveScheduler : une frappe pendant un enregistrement est enregistrée ensuite, jamais deux à la fois', async () => {
   vi.useFakeTimers();
   let release: () => void = () => {};
@@ -335,6 +364,7 @@ test.skipIf(!hasTex)(hasTex ? 'pdfLaTeX : la requête de complexité.tex compile
     const tex = b.fileOf();
     const req = buildRequest({
       origin: { kind: 'file', node: b.ids.nodes.kolmogorov, name: TEX }, source: texts.get(tex.hash)!, s, registry: LatexRegistry.build(s, texts), known: [],
+      widthCm: DEFAULT_PARAMS.latexSnippetWidthCm,
     });
     const a = await svc.compile({ ...req, slot: `draft:${req.slot}` });
     if (a.status !== 'ok') throw new Error(JSON.stringify(a).slice(0, 2000));

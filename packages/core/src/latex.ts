@@ -128,6 +128,7 @@ export interface CompileRequest {
   unknownCites: string[];
   known: KnownLabel[];    // a hint only: never part of the cache key
   resources: FileRef[];   // the node's other files, visible under their names
+  widthCm: number | null; // snippet mode: its box's width (latexSnippetWidthCm, sent by the interface); null for a page
 }
 export interface TexError { message: string; line: number | null; where: 'source' | 'preamble' }
 export interface CompiledPdf { key: string; size: number; pages: number }

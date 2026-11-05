@@ -124,7 +124,7 @@ export function TexWorkbench(props: {
   // The draft's request, under its own slot; the saved source's labels until the draft has its own (knownLabels).
   const req = useMemo(() => {
     if (text === null) return null;
-    const r = buildRequest({ origin, source: text, s: props.state, registry, known: knownLabels(slot) });
+    const r = buildRequest({ origin, source: text, s: props.state, registry, known: knownLabels(slot), widthCm: params.latexSnippetWidthCm });
     return { ...r, slot: `draft:${r.slot}` };
   }, [text, registry, origin]);
   const view = useCompiled(req, params.latexTypingPauseMs);

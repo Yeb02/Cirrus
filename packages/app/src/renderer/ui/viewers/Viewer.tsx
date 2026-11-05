@@ -101,7 +101,7 @@ function TexPreview(props: ViewProps & { node: Id; latex: LatexContext; onNodeLi
   const slot = slotOf(origin);
   const text = read && 'text' in read ? read.text : null;
   const req = useMemo(
-    () => (text !== null && latex.registry ? buildRequest({ origin, source: text, s: latex.state, registry: latex.registry, known: knownLabels(slot) }) : null),
+    () => (text !== null && latex.registry ? buildRequest({ origin, source: text, s: latex.state, registry: latex.registry, known: knownLabels(slot), widthCm: params.latexSnippetWidthCm }) : null),
     [text, latex.registry, origin],
   );
   const compiled = useCompiled(req, params.latexTypingPauseMs);

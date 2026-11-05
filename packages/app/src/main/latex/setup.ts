@@ -77,8 +77,14 @@ export class LatexSetup {
   /** The state last told, as JSON. */
   private told = '';
   private manager: { root: string; packages: PackageManager } | null = null;
-  /** The files looked up this session: their package, or null (none holds it, or tlmgr failed); never looked up again. */
+  /** The files looked up this session: their package, or null when none holds it (tlmgr answered); never looked up again. */
   private readonly found = new Map<string, string | null>();
+  /**
+   * The files tlmgr could not look up (offline, too slow: it failed), and when: looked up again by a compilation
+   * latexLookupRetryMs later, not before — each lookup's end tells `ready`, at which the views compile again
+   * (latexChanged), and a failing tlmgr would otherwise run in a loop (final review).
+   */
+  private readonly failedAt = new Map<string, number>();
   /** The lookups queued or running, by file, with the requests waiting for them; they run one at a time, in order. */
   private readonly lookups = new Map<string, Lookup>();
   private chain: Promise<unknown> = Promise.resolve();
@@ -112,8 +118,8 @@ export class LatexSetup {
    * has not looked up yet: its package looked up and installed (one lookup per file at a time, whoever asks; none for a
    * file looked up already this session), the prepared pdfLaTeX started again, and the compilation once more; the
    * answer names the packages installed (`installed`). A file no package holds, or that tlmgr could not look up, is
-   * said: « Paquet LaTeX introuvable pour « x.sty » (hors ligne ?) ». A newer request of the slot, or its cancellation,
-   * ends it at once, `cancelled`.
+   * said: « Paquet LaTeX introuvable pour « x.sty » (hors ligne ?) »; the first is not looked up again this session, the
+   * second not before latexLookupRetryMs. A newer request of the slot, or its cancellation, ends it at once, `cancelled`.
    */
   async compile(req: CompileRequest): Promise<CompileAnswer> {
     this.end(req.slot);
@@ -203,10 +209,15 @@ export class LatexSetup {
     return installed.length > 0 && (a.status === 'ok' || a.status === 'error') ? { ...a, installed } : a;
   }
 
-  /** The package of `file`: from this session's lookups, else from the one queued or running for it, else a new one. */
+  /**
+   * The package of `file`: from this session's lookups (null for a tlmgr failure less than latexLookupRetryMs ago), else
+   * from the one queued or running for it, else a new one.
+   */
   private async lookup(bins: TexBinaries, file: string, ticket: Ticket): Promise<string | null> {
     for (;;) {
       if (this.found.has(file)) return this.found.get(file)!;
+      const failed = this.failedAt.get(file);
+      if (failed !== undefined && Date.now() - failed < this.opts.params().latexLookupRetryMs) return null;
       let l = this.lookups.get(file);
       if (!l) {
         const waiting = new Set<Ticket>();
@@ -228,12 +239,15 @@ export class LatexSetup {
       if (![...waiting].some((t) => !t.cancelled)) return SKIPPED;
       this.looking = file;
       this.tell();
-      let pkg: string | null = null;
+      let pkg: string | null;
       try {
         pkg = await this.packagesOf(bins).installFor(file);
       } catch (e) {
         console.warn(`Paquet LaTeX pour « ${file} » :`, e);
+        this.failedAt.set(file, Date.now());
+        return null;
       }
+      this.failedAt.delete(file);
       this.found.set(file, pkg);
       if (pkg !== null) this.opts.service.restart();
       return pkg;

@@ -6,6 +6,7 @@ import { type LatexRegistry, type Origin, slotOf } from '../../latex/registry.ts
 import { buildRequest } from '../../latex/request.ts';
 import { type CompiledView, knownLabels } from '../../latex/scheduler.ts';
 import { useCompiled } from '../../latex/useCompiled.ts';
+import { typedFields } from '../../quit.ts';
 import { CompileLog, errorText } from './CompileLog.tsx';
 import { diagnosticsFor, lineStartOf } from './editorLogic.ts';
 import { type FieldEvent, fieldReducer, type FieldState, VIEW } from './fieldState.ts';
@@ -23,11 +24,12 @@ const blank = (text: string) => text.trim() === '';
 /** The request of `text` as the source `origin`, under `slot` (the saved one, or its draft's); none without a registry or a text. */
 function useRequest(a: Shown, slot: string) {
   const { origin, text, state, registry } = a;
+  const widthCm = a.params.latexSnippetWidthCm;
   return useMemo(() => {
     if (registry === null || blank(text)) return null;
-    const r = buildRequest({ origin, source: text, s: state, registry, known: knownLabels(slotOf(origin)) });
+    const r = buildRequest({ origin, source: text, s: state, registry, known: knownLabels(slotOf(origin)), widthCm });
     return r.slot === slot ? r : { ...r, slot };
-  }, [text, registry, origin, slot]);
+  }, [text, registry, origin, slot, widthCm]);
 }
 
 /** The source as typed, in a fixed-width face, and why it is not compiled (`reason`, small). */
@@ -167,10 +169,11 @@ function EditMode(props: {
  * in place (EditMode). A click elsewhere than on a link, or Enter or F2 while the field has the focus, opens its editor;
  * the focus leaving the field and its preview commits the draft if it changed (`onCommit`, through the session), then
  * shows it compiled; Escape gives it up (fieldReducer). Leaving while the window loses the focus is no leaving; the
- * field unmounted while typed in commits too. What is committed is shown until the value has it, or the commit is
- * refused (`onCommit` resolves false): the value then shows again. The two modes compile under their own slots, never
- * both at once (a source has one useCompiled); each shows the other's last PDF until it has its own, so that switching
- * never flashes the source. `registry`: App's, null until built (the source is then shown, waiting).
+ * field unmounted while typed in commits too, and so does the window closing (typedFields). What is committed is shown
+ * until the value has it, or the commit is refused (`onCommit` resolves false): the value then shows again. The two
+ * modes compile under their own slots, never both at once (a source has one useCompiled); each shows the other's last
+ * PDF until it has its own, so that switching never flashes the source. `registry`: App's, null until built (the source
+ * is then shown, waiting).
  */
 export function LatexField(props: {
   origin: Origin; value: string; placeholder: string; rows?: number; state: State; registry: LatexRegistry | null; params: RenderParams;
@@ -195,9 +198,11 @@ export function LatexField(props: {
   // The value changed (the commit written, or any other change): what was committed is in it, or replaced.
   useEffect(() => { setCommitted(null); }, [props.value]);
 
-  const commit = (t: string) => {
+  /** `t` written through the session, shown meanwhile (and the field's text at once, for a commit at closing or unmount). */
+  const commit = (t: string): Promise<void> => {
     setCommitted(t);
-    latest.current.onCommit(t).then(
+    textNow.current = t;
+    return latest.current.onCommit(t).then(
       (ok) => { if (!ok) setCommitted((c) => (c === t ? null : c)); },
       (e: unknown) => { console.error('Modification du champ LaTeX :', e); setCommitted((c) => (c === t ? null : c)); },
     );
@@ -209,9 +214,18 @@ export function LatexField(props: {
       setField(r.state);
       if (before.mode !== r.state.mode) setSeed(r.commit !== undefined ? last.current.draft : last.current.view);
     }
-    if (r.commit !== undefined) commit(r.commit);
+    if (r.commit !== undefined) void commit(r.commit);
     if (r.focusEditor) setEditorFocus((n) => n + 1);
   };
+  // Typed in: what is typed is committed before the window closes (App, quitInOrder), the focus leaving the window
+  // being no leaving (final review, I1).
+  useEffect(() => {
+    if (field.mode !== 'edit') return;
+    return typedFields.hold(() => {
+      const f = fieldNow.current;
+      return f.mode === 'edit' && f.draft !== textNow.current ? commit(f.draft) : Promise.resolve();
+    });
+  }, [field.mode]);
   // Unmounted while typed in (its pop-up closed, its node gone): what is typed is committed still.
   useEffect(() => () => {
     const f = fieldNow.current;

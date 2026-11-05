@@ -15,7 +15,7 @@ import { preambleBuild } from '../src/renderer/actions.ts';
 import { latexStateText, noticeFor, withPackage } from '../src/renderer/latex/install.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
-import { brokenPreambleQuestion, discardPreambleQuestion, PREAMBLE_SAMPLE, preambleRequest, saveStep } from '../src/renderer/ui/latex/preamble.ts';
+import { brokenPreambleQuestion, discardPreambleQuestion, leaveUnsaved, PREAMBLE_SAMPLE, preambleRequest, saveStep } from '../src/renderer/ui/latex/preamble.ts';
 import { readPdf } from './latexPdf.ts';
 
 // --- the main process's side (LatexSetup), with a fake compile service, a fake TinyTeX and a fake tlmgr
@@ -29,7 +29,7 @@ const ABSENT: CompileAnswer = { status: 'unavailable', reason: 'absent', message
 
 /** A request whose source lists the .sty files it needs: the fake service compiles it once their packages are in. */
 const req = (slot: string, source = ''): CompileRequest => ({
-  slot, mode: 'snippet', source, preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [], doubledCites: [], unknownCites: [], known: [], resources: [],
+  slot, mode: 'snippet', source, preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [], doubledCites: [], unknownCites: [], known: [], resources: [], widthCm: 9,
 });
 const OK: CompileAnswer = { status: 'ok', pdf: { key: 'a'.repeat(64), size: 100, pages: 1 }, labels: [], log: '', ms: 1, passes: 1, cached: false };
 const missing = (file: string): CompileAnswer => ({
@@ -175,16 +175,36 @@ test('paquet manquant : installFor rend « x » ; les pdfLaTeX préparés sont r
   expect(w.statuses).toEqual([READY, { state: 'installing', progress: { step: 'package', name: 'x.sty' } }, READY]);
 });
 
-test('paquet manquant : sans paquet qui le contienne, ou tlmgr en échec, le message ; ce fichier n’est plus cherché de la session', async () => {
-  const w = world({ present: true, files: { 'y.sty': null, 'z.sty': new Error('tlmgr search a échoué (code 1) : tlmgr.pl: cannot contact mirror') } });
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
-  for (const f of ['y.sty', 'z.sty']) {
-    const a = await w.setup.compile(req('summary:n1', f));
-    expect(a, f).toEqual({ ...missing(f), error: { message: `Paquet LaTeX introuvable pour « ${f} » (hors ligne ?)`, line: 3, where: 'preamble' } });
+test('paquet manquant : sans paquet qui le contienne, le message, et ce fichier n’est plus cherché de la session ; tlmgr en échec (hors ligne), cherché à nouveau après latexLookupRetryMs, sans boucle d’ici là (revue finale)', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    const files: Record<string, string | null | Error> = { 'y.sty': null, 'z.sty': new Error('tlmgr search a échoué (code 1) : tlmgr.pl: cannot contact mirror') };
+    const w = world({ present: true, files });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const f of ['y.sty', 'z.sty']) {
+      const a = await w.setup.compile(req('summary:n1', f));
+      expect(a, f).toEqual({ ...missing(f), error: { message: `Paquet LaTeX introuvable pour « ${f} » (hors ligne ?)`, line: 3, where: 'preamble' } });
+    }
+    // Asked again at once — the views compile again at each « ready » (latexChanged), which a lookup's end tells —:
+    // neither is looked up again, so that a failing tlmgr is not run in a loop.
+    for (const f of ['y.sty', 'z.sty']) {
+      expect(await w.setup.compile(req('summary:n2', f)), f).toMatchObject({ status: 'error', error: { message: `Paquet LaTeX introuvable pour « ${f} » (hors ligne ?)` } });
+    }
+    expect(w.calls.installFor).toEqual(['y.sty', 'z.sty']);
+    // latexLookupRetryMs later, the network back: z.sty is looked up again by the next compilation, and installed;
+    // y.sty, which no package holds, never is.
+    vi.setSystemTime(Date.now() + DEFAULT_PARAMS.latexLookupRetryMs - 1);
+    await w.setup.compile(req('summary:n2', 'z.sty'));
+    expect(w.calls.installFor).toEqual(['y.sty', 'z.sty']);
+    vi.setSystemTime(Date.now() + 1);
+    files['z.sty'] = 'z';
+    expect(await w.setup.compile(req('summary:n2', 'z.sty'))).toEqual({ ...OK, installed: ['z'] });
+    expect(await w.setup.compile(req('summary:n2', 'y.sty'))).toMatchObject({ status: 'error' });
+    expect(w.calls.installFor).toEqual(['y.sty', 'z.sty', 'z.sty']);
+    expect(w.calls.restart).toBe(1);
+  } finally {
+    vi.useRealTimers();
   }
-  expect(await w.setup.compile(req('summary:n2', 'y.sty'))).toMatchObject({ status: 'error', error: { message: 'Paquet LaTeX introuvable pour « y.sty » (hors ligne ?)' } });
-  expect(w.calls.installFor).toEqual(['y.sty', 'z.sty']);
-  expect(w.calls.restart).toBe(0);
 });
 
 test('paquet manquant : demandé par deux compilations à la fois, il n’est installé qu’une fois', async () => {
@@ -274,7 +294,8 @@ test('LatexNotice : ce qu’elle dit de chaque état, une fois par session pour 
   const fresh = { dismissed: false, justInstalled: false };
   expect(noticeFor(null, fresh)).toBeNull();
   expect(noticeFor({ state: 'absent' }, fresh)).toEqual({
-    text: 'LaTeX n’est pas installé : les résumés et les .tex s’affichent en source. Cirrus peut installer TinyTeX (environ 100 Mo à télécharger).',
+    // The pinned installer's size (LATEX_SOURCES: 73,7 Mo), rounded (final review, M4).
+    text: 'LaTeX n’est pas installé : les résumés et les .tex s’affichent en source. Cirrus peut installer TinyTeX (environ 74 Mo à télécharger).',
     actions: ['install', 'later'],
   });
   expect(noticeFor({ state: 'absent' }, { ...fresh, dismissed: true })).toBeNull();
@@ -301,7 +322,7 @@ test('réglages, section « LaTeX » : l’état de LaTeX', () => {
 test('préambule : l’aperçu compile PREAMBLE_SAMPLE avec le brouillon, sous l’emplacement « preamble », en mode page', () => {
   expect(preambleRequest('\\documentclass{article}\n')).toEqual({
     slot: 'preamble', mode: 'page', source: PREAMBLE_SAMPLE, preamble: '\\documentclass{article}\n', refs: [], broken: [], doubled: [], cites: [],
-    doubledCites: [], unknownCites: [], known: [], resources: [],
+    doubledCites: [], unknownCites: [], known: [], resources: [], widthCm: null,
   });
   // An accented paragraph, a numbered equation cited by \eqref, a list and a link.
   expect(PREAMBLE_SAMPLE).toMatch(/[éèàç]/);
@@ -327,6 +348,14 @@ test('préambule : Enregistrer ferme s’il est inchangé, attend la compilation
   discard.answer(null);
   discard.answer('drop');
   expect([saved, closed]).toEqual([1, 1]);
+});
+
+test('préambule : le quitter sans l’enregistrer remet les pdfLaTeX préparés sur le préambule enregistré, puis ferme (revue finale)', () => {
+  // The draft's compilations took the main process's pool to the draft's preamble: the next summary would wait for a
+  // cold pdfLaTeX.
+  const events: string[] = [];
+  leaveUnsaved('\\documentclass{article}\n', (p) => events.push(`préparer ${p}`), () => events.push('fermer'));
+  expect(events).toEqual(['préparer \\documentclass{article}\n', 'fermer']);
 });
 
 // --- PREAMBLE_SAMPLE compiled for real, by the bench's TinyTeX (read only; never a download)

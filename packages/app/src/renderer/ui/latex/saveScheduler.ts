@@ -15,8 +15,9 @@ export type SaveAnswer = { ok: boolean; message?: string };
  * When a .tex typed in its full screen is saved (plan 4b, D6), its clock injected: once typing has paused for
  * `idleMs` (texSaveIdleMs, read when a pause starts), at saveNow (Ctrl+S) and at flush (closing), and only when the
  * text differs from the last one saved — typing then erasing saves nothing. `saved`: the text of the file opened. Saves
- * run one at a time, each taking the text as it is when its turn comes. A save refused keeps the text, and `dirty`;
- * the next one tries again (none is retried on its own: a node gone would be tried for ever).
+ * run one at a time, each taking the text as it is when its turn comes; one that ends with another text to save and no
+ * pause running (typed back, meanwhile, to the text saved before it) starts the pause (final review). A save refused
+ * keeps the text, and `dirty`; the next one tries again (none is retried on its own: a node gone would be tried for ever).
  */
 export class SaveScheduler {
   private saved: string;
@@ -49,10 +50,7 @@ export class SaveScheduler {
   edit(text: string): void {
     this.text = text;
     this.disarm();
-    if (this.dirty) {
-      this.timer = this.timers.set(() => { this.armed = false; void this.saveNow(); }, this.idleMs());
-      this.armed = true;
-    }
+    if (this.dirty) this.arm();
     this.tell();
   }
 
@@ -82,6 +80,11 @@ export class SaveScheduler {
     this.listeners.clear();
   }
 
+  private arm(): void {
+    this.timer = this.timers.set(() => { this.armed = false; void this.saveNow(); }, this.idleMs());
+    this.armed = true;
+  }
+
   private disarm(): void {
     if (!this.armed) return;
     this.timers.clear(this.timer);
@@ -105,6 +108,9 @@ export class SaveScheduler {
       this.savedOnce = true;
       this.failure = null;
     } else this.failure = r.message ?? 'enregistrement refusé';
+    // Typed meanwhile, and still to save with no pause running: the pause starts. A refusal of the same text is not
+    // tried again on its own.
+    if (this.text !== text && this.dirty && !this.armed) this.arm();
     this.tell();
   }
 
