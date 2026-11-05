@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
-  OpConflictError, type PhantomRec, type Placement, type PlanRec, snapshotVersion, type State, subjectOf, type TagKeyDef,
+  OpConflictError, type PhantomRec, type Placement, type PlanRec, type PreambleRec, snapshotVersion, type State, subjectOf, type TagKeyDef,
 } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
@@ -42,6 +42,7 @@ function loadState(db: DatabaseSync): State {
     phantoms: json<PhantomRec>('SELECT json FROM phantoms'),
     branches: (db.prepare('SELECT plan, connection, node FROM branches').all() as { plan: string; connection: string; node: string }[])
       .map((b) => [b.plan, b.connection, b.node]),
+    preamble: json<PreambleRec>('SELECT json FROM preamble WHERE id = 1')[0] ?? null,
   });
 }
 
@@ -73,6 +74,7 @@ function rowOf(op: Exclude<Op, { t: 'branch' }>): { sql: string; key: string[]; 
       return { sql: 'SELECT json FROM conn_layouts WHERE plan = ? AND connection = ?', key: [l.plan, l.connection], what: 'La forme de la connexion' };
     }
     case 'phantom': return { sql: 'SELECT json FROM phantoms WHERE id = ?', key: [(rec as PhantomRec).id], what: 'Le fantôme' };
+    case 'preamble': return { sql: 'SELECT json FROM preamble WHERE id = 1', key: [], what: 'Le préambule' };
   }
 }
 
@@ -148,6 +150,11 @@ function persistOp(q: Query, op: Op): void {
       const rec = (op.after ?? op.before)!;
       if (op.after) q('INSERT INTO phantoms (id, plan, json) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET plan = excluded.plan, json = excluded.json').run(rec.id, rec.plan, j(op.after));
       else q('DELETE FROM phantoms WHERE id = ?').run(rec.id);
+      return;
+    }
+    case 'preamble': {
+      if (op.after) q('INSERT INTO preamble (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json').run(j(op.after));
+      else q('DELETE FROM preamble WHERE id = 1').run();
       return;
     }
   }

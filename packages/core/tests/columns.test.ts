@@ -302,10 +302,10 @@ function indexDump(s: State) {
   return out.sort();
 }
 
-/** The state rebuilt from the oracle's own snapshot: loaded in bulk, then indexed by reindex. */
+/** The state rebuilt from the oracle's own snapshot (the oracle predates the preamble): loaded in bulk, then indexed by reindex. */
 function rebuilt(o: oracle.State): State {
   const x = oracleSnapshot(o);
-  return fromSnapshot({ ...x, branches: x.branches.map((k) => { const b = oracle.parseBranchKey(k); return [b.plan, b.connection, b.node]; }) });
+  return fromSnapshot({ ...x, branches: x.branches.map((k) => { const b = oracle.parseBranchKey(k); return [b.plan, b.connection, b.node]; }), preamble: null });
 }
 
 /** How often the rule checks were compared, and how many cycle violations were left out as ambiguous. */

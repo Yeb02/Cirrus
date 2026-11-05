@@ -37,6 +37,7 @@ export function writeBenchBase(dir: string, s: State): void {
       for (const l of s.connLayouts.values()) layout.run(l.plan, l.connection, j(l));
       const phantom = db.prepare('INSERT INTO phantoms (id, plan, json) VALUES (?, ?, ?)');
       for (const p of s.phantoms.values()) phantom.run(p.id, p.plan, j(p));
+      if (s.preamble) db.prepare('INSERT INTO preamble (id, json) VALUES (1, ?)').run(j(s.preamble));
       const snapshot = encodeState(s);
       db.prepare('INSERT INTO snapshot (id, version, seq, data) VALUES (1, ?, 0, ?)').run(snapshotVersion(snapshot), new Uint8Array(snapshot));
       db.exec('COMMIT');

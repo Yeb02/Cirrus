@@ -7,10 +7,11 @@ import { LocalStore } from '@cirrus/store';
 import { expect, test } from 'vitest';
 import { decodeState, encodeState, SNAPSHOT_VERSION, SnapshotError, snapshotVersion } from '../src/codec.ts';
 import { connect, createNode, deleteEverywhere, moveNodes } from '../src/commands.ts';
+import { DEFAULT_PREAMBLE } from '../src/latex.ts';
 import type { ConnectionRec, Id, NodeRec, PhantomRec } from '../src/model.ts';
 import type { Op } from '../src/ops.ts';
 import { toSnapshot } from '../src/snapshot.ts';
-import { applyOp, applyOps, canonical, dataOf, emptyState, memberOf, placedIn, type State } from '../src/state.ts';
+import { applyOp, applyOps, canonical, dataOf, emptyState, memberOf, placedIn, preambleText, type State } from '../src/state.ts';
 import { fromSnapshot as oracleFromSnapshot } from './oracle/snapshot.ts';
 import * as oracle from './oracle/state.ts';
 
@@ -231,4 +232,30 @@ test('un instantané endommagé, tronqué ou d’une autre version est refusé (
   for (const junk of [new ArrayBuffer(0), new ArrayBuffer(64), new TextEncoder().encode('{"nodes":[]}').buffer as ArrayBuffer]) {
     expect(() => decodeState(junk)).toThrow(SnapshotError);
   }
+});
+
+/** The JSON section of a snapshot, its last one (codec.ts: header, directory, sections in order). */
+function jsonPart(buf: ArrayBuffer): Record<string, unknown> {
+  const n = new Uint32Array(buf, 0, 8)[5], dir = new Uint32Array(buf, 32, 2 * n);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(buf, dir[2 * n - 2], dir[2 * n - 1]))) as Record<string, unknown>;
+}
+
+test('le préambule fait l’aller-retour, dans la partie JSON (plan 4b)', () => {
+  const { s, o } = oddities();
+  // JSON.stringify escapes \0 and a lone surrogate: both come back.
+  const text = '\\documentclass{article}\n\\usepackage{tikz} % « é » \0\uD800\n';
+  applyOp(s, { t: 'preamble', before: null, after: { text } });
+  expect(jsonPart(encodeState(s)).preamble).toEqual({ text });
+  const d = roundTrip(s, o);
+  expect(d.preamble).toEqual({ text });
+  expect(preambleText(d)).toBe(text);
+});
+
+test('une partie JSON sans préambule, celle d’un instantané d’avant le plan 4b, se décode avec preamble: null', () => {
+  const { s } = fixture();
+  const buf = encodeState(s);
+  expect(jsonPart(buf)).not.toHaveProperty('preamble');
+  const d = decodeState(buf);
+  expect(d.preamble).toBeNull();
+  expect(preambleText(d)).toBe(DEFAULT_PREAMBLE);
 });

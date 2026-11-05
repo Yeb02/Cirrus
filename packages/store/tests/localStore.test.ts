@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, applyOps, canonical, type ConnectionLayout, connect, createNode, createPlan, editNode, emptyState, encodeState, type Id, type NodeRec,
-  OpConflictError, type PhantomRec, removeFromPlan, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot,
+  type Action, applyOps, canonical, type ConnectionLayout, connect, createNode, createPlan, DEFAULT_PREAMBLE, editNode, emptyState, encodeState, type Id,
+  type NodeRec, OpConflictError, type PhantomRec, preambleText, removeFromPlan, setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
 
@@ -17,7 +17,7 @@ const afterId = (a: Action, t: string): Id => (a.ops.find((o) => o.t === t && o.
 /** The store keeps no state: the interface's copy, here, moves only once an action is written (EditSession). */
 const write = (store: LocalStore, s: State, a: Action): number => { const seq = store.commit(a); applyOps(s, a.ops); return seq; };
 const same = (a: State, b: State) => expect(canonical(sorted(a))).toBe(canonical(sorted(b)));
-const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, (v as unknown[]).map((x) => canonical(x)).sort()]));
+const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)]));
 
 function withPlan(store: LocalStore, s: State): Id {
   const a = createPlan(s, 'Thèse', 'plan');
@@ -25,13 +25,13 @@ function withPlan(store: LocalStore, s: State): Id {
   return afterId(a, 'plan');
 }
 
-test('ouvrir crée la base au schéma courant, avec la table de l’instantané', () => {
+test('ouvrir crée la base au schéma courant, avec les tables de l’instantané et du préambule', () => {
   LocalStore.open(dir, { pc: 'pc1' }).close();
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
-  expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'snapshot'").get()).toBeDefined();
+  for (const name of ['snapshot', 'preamble']) expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name), name).toBeDefined();
   db.close();
-  expect(SCHEMA_VERSION).toBe(2);
+  expect(SCHEMA_VERSION).toBe(3);
 });
 
 test('un fichier qui n’est pas une base : ouvrir échoue sans le garder ouvert (il s’efface aussitôt)', () => {
@@ -81,12 +81,13 @@ test('commit refuse un « avant » périmé, relu dans la base : ni ligne, ni jo
   const link = connect(s, { plan, members: [{ node: afterId(ok, 'node'), role: 'source' }, { node: afterId(other, 'node'), role: 'target' }] });
   write(store, s, link);
   const n = s.nodes.get(afterId(ok, 'node'))!, c = s.connections.get(afterId(link, 'connection'))!;
-  // A tag key, a layout and a phantom in the base, for their stale "befores" too.
+  // A tag key, a layout, a phantom and a preamble in the base, for their stale "befores" too.
   const key: TagKeyDef = { key: 'mot', type: 'word', scope: 'both', multi: false, required: false };
   const layout: ConnectionLayout = { plan, connection: c.id, marker: { x: 1, y: 2 }, handles: {} };
   const phantom: PhantomRec = { id: 'f-1', plan, connection: c.id, of: { kind: 'node', node: n.id }, x: 3, y: 4, k: 0 };
   write(store, s, { id: 'extra', label: 'extra', ops: [
     { t: 'tagKey', before: null, after: key }, { t: 'connLayout', before: null, after: layout }, { t: 'phantom', before: null, after: phantom },
+    { t: 'preamble', before: null, after: { text: 'P' } },
   ] });
   const fresh: NodeRec = { id: 'n-new', title: 'Nouveau', summary: '', tags: [], files: [] };
   const stale: Op[][] = [
@@ -101,6 +102,9 @@ test('commit refuse un « avant » périmé, relu dans la base : ni ligne, ni jo
     [{ t: 'connLayout', before: { ...layout, angle: 1 }, after: null }],
     [{ t: 'phantom', before: { ...phantom, x: 9 }, after: { ...phantom, x: 10 } }],
     [{ t: 'phantom', before: null, after: { ...phantom, y: 0 } }],
+    [{ t: 'preamble', before: null, after: { text: 'Q' } }],
+    [{ t: 'preamble', before: { text: 'autre' }, after: { text: 'Q' } }],
+    [{ t: 'preamble', before: { text: 'autre' }, after: null }],
   ];
   const tables = () => canonical(sorted(store.loadState()));
   const before = tables(), seq = store.lastSeq();
@@ -143,6 +147,7 @@ test('un enregistrement que l’état refuserait, sans tags, une connexion comme
     { t: 'connection', before: null, after: { id: 'c-bad', kind: 'knowledge', title: '', relation: '', members: [{ node, role: 'source' }] } as never },
     { t: 'node', before: null, after: { id: 'n-bad', title: 'Sans tags', summary: '', files: [] } as never },
     { t: 'node', before: s.nodes.get(node)!, after: { ...s.nodes.get(node)!, tags: undefined } as never },
+    { t: 'preamble', before: null, after: { text: 42 } as never },
   ];
   for (const op of tagless) {
     expect(() => store.commit({ id: 'b', label: 'b', ops: [{ t: 'node', before: null, after: fresh }, op] }), JSON.stringify(op)).toThrow(/invalid/);
@@ -223,15 +228,58 @@ test('migration du schéma 1 au schéma 2 : additive, rien de perdu, sans instan
   const plan = withPlan(store, s);
   write(store, s, createNode(s, { plan, title: 'Ancien', x: 0, y: 0, k: 0 }));
   store.close();
-  // The base as plan 3b left it: schema 1, no snapshot table.
+  // The base as plan 3b left it: schema 1, no snapshot table (nor the preamble's of schema 3).
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec('DROP TABLE snapshot; PRAGMA user_version = 1;');
+  db.exec('DROP TABLE snapshot; DROP TABLE preamble; PRAGMA user_version = 1;');
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' });
   same(again.loadState(), s);
   expect(again.changesSince(0)).toHaveLength(3);
   expect(again.readSnapshot()).toBeNull();
   again.close();
+});
+
+test('un préambule écrit se relit après réouverture, dans l’historique de son sujet ; l’annuler efface sa ligne', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  expect(store.loadState().preamble).toBeNull();
+  const text = `${DEFAULT_PREAMBLE}\\newcommand{\\K}{\\mathrm{K}}\n`;
+  const a = setPreamble(s, text);
+  write(store, s, a);
+  store.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
+  expect(loaded.preamble).toEqual({ text });
+  expect(preambleText(loaded)).toBe(text);
+  same(loaded, s);
+  expect(again.historyOf('preamble').map((r) => [r.label, r.flow, r.op])).toEqual([['Modifier le préambule LaTeX', 'content', a.ops[0]]]);
+  write(again, s, { id: 'undo', label: 'Annuler', ops: [{ t: 'preamble', before: { text }, after: null }] });
+  expect(again.loadState().preamble).toBeNull();
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  expect(db.prepare('SELECT COUNT(*) AS n FROM preamble').get()).toEqual({ n: 0 });
+  db.close();
+  again.close();
+});
+
+test('migration du schéma 2 au schéma 3 : la table du préambule ajoutée, rien de perdu, sans préambule', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const plan = withPlan(store, s);
+  write(store, s, createNode(s, { plan, title: 'Ancien', x: 0, y: 0, k: 0 }));
+  store.writeSnapshot(encodeState(s), store.lastSeq());
+  store.close();
+  // The base as plan 4a left it: schema 2, its snapshot, no preamble table.
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  db.exec('DROP TABLE preamble; PRAGMA user_version = 2;');
+  db.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
+  same(loaded, s);
+  expect([loaded.preamble, preambleText(loaded)]).toEqual([null, DEFAULT_PREAMBLE]);
+  expect(again.changesSince(0)).toHaveLength(3);
+  expect(again.readSnapshot()!.seq).toBe(3);
+  write(again, s, setPreamble(s, 'nouveau'));
+  expect(again.loadState().preamble).toEqual({ text: 'nouveau' });
+  again.close();
+  const check = new DatabaseSync(join(dir, 'cirrus.db'));
+  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+  check.close();
 });
 
 type Op = Action['ops'][number];

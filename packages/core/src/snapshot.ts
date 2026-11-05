@@ -1,4 +1,4 @@
-import type { ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef } from './model.ts';
+import type { ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef } from './model.ts';
 import { dataOf, emptyState, loadRecords, reindex, type State } from './state.ts';
 
 /** The state as plain JSON arrays (no Map or Set): for IPC between processes and, later, the first sync of a PC. */
@@ -11,6 +11,8 @@ export interface Snapshot {
   branches: [plan: Id, connection: Id, node: Id][];
   connLayouts: ConnectionLayout[];
   phantoms: PhantomRec[];
+  /** null: never set. */
+  preamble: PreambleRec | null;
 }
 
 export function toSnapshot(s: State): Snapshot {
@@ -21,7 +23,7 @@ export function toSnapshot(s: State): Snapshot {
   }
   return {
     nodes: [...s.nodes.values()], connections: [...s.connections.values()], plans: [...s.plans.values()], tagKeys: [...s.tagKeys.values()],
-    placements: [...s.placements.values()], branches, connLayouts: [...s.connLayouts.values()], phantoms: [...s.phantoms.values()],
+    placements: [...s.placements.values()], branches, connLayouts: [...s.connLayouts.values()], phantoms: [...s.phantoms.values()], preamble: s.preamble,
   };
 }
 

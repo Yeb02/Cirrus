@@ -5,7 +5,7 @@ import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
 import {
   applyKnown, applyOp, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf,
-  placedIn, placementOf, rollback, type State,
+  placedIn, placementOf, preambleText, rollback, type State,
 } from './state.ts';
 import { INCLUSION } from './tables.ts';
 
@@ -542,5 +542,17 @@ export function setLayout(s: State, plan: Id, connection: Id, layout: Omit<Conne
   return transact(s, (d) => {
     d.push({ t: 'connLayout', before: s.connLayouts.get(layoutKey(plan, connection)) ?? null, after: layout && { plan, connection, ...layout } });
     return d.finish(layout ? 'Disposer une connexion' : 'Rétablir la disposition automatique');
+  });
+}
+
+/**
+ * The global LaTeX preamble (spec 5.6, D5), refused when it is the one in effect. DEFAULT_PREAMBLE set again is written
+ * as such, not as null: the history keeps what was chosen.
+ */
+export function setPreamble(s: State, text: string): Action {
+  if (text === preambleText(s)) throw new CommandError('Le préambule est déjà celui-ci.');
+  return transact(s, (d) => {
+    d.push({ t: 'preamble', before: s.preamble, after: { text } });
+    return d.finish('Modifier le préambule LaTeX');
   });
 }

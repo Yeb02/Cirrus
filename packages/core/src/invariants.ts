@@ -37,7 +37,8 @@ export function ancestors(s: State, plan: Id, node: Id): Id[] {
  * The objects an action's operations can make wrong, read in `s` with them applied: those they write, and those a plan
  * or a tag key decides, from the indices — never the whole base. A plan's record coming or going decides the trashed
  * nodes placed in it (rule trashedPlaced); its type, the structure connections shown in it (structureOutsideDocument);
- * its name, nothing. A tag key decides the nodes and connections whose tags use it.
+ * its name, nothing. A tag key decides the nodes and connections whose tags use it. The preamble decides nothing: no
+ * rule reads it.
  */
 export function touchedBy(s: State, ops: readonly Op[]): Set<Id> {
   const touched = new Set<Id>();

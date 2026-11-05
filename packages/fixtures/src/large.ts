@@ -55,7 +55,10 @@ export function buildLargeState(spec: LargeSpec): { state: State; lobby: Id } {
     groupShare: 0.15, multiMemberShare: 0.1, locality: [0.8, 0.15, 0.05],
   }, BENCH_PARAMS);
   const lobby = benchId('plan', 0);
-  const x: Snapshot = { nodes: [], connections: [], plans: [{ id: lobby, name: 'Lobby', type: 'lobby' }], tagKeys: [], placements: [], branches: [], connLayouts: [], phantoms: [] };
+  const x: Snapshot = {
+    nodes: [], connections: [], plans: [{ id: lobby, name: 'Lobby', type: 'lobby' }], tagKeys: [], placements: [], branches: [], connLayouts: [], phantoms: [],
+    preamble: null,
+  };
   const ids = new Map(scene.nodes.map((n) => [n.id, benchId('node', n.id)]));
   const id = (i: number) => ids.get(i)!;
   const branch = (connection: Id, node: Id) => x.branches.push([lobby, connection, node]);

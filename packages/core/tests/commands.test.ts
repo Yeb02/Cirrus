@@ -1,12 +1,14 @@
 import { expect, test } from 'vitest';
 import {
   type Action, addMember, combine, CommandError, connect, createNode, createPlan, deleteConnection, deleteEverywhere, editConnection, editNode, include, joinArm,
-  movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, restoreNode, setBranches, setLayout, splitArm,
+  movePhantom, placeAbsent, placeNode, removeFromPlan, removeMember, restoreNode, setBranches, setLayout, setPreamble, splitArm,
 } from '../src/commands.ts';
 import { ancestors, groupOf } from '../src/invariants.ts';
+import { DEFAULT_PREAMBLE } from '../src/latex.ts';
 import type { Id } from '../src/model.ts';
 import { invertAction } from '../src/history.ts';
-import { applyOp, canonical, emptyState, layoutKey, placementKey, type State } from '../src/state.ts';
+import { flowOf, subjectOf } from '../src/ops.ts';
+import { applyOp, canonical, emptyState, layoutKey, OpConflictError, placementKey, preambleText, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
 const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => {
@@ -288,4 +290,46 @@ test('disposition d’une connexion propre au plan : écrite, modifiée, effacé
   run(s, setLayout(s, p1, c, null));
   expect(s.connLayouts.has(layoutKey(p1, c))).toBe(false);
   expect(() => setLayout(s, p1, 'inconnue', null)).toThrow(/Connexion introuvable/);
+});
+
+test('préambule LaTeX (plan 4b, D5) : setPreamble le change, l’annuler rend le défaut, un même texte est refusé', () => {
+  const s = emptyState();
+  expect([s.preamble, preambleText(s)]).toEqual([null, DEFAULT_PREAMBLE]);
+  const same = (text: string) => {
+    expect(() => setPreamble(s, text)).toThrow(CommandError);
+    expect(() => setPreamble(s, text)).toThrow('Le préambule est déjà celui-ci.');
+  };
+  // The default is in effect without being stored: setting it is setting the same text.
+  same(DEFAULT_PREAMBLE);
+  const text = `${DEFAULT_PREAMBLE}\\usepackage{tikz}\n`;
+  const a = setPreamble(s, text);
+  expect(s.preamble).toBeNull(); // computed, not applied
+  run(s, a);
+  expect(a.label).toBe('Modifier le préambule LaTeX');
+  expect(a.ops).toEqual([{ t: 'preamble', before: null, after: { text } }]);
+  expect([subjectOf(a.ops[0]), flowOf(a.ops[0])]).toEqual(['preamble', 'content']);
+  expect(preambleText(s)).toBe(text);
+  same(text);
+  run(s, invertAction(a));
+  expect([s.preamble, preambleText(s)]).toEqual([null, DEFAULT_PREAMBLE]);
+});
+
+test('remettre exactement le préambule par défaut l’écrit tel quel, et non null : l’historique garde ce qui a été choisi', () => {
+  const s = emptyState();
+  const mine = '\\documentclass{article}\n';
+  run(s, setPreamble(s, mine));
+  const back = run(s, setPreamble(s, DEFAULT_PREAMBLE));
+  expect(back.ops).toEqual([{ t: 'preamble', before: { text: mine }, after: { text: DEFAULT_PREAMBLE } }]);
+  expect(s.preamble).toEqual({ text: DEFAULT_PREAMBLE });
+  expect(() => setPreamble(s, DEFAULT_PREAMBLE)).toThrow('Le préambule est déjà celui-ci.');
+});
+
+test('une opération de préambule au « avant » périmé, ou à l’enregistrement invalide, est refusée sans rien changer', () => {
+  const s = emptyState();
+  applyOp(s, { t: 'preamble', before: null, after: { text: 'A' } });
+  expect(() => applyOp(s, { t: 'preamble', before: null, after: { text: 'B' } })).toThrow(OpConflictError);
+  expect(() => applyOp(s, { t: 'preamble', before: { text: 'autre' }, after: null })).toThrow(OpConflictError);
+  expect(() => applyOp(s, { t: 'preamble', before: { text: 'A' }, after: { text: 3 } as never })).toThrow(/invalid/);
+  expect(() => applyOp(s, { t: 'preamble', before: null, after: null })).toThrow(/empty/);
+  expect(s.preamble).toEqual({ text: 'A' });
 });

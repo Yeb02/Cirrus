@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ancestors, canonical, checkState, groupOf, placementKey, type State } from '@cirrus/core';
+import { ancestors, canonical, checkState, CITE_KEY_TAG, groupOf, LABEL_TAG, placementKey, type State } from '@cirrus/core';
 import { filePath, LocalStore } from '@cirrus/store';
 import { buildFixture } from '../src/build.ts';
 import { chapterPdf } from '../src/pdf.ts';
@@ -155,6 +155,43 @@ test('le PDF de trois pages est celui qu’écrit chapterPdf, sans dépendance :
   expect(text.match(/\/Dest \[\d+ 0 R \/XYZ /g)!.length).toBeGreaterThanOrEqual(3);
   // « Préliminaires », in Windows-1252 (WinAnsiEncoding): « é » is byte E9, written \351.
   expect(text).toContain('(Chapitre 1 \\227 Pr\\351liminaires)');
+});
+
+test('le matériau LaTeX (plan 4b) : clé BibTeX, label de titre, .tex et image de Kolmogorov, résumé et relation en LaTeX', () => {
+  const store = LocalStore.open(dir, { pc: 'fixture' });
+  const ids = buildFixture(store, dir);
+  const s = store.loadState();
+  const node = (k: keyof typeof ids.nodes) => s.nodes.get(ids.nodes[k])!;
+  const text = { type: 'text', scope: 'node', multi: false, required: false };
+  expect([s.tagKeys.get(CITE_KEY_TAG), s.tagKeys.get(LABEL_TAG)]).toEqual([{ key: 'clé_bibtex', ...text }, { key: 'label', ...text }]);
+  expect(node('publication').tags).toContainEqual({ key: 'clé_bibtex', value: 'li2008' });
+  expect(node('solomonoff').tags).toContainEqual({ key: 'label', value: 'solomonoff' });
+  // Kolmogorov's .tex, and the very bytes of Compression's image: one copy in the store, under one hash.
+  const files = node('kolmogorov').files;
+  expect(files.map((f) => f.name)).toEqual(['complexité.tex', 'schéma_compression.png']);
+  expect(files[1]).toEqual(node('compression').files.find((f) => f.name === 'schéma_compression.png'));
+  const tex = readFileSync(filePath(dir, files[0]), 'utf8');
+  expect(tex.startsWith('\\section{Complexité de Kolmogorov}\\label{kc:section}\n')).toBe(true);
+  expect(tex).toContain('\\includegraphics[width=3cm]{schéma_compression.png}');
+  expect(node('entropie').summary).toBe(String.raw`Pour une source $X$ de loi $p$ :\begin{equation}\label{ent:def}H(X) = -\sum_x p(x) \log_2 p(x)\end{equation}en bits.`);
+  const deduction = [...s.connections.values()].filter((c) => c.title === 'Déduction jointe');
+  expect(deduction.map((c) => c.relation)).toEqual([String.raw`Ensemble, $K(x) \le L_{\mathrm{MDL}}(x) + O(1)$.`]);
+  // What complexité.tex refers to is defined in the base (a .tex of a node, a summary, a relation, a label tag), but
+  // for the one link meant to be broken; what it cites is a BibTeX key of the base.
+  const defined = new Set<string>();
+  const labels = (t: string) => { for (const m of t.matchAll(/\\label\{([^}]*)\}/g)) defined.add(m[1]); };
+  for (const n of s.nodes.values()) {
+    labels(n.summary);
+    for (const t of n.tags) if (t.key === LABEL_TAG) defined.add(String(t.value));
+    for (const f of n.files) if (f.name.endsWith('.tex')) labels(readFileSync(filePath(dir, f), 'utf8'));
+  }
+  for (const c of s.connections.values()) labels(c.relation);
+  const refs = [...tex.matchAll(/\\(?:eq)?ref\{([^}]*)\}/g)].map((m) => m[1]);
+  expect(refs.filter((r) => defined.has(r)).sort()).toEqual(['ent:def', 'kc:def', 'mdl:enonce', 'solomonoff']);
+  expect(refs.filter((r) => !defined.has(r))).toEqual(['absent:label']);
+  const keys = [...s.nodes.values()].flatMap((n) => n.tags.filter((t) => t.key === CITE_KEY_TAG).map((t) => t.value));
+  expect([...tex.matchAll(/\\cite\{([^}]*)\}/g)].map((m) => m[1])).toEqual(keys);
+  store.close();
 });
 
 test('réouverture identique', () => {

@@ -1,4 +1,4 @@
-import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef } from './model.ts';
+import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef } from './model.ts';
 
 /**
  * Every change is a record-level operation carrying the record before and after (null = absent).
@@ -12,13 +12,15 @@ export type Op =
   | { t: 'placement'; before: Placement | null; after: Placement | null }
   | { t: 'branch'; key: BranchRec; before: boolean; after: boolean }
   | { t: 'connLayout'; before: ConnectionLayout | null; after: ConnectionLayout | null }
-  | { t: 'phantom'; before: PhantomRec | null; after: PhantomRec | null };
+  | { t: 'phantom'; before: PhantomRec | null; after: PhantomRec | null }
+  /** The base's single preamble record (null: never set, DEFAULT_PREAMBLE applies). */
+  | { t: 'preamble'; before: PreambleRec | null; after: PreambleRec | null };
 
 /** The two synchronised flows of spec 6.1 (analytics come later). */
 export type Flow = 'content' | 'layout';
 
 export function flowOf(op: Op): Flow {
-  return op.t === 'node' || op.t === 'connection' || op.t === 'plan' || op.t === 'tagKey' ? 'content' : 'layout';
+  return op.t === 'node' || op.t === 'connection' || op.t === 'plan' || op.t === 'tagKey' || op.t === 'preamble' ? 'content' : 'layout';
 }
 
 export function invertOp(op: Op): Op {
@@ -41,5 +43,7 @@ export function subjectOf(op: Op): Id {
       return op.key.connection;
     case 'connLayout':
       return (op.after ?? op.before)!.connection;
+    case 'preamble':
+      return 'preamble';
   }
 }

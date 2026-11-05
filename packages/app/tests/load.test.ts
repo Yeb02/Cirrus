@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
-const sorted = (s: State) => canonical(Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, (v as unknown[]).map((x) => canonical(x)).sort()])));
+const sorted = (s: State) => canonical(Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)])));
 const open = () => LocalStore.open(dir, { pc: 'test' });
 /** cirrus:load as the main process answers it (index.ts): the payload copied across, a rebuilt snapshot kept once sent. */
 function bridge(store: LocalStore, calls: boolean[] = []) {

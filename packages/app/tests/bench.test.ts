@@ -140,7 +140,7 @@ test('critères du plan 3c : chacun avec sa mesure, tenu ou non, sur les passes 
 });
 
 /** Every list of the state sorted: the tables come back in their own order. */
-const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, (v as unknown[]).map((x) => canonical(x)).sort()]));
+const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)]));
 
 test('réécritures de l’instantané : la taille de la base avant, après chacune et fermée ; l’instantané couvre la dernière action et égale les tables', () => {
   const base = join(dir, 'cirrus-bench-instantanes');

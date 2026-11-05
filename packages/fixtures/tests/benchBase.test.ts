@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { type Action, canonical, decodeState, type Op, type State, toSnapshot } from '@cirrus/core';
+import { type Action, applyOp, canonical, decodeState, type Op, type State, toSnapshot } from '@cirrus/core';
 import { LocalStore, writeBenchBase } from '@cirrus/store';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildLargeState } from '../src/large.ts';
@@ -13,13 +13,13 @@ beforeEach(() => { dirs = []; });
 afterEach(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
 /** The snapshot with every list sorted: the tables come back in their own order. */
-const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, (v as unknown[]).map((x) => canonical(x)).sort()]));
+const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)]));
 
 /** Every row of the state tables, sorted, read straight from the file. */
 function rows(dir: string): Record<string, string[]> {
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
   const out: Record<string, string[]> = {};
-  for (const t of ['nodes', 'connections', 'plans', 'tag_keys', 'placements', 'branches', 'conn_layouts', 'phantoms']) {
+  for (const t of ['nodes', 'connections', 'plans', 'tag_keys', 'placements', 'branches', 'conn_layouts', 'phantoms', 'preamble']) {
     out[t] = (db.prepare(`SELECT * FROM ${t}`).all() as unknown[]).map((r) => canonical(r)).sort();
   }
   db.close();
@@ -28,6 +28,7 @@ function rows(dir: string): Record<string, string[]> {
 
 test('base du banc : écrite d’un coup, LocalStore.open rend le même état, journal vide, instantané au numéro 0', () => {
   const { state } = buildLargeState({ seed: 1, nodes: 1000, connections: 10_000 });
+  applyOp(state, { t: 'preamble', before: null, after: { text: '\\documentclass{article}\n' } });
   const dir = newDir();
   writeBenchBase(dir, state);
   const store = LocalStore.open(dir, { pc: 'banc' });
@@ -42,6 +43,7 @@ test('base du banc : écrite d’un coup, LocalStore.open rend le même état, j
 
 test('base du banc : les mêmes lignes que le magasin écrit action par action', () => {
   const { state } = buildLargeState({ seed: 2, nodes: 200, connections: 1000 });
+  applyOp(state, { t: 'preamble', before: null, after: { text: '\\documentclass{article}\n' } });
   const bulk = newDir(), byCommit = newDir();
   writeBenchBase(bulk, state);
   const ops: Op[] = [
@@ -51,6 +53,7 @@ test('base du banc : les mêmes lignes que le magasin écrit action par action',
     ...[...state.connections.values()].map((after): Op => ({ t: 'connection', before: null, after })),
     ...[...state.branches].map((key): Op => ({ t: 'branch', key, before: false, after: true })),
     ...[...state.phantoms.values()].map((after): Op => ({ t: 'phantom', before: null, after })),
+    { t: 'preamble', before: null, after: state.preamble },
   ];
   const store = LocalStore.open(byCommit, { pc: 'banc' });
   store.commit({ id: 'tout', label: 'Tout', ops } satisfies Action);

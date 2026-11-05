@@ -1,17 +1,20 @@
-import type { ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef, TagValue } from './model.ts';
+import type { ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
 import { dataOf, emptyState, type Indices, layoutKey, reindexRest, type State } from './state.ts';
 import { type ConnTable, EMPTY_TAGS, INCLUSION, KINDS, NO_RECORD, type Pool, type Rows, SOURCE, TARGET } from './tables.ts';
 
 // The state as one ArrayBuffer (plan 3c, decisions 4 and 5): the snapshot kept in the base and sent to the interface.
 // The tables go row for row (identifiers, reference counts, free lists, columns, pools packed); records as columns
 // that refer to rows and to one table of strings, UTF-8 and separated by \0; the rare irregular records, the plans, the
-// tag keys and the layouts as JSON. Of the indices, the three that cost most to derive go as they are (memberOf,
-// placedIn, groupOf), the others are rebuilt (reindexRest). Layout, little-endian, every section 8-aligned:
+// tag keys, the layouts and the preamble as JSON. Of the indices, the three that cost most to derive go as they are
+// (memberOf, placedIn, groupOf), the others are rebuilt (reindexRest). Layout, little-endian, every section 8-aligned:
 //   header (32 bytes): magic, version, total length, two checksum words over everything after the header, section count;
 //   directory: offset and length in bytes of each section, in the order of SECTION_NAMES;
 //   the sections, numeric first, then the strings, then the JSON.
 
-/** The format's version: a snapshot of another version is not read (the base's tables are). Bump it with any change. */
+/**
+ * The format's version: a snapshot of another version is not read (the base's tables are). Bump it with any change,
+ * but for a JSON field whose absence decodes right in the snapshots written before it (the preamble, plan 4b).
+ */
 export const SNAPSHOT_VERSION = 1;
 const MAGIC = 0x53524943; // 'CIRS'
 const HEADER_BYTES = 32;
@@ -57,6 +60,11 @@ interface JsonPart {
   strings: [index: number, value: string][];
   /** The nodes with several direct groups (index groupOf), by plan row and node row. */
   multi: [plan: number, node: number, groups: number[]][];
+  /**
+   * Absent when the base never set one (plan 4b): a snapshot of such a base is the same as one written before the
+   * field existed, and one written before decodes without it, so the version stays.
+   */
+  preamble?: PreambleRec;
 }
 
 function align8(n: number): number {
@@ -209,6 +217,7 @@ export function encodeState(s: State): ArrayBuffer {
   }
   const st = new StringTable(nodeEnd + planEnd + connEnd), lists = new Lists(st), empty = st.empty;
   const json: JsonPart = { plans: [], tagKeys: [...T.tagKeys.values()], layouts: [], placements: [], connTexts: [], strings: [], multi: [] };
+  if (T.preamble) json.preamble = T.preamble;
   const nodeIndex = N.rows.row, planIndex = P.rows.row, connIndex = C.rows.row, planBase = nodeEnd, connBase = nodeEnd + planEnd;
   // A reference to an identifier that has a row is that row's string: on decoding, the same string as the row's.
   const nodeRef = (id: Id) => { const r = nodeIndex.get(id); return r === undefined ? st.of(id) : r; };
@@ -602,6 +611,10 @@ export function decodeState(buf: ArrayBuffer): State {
   for (const t of json.tagKeys) {
     if (!isObject(t) || typeof t.key !== 'string') throw corrupt('clé de tag');
     T.tagKeys.set(t.key, t);
+  }
+  if (json.preamble !== undefined) {
+    if (!isObject(json.preamble) || typeof json.preamble.text !== 'string') throw corrupt('préambule');
+    T.preamble = json.preamble;
   }
   if (N.count !== counts.nodes || P.count !== counts.plans || C.count !== counts.connections || C.branchCount !== counts.branches) throw corrupt('comptes');
 

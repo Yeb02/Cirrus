@@ -69,3 +69,6 @@ export interface TagKeyDef {
   /** Ordered enumeration: name and rank designate the same value. */
   enumValues?: { name: string; rank: number }[];
 }
+
+/** The global LaTeX preamble (spec 5.6), one per base; a base without one uses DEFAULT_PREAMBLE (plan 4b, D5). */
+export interface PreambleRec { text: string }

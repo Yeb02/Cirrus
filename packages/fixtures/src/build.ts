@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, applyOps, connect, createNode, createPlan, editNode, type Id, include, type Member, movePhantom, placeNode, removeFromPlan, splitArm,
-  type TagKeyDef, type TagValue, UndoStack, uuidv7,
+  type Action, applyOps, CITE_KEY_TAG, connect, createNode, createPlan, editNode, type Id, include, LABEL_TAG, type Member, movePhantom, placeNode,
+  removeFromPlan, splitArm, type TagKeyDef, type TagValue, UndoStack, uuidv7,
 } from '@cirrus/core';
 import { importFile, type LocalStore } from '@cirrus/store';
 
@@ -39,6 +39,9 @@ const TAG_KEYS: TagKeyDef[] = [
   { key: 'provenance', type: 'text', scope: 'node', multi: false, required: false },
   { key: 'auteur', type: 'text', scope: 'node', multi: true, required: false },
   { key: 'date_de_publication', type: 'date', scope: 'node', multi: false, required: false },
+  // Plan 4b, D7: a publication's key for \cite, a node's title's label for \ref.
+  { key: CITE_KEY_TAG, type: 'text', scope: 'node', multi: false, required: false },
+  { key: LABEL_TAG, type: 'text', scope: 'node', multi: false, required: false },
   { key: 'parallèle', type: 'word', scope: 'connection', multi: false, required: false },
   { key: 'déduction', type: 'word', scope: 'connection', multi: false, required: false },
   { key: 'partie', type: 'number', scope: 'connection', multi: false, required: false },
@@ -89,7 +92,9 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   });
   // The CSV is in Windows-1252 bytes, with semicolons and decimal commas, as the French Excel writes it (plan 4a).
   attach(mdl, 'Enoncé_détaillé.tex', 'calcul_mdl_séquence_aléatoire.py', 'mesures_compression.csv', 'notes_lecture.md');
-  const solomonoff = node(lobby, 'Induction de Solomonoff', -175, 140, { tags: [kv('statut_epistémique', 5), kv('pertinence', 'important')] });
+  const solomonoff = node(lobby, 'Induction de Solomonoff', -175, 140, {
+    tags: [kv('statut_epistémique', 5), kv('pertinence', 'important'), kv(LABEL_TAG, 'solomonoff')],
+  });
   const priore = node(lobby, 'Priore universelle', -175, 260, { tags: [kv('nature', 'définition')] });
   const kolmogorov = node(lobby, 'Complexité de Kolmogorov', -175, -140, { tags: [kv('nature', 'définition')] });
   const compression = node(lobby, 'Compression sans perte', 175, -140);
@@ -97,7 +102,11 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   const invariance = node(lobby, 'Théorème d’invariance', 0, -260, { tags: [kv('nature', 'théorème')] });
   const kraft = node(lobby, 'Inégalité de Kraft', 300, -260, { tags: [kv('nature', 'théorème')] });
   const codePrefixe = node(lobby, 'Code préfixe', 420, -140);
-  const entropie = node(lobby, 'Entropie de Shannon', -420, -140, { tags: [kv('statut_epistémique', 'consensus_scientifique')] });
+  // A summary in LaTeX that defines a label (plan 4b, D7: complexité.tex refers to it).
+  const entropie = node(lobby, 'Entropie de Shannon', -420, -140, {
+    summary: String.raw`Pour une source $X$ de loi $p$ :\begin{equation}\label{ent:def}H(X) = -\sum_x p(x) \log_2 p(x)\end{equation}en bits.`,
+    tags: [kv('statut_epistémique', 'consensus_scientifique')],
+  });
   const biais = node(lobby, 'Biais de simplicité des réseaux', 1100, 290, { tags: [kv('statut_epistémique', 'étayé')] });
   const surparam = node(lobby, 'Surparamétrisation', 930, 560);
   const generalisation = node(lobby, 'Généralisation sans régularisation', 1270, 560, { tags: [kv('statut_epistémique', 'plausible')] });
@@ -106,7 +115,7 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   const universalite = node(lobby, 'Universalité algorithmique', 660, 650, { tags: [kv('statut_epistémique', 'spéculation'), kv('provenance', 'personnelle')] });
   const monde = node(lobby, 'Monde algorithmique', 190, 740, { tags: [kv('statut_epistémique', 'spéculation'), kv('pertinence', 'central')] });
   const publication = node(lobby, 'An Introduction to Kolmogorov Complexity and Its Applications', -420, -300, {
-    tags: [kv('auteur', 'Ming Li'), kv('auteur', 'Paul Vitányi'), kv('date_de_publication', '2008')],
+    tags: [kv('auteur', 'Ming Li'), kv('auteur', 'Paul Vitányi'), kv('date_de_publication', '2008'), kv(CITE_KEY_TAG, 'li2008')],
   });
   // A one-page PDF, and three pages with links written by scripts/make-pdf.ts (plan 4a, task 6), in one action.
   attach(publication, 'Li_Vitányi_extrait.pdf', 'Li_Vitányi_chapitre_1.pdf');
@@ -127,7 +136,7 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   run(connect(s, { plan: lobby, members: [src(universalite), tgt(monde)] }));
   run(connect(s, {
     plan: lobby, members: [src(kolmogorov), src(solomonoff), src(mdl), tgt(occam)], title: 'Déduction jointe', tags: [word('déduction')],
-    relation: 'Ces trois nœuds ensemble mènent au résultat, ce qui diffère de trois connexions séparées.',
+    relation: String.raw`Ensemble, $K(x) \le L_{\mathrm{MDL}}(x) + O(1)$.`,
   }));
   const twoToTwo = created(connect(s, {
     plan: lobby, members: [src(occam), src(universalite), tgt(biais), tgt(generalisation)], title: 'Deux résultats', tags: [word('déduction')],
@@ -186,6 +195,11 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   const typo = run(editNode(s, occam, { title: 'Rasoir d’Ocam formalisé' }));
   stack.record(typo);
   run(stack.undo(s)!);
+
+  // Plan 4b: a .tex for Kolmogorov that refers to labels of other nodes and of itself, cites the publication and shows
+  // an image of its node, the very bytes of Compression's (one copy in the store). Written last, so that the times the
+  // captures give the history (one action a minute, in order) stay those of the actions before.
+  attach(kolmogorov, 'complexité.tex', 'schéma_compression.png');
 
   return {
     plans: { lobby, these, article },

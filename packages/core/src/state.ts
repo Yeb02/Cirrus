@@ -1,5 +1,6 @@
 import { BranchSet, connectionAt, ConnectionsFacade, MapFacade, PlacementsFacade, placementAt, RecordFacade } from './facades.ts';
-import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef, TagValue } from './model.ts';
+import { DEFAULT_PREAMBLE } from './latex.ts';
+import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import type { Snapshot } from './snapshot.ts';
 import {
@@ -55,6 +56,8 @@ export interface State {
   /** key `${plan}|${connection}` */
   readonly connLayouts: ReadonlyMap<string, ConnectionLayout>;
   readonly phantoms: ReadonlyMap<Id, PhantomRec>;
+  /** The global LaTeX preamble; null: never set (preambleText gives the one in effect). */
+  readonly preamble: PreambleRec | null;
 }
 
 /** Core's own view of a state: the façades plus the tables and indices behind them (not exported from @cirrus/core). */
@@ -82,6 +85,7 @@ function stateOf(tables: Tables, index: Indices): StateData {
     nodes: new RecordFacade(tables.nodes), connections: new ConnectionsFacade(tables), plans: new RecordFacade(tables.plans),
     tagKeys: new MapFacade(tables.tagKeys), placements: new PlacementsFacade(tables), branches: new BranchSet(tables),
     connLayouts: new MapFacade(tables.layouts), phantoms: new MapFacade(tables.phantoms),
+    get preamble() { return tables.preamble; },
   };
 }
 
@@ -160,6 +164,8 @@ export const phantomsOf = (s: State, connection: Id): readonly Id[] => dataOf(s)
 export const phantomsIn = (s: State, group: Id): readonly Id[] => dataOf(s).index.phantomsIn.get(group) ?? [];
 /** Core only: whether `rec` is its connection's current record, in the sense of canonical (read from the columns). */
 export const isCurrentConnection = (s: State, rec: ConnectionRec): boolean => connectionIs(dataOf(s).tables, rec.id, rec);
+/** The LaTeX preamble in effect (spec 5.6): the base's, or DEFAULT_PREAMBLE when it never set one (D5: never stored). */
+export const preambleText = (s: State): string => s.preamble?.text ?? DEFAULT_PREAMBLE;
 
 export class OpConflictError extends Error {}
 
@@ -308,6 +314,14 @@ function write(d: StateData, op: Op, checked: boolean, back: boolean): void {
       if (present === before) return;
       return writeBranch(d, op.key, present, true);
     }
+    case 'preamble': {
+      const before = back ? op.after : op.before, after = back ? op.before : op.after;
+      if (!before && !after) throw new Error('empty preamble operation');
+      if (after) checkPreamble(after);
+      if (checked) check(d.tables.preamble, before, 'Le préambule');
+      d.tables.preamble = after;
+      return;
+    }
   }
 }
 
@@ -344,6 +358,9 @@ export function loadRecords(s: State, x: Snapshot): void {
   C.branchCount = x.branches.length;
   for (const l of x.connLayouts) T.layouts.set(layoutKey(l.plan, l.connection), l);
   for (const p of x.phantoms) writePhantom(d, p.id, T.phantoms.get(p.id), p, false);
+  // A snapshot made before plan 4b has none.
+  if (x.preamble) checkPreamble(x.preamble);
+  T.preamble = x.preamble ?? null;
 }
 
 /** Builds every index from the tables (at load, after loadRecords): O(base), once, each list exactly its size. */
@@ -525,14 +542,20 @@ function checkConnection(c: ConnectionRec): void {
   }
 }
 
+/** What preambleText reads of the preamble record, checked before it is written: its text, a string. */
+function checkPreamble(p: PreambleRec): void {
+  if (!isPlainObject(p) || typeof p.text !== 'string') throw new Error('invalid preamble record');
+}
+
 /**
- * Throws when the "after" of a node or connection operation is a record the state cannot store: the one check the
- * state's writes make (applyOp, a rollback, a bulk load) and the base makes before writing (LocalStore.commit), so
- * the base never holds a record that its tables could not be loaded back with.
+ * Throws when the "after" of a node, connection or preamble operation is a record the state cannot store: the one
+ * check the state's writes make (applyOp, a rollback, a bulk load) and the base makes before writing
+ * (LocalStore.commit), so the base never holds a record that its tables could not be loaded back with.
  */
 export function checkRecord(op: Op): void {
   if (op.t === 'node' && op.after) checkNode(op.after);
   else if (op.t === 'connection' && op.after) checkConnection(op.after);
+  else if (op.t === 'preamble' && op.after) checkPreamble(op.after);
 }
 
 function writeNode(d: StateData, id: Id, after: NodeRec | null, indexed: boolean): void {
