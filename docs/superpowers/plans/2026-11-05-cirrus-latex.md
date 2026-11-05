@@ -46,19 +46,28 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - C'est une opération `preamble` : elle entre dans l'historique et dans la synchro du plan 5, et Ctrl+Z l'annule.
   - On le modifie dans un plein écran ouvert depuis les réglages, avec un aperçu d'exemple. On l'enregistre explicitement, parce qu'un préambule à moitié tapé casserait toutes les compilations.
   - En faire un réglage le sortirait de l'historique, contre la spec 5.6. En faire un fichier d'un nœud spécial serait du bricolage.
-- **D6, un `.tex` se modifie dans son plein écran, éditeur et aperçu côte à côte.**
-  - Il s'enregistre à chaque pause de `texSaveIdleMs` (2 s), à Ctrl+S, à la fermeture du plein écran et à celle de la fenêtre. Chaque enregistrement est une nouvelle version, et l'ancienne reste dans l'historique.
-  - Les enregistrements d'une même ouverture ne forment qu'un Ctrl+Z.
+- **D6, un `.tex` se modifie dans son plein écran, éditeur et aperçu côte à côte** (pause et regroupement fixés par l'utilisateur, 2026-11-05).
+  - **Quand :** il s'enregistre après une pause de frappe de `texSaveIdleMs` (10 s), à Ctrl+S, à la fermeture du plein écran et à celle de la fenêtre. C'est toujours à condition que le texte diffère de la dernière version enregistrée : taper puis effacer n'enregistre rien.
+  - **Regroupement :** des enregistrements successifs du même `.tex` ne forment qu'une seule modification dans l'historique, et un seul Ctrl+Z. Il ne faut aucune autre action entre eux : aucune autre modification, ni annulation, ni rétablissement. Cela vaut d'une ouverture du plein écran à la suivante, pendant une même session de l'app.
+  - **Mécanisme :** les enregistrements regroupés portent l'identifiant d'action du premier, dans le journal, et prolongent le même pas d'annulation. Les versions intermédiaires restent dans le journal (quelques Ko chacune), mais l'historique n'en montre qu'une.
+  - **Conséquence pour le plan 5 :** une action peut recevoir des lignes après avoir été envoyée, et la synchro doit l'accepter.
   - N'enregistrer qu'à la fermeture perdrait la frappe en cas de panne. Enregistrer à chaque frappe ferait une version par lettre.
 - **D7, liens entre nœuds.**
-  - **Vers un autre nœud :** un `\ref` vers son label affiche son titre, avec un lien `cirrus://node/<id>`. Un clic ouvre le pop-up de ce nœud ; le saut avec « précédent » et « suivant » vient avec la navigation (plan 6).
+  - **Vers un autre nœud :** un `\ref` vers un label d'un autre nœud affiche son titre, avec un lien `cirrus://node/<id>`. Un clic ouvre le pop-up de ce nœud ; le saut avec « précédent » et « suivant » vient avec la navigation (plan 6).
+  - **Où un label se définit** (demande de l'utilisateur, 2026-11-05) :
+    - par `\label` dans un `.tex` ;
+    - par `\label` dans le résumé d'un nœud, par exemple sur une équation ;
+    - par `\label` dans la relation d'une connexion ;
+    - pour le titre d'un nœud, par un tag `label` (`label: mdl`, un seul par nœud) : `\ref{mdl}` désigne le nœud lui-même. Dans un document (spec 15), ce sera le numéro de sa section.
+
+    Tous ces labels partagent un même registre : chacun est unique dans la base, et un doublon apparaît en rouge, quelle que soit sa sorte.
   - **Dans la même source :** les vrais numéros, par le `.aux` relu. Une seconde passe n'a lieu que si ces numéros ont changé.
   - **Entre deux sources du même nœud** (deux `.tex`, ou le résumé et un `.tex`) : le titre du nœud [C].
   - **Labels invalides :** un label que rien ne définit s'affiche en rouge, suivi de « ? ». Un label défini plusieurs fois s'affiche en rouge, avec le titre de sa première définition.
   - **`\cite{li2008}` :** il affiche « [Li et Vitányi, 2008] », avec un lien vers le nœud de la publication. Une clé inconnue s'affiche en rouge.
   - **Clé de citation :** c'est un tag `clé_bibtex`, plutôt que le champ dédié prévu à la spec 5.4 [C]. Il se synchronise, se cherche et se modifie comme les autres tags, sans changer le modèle. Le plan 4c le remplira à l'import d'une publication.
 - **D8, le registre des labels est tenu par l'interface.**
-  - Il est dérivé des résumés, des relations et des `.tex`, lus par `cirrus-file:` et gardés en mémoire par empreinte.
+  - Il est dérivé des résumés, des relations, des tags `label` et des `.tex`. Ces derniers sont lus par `cirrus-file:` et gardés en mémoire par empreinte.
   - Le principal reste sans état (plan 3c, décision 3). La requête de compilation porte les titres et les citations dont la source a besoin.
 
 **Hors du plan 4b :**
@@ -87,7 +96,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - aucun pdfLaTeX ne survit à la fermeture de l'app.
 - **Réseau :** seuls le téléchargement épinglé de TinyTeX, après accord, et `tlmgr` (dépôt de TeX Live) y accèdent, tous deux depuis le principal.
 - **Données :** le préambule par défaut n'est jamais stocké. Une base sans préambule utilise `DEFAULT_PREAMBLE` (comme les valeurs par défaut des tags, spec 5.4). Une base plus ancienne s'ouvre sans changement (spec 3).
-- **Une action, un pas :** les enregistrements d'un `.tex` pendant une même ouverture de son plein écran forment un seul Ctrl+Z. Dans un éditeur, Ctrl+Z agit sur le texte.
+- **Une action, un pas :** des enregistrements successifs d'un même `.tex`, sans aucune autre action entre eux, forment une seule modification de l'historique et un seul Ctrl+Z (D6). Dans un éditeur, Ctrl+Z agit sur le texte.
 - **Performance :**
   - l'aperçu d'un nœud ordinaire s'affiche en moins de 300 ms après la fin de la pause de frappe (cible de la spec 13, mesurée à la tâche 8) ;
   - ouvrir un pop-up dont le résumé est en cache ne compile pas ;
@@ -178,7 +187,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     \hypersetup{colorlinks, linkcolor=blue!50!black, citecolor=green!40!black, urlcolor=blue!60!black}
     ```
 
-  - `CITE_KEY_TAG = 'clé_bibtex'` ;
+  - `CITE_KEY_TAG = 'clé_bibtex'` et `LABEL_TAG = 'label'` (le label du titre d'un nœud, D7) ;
   - `titleToTex(text: string): string` : un texte de l'utilisateur (titre, citation courte) rendu en source pdfLaTeX inerte :
     - `\ # $ % & _ { } ~ ^` deviennent `\textbackslash{} \# \$ \% \& \_ \{ \} \textasciitilde{} \textasciicircum{}` ;
     - les caractères de U+0020 à U+017F (latin de base, Latin-1 et Latin étendu A) et `‘ ’ “ ” « » – — … ·` restent tels quels ;
@@ -222,8 +231,9 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
 
 - Base de test :
   - tag `clé_bibtex` (texte, nœud, une seule valeur, facultatif), et `clé_bibtex: li2008` sur la publication de Li et Vitányi ;
+  - tag `label` (texte, nœud, une seule valeur, facultatif), et `label: solomonoff` sur le nœud de Solomonoff ;
   - le nœud de Kolmogorov reçoit `complexité.tex` et `schéma_compression.png`, les mêmes octets que celui de MDL ;
-  - le nœud de l'entropie reçoit le résumé `Pour une source $X$ de loi $p$ : $H(X) = -\sum_x p(x) \log_2 p(x)$ bits.` ;
+  - le nœud de l'entropie reçoit le résumé `Pour une source $X$ de loi $p$ :\begin{equation}\label{ent:def}H(X) = -\sum_x p(x) \log_2 p(x)\end{equation}en bits.` ;
   - la connexion « Déduction jointe » reçoit la relation `Ensemble, $K(x) \le L_{\mathrm{MDL}}(x) + O(1)$.` ;
   - `complexité.tex`, exactement :
 
@@ -236,6 +246,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     \end{equation}
     L'équation~\eqref{kc:def} ne dépend de $U$ qu'à une constante près
     (\ref{mdl:enonce} en donne une lecture pratique ; voir \cite{li2008}).
+    L'entropie~\eqref{ent:def} en est la version probabiliste ; voir aussi \ref{solomonoff}.
     Un lien cassé reste visible : \ref{absent:label}.
 
     \includegraphics[width=3cm]{schéma_compression.png}
@@ -258,7 +269,7 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - un préambule écrit se relit après réouverture ;
     - un « avant » qui ne correspond plus est refusé (`OpConflictError`) ;
     - une base créée au schéma précédent migre sans perte.
-  - Base de test : Kolmogorov porte les deux fichiers, la publication `clé_bibtex: li2008`, l'entropie son résumé, et « Déduction jointe » sa relation.
+  - Base de test : Kolmogorov porte les deux fichiers, la publication `clé_bibtex: li2008`, Solomonoff `label: solomonoff`, l'entropie son résumé, et « Déduction jointe » sa relation.
 - [ ] **Step 2 :** `npx vitest run --maxWorkers=1 packages/core packages/store packages/fixtures`. Attendu : échec, faute de `latex.ts` et de l'opération.
 - [ ] **Step 3 :** implémenter. Suivre le chemin de l'opération `tagKey` à travers `ops`, `state`, `codec`, `snapshot`, `invariants`, `localStore` et `bulk`. Dans `sceneUpdate`, l'opération ne demande rien.
 - [ ] **Step 4 :** relancer la suite complète et `tsc` sur `core`, `store`, `view`, `fixtures` et `app`. Lancer les captures et les comparer à `docs/captures/reference-3c` et `docs/captures/plan4a`. Un écart (un nœud qui montre désormais des fichiers, par exemple) reçoit un `Ruling:` et sa référence est refaite.
@@ -478,12 +489,18 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - citations : `\cite \citep \citet \citealp \citealt \citeauthor \citeyear \nocite \parencite \textcite`, avec leurs formes étoilées, jusqu'à deux arguments optionnels `[…]`, et des clés séparées par des virgules, espaces retirés ;
     - un `%` non échappé commence un commentaire, et les environnements `verbatim`, `Verbatim` et `lstlisting` sont sautés ;
     - `standalone` : un `\documentclass` hors d'un commentaire.
-  - `type Origin = { kind: 'summary'; node: Id } | { kind: 'relation'; connection: Id } | { kind: 'file'; node: Id; name: string }` ;
+  - `type Origin = { kind: 'summary'; node: Id } | { kind: 'relation'; connection: Id } | { kind: 'file'; node: Id; name: string }` : une source qui se compile ;
+  - `type DefOrigin = Origin | { kind: 'title'; node: Id }` : là où un label est défini, le titre d'un nœud compris (tag `label`, D7) ;
   - `slotOf(o: Origin): string` : `'summary:<id>'`, `'relation:<id>'` ou `'file:<id>:<nom>'`.
-  - `interface LabelDef { label: string; origin: Origin; line: number; title: string; node: Id | null }`, où `title` est le titre du nœud, ou celui de la connexion pour une relation (`node` vaut alors null).
+  - `interface LabelDef { label: string; origin: DefOrigin; line: number; title: string; node: Id | null }`, où :
+    - `title` est le titre du nœud, ou celui de la connexion pour une relation (`node` vaut alors null) ;
+    - `line` vaut 0 pour un tag `label`.
   - `class LatexRegistry` :
     - `static build(s: State, texts: ReadonlyMap<string, string>, previous?: LatexRegistry): LatexRegistry` ;
-    - les sources sont les résumés et les relations non vides, et les `.tex` dont le texte est dans `texts` (clé : l'empreinte), des nœuds et des connexions hors de la corbeille ;
+    - les sources sont, pour les nœuds et les connexions hors de la corbeille :
+      - les résumés et les relations non vides ;
+      - les tags `label` ;
+      - les `.tex` dont le texte est dans `texts` (clé : l'empreinte) ;
     - avec `previous`, une source dont l'origine et le texte n'ont pas changé reprend son analyse sans la refaire ;
     - `definitions(label: string): LabelDef[]`, dans l'ordre des identifiants ;
     - `labels(): LabelDef[]` ;
@@ -543,11 +560,13 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - un label défini dans deux nœuds a deux définitions ;
     - celui d'un nœud à la corbeille n'en a plus ;
     - un label d'une relation porte le titre de la connexion ;
+    - le tag `label: solomonoff` définit `solomonoff`, d'origine `title`, avec le titre du nœud ;
+    - un tag `label` qui reprend le `\label` d'un `.tex` d'un autre nœud donne deux définitions ;
     - `citeNodes('li2008')` donne la publication de la base de test ;
     - reconstruire après la modification d'un seul résumé n'analyse que lui (un compteur injecté dans l'analyse).
   - `shortCitation` : un auteur, deux, trois, aucun, et une date absente.
   - `buildRequest` sur la base de test, pour `complexité.tex` :
-    - `refs` contient `mdl:enonce` avec le titre et l'identifiant de MDL ;
+    - `refs` contient `mdl:enonce` avec le titre et l'identifiant de MDL, `ent:def` (une équation de son résumé) avec le titre de l'entropie, et `solomonoff` (le titre) avec celui de Solomonoff ;
     - `broken` vaut `['absent:label']` ;
     - `cites` contient `li2008` avec « Li et Vitányi, 2008 » ;
     - `kc:def` n'est pas dans `refs` ;
@@ -576,13 +595,14 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
   - `packages/app/src/renderer/ui/viewers/PdfViewer.tsx` : le mode `live` ;
   - `packages/app/src/renderer/files/kind.ts`, `pdf.ts` : `ViewRef` ;
   - `packages/app/src/renderer/App.tsx` : enregistrer avant la fermeture ;
+  - `packages/app/src/renderer/session.ts` et ses tests : l'option `merge` ;
   - `packages/store/src/files.ts` et ses tests : `storeBytes` ;
   - `packages/app/src/main/index.ts`, le preload, `env.d.ts` : `storeText` ;
   - `packages/app/package.json` ;
   - `packages/view/src/params.ts`.
 
 **Interfaces :**
-- Consumes : `LatexRegistry`, `buildRequest`, `useCompiled` et `scanTex` (tâche 4), `filesBuild` (plan 4a), et `UndoStack.extend` par l'option `extend` de la session (plan 3b).
+- Consumes : `LatexRegistry`, `buildRequest`, `useCompiled` et `scanTex` (tâche 4), `filesBuild` (plan 4a), et `UndoStack.extend` (plan 3b), que l'option `merge` de la session réutilise.
 - Produces :
   - `storeBytes(storeDir: string, name: string, bytes: Uint8Array): FileRef`, dans `@cirrus/store`, avec les garanties d'`importFile` : fsync, renommage, et doublon reconnu par l'empreinte ;
   - `storeText(name: string, text: string): Promise<FileRef>` (`cirrus:files:store-text`). Le principal refuse un nom qui ne passe pas `checkFileName` (plan 4a), et un texte de plus de `maxImportMb`. Le texte est écrit en UTF-8, sans BOM.
@@ -603,27 +623,31 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - les numéros de ligne, sauf en `compact` ;
     - Ctrl+S appelle `onSave` ;
     - les raccourcis de l'app (Suppr, Ctrl+Z…) ne partent pas d'un éditeur qui a le focus.
-  - `TexWorkbench(props: { node: NodeRec; file: FileRef; state: State; registry: LatexRegistry; params: RenderParams; onSave(text: string, extend: string | null): Promise<{ ok: boolean; actionId?: string; message?: string }>; onClose(): void })`, dans le plein écran (`FullScreen` garde sa modalité et son Échap) :
+  - `TexWorkbench(props: { node: NodeRec; file: FileRef; state: State; registry: LatexRegistry; params: RenderParams; onSave(text: string): Promise<{ ok: boolean; message?: string }>; onClose(): void })`, dans le plein écran (`FullScreen` garde sa modalité et son Échap) :
     - à gauche l'éditeur, à droite l'aperçu (`PdfViewer` en mode `live` sur le dernier PDF valide) ;
     - un bandeau d'état : « Compilation… », « Erreur ligne 12 : … », « Enregistré », « Non enregistré : <raison> » ;
     - un bouton « Journal » ouvre `CompileLog`, où un clic sur une erreur place l'éditeur à sa ligne ;
     - le fichier est lu par `readHead`. Un texte tronqué ou un binaire s'affiche sans pouvoir être modifié, avec la raison.
   - `class SaveScheduler` (pure, son temps injecté) :
-    - `constructor(save: (text: string, extend: string | null) => Promise<{ ok: boolean; actionId?: string }>, timers, idleMs: () => number)` ;
+    - `constructor(saved: string, save: (text: string) => Promise<{ ok: boolean }>, timers, idleMs: () => number)`, où `saved` est le texte du fichier ouvert ;
     - `edit(text: string): void`, `saveNow(): Promise<void>`, `flush(): Promise<void>` ;
-    - `dirty: boolean`, `onState(cb)` ;
-    - il enregistre après `idleMs` sans frappe, à `saveNow` (Ctrl+S) et à `flush` (fermeture) ;
-    - le premier enregistrement réussi donne l'identifiant qui sert d'`extend` aux suivants de la même ouverture ;
+    - `dirty: boolean` (le texte diffère du dernier enregistré), `onState(cb)` ;
+    - il enregistre après `idleMs` sans frappe, à `saveNow` (Ctrl+S) et à `flush` (fermeture), seulement si le texte diffère du dernier enregistré (D6) ;
     - un enregistrement refusé garde `dirty` et le texte.
+  - Regroupement (D6), dans la session : `run(build, { merge?: string })`.
+    - Si la dernière action écrite par la session portait la même clé `merge`, et que rien n'a été écrit depuis (aucune autre action, aucune annulation, aucun rétablissement), la nouvelle action reprend son identifiant : ses lignes du journal portent le même `action_id`, et elle prolonge le même pas d'annulation (`UndoStack.extend`).
+    - Sinon, c'est une action nouvelle.
+    - La clé d'un `.tex` est `tex:<nœud>:<nom normalisé par sameName>`.
+    - Cette mémoire ne dure que le temps de la session de l'app.
   - Enregistrer un `.tex` :
-    - `storeText(nom, texte)`, puis `filesBuild(s, node, [ref])`, qui garde le nom et la place ;
+    - `storeText(nom, texte)`, puis `filesBuild(s, node, [ref])`, qui garde le nom et la place, par `run(…, { merge })` ;
     - le libellé de l'action est « Modifier « complexité.tex » » ;
     - à la fermeture de la fenêtre, `App` attend le `flush` de l'atelier ouvert avant d'envoyer l'instantané.
   - `PdfViewer` en mode `live` : un nouveau `file` remplace le document sur place, avec le même zoom et le même défilement, borné à la nouvelle hauteur. Les anciennes pages restent jusqu'à ce que les nouvelles soient dessinées, sans éclair blanc.
   - Aperçu d'un `.tex` (panneau `FilePreview`) :
     - le PDF compilé (`PdfViewer`, lecture seule), avec « Compilation… » avant le premier ;
     - LaTeX indisponible : le source, comme au plan 4a.
-  - Réglage `texSaveIdleMs` : 2000, de 300 à 60000, « Pause avant l'enregistrement d'un .tex (ms) ».
+  - Réglage `texSaveIdleMs` : 10000, de 1000 à 600000, « Pause de frappe avant l'enregistrement d'un .tex (ms) ».
 
 - [ ] **Step 1 : tests.**
   - `refContext` et `completionsFor` :
@@ -636,19 +660,25 @@ Chaque décision ci-dessous a comparé ses options. Une décision non prévue ic
     - un label `kc:def` défini aussi dans un autre nœud du test est signalé ;
     - une erreur de compilation à la ligne 4 couvre la ligne 4.
   - `SaveScheduler`, avec de fausses minuteries (Review Focus 4) :
-    - frappes puis pause : un seul enregistrement ;
+    - frappes puis pause de 10 s : un seul enregistrement, et aucun avant la fin de la pause ;
+    - taper puis revenir au texte enregistré : aucun enregistrement, ni à la pause ni à `flush` ;
     - Ctrl+S enregistre aussitôt ;
     - `flush` enregistre ce qui reste ;
-    - le deuxième enregistrement porte l'`extend` du premier ;
-    - un refus garde `dirty`, et le suivant réessaie ;
-    - rien à enregistrer : aucun appel.
+    - un refus garde `dirty`, et le suivant réessaie.
+  - Regroupement, sur une session et une base de test temporaire :
+    - trois enregistrements successifs de `complexité.tex` donnent un seul `action_id` au journal, une seule modification dans `historySummary`, et un seul Ctrl+Z, qui revient au texte d'avant le premier ;
+    - un déplacement de nœud entre deux enregistrements les sépare : deux modifications ;
+    - une annulation entre deux enregistrements les sépare aussi ;
+    - l'enregistrement d'un autre `.tex` les sépare aussi ;
+    - deux ouvertures successives du plein écran, sans rien entre elles, se regroupent.
   - `storeBytes` : l'empreinte et la taille sont justes, et un second appel identique ne crée pas de doublon. `storeText` refuse `a/b.tex`, `..` et `nul.tex`.
   - Avec pdfLaTeX (sauté si absent) : la requête de `complexité.tex` (tâche 4) compile, et le PDF contient le titre de MDL.
 - [ ] **Step 2 :** lancer ces tests. Attendu : échec.
 - [ ] **Step 3 :** implémenter. Vérifier dans l'app construite, sur une copie de la base de test :
   - ouvrir `complexité.tex` en plein écran, taper, voir l'aperçu changer ;
   - fermer par Échap pendant la pause, puis vérifier que la nouvelle version est dans le pop-up ;
-  - Ctrl+Z, une fois le plein écran fermé, annule toute l'ouverture.
+  - rouvrir, modifier encore et refermer : le pop-up compte une seule modification de plus ;
+  - Ctrl+Z, une fois le plein écran fermé, annule les deux ouvertures d'un coup.
 - [ ] **Step 4 :** relancer les tests, la suite complète et `tsc` sur `app`, `store` et `view`. Lancer les captures et les comparer aux références.
 - [ ] **Step 5 :** commit et push (`feat(app): éditeur LaTeX et plein écran d'un .tex`).
 
