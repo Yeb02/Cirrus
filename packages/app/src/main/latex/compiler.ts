@@ -2,12 +2,12 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CompileAnswer, CompiledPdf, CompileRequest, FileRef, KnownLabel, LatexStatus, TexError } from '@cirrus/core';
+import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isStandalone, type KnownLabel, type LatexStatus, type TexError } from '@cirrus/core';
 import { filePath } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { plainName } from '../files.ts';
 import type { PdfCache } from './cache.ts';
-import { citedLabels, driverSource, isStandalone, jobBody } from './driver.ts';
+import { citedLabels, driverSource, jobBody } from './driver.ts';
 import { parseLog, readAux } from './log.ts';
 import { missingFile, texEnv, type TexBinaries } from './tinytex.ts';
 

@@ -114,6 +114,16 @@ export const connRowCount = (s: State): number => dataOf(s).tables.conns.rows.en
 /** The kind of connection row `row` as its index in KINDS (KNOWLEDGE, INCLUSION, STRUCTURE), or NO_RECORD. */
 export const connKind = (s: State, row: number): number => dataOf(s).tables.conns.kind[row];
 export const connTitle = (s: State, row: number): string => dataOf(s).tables.conns.title[row];
+export const connRelation = (s: State, row: number): string => dataOf(s).tables.conns.relation[row];
+/**
+ * The rows of the connections whose relation is not empty, trash included, in row order: the LaTeX registry reads them
+ * without visiting every row (half a million in the bench's base) through the accessors.
+ */
+export function relationRows(s: State): number[] {
+  const C = dataOf(s).tables.conns, kind = C.kind, relation = C.relation, none = NO_RECORD, out: number[] = [];
+  for (let r = 0, end = C.rows.end; r < end; r++) if (kind[r] !== none && relation[r] !== '') out.push(r);
+  return out;
+}
 export const connTrashed = (s: State, row: number): boolean => !Number.isNaN(dataOf(s).tables.conns.trashedAt[row]);
 /** The record of connection row `row` (which has one), built from its columns. */
 export const connectionOfRow = (s: State, row: number): ConnectionRec => connectionAt(dataOf(s).tables, row);

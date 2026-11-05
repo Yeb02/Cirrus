@@ -357,6 +357,100 @@ Fixées par le contrôleur avant la tâche :
 
 ## Tâche 4 : interface — registre des labels et des citations, requêtes, compilation à la pause
 
+### Mesures
+
+- **Construction du registre sur la base du banc** (50 000 nœuds, 549 189 connexions, sans `.tex`), sous vitest, douze constructions, une sur deux avec `previous` :
+  - avec les accesseurs de rangée (`connKind`, `connTrashed`, `connRelation`) appelés pour chaque connexion : de 104 à 160 ms. La boucle des connexions en prend à elle seule de 93 à 141 ms, celle des nœuds de 1 à 9 ms ;
+  - avec `relationRows` (décision plus bas) : de 4 à 14 ms.
+- **Suite** : 681 tests sur 681 (647 avant la tâche), 34 de plus :
+
+  | Fichier | Tests ajoutés |
+  | --- | --- |
+  | `latexScan.test.ts` | 8 |
+  | `latexRegistry.test.ts` | 13, dont 3 pour `loadTexTexts` |
+  | `latexRequest.test.ts` | 3 |
+  | `compileScheduler.test.ts` | 8 |
+  | `params.test.ts` (view) | 1 |
+  | `columns.test.ts` (core) | 1 |
+
+  `tsc` : `app`, `view` et `core` sans erreur.
+- **App construite** (`electron-vite build`), une capture sous `CIRRUS_TINYTEX` (TinyTeX du banc) : `latexWarm` a préparé les deux pdfLaTeX (`latex/work/p1` et `p2` dans la base de la capture), aucun `pdflatex.exe` ne reste après la sortie, et `%LOCALAPPDATA%\Cirrus` n'a pas été créé.
+- **Captures**, une suite neuve : 11 sur 11 à 0 pixel contre `reference-3c`, 8 sur 8 à 0 pixel contre `plan4a`.
+
+### Décisions
+
+Fixées par le contrôleur avant la tâche :
+- un label défini deux fois dans la même source compte pour deux définitions ;
+- une ref vers un label que la source définit elle-même n'est pas injectée, même s'il est défini ailleurs aussi : le numéro de la source l'emporte, et le doublon est le diagnostic de l'éditeur (tâche 5) ;
+- `doubled` porte la première définition dans l'ordre des identifiants, puis dans celui des origines ; le `title` d'une définition d'origine `title` est le titre du nœud ;
+- `citeKeys()[].text` est la `shortCitation` du nœud ;
+- les tags, le résumé et les fichiers d'un nœud à la corbeille ne définissent rien, ni la relation d'une connexion à la corbeille ;
+- les minuteries du planificateur sont injectées sous la forme `{ set(fn, ms): unknown; clear(h): void }`, et le hook prend `window.setTimeout` ;
+- deux requêtes se comparent par un JSON stable, sans `known`.
+
+- Ruling: **la règle du document autonome vit dans `@cirrus/core`** : `withoutComments` et `isStandalone` passent de `driver.ts` à `latex.ts`, sans changement, et `scanTex(...).standalone` appelle `isStandalone`.
+  - Options : recopier la règle dans l'interface et tester les mêmes cas ; la partager (choix).
+  - Pourquoi : ce sont deux fonctions de chaînes, sans rien du principal. Une seule règle sert les deux processus, qui ne peuvent donc pas diverger. `cache.ts`, `compiler.ts` et `latexLog.test.ts` les importent désormais de `@cirrus/core`, et les cas de `latexLog.test.ts` sont refaits par `scanTex` dans `latexScan.test.ts`.
+  - Coût si faux : trois imports.
+- Ruling: **`relationRows(s)` et `connRelation(s, row)` s'ajoutent aux accesseurs du cœur** (`state.ts`).
+  - `relationRows` rend les rangées des connexions dont la relation n'est pas vide, corbeille comprise, en lisant les colonnes en local.
+  - Pourquoi : appeler les accesseurs pour chacune des 549 189 rangées coûtait de 93 à 141 ms par construction (mesure plus haut), et le registre se reconstruit après chaque action. Bâtir chaque enregistrement par `s.connections` coûterait plus encore.
+  - Coût si faux : deux fonctions exportées.
+- Ruling: **`scanTex` ne découpe par virgules que les refs de cleveref** (`\cref`, `\Cref`), et les citations ; chaque nom d'une liste perd ses espaces de bord. Un nom seul est pris tel qu'il est écrit, comme LaTeX le lit : `\ref{ a }` cherche « a » entouré d'espaces.
+  - Le `citedLabels` du principal découpe toute commande en « ref ». Il ne décide que d'une seconde passe : la différence ne change aucune compilation.
+  - Coût si faux : un ensemble de noms.
+- Ruling: **ce qui n'est pas une marque** : un nom vide ou fait d'espaces, un nom qui porte `#` (le paramètre d'une macro, `\newcommand\r[1]{\ref{#1}}`), la clé `*` (`\nocite{*}`), un argument jamais fermé, ou coupé par un commentaire.
+  - Pourquoi : l'éditeur (tâche 5) marquerait en rouge `\ref{#1}` dans une définition, et `*` comme une clé inconnue. `safeLabel` refuserait de toute façon `#` à l'injection.
+  - Coût si faux : une condition.
+- Ruling: **`scanTex` saute aussi `verbatim*` et `Verbatim*`**, et cherche la fin `\end{<nom>}` telle quelle, comme le fait LaTeX. Un environnement jamais fermé va jusqu'au bout du texte. TeX saute les espaces et les sauts de ligne entre la commande, son étoile, ses arguments optionnels et son accolade : `scanTex` aussi. Les refs ne lisent pas d'argument optionnel, puisque aucune de la liste n'en prend. Coût si faux : nul.
+- Ruling: **l'ordre des définitions** : par identifiant (celui du nœud, ou de la connexion pour une relation), puis le titre, le résumé, les fichiers dans l'ordre du nœud, puis la position dans la source.
+  - `labels()` rend toutes les définitions par label, dans l'ordre des unités de code, puis dans cet ordre-là.
+  - `citeKeys()` les rend par clé, puis par nœud.
+  - Coût si faux : un comparateur.
+- Ruling: **un titre vide se montre « Sans titre »**, le mot du pop-up de connexion. Cela vaut pour la définition d'un nœud ou d'une connexion sans titre, et pour la citation d'une publication sans auteur ni titre.
+  - Pourquoi : un `\ref` vers la relation d'une connexion sans titre n'afficherait rien dans l'aperçu. Le lien serait alors invisible, alors que Review Focus 5 le veut visible.
+  - Coût si faux : une expression.
+- Ruling: **les tags `label` et `clé_bibtex` sont lus sans leurs espaces de bord** : `\cite` et les listes perdent aussi les leurs. Une valeur vide ne définit rien. Chaque tag `label` compte : deux tags égaux sur un même nœud, que le registre de tags refuse d'ordinaire (`multi: false`), font un doublon. Coût si faux : un `trim`.
+- Ruling: **`LatexRegistry.build` prend un quatrième paramètre facultatif, `analyse`** (`scanTex` par défaut). C'est le compteur que la tâche demande d'injecter dans l'analyse.
+  - `scanOf(origin, text)` rend l'analyse du registre si `text` est le texte qu'il a lu pour cette source, et une analyse neuve sinon. `buildRequest` s'en sert : ouvrir un pop-up dont le résumé n'a pas changé ne relit pas sa source.
+  - Coût si faux : un paramètre et une méthode.
+- Ruling: **`shortCitation` prend pour année la première suite de quatre chiffres** de `date_de_publication` (`/\d{4}/`) : « 05/2008 » donne 2008, là où les quatre premiers chiffres épars donneraient « 0520 ». Sans auteur, le titre est suivi de l'année s'il y en a une (« Un livre, 2008 »). Coût si faux : une expression régulière.
+- Ruling: **les définitions de la source elle-même ne comptent pas dans `buildRequest`**. Le registre les tient de la version de la source qui est dans l'état, et non du texte tapé : un `\label` effacé à l'instant ne cache pas un label désormais cassé.
+  - Le tag `label` du même nœud compte, lui : `\ref{mdl}` dans le résumé de MDL désigne le nœud lui-même (D7).
+  - Chaque label et chaque clé n'apparaît qu'une fois, dans l'ordre de leur première citation, si bien que la clé du cache reste stable.
+  - Le texte d'une citation vient de l'enregistrement actuel du nœud. Une clé dont le nœud a disparu depuis la construction du registre passe dans `unknownCites`.
+  - Coût si faux : un filtre.
+- Ruling: **le planificateur, pour une autre source** : une requête d'un autre emplacement part aussitôt, et vide la vue. Le PDF d'une autre source ne doit pas passer pour « le dernier bon ».
+  - `request(null)` abandonne la pause et annule la compilation en cours. `pending` devient faux, et la vue est gardée. La même requête, redonnée ensuite, part aussitôt : le cache du principal y répond.
+  - Coût si faux : une branche.
+- Ruling: **une réponse `cancelled` à la requête courante** remet `pending` à faux, sans rien montrer d'autre. Seul le principal l'annule de lui-même, à la fermeture, ou quand une autre vue demande le même emplacement. Les réponses `cancelled` des requêtes que le planificateur a lui-même annulées sont ignorées par leur numéro.
+  - Pourquoi : sinon, la vue resterait « en cours » sans fin.
+  - Coût si faux : une branche.
+- Ruling: **le planificateur et les états sans compilation** :
+  - `unavailable` garde le PDF, l'erreur et le journal, et une réponse `ok` ou `error` l'efface ;
+  - un pont qui échoue (l'IPC) devient une erreur de la source, « La compilation n'a pas pu être demandée : … », et le PDF reste ;
+  - `subscribe` donne aussitôt la vue courante.
+  - Coût si faux : nul.
+- Ruling: **la table des `known`** se remplit des labels de chaque réponse `ok` ou `error`, vides compris, puisque les deux ont lu un `.aux`. À l'envoi, le `known` de la requête est remplacé par celui de la table quand elle connaît l'emplacement. `knownLabels(slot)` la lit, pour les tâches 5 et 6. Coût si faux : nul.
+- Ruling: **`useCompiled(req, pauseMs = DEFAULT_PARAMS.latexTypingPauseMs)`** prend un second paramètre facultatif, la pause.
+  - Pourquoi : chaque pop-up et le plein écran reçoivent `params` en prop. Une valeur de module que l'app réglerait serait un couplage caché.
+  - Le pont du hook compte chaque compilation parmi ce que les vues chargent (`loading`), pour que la capture attende. Le planificateur est créé dans un effet, ce qui le rend sûr sous le StrictMode de React.
+  - Coût si faux : un paramètre.
+- Ruling: **`loadTexTexts`, les cas difficiles** :
+  - un `.tex` plus long que le plafond n'est pas lu du tout, puisque sa taille le dit : `readHead` le rendrait tronqué, et il serait écarté ;
+  - un blob illisible compte comme vide pour la session, et la console le dit. Il n'est pas relu à chaque action ;
+  - les textes des fichiers partis sont lâchés, et un signal levé fait rejeter le chargement ;
+  - l'app relit tous les textes quand le plafond change : un `.tex` laissé vide parce que trop long peut y tenir désormais.
+  - Coût si faux : nul.
+- Ruling: **l'app reconstruit le registre au plus une fois par `latexTypingPauseMs`** : tout de suite après un moment calme, et sinon à la fin de la pause qui suit la dernière construction, avec l'état tel qu'il est alors. Les textes se relisent après chaque action : c'est une boucle sur les nœuds, qui ne lit que les `.tex` nouveaux. Coût si faux : nul.
+- Ruling: **`latexWarm` n'est pas appelé pour le banc**, qui mesure le graphe. Les captures le gardent : la tâche 8 y compilera. Coût si faux : une condition.
+- Ruling: **le pas de `latexTypingPauseMs` est de 10 ms.** La tâche n'en fixe pas. Coût si faux : un nombre.
+
+### Notes
+
+- `scanTex` fait une passe sur le texte, plus celle de `isStandalone`. Les lignes se comptent au fil des marques.
+- Le registre n'est encore lu par aucune vue : `App` le tient dans son état, pour les pop-ups et le plein écran des tâches 5 et 6.
+
 ## Tâche 5 : interface — éditeur LaTeX, plein écran d'un `.tex`, enregistrement
 
 ## Tâche 6 : interface — résumé et relation compilés, liens `cirrus:`
@@ -377,6 +471,7 @@ Fixées par le contrôleur avant la tâche :
 | `Packages.installed()` (`tlmgr info --list --only-installed`) | 2 | 1,6 s | TinyTeX du banc, sans réseau |
 | Compilation préchauffée de `complexité.tex` (de la requête à la réponse) | 3 | p50 138 ms sur 20 (min 130, max 144) ; 156 ms avant les optimisations | `DEFAULT_PREAMBLE`, mode `page`, image, 3 références, 1 citation, 1 label cassé, une passe ; TinyTeX du banc |
 | pdfLaTeX seul, préchauffé (du nom du job à la sortie) | 3 | 113 ms pour `complexité.tex` ; 89 ms pour `Bonjour $x^2$.` | p50 sur 9, hors du service |
+| Construction du registre des labels, base du banc | 4 | de 4 à 14 ms ; de 104 à 160 ms avant `relationRows` | 50 000 nœuds, 549 189 connexions, sans `.tex` ; vitest, 12 constructions, une sur deux avec `previous` |
 
 ## Mineurs reportés
 
@@ -407,6 +502,16 @@ Chaque ligne `minor (deferred)` du suivi du plan, dans l'ordre des tâches, avec
 - Au-delà de `latexWarmProcesses` requêtes simultanées, les suivantes attendent qu'un processus se prépare à froid, environ 600 ms (`compiler.ts`, `fill`).
 - pdfLaTeX seul prend 89 ms pour une ligne sur cette machine, contre 35 à 84 ms au banc pour ses fragments. La différence n'a pas été cherchée : le préambule et les fragments diffèrent, et la mesure de la tâche 8 tranchera (`compiler.ts`).
 - Les dossiers des processus tués par `dispose()` restent jusqu'au démarrage suivant, qui les vide (`compiler.ts`, `dispose`).
+
+### Tâche 4
+
+- Pour la tâche 5 ou 6 : une clé `clé_bibtex` portée par deux nœuds ne s'affiche pas en rouge dans l'aperçu. `cites` prend le premier nœud, comme la tâche le fixe, et la requête n'a aucun champ pour un doublon de clé. Le Review Focus 5 veut ce lien en rouge dans l'aperçu comme dans l'éditeur. L'éditeur peut le dire par `citeNodes(key).length > 1` ; l'aperçu demanderait un champ de plus dans `CompileRequest` et dans `jobBody` (`request.ts`, `driver.ts`).
+- Pour les tâches 5 et 6 : deux vues du même emplacement s'annulent l'une l'autre dans le principal, puisqu'une requête annule la précédente de son emplacement. Une source ne doit avoir qu'un `useCompiled` à la fois (`scheduler.ts`).
+- Pour les tâches 5 et 6 : `useCompiled` compare la requête à chaque changement de son identité, c'est-à-dire le JSON de toute la source. Les appelants gagnent à la mémoriser (`useMemo`) (`useCompiled.ts`).
+- `\verb|…|` n'est pas sauté : `\verb|%|` y commence un commentaire, et `\verb|\label{x}|` y serait un label. Le `withoutComments` du principal fait de même (`scan.ts`).
+- `labels()` trie les labels par unités de code, et non à la française. Les suggestions de la tâche 5 voudront peut-être `localeCompare` (`registry.ts`).
+- Le registre se reconstruit en entier à chaque changement, au plus une fois par pause : de 4 à 14 ms sur la base du banc. Une mise à jour par les opérations de l'action ne viendra que si la vraie base grossit (`registry.ts`).
+- Une action pendant la lecture des `.tex` l'abandonne. La lecture suivante reprend tout ce qui n'était pas fini (`App.tsx`).
 
 ## Décisions du contrôleur (plan 4b)
 

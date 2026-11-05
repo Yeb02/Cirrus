@@ -1,4 +1,4 @@
-import { type CompileRequest, type InjectedRef, safeLabel, titleToTex } from '@cirrus/core';
+import { type CompileRequest, type InjectedRef, safeLabel, titleToTex, withoutComments } from '@cirrus/core';
 
 /**
  * What the main process writes for pdfLaTeX (plan 4b, D2, D4, D7): the warm driver, read once per process with the
@@ -113,23 +113,8 @@ export function jobBody(req: CompileRequest, src: string, widthCm: number): stri
 /** A width for TeX: never in exponent notation. */
 const cm = (x: number) => `${Number(x.toFixed(3))}cm`;
 
-// The source as the main process reads it. The interface's scanTex (task 4) follows the same rule for comments.
-
-/** The source without its comments: from a « % » that no backslash escapes (« \% » is text, « \\% » a comment) to the end of its line. */
-export function withoutComments(source: string): string {
-  return source.split('\n').map((line) => {
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '\\') i++;
-      else if (line[i] === '%') return line.slice(0, i);
-    }
-    return line;
-  }).join('\n');
-}
-
-/** A document of its own: \documentclass outside a comment. It is compiled as it is, without the preamble. */
-export function isStandalone(source: string): boolean {
-  return /\\documentclass(?![A-Za-z@])/.test(withoutComments(source));
-}
+// The source as the main process reads it: withoutComments and isStandalone are in @cirrus/core, shared with the
+// interface's scanTex (task 4).
 
 /** The labels the source refers to, by any command ending in « ref » (\ref, \eqref, \pageref, \autoref, \cref{a,b}…). */
 export function citedLabels(source: string): Set<string> {

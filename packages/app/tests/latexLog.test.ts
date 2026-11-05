@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type CompileRequest, DEFAULT_PREAMBLE } from '@cirrus/core';
+import { type CompileRequest, DEFAULT_PREAMBLE, isStandalone, withoutComments } from '@cirrus/core';
 import { expect, test } from 'vitest';
-import { citedLabels, driverSource, isStandalone, jobBody, withoutComments } from '../src/main/latex/driver.ts';
+import { citedLabels, driverSource, jobBody } from '../src/main/latex/driver.ts';
 import { parseLog, readAux } from '../src/main/latex/log.ts';
 
 /**

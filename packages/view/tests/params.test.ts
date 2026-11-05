@@ -150,6 +150,15 @@ test('compilation LaTeX : processus préparés, délai, largeur du résumé, cac
   expect(withOverrides({ latexWarmProcesses: 9, latexSnippetWidthCm: 1 })).toMatchObject({ latexWarmProcesses: 4, latexSnippetWidthCm: 4 });
 });
 
+test('pause de frappe avant de compiler : 300 ms, de 50 à 3000, réglage avancé du groupe « LaTeX » (plan 4b, tâche 4)', () => {
+  expect(DEFAULT_PARAMS.latexTypingPauseMs).toBe(300);
+  expect(PARAM_SPECS.find((s) => s.key === 'latexTypingPauseMs')).toEqual({
+    key: 'latexTypingPauseMs', label: 'Pause de frappe avant de compiler (ms)', section: 'avancé', group: 'LaTeX', kind: 'number', min: 50, max: 3000, step: 10,
+  });
+  expect(withOverrides({ latexTypingPauseMs: 10 }).latexTypingPauseMs).toBe(50);
+  expect(withOverrides({ latexTypingPauseMs: 9000 }).latexTypingPauseMs).toBe(3000);
+});
+
 test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la relecture)', () => {
   const p = withOverrides({ factor: 1, widthMaxPx: 1e9, textFade: [9, 3], starSpacingPx: [0, 160], gridSpacingPx: [-5, 4] });
   const spec = (k: string) => PARAM_SPECS.find((s) => s.key === k)!;

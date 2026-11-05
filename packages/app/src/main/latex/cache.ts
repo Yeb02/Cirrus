@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CompiledPdf, CompileRequest, KnownLabel } from '@cirrus/core';
-import { DRIVER_VERSION, isStandalone } from './driver.ts';
+import { type CompiledPdf, type CompileRequest, isStandalone, type KnownLabel } from '@cirrus/core';
+import { DRIVER_VERSION } from './driver.ts';
 
 /** What the cache keeps beside a PDF, in <key>.json. */
 export interface CacheMeta { pages: number; labels: KnownLabel[]; log: string; passes: number }

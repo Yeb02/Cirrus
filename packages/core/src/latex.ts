@@ -1,5 +1,6 @@
 // What the LaTeX chain shares between the interface and the main process (plan 4b): the default preamble, the tags it
-// reads, the escaping of the user's texts it injects, and the types its compile IPC exchanges.
+// reads, the escaping of the user's texts it injects, what makes a source a document of its own, and the types its
+// compile IPC exchanges.
 import type { FileRef, Id } from './model.ts';
 
 /** The global preamble of a base that never set one (spec 5.6, D5): never stored, as the default values of tags. */
@@ -78,6 +79,25 @@ const UNSAFE_LABEL = /[\\{}%#\p{Cc}]/u;
  */
 export function safeLabel(name: string): boolean {
   return name.length > 0 && name.length <= 2 * MAX_LABEL && [...name].length <= MAX_LABEL && !UNSAFE_LABEL.test(name);
+}
+
+// The source as both processes read it: the main process compiles a standalone document without the preamble, and the
+// interface's scanTex says the same of it.
+
+/** The source without its comments: from a « % » that no backslash escapes (« \% » is text, « \\% » a comment) to the end of its line. */
+export function withoutComments(source: string): string {
+  return source.split('\n').map((line) => {
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '\\') i++;
+      else if (line[i] === '%') return line.slice(0, i);
+    }
+    return line;
+  }).join('\n');
+}
+
+/** A document of its own: \documentclass outside a comment. It is compiled as it is, without the preamble. */
+export function isStandalone(source: string): boolean {
+  return /\\documentclass(?![A-Za-z@])/.test(withoutComments(source));
 }
 
 // The compile IPC (tasks 3 to 7).

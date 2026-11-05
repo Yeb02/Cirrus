@@ -192,6 +192,8 @@ export interface RenderParams {
   latexCacheMb: number;
   /** each with the end of its log, this long at most. */
   latexLogMaxKb: number;
+  /** A source changed is compiled once typing has paused this long; the labels' registry is rebuilt at most this often. */
+  latexTypingPauseMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -342,6 +344,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexSnippetWidthCm: 9,
   latexCacheMb: 500,
   latexLogMaxKb: 256,
+  latexTypingPauseMs: 300,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -522,6 +525,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexSnippetWidthCm', 'Largeur du résumé et de la relation compilés (cm)', A, 'LaTeX', 4, 20, 0.5),
   num('latexCacheMb', 'Taille du cache des PDF compilés (Mo)', A, 'LaTeX', 20, 20_000, 10),
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'LaTeX', 16, 4096, 16),
+  num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'LaTeX', 50, 3000, 10),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],

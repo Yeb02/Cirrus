@@ -4,8 +4,8 @@ import type { ConnectionKind, ConnectionRec, Id, Member, NodeRec, PlanType, Role
 import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot } from '../src/snapshot.ts';
 import {
-  applyOp, canonical, checkRecord, connRow, dataOf, emptyState, formerConnRow, formerNodeRow, groupMembers, memberOf, nodeRow, OpConflictError, phantomsIn,
-  phantomsOf, placedIn, placementOf, planRow, reindex, type State,
+  applyOp, canonical, checkRecord, connId, connRelation, connRow, dataOf, emptyState, formerConnRow, formerNodeRow, groupMembers, memberOf, nodeRow,
+  OpConflictError, phantomsIn, phantomsOf, placedIn, placementOf, planRow, reindex, relationRows, type State,
 } from '../src/state.ts';
 import * as oracleRules from './oracle/invariants.ts';
 import * as oracle from './oracle/state.ts';
@@ -544,6 +544,18 @@ test('le « avant » d’une connexion se compare à ses colonnes comme canonica
   ];
   for (const v of variants) expect(accepts(v), canonical(v)).toBe(canonical(v) === canonical(s.connections.get('X')));
   expect(variants.filter(accepts)).toHaveLength(6);
+});
+
+test('relationRows : les rangées des connexions à relation non vide, corbeille comprise, sans les rangées libérées (plan 4b)', () => {
+  const s = emptyState();
+  for (const id of ['a', 'b']) applyOp(s, nodeOp(id));
+  const add = (id: Id, relation: string, trashedAt?: number) => applyOp(s, { t: 'connection', before: null, after: { ...conn(id, ['a', 'b']), relation, trashedAt } });
+  add('W', 'w');
+  add('X', '');
+  add('Y', 'y', 7);
+  add('Z', 'z');
+  applyOp(s, { t: 'connection', before: s.connections.get('W')!, after: null });
+  expect(relationRows(s).map((r) => [connId(s, r), connRelation(s, r)])).toEqual([['Y', 'y'], ['Z', 'z']]);
 });
 
 test('pools : une connexion qui grandit est relogée en fin de pool, et grandit sur place quand elle y est déjà', () => {

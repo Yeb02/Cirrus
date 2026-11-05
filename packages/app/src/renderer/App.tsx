@@ -1,12 +1,14 @@
-import { type Action, type Id, type State } from '@cirrus/core';
+import { type Action, type Id, preambleText, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import type { Build } from './actions.ts';
 import { mark } from './bench.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
-import { viewsSettled } from './files/read.ts';
+import { loading, MB, viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
+import { LatexRegistry } from './latex/registry.ts';
+import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -23,6 +25,7 @@ import { EditSession, openState, type Result, SnapshotSaver } from './session.ts
 const TABS_KEY = 'cirrus.tabs';
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
+const NO_TEXTS: ReadonlyMap<string, string> = new Map();
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
 // so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
@@ -84,6 +87,14 @@ export function App() {
   fullRef.current = full;
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
   const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
+  /** The texts of the .tex, by hash, that the registry reads (plan 4b, D8), and the ceiling (textViewMaxMb) they were read under. */
+  const [texts, setTexts] = useState({ byHash: NO_TEXTS, maxMb: 0 });
+  const textsRef = useRef(texts);
+  textsRef.current = texts;
+  /** The labels and citation keys of the base (D7, D8), for the compile requests: the pop-ups and the full screen take it (tasks 5, 6). */
+  const [registry, setRegistry] = useState<LatexRegistry | null>(null);
+  /** The last registry built, and when: the next one reuses its analyses, and waits for the pause. */
+  const built = useRef<{ registry: LatexRegistry | null; at: number }>({ registry: null, at: -Infinity });
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -190,6 +201,48 @@ export function App() {
     const timer = setTimeout(() => { void window.cirrus.setSettings(diffFromDefaults(params)); }, params.settingsSaveDelayMs);
     return () => clearTimeout(timer);
   }, [params, state]);
+
+  // LaTeX (plan 4b, D2): pdfLaTeX prepared with the preamble once the state is loaded, and again when it changes. Not
+  // for the bench, which measures the graph.
+  const preamble = state ? preambleText(state) : null;
+  useEffect(() => {
+    if (preamble !== null && window.cirrus.launch.bench === undefined) window.cirrus.latexWarm(preamble);
+  }, [preamble]);
+
+  // The .tex not read yet, after each change of the state; the texts of the files gone are let go. Another ceiling
+  // reads them all again: one left empty as too long may fit now.
+  const rev = shown?.rev;
+  useEffect(() => {
+    if (!state) return;
+    const maxMb = params.textViewMaxMb, stop = new AbortController();
+    const have = textsRef.current.maxMb === maxMb ? textsRef.current.byHash : NO_TEXTS;
+    void loading(loadTexTexts(state, have, maxMb * MB, stop.signal)).then(
+      (byHash) => {
+        const now = textsRef.current;
+        if (now.maxMb !== maxMb || !sameTexts(byHash, now.byHash)) setTexts({ byHash, maxMb });
+      },
+      (e: unknown) => { if (!stop.signal.aborted) console.error('Lecture des .tex pour leurs labels :', e); },
+    );
+    return () => stop.abort();
+  }, [state, rev, params.textViewMaxMb]);
+
+  // The registry, built again when the state or the texts change, at most once per typing pause: at once after a
+  // quiet moment, else once the pause since the last build is over, with the state as it then is.
+  useEffect(() => {
+    if (!state) return;
+    const build = () => {
+      const r = LatexRegistry.build(state, texts.byHash, built.current.registry ?? undefined);
+      built.current = { registry: r, at: performance.now() };
+      setRegistry(r);
+    };
+    const wait = built.current.at + params.latexTypingPauseMs - performance.now();
+    if (wait <= 0) {
+      build();
+      return;
+    }
+    const timer = setTimeout(build, wait);
+    return () => clearTimeout(timer);
+  }, [state, rev, texts, params.latexTypingPauseMs]);
 
   /** Captures wait for the first drawn frame; a due snapshot waits for it too (R16). */
   const firstFrame = () => {
