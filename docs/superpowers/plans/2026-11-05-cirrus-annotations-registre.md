@@ -1011,3 +1011,188 @@ La revue (`task-6-review.md`) a demandé I1 et sept Minors, M1 à M7. M8 à M12 
   - suites, chaque paquet seul, `--maxWorkers=1` : `core` 132 (14 fichiers), `store` 23 (4), `view` 251 (31), `app` 419 (40). Tous passés. `tsc --noEmit -p .` sans erreur dans `core`, `store`, `view` et `app` ;
   - scénarios d’interface : 22 sur 22, dont un nouveau. « pendant l’attente d’un .bib posé… » : 2 000 entrées, un clic aussitôt ; Ctrl+V est refusé avec la raison, et le fantôme dit toujours « Enregistrement des fichiers .bib : 600 / 2 000… » ; le menu du fond ne s’ouvre pas ; rien n’est collé. Le scénario du dépôt sur le fond vérifie aussi que la notification est encore là après 5,5 s, puis qu’un clic la ferme ; celui du menu, qu’Échap la ferme. Les mesures de 2 000 entrées restent du même ordre (dépôt → fantôme 100 à 138 ms, clic → action 208 à 240 ms après l’enregistrement) ;
   - captures : non refaites. Le rendu des scènes de référence n’a pas changé : seule une notification qu’un clic ferme prend une classe nouvelle, et aucune capture n’en montre.
+
+## Tâche 7 : mesures, captures et spec
+
+### Fait
+
+- **`packages/app/scripts/cdp.mjs`**, nouveau : `launch`, la fenêtre de Cirrus pilotée par DevTools, sortie telle quelle de `interface.mjs`, qui l'importe désormais. Elle gagne `page.send`, une commande de DevTools telle quelle (la molette des mesures).
+- **`packages/app/scripts/mesures-annotations.mjs`**, nouveau, et `npm run mesures -w packages/app [-- bib|ouverture|defilement]` : les mesures de la tâche, trois passes chacune, sur des bases de test neuves, fenêtres en arrière-plan (`CIRRUS_BACKGROUND=1`), sans réseau.
+- **`packages/fixtures/scripts/add-reading.ts`**, nouveau : il ajoute à une base de test « lecture_de_mesure.pdf », 25 pages de 40 lignes (122 886 octets), fichier de deux nœuds du lobby :
+  - « Lecture de mesure (50 annotations) », en (−700, −300) : deux passages de chaque page annotés, d'une à trois lignes, 101 rectangles, une action chacun, comme l'app les fait ;
+  - « Lecture de mesure (sans annotation) », en (−700, −140) : le même fichier, sans annotation.
+  - La base de test elle-même ne change pas : ni les tests ni les captures ne lisent ce PDF.
+- **`GraphView.tsx`** :
+  - deux marques de mesure de plus, `cirrus:bib:read` (le fichier rendu par le principal) et `cirrus:bib:planned` (décodé, analysé, comparé à la base) ;
+  - l'enregistrement des `.bib` d'un import compte parmi les chargements des vues (`loading`), qu'une capture attend (`viewsSettled`).
+- **`scripts/captures.mjs`** :
+  - cinq scènes nouvelles (Vérifications) ;
+  - l'option `--only=<scène>,…` ;
+  - la sorte `publications`, qui branche `CIRRUS_PUBLICATIONS_REPLAY` sur `tests/data/publications` ;
+  - `import.from`, un fichier copié pour être déposé ;
+  - l'en-tête nomme `plan4c`, `--only` et le rejeu.
+- **`compare-captures.mjs`** : l'en-tête nomme `plan4c`.
+- **`docs/captures/plan4c/`**, nouveau : `pdf-surlignages`, `popup-annotations`, `plan-lecture`, `import-publication` et `bloc-bib`. Les autres dossiers de captures n'ont pas de README, celui-ci non plus.
+- **La spec** (`2026-11-02-cirrus-design.md`) :
+  - section 4 : la ligne de PDF.js, et un bloc « Annotations et publications (plan 4c) », sur le modèle du plan 4b ;
+  - section 5.2 : l'`anchor` d'un nœud ;
+  - section 5.4 : les tags d'une publication importée (`auteur`, `date_de_publication`, `clé_bibtex`, `doi`, `arxiv`), et le `.bib` en fichier du dossier ;
+  - sections 6.3 et 7 : l'exception des annotations retirées de leur dernier plan ;
+  - section 12 : la puce « Annotation de PDF » précisée, et le paragraphe « Fixé par le plan 4c » ;
+  - section 18 : les sources des publications (`PUBLICATION_SOURCES`) ;
+  - section 19 : les groupes « Annotations » et « Publications » sous « Fichiers ».
+
+### Mesures
+
+Toutes dans l'app construite, trois passes chacune, sur ce PC (Ryzen 7 7435HS, 16 Go, environ 3 Go libres), la machine chargée par le travail de l'utilisateur. Les fenêtres sont hors des écrans, sans focus (`CIRRUS_BACKGROUND=1`, focus émulé). Leurs images se suivent à environ 10,7 ms.
+
+- **L'analyse d'un `.bib` de 2 000 entrées** (seuil : moins d'une seconde).
+  - Deux fichiers :
+    - « réelles » : les cinquante références de `core/tests/data/reel-50.bib` (JabRef, Scholar, DBLP, Crossref, à la main : `@string`, `#`, mois, accents, `@comment`, `@preamble`, `%`), quarante fois, chaque copie avec sa clé, son titre, son DOI et son identifiant arXiv. Cela fait 2 000 entrées distinctes, 596 Ko, sans problème ni doublon ;
+    - « de la tâche 6 » : les 2 000 entrées de six lignes du scénario de la tâche 6, 359 Ko.
+  - `parseBibtex` seul, sous Node 26 (le même code que l'app) :
+
+    | Entrées | Passe 1 | Passe 2 | Passe 3 |
+    |---|---|---|---|
+    | réelles | 30,7 ms | 20,6 ms | 18,2 ms |
+    | de la tâche 6 | 14,7 ms | 12,5 ms | 10,9 ms |
+
+  - Dans l'app, par les marques de l'import, le fichier déposé sur le fond :
+
+    | Entrées, passe | Dépôt → fichier lu | Lu → analysé et planifié | → fantôme | Dépôt → fantôme |
+    |---|---|---|---|---|
+    | réelles, 1 | 25 ms | 111 ms | 21 ms | 156 ms |
+    | réelles, 2 | 13 ms | 87 ms | 14 ms | 114 ms |
+    | réelles, 3 | 12 ms | 88 ms | 13 ms | 114 ms |
+    | tâche 6, 1 | 16 ms | 95 ms | 8 ms | 119 ms |
+    | tâche 6, 2 | 13 ms | 114 ms | 10 ms | 137 ms |
+    | tâche 6, 3 | 14 ms | 88 ms | 9 ms | 111 ms |
+
+    « Analysé et planifié » compte le décodage, l'analyse, et la comparaison de chaque entrée avec la base et avec les entrées au-dessus d'elle (`planBib`). « → fantôme » compte la mesure des titres et le bloc.
+  - **Le seuil est tenu** : l'analyse seule prend de 11 à 31 ms, et tout ce qui précède le fantôme de 111 à 156 ms, au plus 16 % de la seconde.
+- **La pose de ces 2 000 entrées**, le clic donné une fois les `.bib` enregistrés. Il n'y a pas de seuil. La tâche 6 mesurait 202 à 266 ms jusqu'à l'action, et 562 à 642 ms jusqu'à l'image.
+
+  | Entrées, passe | Fantôme → `.bib` enregistrés | Clic → action | Clic → image |
+  |---|---|---|---|
+  | réelles, 1 | 5 709 ms | 223 ms | 598 ms |
+  | réelles, 2 | 5 659 ms | 238 ms | 614 ms |
+  | réelles, 3 | 5 431 ms | 241 ms | 614 ms |
+  | tâche 6, 1 | 5 312 ms | 246 ms | 615 ms |
+  | tâche 6, 2 | 5 311 ms | 561 ms | 938 ms |
+  | tâche 6, 3 | 5 095 ms | 205 ms | 581 ms |
+
+  - « Clic → action » va jusqu'à l'action appliquée à l'état de l'interface : calcul, écriture dans la base par le principal, application. « → image » va jusqu'à deux images de la boucle après elle. L'image qui montre les 2 000 nœuds vient environ 370 ms après l'action.
+  - Une passe sur six prend 561 ms jusqu'à l'action, comme la première passe du scénario de la tâche 6 dans `npm run interface` (510 ms). La cause n'est pas établie : le ramasse-miettes, ou l'écriture de la base.
+- **L'ouverture d'un PDF de 50 annotations** : « lecture_de_mesure.pdf » ouvert depuis le pop-up de son nœud, dans son aperçu (1 000 × 820 px). La mesure va du clic sur le fichier à la page 1 dessinée, à son texte, à ses 5 rectangles et à la marge de 50 lignes, puis à l'image qui suit.
+  - Le même fichier sans annotation sert de témoin, dans un aperçu plus étroit de la largeur de la marge (760 px). Les deux lecteurs ont 743 px et le même zoom, 91 %.
+  - À froid, le premier PDF de la session (pdf.js et son travailleur chargés) :
+
+    | Passe | Page 1 dessinée | Son texte | Ses surlignages | La marge | Tout → image | Sans annotation → image |
+    |---|---|---|---|---|---|---|
+    | 1 | 340 ms | 361 ms | 328 ms | 6 ms | 390 ms | 381 ms |
+    | 2 | 333 ms | 354 ms | 321 ms | 6 ms | 389 ms | 377 ms |
+    | 3 | 339 ms | 360 ms | 323 ms | 6 ms | 384 ms | 374 ms |
+
+  - À chaud, l'aperçu fermé puis rouvert :
+
+    | Passe | Page 1 dessinée | Son texte | Ses surlignages | La marge | Tout → image | Sans annotation → image |
+    |---|---|---|---|---|---|---|
+    | 1 | 29 ms | 21 ms | 14 ms | 3 ms | 45 ms | 34 ms |
+    | 2 | 27 ms | 21 ms | 14 ms | 5 ms | 45 ms | 35 ms |
+    | 3 | 27 ms | 22 ms | 14 ms | 3 ms | 45 ms | 35 ms |
+
+  - Les surlignages paraissent avant le canevas : leur couche vient avec la page lue, avant la fin de son dessin.
+  - Les annotations coûtent de 9 à 12 ms à froid, et 10 à 11 ms à chaud. La part de la marge et celle de la couche des surlignages n'ont pas été séparées.
+- **Le dessin des surlignages pendant le défilement.**
+  - Le geste : l'aperçu ouvert à la page 1, défilé jusqu'à la fin par la molette, 24 994 px en 11 s environ. C'est un vrai défilement de Chromium, par `Input.dispatchMouseEvent` (`mouseWheel`, 100 px toutes les 16 ms).
+  - Ce qui est noté :
+    - à chaque image, par une boucle `requestAnimationFrame` : son heure, le défilement, les pages en vue (par leur place et le défilement, sans mise en page), les pages qui portent une couche de surlignages, leurs rectangles et leurs canevas ;
+    - le rendu qui suit chaque image, par une tâche postée ;
+    - les images longues, de 50 ms et plus, par un `PerformanceObserver` (`long-animation-frame`).
+
+  | Passe | Images | Intervalle p50 | p95 | max | Au-delà de 1,5 × p50 | Rendu p95 | Images longues |
+  |---|---|---|---|---|---|---|---|
+  | 50 annotations, 1 | 1 051 | 10,6 ms | 11,2 ms | 21,3 ms | 1 | 1,3 ms | 0 |
+  | 50 annotations, 2 | 1 064 | 10,7 ms | 11,2 ms | 21,7 ms | 1 | 1,3 ms | 0 |
+  | 50 annotations, 3 | 1 056 | 10,7 ms | 11,2 ms | 22,3 ms | 2 | 1,3 ms | 0 |
+  | sans annotation, 1 | 1 073 | 10,7 ms | 11,2 ms | 15,8 ms | 0 | 1,2 ms | 0 |
+  | sans annotation, 2 | 1 054 | 10,6 ms | 11,2 ms | 14,2 ms | 0 | 1,2 ms | 0 |
+  | sans annotation, 3 | 1 034 | 10,7 ms | 11,2 ms | 17,1 ms | 1 | 1,2 ms | 0 |
+
+  - Le temps par image ne change pas avec les surlignages, ni en médiane ni au p95. Une ou deux images sur mille en prennent deux (21 à 22 ms), contre zéro ou une sans eux.
+  - **La preuve que seules les pages dessinées portent leurs surlignages**, la même aux trois passes :
+    - au plus 2 pages en vue, et au plus 4 avec leurs surlignages, sur 25 qui en ont toutes. Au plus 17 rectangles dans la page, sur 101 ;
+    - les 25 pages les ont reçus tour à tour ;
+    - aucune page ne les reçoit avant d'être en vue ou à une page d'elle (`pdfPagesAhead`, 1) : 0 fois ;
+    - ceux d'une page qui en sort restent en tout 34 ou 35 images, au plus 5, 6 et 5 images après (54, 64 et 53 ms), et toujours avec son canevas (0 fois sans). Le lecteur lâche la page au rendu suivant de React, et ses surlignages avec elle ;
+    - une page en vue et dessinée n'est jamais sans les siens (0 fois).
+  - Une première série, avant que les deux lecteurs aient la même largeur, a donné les mêmes ordres : intervalles p50 10,7 ms et p95 11,2 ms des deux côtés. Le témoin, sans marge, y avait un plus fort zoom et 33 485 px à défiler.
+
+### Décisions
+
+- Ruling: **les mesures ont leur script, `mesures-annotations.mjs`, et non des scénarios de `interface.mjs`.** Elles prennent environ quatre minutes (six lancements et six imports de 2 000 entrées), et n'ont ni réussite ni échec à vérifier. `launch` passe dans `cdp.mjs`, que les deux scripts importent.
+  - Options : des scénarios de `npm run interface`, qui s'allongerait d'autant ; un script à part (choix).
+  - Coût si faux : déplacer trois fonctions.
+- Ruling: **le PDF de 50 annotations vient d'un script de mesure, `add-reading.ts`, et non de la base de test.** La base de test, que lisent les tests et les captures, ne change pas.
+  - Le PDF a 25 pages : le défilement passe par beaucoup de pages et en laisse la plupart hors de la vue.
+  - Ses lignes commencent et finissent par leur numéro, `(07) … 07.`, pour que chaque passage commence et finisse sur une ligne à lui (`passage`).
+  - Un second nœud porte le même fichier, sans annotation : le témoin a les mêmes octets, et rien d'autre ne diffère.
+  - Coût si faux : une fonction de plus dans `fixtures/src`.
+- Ruling: **« les pages visibles » de la contrainte sont les pages que le lecteur dessine** : celles de la vue, et `pdfPagesAhead` (1) de chaque côté, comme leurs canevas.
+  - Options : les pages strictement en vue, par le réglage existant à 0 (`pdfPagesAhead`) ; les pages dessinées (choix).
+  - Pourquoi : un surlignage suit le dessin de sa page. Une page dessinée d'avance montre les siens dès qu'elle entre dans la vue, sans éclair. Mesuré : jamais avant, et partis avec le canevas.
+  - Coût si faux : `pdfPagesAhead` à 0, ou une condition dans `PdfPage`.
+- Ruling: **l'analyse se mesure de deux façons** : `parseBibtex` seul, sous Node, et dans l'app, entre deux marques nouvelles, `cirrus:bib:read` et `cirrus:bib:planned`.
+  - L'app ne sépare pas l'analyse de la comparaison avec la base : les deux se font dans `planBib`. Une marque dans `bib.ts`, un module pur, y mettrait un effet de bord.
+  - Coût si faux : nul.
+- Ruling: **les 2 000 entrées réelles sont `reel-50.bib` quarante fois**, chaque copie avec sa clé, son titre, son DOI et son identifiant arXiv, nouveau ou ancien.
+  - Sans cela, l'import écarterait 1 950 doublons, comme à la mesure de la tâche 5, et ne poserait que 50 publications.
+  - Vérifié par une sonde : 2 000 entrées, aucun problème, aucune marque de doublon commune.
+  - Coût si faux : nul.
+- Ruling: **l'enregistrement des `.bib` d'un import compte parmi les chargements des vues** (`loading`). Une capture attend ces chargements (`viewsSettled`).
+  - Sans cela, rien n'attendait l'enregistrement, et l'étiquette de `bloc-bib` pouvait dire « · fichiers .bib : n / 7 » selon le disque.
+  - Seule l'attente des captures lit cet ensemble. Pas de test unitaire : la capture le vérifie, identique d'une suite à l'autre.
+  - Coût si faux : nul pour l'utilisateur.
+- Ruling: **`import-publication` montre le dialogue avant « Importer », l'identifiant arXiv tapé dans son champ** (`CIRRUS_CLICK`, `type:arXiv:1706.03762`). Le rejeu est branché tout de même (`publications`), et rien ne part.
+  - Options :
+    - un PDF déposé sur le dialogue, l'identifiant trouvé dans le champ. Une capture ne sait pas déposer sur le dialogue : il prend un `FileList`, et un fichier fait par un script n'a pas de chemin (`getPathForFile`) ;
+    - l'import fait, sur le rejeu : le dialogue se ferme ;
+    - l'identifiant tapé (choix).
+  - Coût si faux : une option de capture qui dépose un fichier sur un élément, par DevTools.
+- Ruling: **`bloc-bib` dépose le `.bib` de la base de test sur le ciel par `CIRRUS_IMPORT`**, et non par le menu du fond et `CIRRUS_BIB_PICK`. La capture attend le dépôt avant ses clics et ses chargements. La réponse du sélecteur, une IPC, pouvait au contraire venir après l'image.
+  - Coût si faux : nul.
+- Ruling: **le cadre de deux scènes.**
+  - `pdf-surlignages` ferme le pop-up de la publication une fois l'aperçu ouvert (`.node-popup .close`). L'aperçu, de 1 000 px, s'ouvre à gauche du pop-up et le couvrait en partie.
+  - `plan-lecture` a sa vue, (0, −20) au zoom 1,6. Le cadrage par défaut du plan, au zoom 4,3 environ, coupait le titre du groupe.
+  - Coût si faux : nul.
+- Ruling: **`captures.mjs` prend `--only=<scène>,…`**, pour mettre une scène au point. Les références se vérifient toujours sur des suites entières.
+  - Coût si faux : nul.
+- Ruling: **la spec gagne aussi un bloc à la section 4 et une ligne à la section 6.3**, au-delà des sections demandées (5.2, 5.4, 7, 12, 18 et 19). Le plan 4b avait fait de même pour la section 4, et la section 6.3 disait « un objet retiré de son dernier plan y va » sans l'exception.
+  - Coût si faux : deux paragraphes.
+
+### Vérifications
+
+- **Tests** : aucun test nouveau. La tâche ajoute deux marques de mesure, une attente des captures, et des scripts de mesure et de capture (Rulings plus haut).
+- **Suites**, chaque paquet seul, `--maxWorkers=1` : `core` 132 (14 fichiers), `store` 23 (4), `fixtures` 13 (4), `view` 251 (31), `app` 419 (40), `bench/latex` 7 (1), `bench/rendu` 46 (7). Tous passés, 891 en tout.
+- **`tsc --noEmit -p .`** : sans erreur dans `core`, `store`, `fixtures` (ses scripts compris, donc `add-reading.ts`), `view`, `app`, `bench/latex` et `bench/rendu`.
+- **Scénarios d'interface** (`npm run interface`) : 22 sur 22. Aucun n'est ajouté : les mesures ont leur script.
+- **Captures** :
+  - deux suites neuves de 29 images, sur le code final, dans le scratchpad ;
+  - **déterminisme** : les deux suites sont identiques au pixel (`compare-captures.mjs`, 29 sur 29, 0 à regarder), et même octet pour octet (`cmp`, 29 sur 29) ;
+  - les cinq images nouvelles de la première suite sont la référence `plan4c` ;
+  - la seconde suite, contre `reference-3c` : 11 sur 11 à 0 pixel ; contre `plan4a` : 8 sur 8 ; contre `plan4b` : 5 sur 5 ; contre `plan4c` : 5 sur 5. La première, contre les trois premières, est aussi à 0 pixel ;
+  - aucune image des références existantes n'est refaite ;
+  - les cinq scènes, regardées :
+    - `pdf-surlignages` : le chapitre à 91 %, le passage de la page 1 surligné sur ses deux lignes, et la marge de trois annotations. On y lit la version précédente, « dans aucun plan » ; la page 1, « Lecture », avec son liseré ; la page 2, « dans aucun plan » ;
+    - `popup-annotations` : le pop-up entier de la publication, ses fichiers et sa section « Annotations » de trois lignes ;
+    - `plan-lecture` : le groupe « An Introduction to Kolmogorov Complexity and Its Applications », son titre entier, et l'annotation de la page 1 dans son enveloppe ;
+    - `import-publication` : le dialogue en haut du graphe, « arXiv:1706.03762 » dans son champ, « Importer », l'indication et « Fermer » ;
+    - `bloc-bib` : « Importer 7 publications » au milieu du contour du bloc (678 × 326 px), sur le ciel, à gauche de la publication.
+
+### Notes
+
+- Les mesures se refont par `npm run mesures -w packages/app`, ou par `node scripts/mesures-annotations.mjs bib|ouverture|defilement` après une construction.
+- Points d'attention :
+  - l'image qui suit la pose de 2 000 publications vient environ 370 ms après l'action : la scène se refait avec 2 000 nœuds de plus. C'est l'ordre de la tâche 6 ;
+  - une pose sur six a pris 561 ms jusqu'à l'action, au lieu d'environ 230 ms, sans cause établie ;
+  - l'ouverture à froid d'un PDF reste dominée par le chargement de pdf.js, avec ou sans annotations : environ 0,34 s pour la première page.

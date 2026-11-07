@@ -75,7 +75,7 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
     - la couche reste mince : un second moteur WebGPU reste possible.
   - Interface (panneaux, pop-ups, onglets) : React.
   - Éditeur .tex : CodeMirror 6. Depuis le plan 4a, il affiche aussi le texte et le code, en lecture seule. Depuis le plan 4b, il modifie les .tex, les résumés, les relations et le préambule, avec suggestions et diagnostics.
-  - Lecture et annotation de PDF : PDF.js. Depuis le plan 4a, il tourne dans un lecteur à nous ; l'annotation vient au plan 4c. Depuis le plan 4b, il dessine aussi les aperçus compilés.
+  - Lecture et annotation de PDF : PDF.js. Depuis le plan 4a, il tourne dans un lecteur à nous. Depuis le plan 4b, il dessine aussi les aperçus compilés, et depuis le plan 4c les surlignages des annotations (section 12). Il lit aussi, à l'import d'une publication, les premières pages d'un PDF déposé.
   - Octets des fichiers : un protocole `cirrus-file:`, servi par le principal (plan 4a).
 - **Base locale :** SQLite, avec les entrées en JSON et les fichiers des nœuds tels quels sur le disque.
 - **Serveur :** Node.js et TypeScript, SQLite et fichiers sur disque. Le serveur MCP utilise le SDK TypeScript officiel de MCP, la veille le SDK TypeScript d'Anthropic.
@@ -115,6 +115,11 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - **Cache :** les PDF compilés vont dans `<base>/latex/cache`, retrouvés par l'empreinte de tout ce qui entre dans la compilation, jamais synchronisés. L'interface les lit par `cirrus-file://latex/<empreinte>/<nom>`, comme les fichiers du magasin.
 - **Registre des labels :** il est tenu par l'interface, qui a l'état. Le principal reste sans état : la requête de compilation porte les titres et les citations dont la source a besoin.
 
+**Annotations et publications (plan 4c) :** les décisions D1 à D9 du plan, que l'utilisateur a approuvé le 2026-11-07. Ce qu'elles donnent à l'usage est à la section 12.
+- **Annotations :** un nœud ordinaire qui porte un champ `anchor` (5.2). L'interface en tient un index par PDF et par version, dérivé de l'état comme le registre des labels. Il parcourt les nœuds à chaque changement de l'état, jamais à chaque image, et ne relit que les annotations changées : de 1,1 à 1,2 ms à 50 000 nœuds et 500 annotations [C].
+- **Réseau :** seul le principal interroge le réseau pour une publication, par un module unique de sources (`PUBLICATION_SOURCES`, section 18), à la demande explicite de l'utilisateur.
+- **Lecture :** le BibTeX et le CSL-JSON se lisent par du code à nous, sans dépendance. L'interface construit les nœuds, comme toutes les actions. Un `.bib` déposé ou choisi est lu par le principal, borné, puis décodé et analysé par l'interface ; les `.bib` des entrées sont écrits au magasin par lots [C].
+
 **Bancs de mesure en tête de plan :** voir la section 21.
 
 ## 5. Modèle de données
@@ -133,6 +138,13 @@ Modifier le contenu d'un nœud ou d'une connexion depuis n'importe quel plan le 
 - **Tags :** voir 5.4.
 - **Dossier :** une liste de fichiers à plat, sans sous-dossiers [C]. Par exemple `Enoncé_détaillé.tex` ou `calcul_mdl_séquence_aléatoire.py`. Les noms accentués sont attendus.
 - **Copies, jamais de pointeurs :** les fichiers d'un nœud vivent dans le dossier de données de l'app. Importer un fichier, par exemple en le déposant, en fait une copie, et modifier l'original ensuite n'affecte pas la base. Les fichiers ne sont pas modifiés hors de Cirrus : il n'y a ni surveillance de dossiers ni prise en compte de modifications extérieures.
+- **Ancre** (plan 4c, D1) : un nœud d'annotation porte un champ `anchor`. C'est un nœud ordinaire, qu'on renomme, résume, tague et pose comme les autres (section 12).
+  - Il contient le nœud du PDF, le nom du fichier, l'empreinte de sa version, la page (à partir de 1), les rectangles du passage et le texte surligné.
+  - Les rectangles sont dans les coordonnées de la page PDF : des points, l'axe y vers le haut, un rectangle par ligne.
+  - L'empreinte désigne la version annotée, qui reste au magasin quand le fichier est réimporté (section 12).
+  - Chaque enregistrement est vérifié avant d'être écrit : de 1 à 500 rectangles, au plus 20 000 caractères [C]. Le PDF n'est contrôlé qu'à la création : il peut ensuite aller à la corbeille, ou son fichier être remplacé.
+  - Un nœud sans ancre n'a pas ce champ : une base plus ancienne s'ouvre sans changement, et l'instantané garde son format [C].
+  - Son titre est le début du passage, `annotationTitleChars` caractères (80), puis « … ».
 
 Exemple fourni par l'utilisateur : nœud « Minimum Description Length Principle (MDL) », avec pour résumé « Énonce que le meilleur modèle génératif d'un jeu de données est celui qui le compresse le plus ». Ses tags sont `statut_epistémique:consensus_scientifique` (rang 5), `pertinence:central` (rang 5), `nature:principe`, `théorie de l'information`, `algorithmie`, `axiome` et `provenance:externe`. Son dossier contient les deux fichiers cités plus haut.
 
@@ -158,7 +170,14 @@ La recherche, le MCP, les badges et la santé du graphe excluent les connexions 
 - **Valeurs par défaut :** elles ne sont pas stockées. Ajouter plus tard une clé obligatoire ne touche donc aucun nœud, et la santé du graphe peut lister les valeurs jamais renseignées.
 - **Renommage :** il est global, ce qui évite que `ml` et `machine-learning` coexistent.
 - **Labels LaTeX :** leur registre est dérivé des `\label` des .tex, des résumés (une équation, par exemple) et des relations, et du tag `label`, qui donne un label au titre d'un nœud (`label: mdl`, un seul par nœud : `\ref{mdl}` désigne le nœud) (décision de l'utilisateur, 2026-11-05). Toutes ces sortes partagent un même registre, et chaque label est unique dans toute la base : un doublon apparaît en rouge (section 13).
-- **Publications :** un nœud de publication porte les tags `auteur:…` (multivalué, `auteur:Anon` si inconnu) et `date_de_publication:…`. Il porte aussi sa clé BibTeX pour `\cite`, dans le tag `clé_bibtex` (`clé_bibtex: li2008`) [C, plan 4b : un tag plutôt qu'un champ dédié. Il se synchronise, se cherche et se modifie comme les autres, sans changer le modèle]. Une clé portée par deux nœuds apparaît en rouge, comme un label en double. Le plan 4c remplira ce tag à l'import d'une publication.
+- **Publications :** un nœud de publication porte les tags `auteur:…` (multivalué, `auteur:Anon` si inconnu) et `date_de_publication:…`. Il porte aussi sa clé BibTeX pour `\cite`, dans le tag `clé_bibtex` (`clé_bibtex: li2008`) [C, plan 4b : un tag plutôt qu'un champ dédié. Il se synchronise, se cherche et se modifie comme les autres, sans changer le modèle]. Une clé portée par deux nœuds apparaît en rouge, comme un label en double.
+  - **Tags d'une publication importée** (plan 4c, D7) :
+    - `auteur`, un par auteur, « Prénom Nom », au plus `publicationMaxAuthors` (50) [C]. Le `.bib` les garde tous. Sans auteur connu, l'import n'en met aucun [C] ;
+    - `date_de_publication`, l'année ;
+    - `clé_bibtex`, la clé de l'entrée (section 12) ;
+    - `doi`, tel que donné, ou `arxiv`, l'identifiant sans sa version. Une entrée de `.bib` qui a les deux porte les deux [C].
+  - `doi` et `arxiv` sont des clés de texte, à une valeur, comme `clé_bibtex`. L'import n'ajoute aucune clé au registre : une clé absente du registre est acceptée telle quelle [C].
+  - **Le `.bib` est un fichier du dossier** (D7) : l'entrée BibTeX d'une publication est un fichier `<clé>.bib` de son nœud, et non un champ. Elle se synchronise, se versionne et se lit comme les autres fichiers. C'est l'entrée réécrite par Cirrus, un champ par ligne, les macros `@string` de son fichier remplacées : elle se lit seule [C]. Le document (section 15) assemblera son `.bib` à partir de ces fichiers [C].
 
 ### 5.5 Plan
 
@@ -213,7 +232,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 
 - **Contenu :** toutes les éditions entrent dans l'historique, déplacements et changements d'échelle compris.
 - **Historique par nœud :** on peut consulter les versions et restaurer un nœud seul. Une vue des différences textuelles est fournie.
-- **Corbeille :** un objet retiré de son dernier plan y va.
+- **Corbeille :** un objet retiré de son dernier plan y va, sauf une annotation (section 7).
 - **Copies :** l'historique complet est conservé sur chaque PC.
 - **Poids de l'historique :** une fenêtre à part dans le menu principal, d'usage très exceptionnel, par exemple pour un PDF sur lequel l'utilisateur s'est ravisé. Elle affiche le poids par nœud et par type, et permet de supprimer un contenu en gardant la trace de son existence : nom, date et taille. Une restauration affiche alors « contenu supprimé ».
 - **Plus tard :** un curseur temporel en lecture seule.
@@ -243,6 +262,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 - Le dialogue indique combien d'instances existent et avertit s'il s'agit de la dernière.
 - Cette règle remplace celle de la spécification, selon laquelle un plan ne pouvait supprimer que ses objets exclusifs. Le dialogue et la corbeille sont les garde-fous.
 - Un objet retiré de son dernier plan va à la corbeille.
+- **Exception, les annotations** (plan 4c) [C] : une annotation, un nœud qui porte une ancre (5.2), retirée de son dernier plan reste vivante, dans aucun plan, comme à sa création (section 12). Elle reste ainsi dans la marge du lecteur et dans le pop-up de son PDF. « Partout » la met à la corbeille, comme tout nœud. L'avertissement du dernier plan ne la nomme pas.
 
 **Cacher une sélection** (menu de sélection) retire les éléments de ce plan.
 - Un avertissement apparaît si c'est le dernier plan qui contient certains éléments.
@@ -447,7 +467,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Mise à jour d'un fichier :** on réimporte explicitement, en déposant la nouvelle version sur le nœud. Elle remplace l'ancienne, qui reste dans l'historique [C].
 - **Édition :** le titre, le résumé, les tags, l'import de fichiers et la création de nœuds se font dans la fenêtre principale. Un .tex se modifie dans son plein écran (plan 4b).
 - **Création d'un nœud :** depuis le menu contextuel du fond, le nœud suit le curseur et un clic le pose [C].
-- **Annotation de PDF :** surligner un passage crée un nœud d'annotation qui porte le passage, le PDF et la page. Le nœud du PDF devient un groupe pour le rendu, ses annotations en étant les membres.
+- **Annotation de PDF :** surligner un passage crée un nœud d'annotation qui porte le passage, le PDF et la page. Le nœud du PDF devient un groupe pour le rendu, ses annotations en étant les membres, dans les plans où elles y sont déposées (plan 4c).
   - **Placement [C] :** pour ne pas interrompre la lecture et ne rien placer automatiquement, une annotation n'apparaît dans aucun plan à sa création. Elle est listée dans la marge du lecteur PDF et dans le pop-up du nœud du PDF.
   - **Ajout à un plan :** l'utilisateur l'y dépose depuis cette liste. La déposer dans l'enveloppe du PDF crée une inclusion ordinaire, avec la règle d'entrée et la question « partout ou ici seulement » (section 10).
   - **Retour au PDF :** un clic sur l'annotation ouvre le PDF à la bonne page.
@@ -528,6 +548,51 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - **Un .tex plus grand que `textViewMaxMb`** s'affiche en lecture seule, avec la raison et sans aperçu [C].
   - L'aperçu d'un .tex, à côté du pop-up, montre son PDF compilé.
 - **Préambule :** il se modifie dans un plein écran du même genre, ouvert depuis les réglages (section 13, D5).
+
+**Fixé par le plan 4c** (approuvé par l'utilisateur le 2026-11-07) : les annotations de PDF, l'import d'une publication par son identifiant ou son PDF, et l'import d'un fichier `.bib`. [C] marque, comme plus haut, un choix de Claude fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-05-cirrus-annotations-registre.md`) en donne la raison et le coût. Le champ `anchor` est à la section 5.2, les tags des publications à la section 5.4, les sources du réseau à la section 18.
+
+- **Surligner :** on sélectionne du texte dans un lecteur PDF, dans l'aperçu ou en plein écran.
+  - « Annoter » paraît au bord droit, sous la dernière ligne de la sélection, une fois l'appui terminé [C]. Ctrl+Maj+A fait de même [C]. Une sélection vide ou faite de blancs n'offre rien.
+  - Une sélection qui passe d'une page à l'autre est coupée à la fin de la première [C] : une annotation, une page.
+  - Un passage trop long est refusé, et la notification dit sa longueur et la borne : 20 000 caractères ou 500 lignes [C]. La sélection reste, pour qu'on la raccourcisse.
+  - L'annotation naît dans aucun plan. C'est une action, et Ctrl+Z la défait. En plein écran, Ctrl+Z et Ctrl+Y ne défont et ne refont que les pas faits dans ce plein écran [C].
+- **Le surlignage :** un rectangle translucide par ligne, de la couleur `annotationColor` (un jaune, #ffd23f [C]) à `annotationOpacity` (0,35), multiplié avec la page : le texte reste noir [C]. Il reste sur son texte à tous les zooms : 0,5 pt d'écart au plus, mesuré à 91 % et à 277 %. Le lecteur ne dessine que les surlignages des pages qu'il dessine : celles de la vue, et `pdfPagesAhead` (1) de chaque côté (mesures, plus bas).
+- **La marge du lecteur :** à droite du PDF, repliable, `annotationMarginPx` de large (240 px), au plus la moitié de la vue [C].
+  - Elle ne paraît que si le fichier lu a des annotations [C]. Elle liste celles de ce fichier, dans l'ordre des pages, puis de haut en bas.
+  - Chaque ligne montre le début du passage, la page, les plans où l'annotation figure, ou « dans aucun plan », et « sur une version précédente » s'il y a lieu. Celles de la version montrée ont un liseré [C].
+  - Son repli se garde par fichier, comme la page lue [C].
+- **Le pop-up d'un PDF** a une section « Annotations », après « Fichiers », quand il en a : la liste de la marge [C]. Le pop-up d'une annotation commence par « Annotation de « <PDF> », p. <n> », qui ouvre le PDF là [C].
+- **Ouvrir une annotation :** un clic sur une ligne ouvre le PDF à sa page, le passage centré dans la vue et clignotant pendant `annotationFlashMs` (1,2 s). Depuis un pop-up, il s'ouvre dans l'aperçu de son fichier, à côté du pop-up [C]. Ce qui manque se dit à la place, et la ligne ne s'ouvre plus : le PDF à la corbeille ou absent, le fichier retiré du nœud, la version absente du magasin.
+- **Versions** (D2) : une annotation porte sur la version du PDF où elle a été faite, que le magasin garde après une réimportation. Le lecteur ne dessine sur un PDF que les annotations de sa version. Celle d'une version précédente s'ouvre sur sa version, dans la même vue, sous une bannière et son bouton « Revenir à la version actuelle » [C].
+- **Poser une annotation dans un plan :** on glisse une ligne de la marge de l'aperçu, ou du pop-up, sur le graphe. Le plein écran est modal : on n'y glisse rien.
+  - Elle prend la place du dépôt, au cran lisible. Lâchée dans l'enveloppe d'un groupe, elle y entre. Lâchée sur un nœud simple, celui de son PDF ou un autre, elle y entre aussi, et ce nœud devient un groupe, comme pour un nœud déplacé (section 10) [C].
+  - Le nœud ou le groupe qui la recevrait s'illumine pendant le survol. La question « partout ou ici seulement » suit la section 10.
+  - Déjà dans ce plan : « Déjà dans ce plan. », et la vue se cadre sur elle [C]. Pendant un geste ou une question, le dépôt est refusé et la notification dit pourquoi [C].
+  - C'est une action, et Ctrl+Z la défait. Retirée de son dernier plan, l'annotation reste vivante (section 7).
+- **Importer une publication par son identifiant :** « Importer une publication… », dans le menu du fond, ouvre un dialogue en haut du graphe. Il ne bloque rien [C], et Échap ou « Fermer » le ferme.
+  - On y tape un DOI, un identifiant arXiv, nouveau ou ancien, avec ou sans sa version, ou un lien vers l'un d'eux.
+  - Seul « Importer », ou Entrée, touche le réseau (section 18).
+  - Le nœud se pose au point du clic droit, au cran lisible, même si la vue a bougé [C]. Son titre est celui de l'article, les accents LaTeX convertis. Il porte les tags de la section 5.4, et son `<clé>.bib`. L'import est une action, qu'un Ctrl+Z retire.
+  - Le PDF d'un article arXiv se télécharge seul, et vient au nœud. S'il ne vient pas, la publication vient sans lui, et une notification dit pourquoi [C]. En attendant le serveur, c'est le PC qui le télécharge (demande de l'utilisateur, 2026-11-05).
+  - Un échec se dit en français dans le dialogue, qui reste ouvert : « Identifiant non reconnu. », « Publication introuvable. », « Pas de connexion. »… Rien n'est créé.
+- **Importer une publication par son PDF** (D8) : un PDF déposé sur le dialogue entre au magasin. Ses métadonnées et ses `publicationPdfPages` premières pages (2) sont lues, à la recherche d'un DOI ou d'un identifiant arXiv. Trouvé, il remplit le champ, et « Importer » garde ce PDF. Sinon, « Créer le nœud » crée le nœud sous le titre des métadonnées, ou le nom du fichier, le PDF attaché, et l'utilisateur complète.
+- **La clé BibTeX :** celle de l'entrée si c'est une clé sûre : des lettres et des chiffres ASCII, et « _ . + - » [C]. Sinon, le nom de famille du premier auteur et l'année (`vaswani2017`), puis `vaswani2017b`, et ainsi de suite. La clé de DataCite, une adresse, et celles de DBLP, avec « : » et « / », sont donc remplacées.
+- **Les doublons :** une publication qui a déjà ce DOI, cet identifiant arXiv, cette clé, ou ce titre et cette année [C], n'est pas recréée, et la notification nomme le nœud existant. Une clé, ou un titre et une année, ne comptent que si aucun identifiant ne les contredit [C]. Un nœud à la corbeille ne compte pas.
+- **Importer un fichier `.bib`** (D9) : on le dépose sur le fond du graphe, ou on passe par « Importer un fichier .bib… » dans le menu du fond.
+  - Sans réseau, ses entrées deviennent des publications, avec leurs doublons écartés, ceux de la base comme ceux du fichier.
+  - Elles suivent le curseur en un bloc compact : le fantôme du collage, « Importer 7 publications », et le contour du bloc au cran lisible. Le bloc compte `ceil(√n)` colonnes, `bibBlockGapPx` (24 px) entre les boîtes [C].
+  - Pendant que le bloc suit le curseur, leurs `.bib` s'enregistrent en fond, et le fantôme dit l'avancement [C].
+  - Un clic pose tout le bloc, en une seule action, « Importer <n> publications », qu'un seul Ctrl+Z retire. Échap abandonne la pose. Après le clic, on attend l'enregistrement, et rien d'autre ne commence [C].
+  - La notification dit les publications posées, les doublons écartés en nommant le nœud existant, et les entrées abîmées par leur ligne, `bibNoticeLines` (5) par liste. Elle reste `bibNoticeMs` (20 s), et un clic ou Échap la ferment [C].
+  - Un `.bib` déposé sur un nœud en devient un fichier, comme tout fichier. Déposé sur le fond avec d'autres fichiers, il n'est pas importé [C].
+- **La lecture d'un `.bib`** se fait par un analyseur à nous : macros `@string`, concaténations `#`, mois, `@comment`, `@preamble`, commentaires `%`, accents LaTeX, noms « von » et « Jr ». Une entrée abîmée est signalée à sa ligne, et la lecture reprend à la suivante. Un fichier de plus de 16 Mi caractères n'est pas lu, et le temps de lecture d'un fichier abîmé est borné [C].
+- **Mesures** (tâche 7, sur ce PC, la machine chargée par le travail de l'utilisateur ; trois passes chacune, dans l'app construite, fenêtre en arrière-plan) :
+  - un `.bib` de 2 000 entrées s'analyse en 11 à 31 ms : l'analyseur seul, sur 2 000 entrées réelles en forme (600 Ko) ou sur celles de la tâche 6. Dans l'app, du dépôt au fantôme, il faut 111 à 156 ms, dont 87 à 114 ms pour décoder, analyser et comparer à la base. Le seuil d'une seconde est tenu ;
+  - les 2 000 `.bib` s'enregistrent en 5,1 à 5,7 s pendant que le bloc suit le curseur. Un clic donné ensuite pose le bloc en 205 à 561 ms, et l'image qui le montre vient 0,58 à 0,94 s après le clic ;
+  - un PDF de 25 pages et 50 annotations s'ouvre dans l'aperçu en 384 à 390 ms à froid, le premier de la session : sa première page, ses surlignages et la marge de 50 lignes, jusqu'à l'image. Le même fichier sans annotation s'ouvre en 374 à 381 ms. À chaud : 45 ms, contre 34 à 35 ms ;
+  - à la molette, de la première page à la dernière (25 000 px en 11 s), les images se suivent à 10,7 ms en médiane et 11,2 ms au p95, avec ou sans surlignages, et aucune ne dépasse 50 ms. La plus longue prend 21 à 22 ms avec eux, 14 à 17 ms sans ;
+  - pendant ce défilement, 4 pages au plus sur 25 portent leurs surlignages, et 17 rectangles au plus sur 101 sont dans la page. Aucune page ne les reçoit avant d'entrer dans la vue ± 1 page. Ceux d'une page qui en sort partent avec son canevas, au plus 6 images (64 ms) plus tard.
+- **Hors du plan 4c :** la récupération par le serveur (plans 5 et 9) ; un PDF trouvé hors d'arXiv ; l'annotation à main levée ou par zone ; la veille (section 16.2).
 
 ## 13. LaTeX
 
@@ -732,6 +797,14 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - les PC ne téléchargeront que depuis lui, et passer à une TeX Live plus récente deviendra un acte délibéré ;
   - toutes les sources de téléchargement sont déjà dans un seul module du principal (`LATEX_SOURCES`), et `tlmgr` nomme son dépôt à chaque appel : les installations faites avant le serveur le suivront aussi ;
   - jusqu'à ce que le serveur existe (plans 5 et 9), les PC vont sur Internet. Le gel de printemps de TeX Live, vers avril 2027, est l'échéance.
+- **Sources des publications** (plan 4c, D5, D6) : elles iront au serveur, qui récupérera les métadonnées et le PDF d'une publication (section 12).
+  - Toutes les adresses sont dans un seul module du principal, `PUBLICATION_SOURCES`, comme `LATEX_SOURCES`. Les plans 5 et 9 le tourneront vers le serveur. D'ici là, le principal du PC va sur Internet.
+  - Le principal demande à `doi.org` le CSL-JSON (titre, auteurs, date) et le BibTeX de l'entrée, par la négociation de contenu. Un identifiant arXiv passe par le DOI que lui donne arXiv (`10.48550/arXiv.<id>`). Le PDF d'un article arXiv vient de `https://arxiv.org/pdf/<id>`.
+  - Seuls sont permis `doi.org`, `api.crossref.org`, `data.crossref.org`, `api.datacite.org`, `data.datacite.org`, `data.crosscite.org` [C] et `arxiv.org`. `doi.org` renvoie un DOI de DataCite vers `data.crosscite.org`, qui succède à `data.datacite.org` (constaté le 2026-11-07).
+  - Tout passe en HTTPS. Chaque redirection est vérifiée avant d'être suivie, 5 au plus [C]. Chaque réponse est lue sous son plafond (`publicationMaxKb`, 2 Mo ; `maxImportMb` pour le PDF) et dans son délai (`publicationTimeoutMs`, 20 s), puis lue comme des données, jamais comme du code. Aucun cookie n'est envoyé ni gardé, aucune adresse électronique non plus [C].
+  - Le réseau ne sert qu'à la demande explicite de l'utilisateur : « Importer », jamais au démarrage ni en arrière-plan. Un `.bib` s'importe sans réseau.
+  - Les liens qu'un utilisateur colle (`dx.doi.org`, `www.arxiv.org`, `export.arxiv.org`…) se lisent comme des identifiants, sans être demandés : ce ne sont pas des sources [C].
+  - Les tests et les captures rejouent des réponses enregistrées, et n'atteignent jamais le réseau.
 - **Sécurité** (« ne transige pas, mais pas overkill », la VM étant dédiée) [C, accepté] :
   - administration uniquement par clé SSH ;
   - pare-feu n'ouvrant que HTTPS et SSH ;
@@ -778,6 +851,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - délais de pause et de synchro ;
   - réponse par défaut des dialogues « partout ou ici seulement ».
 - **LaTeX (plan 4b) :** les réglages de la chaîne forment la rubrique « LaTeX ». La largeur du résumé compilé (9 cm) et la liste des paquets ajoutés y sont des réglages principaux (2026-11-07) ; les autres sont des avancés : les processus préparés, les délais, la largeur et l'agrandissement du résumé compilé, le cache, le journal, la pause de frappe, l'enregistrement d'un .tex, les suggestions de l'éditeur, le délai de `tlmgr`, l'attente d'un téléchargement bloqué, le délai avant de chercher à nouveau un paquet, et la liste partagée des paquets ajoutés (`latexPackages`). En tête de la rubrique, un bloc dit l'état de LaTeX, propose de l'installer et ouvre le préambule, qui est une donnée de la base et non un réglage (section 13, D5).
+- **Fichiers (plan 4c) :** les groupes « Annotations » et « Publications » suivent « PDF » dans la rubrique « Fichiers » [C]. La couleur du surlignage y est un réglage principal. Les autres sont des avancés : l'opacité du surlignage, la durée du clignotement, la longueur du titre d'une annotation et la largeur de la marge ; pour les publications, le plafond et le délai des réponses du réseau, les auteurs gardés en tags, les pages lues d'un PDF déposé, l'écart entre les boîtes du bloc d'un `.bib`, et les lignes et la durée de sa notification.
 - **Mode performance :** envisageable si les bancs de mesure le rendent nécessaire (section 21). Un interrupteur dans les paramètres graphiques allégerait alors les effets coûteux : flou des enveloppes, rubans à largeur variable, ciel étoilé, résolution du rendu.
 - **Stockage :** les valeurs sont centralisées sur le serveur et communes à tous les PC. Des valeurs propres à un PC seront revues plus tard si besoin.
 - **Hors ligne :** chaque PC garde sa copie, et la modification la plus récente l'emporte à la reconnexion.

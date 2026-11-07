@@ -1,13 +1,15 @@
-// The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace]
+// The reference captures (plan 3c): npm run captures -w packages/app -- <dossier> [--replace] [--only=<scène>,<scène>]
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
-// suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a and
-// docs/captures/plan4b (those new in plans 4a and 4b), each compared on its own images. A folder that already holds
-// files is refused, so a reference is never replaced by mistake; --replace removes its captures first (to remake a
-// reference on purpose). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be there; the app takes
-// each image once its compilations are done.
+// suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a,
+// docs/captures/plan4b and docs/captures/plan4c (those new in plans 4a, 4b and 4c), each compared on its own images. A
+// folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
+// captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
+// reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
+// there; the app takes each image once its compilations are done. Plan 4c's scenes never reach the network: an import
+// replays recorded answers (CIRRUS_PUBLICATIONS_REPLAY, tests/data/publications), a .bib is dropped by CIRRUS_IMPORT.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -18,8 +20,9 @@ const appDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const targets = args.filter((a) => !a.startsWith('--'));
 const replace = args.includes('--replace');
-if (targets.length !== 1 || args.some((a) => a.startsWith('--') && a !== '--replace')) {
-  console.error('Usage : npm run captures -w packages/app -- <dossier> [--replace]');
+const only = args.find((a) => a.startsWith('--only='))?.slice(7).split(',').filter(Boolean);
+if (targets.length !== 1 || args.some((a) => a.startsWith('--') && a !== '--replace' && !a.startsWith('--only='))) {
+  console.error('Usage : npm run captures -w packages/app -- <dossier> [--replace] [--only=<scène>,<scène>]');
   process.exit(2);
 }
 const out = resolve(process.env.INIT_CWD ?? process.cwd(), targets[0]);
@@ -97,6 +100,26 @@ const SCENES = [
   },
   // The preamble's editor, from « Modifier le préambule… » in the settings' LaTeX rubric (opened first), its sample compiled.
   { name: 'preambule', panel: true, click: '.settings .rubric[data-rubric="LaTeX"] .rubric-title,.settings .latex-actions button:last-child' },
+  // Plan 4c: the publication's chapter in its preview beside its pop-up, wide enough to read it at the fit beside its
+  // margin: page 1's passage highlighted, the margin's three annotations (one in « Lecture », one in no plan, one on
+  // the version before the re-import).
+  {
+    name: 'pdf-surlignages', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { previewWidthPx: 1000, previewHeightPx: 820 },
+    click: '.file[data-name="Li_Vitányi_chapitre_1.pdf"],.node-popup .close',
+  },
+  // The publication's pop-up, tall enough to show its section « Annotations » under its files.
+  { name: 'popup-annotations', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { popupHeightPx: 940 } },
+  // « Lecture »: the publication's node a group there, its page 1 annotation its member.
+  { name: 'plan-lecture', plan: 'Lecture', view: '0,-20,1.6' },
+  // « Importer une publication… » from the menu of the sky's background (1530, 72 under the tabs), an arXiv identifier
+  // typed in its field, before « Importer »: nothing asked of the network, and the replay stands in for it anyway.
+  {
+    name: 'import-publication', view: '-420,-300,1', pointer: 'down 1530 72 right; up 1530 72 right | click .context-menu button:nth-child(2)',
+    click: 'type:arXiv:1706.03762', publications: true,
+  },
+  // The test base's .bib (fixtures/assets) dropped on the sky (CIRRUS_IMPORT): its block's ghost, « Importer 7
+  // publications » and its outline at the readable step, once its .bib are stored; nothing made before a click.
+  { name: 'bloc-bib', view: '-420,-300,1', import: { at: '350,250', name: 'bibliographie.bib', from: join(appDir, '..', 'fixtures', 'assets', 'bibliographie.bib') } },
 ];
 
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
@@ -120,11 +143,16 @@ function fixHistoryTimes(dir) {
   }
 }
 
+const chosen = only ? SCENES.filter((s) => only.includes(s.name)) : SCENES;
+if (only && chosen.length !== only.length) {
+  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n)).join(', ')}.`);
+  process.exit(2);
+}
 mkdirSync(out, { recursive: true });
 const env0 = { ...process.env };
 delete env0.ELECTRON_RUN_AS_NODE;
 let failed = 0;
-for (const s of SCENES) {
+for (const s of chosen) {
   const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-'));
   // The folder of a file to drop, out of the base's: the store copies it in, as it would the user's.
   const dropDir = s.import ? mkdtempSync(join(tmpdir(), 'cirrus-depot-')) : null;
@@ -137,9 +165,12 @@ for (const s of SCENES) {
       if (s[key]) env[name] = s[key];
     }
     if (s.panel) env.CIRRUS_PANEL = '1';
+    // Plan 4c: a publication's import answered by the recorded answers (tests/data/publications), never the network.
+    if (s.publications) env.CIRRUS_PUBLICATIONS_REPLAY = join(appDir, 'tests', 'data', 'publications');
     if (s.import) {
       const file = join(dropDir, s.import.name);
-      writeFileSync(file, s.import.text, 'utf8');
+      if (s.import.from) copyFileSync(s.import.from, file);
+      else writeFileSync(file, s.import.text, 'utf8');
       env.CIRRUS_IMPORT = `${s.import.at}|${file}`;
     }
     const r = spawnSync(electron, [appDir], { env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 120_000 });
@@ -152,5 +183,5 @@ for (const s of SCENES) {
     if (dropDir) rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
   }
 }
-console.log(`${SCENES.length - failed} captures sur ${SCENES.length} dans ${out}`);
+console.log(`${chosen.length - failed} captures sur ${chosen.length} dans ${out}`);
 process.exit(failed > 0 ? 1 : 0);

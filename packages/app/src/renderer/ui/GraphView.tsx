@@ -29,6 +29,7 @@ import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
 import { backgroundNotice, carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
+import { loading } from '../files/read.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
 import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
 import { type ImportDeps, publicationBuild } from '../publications/build.ts';
@@ -95,10 +96,11 @@ interface BibImport {
 /** What a gesture begun while a .bib's import waits for its .bib is told (review of task 6, M4). */
 const BIB_WAITING = 'Import du .bib en cours : attends que ses publications soient posées.';
 /**
- * The import's marks for its measures (scripts/interface.mjs): the drop or the choice, the ghost shown, every .bib
- * stored, the click, the action applied.
+ * The import's marks for its measures (scripts/interface.mjs, scripts/mesures-annotations.mjs): the drop or the choice,
+ * the file read by the main process, its entries read and planned (decoded, parsed, compared with the base), the ghost
+ * shown, every .bib stored, the click, the action applied.
  */
-const bibMark = (name: 'drop' | 'ghost' | 'stored' | 'click' | 'placed') => {
+const bibMark = (name: 'drop' | 'read' | 'planned' | 'ghost' | 'stored' | 'click' | 'placed') => {
   performance.clearMarks(`cirrus:bib:${name}`);
   performance.mark(`cirrus:bib:${name}`);
 };
@@ -545,6 +547,7 @@ export function GraphView(props: {
    * nothing follows the cursor. Another plan shown or a gesture begun while it was read: given up, said.
    */
   const startBib = (file: BibFile | null, at: { x: number; y: number }, plan: Id) => {
+    bibMark('read');
     const e = engine.current, sc = sceneRef.current;
     if (file === null || !e || !sc) return;
     if ('refused' in file) { notify(file.refused); return; }
@@ -552,6 +555,7 @@ export function GraphView(props: {
     const text = bibText(file);
     if ('refused' in text) { notify(text.refused); return; }
     const p = paramsRef.current, planned = planBib(stateRef.current, file.name, text.text, p.publicationMaxAuthors);
+    bibMark('planned');
     if (planned.items.length === 0) { onLongNoticeRef.current(bibNotice(planned, 0, p.bibNoticeLines)); return; }
     const measure = scenes.current.measure && scenes.current.key === sceneParamsKey(p) ? scenes.current.measure : measureLines(e.font, p);
     const lines = planned.items.map((x) => measure(x.plan.title));
@@ -562,7 +566,9 @@ export function GraphView(props: {
     bib.current = b;
     // Only the block's ghost is redrawn: no other gesture begins while it follows the cursor or waits (M4).
     const shown = () => bib.current === b && (placing.current?.kind === 'bib' || b.put !== null);
-    b.settled = storeBibs(planned.items.map((x) => x.plan.bib!), (batch) => window.cirrus.storeTexts(batch), (n) => {
+    // Counted among what the views load (viewsSettled): a capture shows the ghost once its .bib are stored (plan 4c,
+    // task 7, « bloc-bib »), never halfway.
+    b.settled = loading(storeBibs(planned.items.map((x) => x.plan.bib!), (batch) => window.cirrus.storeTexts(batch), (n) => {
       b.stored = n;
       if (shown()) showBib();
     }, () => b.stop).then((refs) => {
@@ -574,7 +580,7 @@ export function GraphView(props: {
       b.failed = bibStoreFailure(err);
       // Still following the cursor: the gesture is given up, said.
       if (bib.current === b && b.put === null) { feed({ t: 'cancel' }); notify(b.failed); }
-    });
+    }));
     startPlacing({ kind: 'bib' }, bibLabel(b), at);
     showBib(at);
     bibMark('ghost');

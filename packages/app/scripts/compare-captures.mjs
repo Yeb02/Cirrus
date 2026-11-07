@@ -2,8 +2,8 @@
 // For each PNG of the reference, the share of its pixels where a channel differs by more than 16 levels. Exits with 1
 // when one exceeds --max percent (0.5 by default, the plan's tolerance), differs in size or is missing from the
 // captures; with 2 on a usage error or when a folder holds no capture. The captures may hold more images than the
-// reference (a run holds every scene, a reference only its own: reference-3c, plan4a, plan4b): those are listed, not
-// compared.
+// reference (a run holds every scene, a reference only its own: reference-3c, plan4a, plan4b, plan4c): those are
+// listed, not compared.
 // An image that differs at all, within the tolerance, is listed « à regarder »: a lost selection ring, hover light, stub
 // or phantom stays under 0.5 %, and the suite repeats to the pixel from one run to the next, so it is looked at.
 // The images are decoded by Electron's nativeImage: run with Node, the script starts itself again under Electron.
