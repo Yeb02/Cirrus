@@ -189,6 +189,13 @@ export interface RenderParams {
   publicationMaxAuthors: number;
   /** a PDF dropped in the import dialog is searched for its DOI or arXiv identifier in this many first pages (D8). */
   publicationPdfPages: number;
+  /**
+   * A .bib's publications are put down in a block (D9, task 6) whose boxes stand this far apart, in pixels at the
+   * readable step (bibBlock); its notification names at most this many duplicates, and as many problems, then counts
+   * the others.
+   */
+  bibBlockGapPx: number;
+  bibNoticeLines: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -378,6 +385,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   publicationTimeoutMs: 20_000,
   publicationMaxAuthors: 50,
   publicationPdfPages: 2,
+  bibBlockGapPx: 24,
+  bibNoticeLines: 5,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -576,6 +585,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('publicationTimeoutMs', 'Attente maximale d’un serveur de publications (ms)', A, 'Publications', 1000, 600_000, 500),
   num('publicationMaxAuthors', 'Auteurs d’une publication importée gardés en tags « auteur »', A, 'Publications', 1, 10_000, 1),
   num('publicationPdfPages', 'Pages d’un PDF déposé où chercher son DOI ou son identifiant arXiv', A, 'Publications', 1, 20, 1),
+  num('bibBlockGapPx', 'Écart entre les boîtes du bloc d’un .bib importé (px au cran lisible)', A, 'Publications', 0, 400, 1),
+  num('bibNoticeLines', 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', A, 'Publications', 1, 100, 1),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),

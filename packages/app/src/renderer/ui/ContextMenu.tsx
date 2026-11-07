@@ -63,7 +63,17 @@ export function TitleEditor(props: { x: number; y: number; width: number; initia
   );
 }
 
-/** What follows the cursor during a gesture without a held button (spec 9.1): a node to place, a node leaving its group. */
-export function Ghost(props: { x: number; y: number; text: string }) {
-  return <div className="ghost" style={{ left: props.x, top: props.y }}>{props.text}</div>;
+/**
+ * What follows the cursor during a gesture without a held button (spec 9.1): a node to place, a node leaving its group;
+ * a .bib's block of publications (plan 4c, D9) with its outline, `box` pixels wide and high, centred on the cursor.
+ */
+export function Ghost(props: { x: number; y: number; text: string; box?: { w: number; h: number } }) {
+  const label = <div className="ghost" style={{ left: props.x, top: props.y }}>{props.text}</div>;
+  if (!props.box) return label;
+  return (
+    <>
+      <div className="ghost-block" style={{ left: props.x, top: props.y, width: props.box.w, height: props.box.h }} />
+      {label}
+    </>
+  );
 }

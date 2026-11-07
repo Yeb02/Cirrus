@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import {
-  BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, BIB_WORK_PER_CHAR, BIB_WORK_SLACK, bibAuthors, type BibEntry, bibFields, bibIdentifiers, bibNames, bibtexEntry, citeKey, cleanArxiv, cleanDoi, latexToUnicode,
-  normalizedTitle, parseBibtex, safeCiteKey,
+  BIB_MAX_BYTES, BIB_MAX_CHARS, BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, BIB_NAME_CHARS, BIB_WORK_PER_CHAR, BIB_WORK_SLACK, bibAuthors, type BibEntry, bibFields,
+  bibIdentifiers, bibNames, bibShort, bibtexEntry, CiteKeys, citeKey, cleanArxiv, cleanDoi, latexToUnicode, normalizedTitle, parseBibtex, safeCiteKey,
 } from '../src/bibtex.ts';
 
 const REAL = readFileSync(new URL('./data/reel-50.bib', import.meta.url), 'utf8');
@@ -150,7 +150,7 @@ test('parseBibtex : accolades imbriquées, entrée entre parenthèses, sans clé
   expect(parseBibtex('Écrire à auteur@exemple.fr\n@comment(x {y})\n@preamble{"\\def\\x{1}"}\n@misc{v}').entries.map((e) => e.key)).toEqual(['v']);
   // Windows line ends: the lines counted the same.
   expect(parseBibtex('@misc{a}\r\n\r\n@misc{b c}\r\n').problems.map((p) => p.line)).toEqual([3]);
-  expect(parseBibtex('')).toEqual({ entries: [], problems: [] });
+  expect(parseBibtex('')).toEqual({ entries: [], problems: [], omitted: 0, stopped: null });
   expect(parseBibtex('﻿@misc{bom}').entries[0].key).toBe('bom');
 });
 
@@ -254,6 +254,72 @@ test('parseBibtex : 2 000 entrées, dont des accolades jamais fermées, en moins
   expect(ms).toBeLessThan(1000);
 });
 
+test('parseBibtex : un texte de plus de BIB_MAX_CHARS caractères n’est pas lu, le problème dit sa taille et la borne ; à la borne, il est lu (tâche 6, M8)', () => {
+  expect(BIB_MAX_CHARS).toBe(16 * 2 ** 20);
+  // A file larger than this cannot be such a text, whatever its encoding: UTF-16 with its BOM, two bytes a character.
+  expect(BIB_MAX_BYTES).toBe(2 * BIB_MAX_CHARS + 2);
+  const head = '@misc{a, title = {Lue}}\n';
+  const over = head + ' '.repeat(BIB_MAX_CHARS + 1 - head.length);
+  expect(over.length).toBe(BIB_MAX_CHARS + 1);
+  const r = parseBibtex(over);
+  expect(r.entries).toEqual([]);
+  const message = `Le fichier fait ${(BIB_MAX_CHARS + 1).toLocaleString('fr-FR')} caractères, plus que les ${BIB_MAX_CHARS.toLocaleString('fr-FR')} qu’un .bib peut compter : il n’est pas lu.`;
+  expect(r.problems).toEqual([{ line: 1, message }]);
+  expect(r.stopped).toEqual({ line: 1, message });
+  expect(r.omitted).toBe(0);
+  const at = parseBibtex(over.slice(0, BIB_MAX_CHARS));
+  expect(at.entries.map((e) => e.key)).toEqual(['a']);
+  expect(at.problems).toEqual([]);
+  expect(at.stopped).toBeNull();
+});
+
+test('parseBibtex : `omitted` compte les problèmes non listés, `stopped` dit pourquoi la lecture s’est arrêtée avant la fin (tâche 6)', () => {
+  const real = parseBibtex(REAL);
+  expect([real.omitted, real.stopped]).toEqual([0, null]);
+  const broken = parseBibtex(Array.from({ length: 1000 }, (_, i) => `@misc{b${i} title}`).join('\n'));
+  expect([broken.omitted, broken.stopped]).toEqual([1000 - BIB_MAX_PROBLEMS, null]);
+  const many = parseBibtex(Array.from({ length: BIB_MAX_ENTRIES + 3 }, (_, i) => `@misc{e${i}}`).join('\n'));
+  expect(many.stopped).toEqual(many.problems.at(-1));
+  expect(many.omitted).toBe(0);
+  const head = '@a(k,t={\n'.repeat(1230) + '%}\n'.repeat(1230) + '#';
+  const tired = parseBibtex(Array.from({ length: 300 }, (_, i) => `@misc{b${i} title}`).join('\n') + '\n' + head + 'x'.repeat(2_000_000));
+  expect(tired.stopped).toEqual(tired.problems.at(-1));
+  expect(tired.stopped!.message).toMatch(/^Le fichier est trop abîmé/);
+  // The listed problems, then the one that counts the others, then the stop.
+  expect(tired.omitted).toBeGreaterThan(0);
+  expect(tired.problems).toHaveLength(BIB_MAX_PROBLEMS + 2);
+  expect(tired.problems.at(-2)!.message).toBe(`Et ${tired.omitted.toLocaleString('fr-FR')} autres problèmes.`);
+});
+
+test('parseBibtex : un nom tiré du fichier est coupé dans les messages — macro, clé, type, champ de 200 000 caractères (re-revue, sonde pct-string)', () => {
+  expect(BIB_NAME_CHARS).toBe(80);
+  expect(bibShort('Vitányi')).toBe('Vitányi');
+  expect(bibShort('x'.repeat(BIB_NAME_CHARS))).toBe('x'.repeat(BIB_NAME_CHARS));
+  expect(bibShort('x'.repeat(BIB_NAME_CHARS + 1))).toBe(`${'x'.repeat(BIB_NAME_CHARS)}…`);
+  // Not inside a pair of UTF-16 units: an accent of the astral planes is kept whole or left out.
+  expect(bibShort(`${'x'.repeat(BIB_NAME_CHARS - 1)}𝔄b`)).toBe(`${'x'.repeat(BIB_NAME_CHARS - 1)}…`);
+  const long = (c: string) => c.repeat(200_000);
+  const cases = [
+    `@string{a = ${long('m')}}`, // a macro defined nowhere, cited by a macro
+    `@misc{k, title = ${long('m')}}`, // and by a field
+    `@string{${long('m')} x}`, // a macro's name, then no « = »
+    `@misc{${long('k')} title = {x}}`, // a key, then no « , »
+    `@misc{${long('k')}, title = {x}}\n@misc{${long('k')}, title = {y}}`, // a key twice
+    `@${long('t')} x`, // a type without « { »
+    `@misc{k, ${long('f')} {x}}`, // a field's name without « = »
+    `@misc{k, ${long('f')} = {x}, ${long('f')} = {y}}`, // a field twice
+    `@misc{k, ${long('f')} = {x} y = {z}}`, // no « , » after it
+  ];
+  for (const text of cases) {
+    const { problems } = parseBibtex(text);
+    expect(problems.length, text.slice(0, 12)).toBeGreaterThan(0);
+    for (const p of problems) {
+      expect(p.message.length, text.slice(0, 12)).toBeLessThan(4 * BIB_NAME_CHARS + 200);
+      expect(p.message, text.slice(0, 12)).toContain('…');
+    }
+  }
+});
+
 test('latexToUnicode : accents, lettres, tirets, espaces insécables, accolades de protection, mode mathématique', () => {
   const cases: [string, string][] = [
     ['Vit{\\\'a}nyi', 'Vitányi'], ['\\\'e', 'é'], ['\\\'{e}', 'é'], ['{\\\'e}', 'é'], ['\\\' e', 'é'], ['\\"o', 'ö'], ['\\"{O}', 'Ö'], ['\\`a', 'à'], ['\\^o', 'ô'],
@@ -315,6 +381,34 @@ test('citeKey : la clé de l’entrée si elle est sûre, sinon nom du premier a
   // A key Windows reserves as a file name is not given.
   expect(citeKey(entry('@misc{, author = {Con, A.}}'), new Set())).toBe('conb');
   expect(citeKey(entry('@misc{aux, author = {Aux, A.}}'), new Set())).toBe('auxb');
+});
+
+test('citeKey et CiteKeys (tâche 6) : les mêmes clés qu’avec un Set ; pour des milliers d’entrées, une clé coûte une recherche, même quand toutes ont la même base', () => {
+  const keys = new CiteKeys(['li2008', 'Vaswani2017']);
+  expect(keys.has('LI2008')).toBe(true);
+  const datacite = entry('@misc{https://doi.org/10.48550/arxiv.1706.03762, author = {Vaswani, Ashish}, year = {2017}}');
+  expect(citeKey(datacite, keys)).toBe('vaswani2017b');
+  keys.add('vaswani2017b');
+  expect(citeKey(datacite, keys)).toBe('vaswani2017c');
+  // A key returned but not taken is returned again; one taken meanwhile by other means is skipped.
+  expect(citeKey(datacite, keys)).toBe('vaswani2017c');
+  keys.add('VASWANI2017C');
+  keys.add('vaswani2017d');
+  expect(citeKey(datacite, keys)).toBe('vaswani2017e');
+  expect(citeKey(entry('@book{li2008, author = {Li, Ming}, year = 2008}'), keys)).toBe('li2008b');
+  // 50 000 entries, all of the same base (no author, no year, the same first word), or each of its own: linear.
+  for (const make of [(i: number) => `@misc{, title = {The ${i}}}`, (i: number) => `@misc{k${i}, author = {Nom${i}, A.}, year = 2000}`]) {
+    const read = parseBibtex(Array.from({ length: BIB_MAX_ENTRIES }, (_, i) => make(i)).join('\n'));
+    const taken = new CiteKeys(), seen = new Set<string>();
+    const t0 = performance.now();
+    for (const e of read.entries) {
+      const k = citeKey(e, taken);
+      taken.add(k);
+      seen.add(k.toLowerCase());
+    }
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(seen.size).toBe(BIB_MAX_ENTRIES);
+  }
 });
 
 test('safeCiteKey : un nom de fichier « <clé>.bib » et une clé de \\cite', () => {

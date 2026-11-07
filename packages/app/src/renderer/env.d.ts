@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@cirrus/core';
+import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 import type { PublicationResult } from '../main/publications/fetch.ts';
 
@@ -34,6 +35,23 @@ export interface CirrusBridge {
    * reference. Rejects with the reason, in French, for a name checkFileName refuses or a text over maxImportMb.
    */
   storeText(name: string, text: string): Promise<FileRef>;
+  /**
+   * Texts stored as files in one call (plan 4c, task 6: a .bib's entries), each as storeText stores it, several
+   * written at once: their references, in order. STORE_TEXTS_MAX at most, maxImportMb all together; one refused rejects
+   * the call with its reason, in French, before any is written.
+   */
+  storeTexts(items: { name: string; text: string }[]): Promise<FileRef[]>;
+  /**
+   * A .bib dropped on the graph's background (plan 4c, D9), read by the main process: its bytes, BIB_MAX_BYTES at most,
+   * or why not, in French. Only a path pathForFile gave in this page goes through; any other is refused.
+   */
+  readBib(path: string): Promise<BibFile>;
+  /**
+   * « Importer un fichier .bib… »: the system's dialog, the .bib chosen read as readBib reads; null when none is chosen.
+   * In a test's window (CIRRUS_BACKGROUND, captures) the dialog never opens: CIRRUS_BIB_PICK names the file, on a test
+   * base only.
+   */
+  pickBib(): Promise<BibFile | null>;
   /**
    * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
    * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.

@@ -9,7 +9,8 @@ import { type RenderParams, withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
-import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText } from './files.ts';
+import { bibPickOf, readBib } from './bib.ts';
+import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText, storeTexts } from './files.ts';
 import { PdfCache } from './latex/cache.ts';
 import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
@@ -230,6 +231,31 @@ ipcMain.handle('cirrus:files:pick', async (e) => {
 // A .tex typed in its full screen (plan 4b, D6), stored before the action that refers to it; a name or a size refused
 // rejects with its reason, in French.
 ipcMain.handle('cirrus:files:store-text', (_e, name: unknown, text: unknown) => storeText(dir, name, text, maxImportBytes()));
+// A .bib's entries (plan 4c, task 6), a file each, stored by batches before the action that refers to them: checked here
+// whatever the interface did (a list of STORE_TEXTS_MAX at most, each storeText's checks, maxImportMb in all).
+ipcMain.handle('cirrus:files:store-texts', (_e, items: unknown) => storeTexts(dir, items, maxImportBytes()));
+/**
+ * A whole .bib (plan 4c, D9, task 6), read here only: dropped on the graph's background (the preload passes on only a
+ * drop's path), or chosen in the system's dialog by « Importer un fichier .bib… »; BIB_MAX_BYTES at most (readBib). On
+ * a test base out of the user's way, CIRRUS_BIB_PICK names the file the menu takes, and in a test's window the dialog
+ * never opens (the user, 2026-11-07: nothing in front of the user's work).
+ */
+const bibPick = bibPickOf(process.env, capture !== undefined);
+if (process.env.CIRRUS_BIB_PICK && !bibPick) {
+  console.warn('CIRRUS_BIB_PICK ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
+}
+ipcMain.handle('cirrus:bib:read', (_e, path: unknown) => readBib(path));
+ipcMain.handle('cirrus:bib:pick', async (e) => {
+  if (bibPick) return readBib(bibPick);
+  if (background) {
+    console.warn('Sélecteur de fichiers non ouvert dans une fenêtre de test : CIRRUS_BIB_PICK nomme le .bib à importer.');
+    return null;
+  }
+  const options = { title: 'Importer un fichier .bib', properties: ['openFile' as const], filters: [{ name: 'BibTeX', extensions: ['bib'] }] };
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const chosen = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
+  return chosen.canceled || chosen.filePaths.length === 0 ? null : readBib(chosen.filePaths[0]);
+});
 // A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
 // instead, never run (plan 4a, D5). Failures reach the user in French, their cause in the console.
 ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {

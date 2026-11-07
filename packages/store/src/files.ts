@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { FileRef } from '@cirrus/core';
 
@@ -76,5 +77,38 @@ export function storeBytes(storeDir: string, name: string, bytes: Uint8Array): F
   }
   closeSync(out);
   place(storeDir, ref, tmp);
+  return ref;
+}
+
+/**
+ * storeBytes without holding the process (plan 4c, task 6: a .bib's thousands of entries, a file each): the same
+ * temporary file synced then renamed into place, nothing written when the same content is stored already, by the file
+ * system's thread pool, so that several run at once. Two of the same content at once both end on that one blob: a
+ * rename that finds it there already drops its temporary.
+ */
+export async function storeBytesAsync(storeDir: string, name: string, bytes: Uint8Array): Promise<FileRef> {
+  const ref: FileRef = { name, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+  const dest = filePath(storeDir, ref);
+  if (existsSync(dest)) return ref;
+  const filesDir = join(storeDir, 'files');
+  await mkdir(filesDir, { recursive: true });
+  const tmp = join(filesDir, `.import-${randomBytes(8).toString('hex')}`);
+  const out = await open(tmp, 'w');
+  try {
+    await out.writeFile(bytes);
+    await out.sync();
+  } catch (e) {
+    await out.close();
+    await rm(tmp, { force: true });
+    throw e;
+  }
+  await out.close();
+  await mkdir(join(filesDir, ref.hash.slice(0, 2)), { recursive: true });
+  try {
+    await rename(tmp, dest);
+  } catch (e) {
+    await rm(tmp, { force: true });
+    if (!existsSync(dest)) throw e;
+  }
   return ref;
 }

@@ -277,6 +277,30 @@ const blob = (data, hash) => readFileSync(join(data, 'files', hash.slice(0, 2), 
 /** The node's tags, `key: value` each. */
 const tagsOf = (n) => n.tags.map((t) => `${t.key}: ${t.value}`);
 
+// Plan 4c, task 6: a whole .bib — the test base's (fixtures/assets) — dropped on the sky's background, or chosen by
+// the background's menu (CIRRUS_BIB_PICK: the system's dialog never opens), its block following the cursor until a click.
+const BIB = join(appDir, '..', 'fixtures', 'assets', 'bibliographie.bib');
+const BIB_TITLES = [
+  'A Mathematical Theory of Communication', 'Three approaches to the quantitative definition of information', 'A formal theory of inductive inference. Part I',
+  'Modeling by shortest data description', 'The Minimum Description Length Principle', ATTENTION,
+  'Universal Artificial Intelligence: Sequential Decisions Based on Algorithmic Probability',
+];
+const BIB_KEYS = ['shannon1948', 'kolmogorov1965', 'solomonoff1964', 'rissanen1978', 'grunwald2007', 'vaswani2017attention', 'hutter2005'];
+/** The live nodes of the test .bib's publications. */
+const bibNodes = (base) => BIB_TITLES.flatMap((t) => titledIn(base, t));
+const ghostText = (page) => page.evaluate(`document.querySelector('.ghost')?.textContent ?? null`);
+const toastsText = (page) => page.evaluate(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+/** A mark of the import (GraphView's bibMark), in ms of the page's clock; null if not reached. */
+const markAt = (page, name) => page.evaluate(`performance.getEntriesByName('cirrus:bib:${name}').at(-1)?.startTime ?? null`);
+/** The ghost of the .bib's block shown, saying `text` (a regular expression's source). */
+const bibGhost = (page, text, ms = 8000) => page.until(`new RegExp(${JSON.stringify(text)}).test(document.querySelector('.ghost')?.textContent ?? '') && !!document.querySelector('.ghost-block')`, ms);
+/** « Importer un fichier .bib… » in the menu of the sky's background at `at`. */
+async function pickBibByMenu(page, at = SKY) {
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(at.x, at.y, 'right');
+  const item = await page.centre('.context-menu button', 'Importer un fichier \\.bib');
+  await page.click(item.x, item.y);
+}
+
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
 const SCENARIOS = [
   {
@@ -791,6 +815,136 @@ const SCENARIOS = [
       await page.press('Enter', 'Enter', 13);
       if (!(await said(page, `Déjà dans la base (même identifiant arXiv) : « ${ATTENTION} ».`))) throw new Error(`pas de notification du second import (le dialogue dit « ${await statusOf(page)} »)`);
       if (titledIn(base, ATTENTION).length !== 1) throw new Error('le second import a créé un nœud');
+    },
+  },
+  {
+    // Plan 4c, D9: the test base's .bib dropped on the sky; its block follows the cursor, a click puts the seven
+    // publications down, one action; the base's book a duplicate, named; the broken entry said by its line; Ctrl+Z.
+    name: 'importer un .bib déposé sur le fond : le bloc suit le curseur, un clic le pose en une action ; doublon et entrée abîmée nommés ; un Ctrl+Z retire tout',
+    ...PUBLICATION,
+    async run(page, base, data) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count();
+      await page.move(SKY2.x, SKY2.y);
+      await page.dropFiles(SKY2, [BIB]);
+      if (!(await bibGhost(page, '^Importer 7 publications'))) throw new Error(`pas de fantôme du bloc (« ${await ghostText(page)} » ; ${await toastsText(page)})`);
+      if (count() !== before) throw new Error('le dépôt a créé des nœuds avant le clic');
+      // It follows the cursor, its outline the block's size at the readable step: three boxes of 210 and two gaps of 24.
+      await page.move(SKY.x, SKY.y);
+      const g = await page.evaluate(`(() => {
+        const a = document.querySelector('.ghost').getBoundingClientRect(), b = document.querySelector('.ghost-block').getBoundingClientRect();
+        return { x: a.x + a.width / 2, y: a.y + a.height / 2, bx: b.x + b.width / 2, by: b.y + b.height / 2, w: b.width, h: b.height };
+      })()`);
+      if ([g.x - SKY.x, g.y - SKY.y, g.bx - SKY.x, g.by - SKY.y].some((d) => Math.abs(d) > 2)) throw new Error(`le fantôme ne suit pas le curseur : ${JSON.stringify(g)}`);
+      if (Math.abs(g.w - (3 * 210 + 2 * 24)) > 2) throw new Error(`contour du bloc inattendu : ${JSON.stringify(g)}`);
+      if (!(await bibGhost(page, '^Importer 7 publications$'))) throw new Error(`les .bib ne sont pas enregistrés (« ${await ghostText(page)} »)`);
+      console.log(`     fantôme « ${await ghostText(page)} », contour ${g.w.toFixed(0)} × ${g.h.toFixed(0)} px`);
+      const at = await worldAt(page, SKY);
+      await page.click(SKY.x, SKY.y);
+      if (!(await until(() => bibNodes(base).length === 7, 8000))) throw new Error(`${bibNodes(base).length} publications dans la base au lieu de 7 ; ${await toastsText(page)}`);
+      if (count() !== before + 7) throw new Error(`${count() - before} nœuds créés au lieu de 7`);
+      if (await page.evaluate(`!!document.querySelector('.ghost')`)) throw new Error('le fantôme reste après la pose');
+      // Their tags and their own <key>.bib, a block of three columns and three rows around the click, at step 0.
+      const lobby = idsOf(base).lobby, nodes = BIB_TITLES.map((t) => titledIn(base, t)[0]);
+      const shannon = ['auteur: Claude E. Shannon', 'date_de_publication: 1948', 'clé_bibtex: shannon1948', 'doi: 10.1002/j.1538-7305.1948.tb01338.x'];
+      if (JSON.stringify(tagsOf(nodes[0])) !== JSON.stringify(shannon)) throw new Error(`tags inattendus : ${JSON.stringify(tagsOf(nodes[0]))}`);
+      if (!tagsOf(nodes[5]).includes('arxiv: 1706.03762') || !tagsOf(nodes[4]).includes('auteur: Peter D. Grünwald')) throw new Error(`tags inattendus : ${JSON.stringify(nodes.map(tagsOf))}`);
+      nodes.forEach((n, i) => {
+        if (JSON.stringify(n.files.map((f) => f.name)) !== JSON.stringify([`${BIB_KEYS[i]}.bib`])) throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
+        const bib = blob(data, n.files[0].hash).toString('utf8');
+        if (!bib.startsWith(`@`) || !bib.includes(`{${BIB_KEYS[i]},\n`) || !tagsOf(n).includes(`clé_bibtex: ${BIB_KEYS[i]}`)) throw new Error(`.bib inattendu : ${bib.slice(0, 80)}`);
+      });
+      const places = nodes.map((n) => placementOf(base, lobby, n.id));
+      if (places.some((p) => !p || p.k !== 0 || Math.abs(p.x - at.x) > g.w / 2 || Math.abs(p.y - at.y) > g.h / 2)) throw new Error(`le bloc n’est pas posé autour du clic : ${JSON.stringify(places)} ; ${JSON.stringify(at)}`);
+      if (new Set(places.map((p) => p.x.toFixed(3))).size !== 3 || new Set(places.map((p) => p.y.toFixed(3))).size !== 3) throw new Error(`pas une grille de trois colonnes : ${JSON.stringify(places)}`);
+      const notice = await toastsText(page);
+      for (const part of ['7 publications importées de « bibliographie.bib ».', `déjà dans la base (même clé BibTeX) : « ${LI} ».`, ': Entrée « casse2020 » abîmée : « , » ou « } » est attendu après le champ « title »']) {
+        if (!notice.includes(part)) throw new Error(`la notification ne dit pas « ${part} » : ${notice}`);
+      }
+      console.log(`     ${notice.replaceAll('\n', ' / ')}`);
+      console.log(`     ${places.map((p) => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(' ; ')}`);
+      // One action: one Ctrl+Z removes the seven; the base's book stays.
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => bibNodes(base).length === 0))) throw new Error('un Ctrl+Z ne retire pas tout l’import');
+      if (count() !== before || titledIn(base, LI).length !== 1) throw new Error('le Ctrl+Z a retiré autre chose');
+    },
+  },
+  {
+    // « Importer un fichier .bib… » by the test's entry (CIRRUS_BIB_PICK), never the system's dialog: Escape gives the
+    // block up, nothing made; chosen again, a click puts it down.
+    name: 'importer un .bib par le menu du fond (entrée de test, sans sélecteur) : Échap annule la pose, rien n’est créé ; un clic pose le bloc',
+    env: { ...PUBLICATION.env, CIRRUS_BIB_PICK: BIB },
+    async run(page, base) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count();
+      await pickBibByMenu(page);
+      if (!(await bibGhost(page, '^Importer 7 publications'))) throw new Error(`pas de fantôme du bloc (« ${await ghostText(page)} » ; ${await toastsText(page)})`);
+      await page.move(SKY2.x, SKY2.y);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.ghost')`))) throw new Error('Échap ne retire pas le fantôme');
+      await page.click(SKY2.x, SKY2.y);
+      await sleep(500);
+      if (count() !== before) throw new Error('Échap, puis un clic, ont créé des nœuds');
+      await pickBibByMenu(page);
+      if (!(await bibGhost(page, '^Importer 7 publications$'))) throw new Error(`pas de fantôme du bloc (« ${await ghostText(page)} »)`);
+      await page.move(SKY.x, SKY.y);
+      await page.click(SKY.x, SKY.y);
+      if (!(await until(() => bibNodes(base).length === 7, 8000))) throw new Error(`${bibNodes(base).length} publications dans la base au lieu de 7 ; ${await toastsText(page)}`);
+      if (count() !== before + 7) throw new Error(`${count() - before} nœuds créés au lieu de 7`);
+    },
+  },
+  {
+    // The routes of a .bib let go elsewhere (D9): on a node, one of its files, as any file; on the import dialog, which
+    // takes a PDF only, refused — and in neither case an import.
+    name: 'un .bib déposé sur un nœud en devient un fichier ; sur le dialogue d’import, il est refusé ; aucun import',
+    ...IMPORT,
+    async run(page, base) {
+      await page.dropFiles(ON_PUBLICATION, [BIB]);
+      if (!(await until(() => titledIn(base, LI)[0]?.files.some((f) => f.name === 'bibliographie.bib'), 8000))) throw new Error(`le .bib n’est pas un fichier du nœud ; ${await toastsText(page)}`);
+      if (await ghostText(page)) throw new Error('le dépôt sur un nœud a lancé l’import');
+      await openImport(page);
+      await page.dropFiles(await page.centre('.publication-dialog .status', ''), [BIB]);
+      if (!(await page.until(`document.querySelector('.publication-dialog .status')?.textContent === '« bibliographie.bib » n’est pas un PDF.'`))) throw new Error(`le dialogue dit « ${await statusOf(page)} »`);
+      await sleep(500);
+      if ((await ghostText(page)) || bibNodes(base).length !== 0) throw new Error('le dépôt sur le dialogue a lancé l’import');
+    },
+  },
+  {
+    // The measures of task 6 (three times each): 2 000 entries, from the drop to the ghost, their .bib stored in the
+    // background, and from the click to the action applied — the click once the .bib are stored, then at once.
+    name: 'un .bib de 2 000 entrées : du dépôt au fantôme, l’enregistrement des .bib, du clic à la pose',
+    ...PUBLICATION,
+    async run(page, base) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count();
+      const dir = mkdtempSync(join(tmpdir(), 'cirrus-bib-'));
+      const ms = (a, b) => (b - a).toFixed(0);
+      try {
+        for (let run = 1; run <= 6; run++) {
+          const path = join(dir, `bibliotheque-${run}.bib`), wait = run <= 3;
+          writeFileSync(path, Array.from({ length: 2000 }, (_, i) => [
+            `@article{auteur${run}x${i},`, `  author = {Nom${i}, Prénom and Autre, Jean},`, `  title = {Titre ${run}.${i} d’un article -- avec {\\'e}},`,
+            `  journal = {Revue}, year = ${1950 + (i % 70)},`, `  doi = {10.5555/run${run}.${i}}`, '}',
+          ].join('\n')).join('\n'), 'utf8');
+          await page.move(SKY2.x, SKY2.y);
+          await page.dropFiles(SKY2, [path]);
+          if (!(await bibGhost(page, '^Importer 2.000 publications', 30000))) throw new Error(`pas de fantôme du bloc (« ${await ghostText(page)} » ; ${await toastsText(page)})`);
+          if (wait && !(await bibGhost(page, '^Importer 2.000 publications$', 60000))) throw new Error(`les .bib ne sont pas enregistrés (« ${await ghostText(page)} »)`);
+          await page.move(SKY.x, SKY.y);
+          await page.click(SKY.x, SKY.y);
+          if (!(await until(() => count() === before + 2000, 90000))) throw new Error(`${count() - before} nœuds créés au lieu de 2 000 ; ${await toastsText(page)}`);
+          if (!(await page.until(`performance.getEntriesByName('cirrus:bib:placed').length > 0 && !document.querySelector('.ghost')`, 10000))) throw new Error('pas de marque de la pose');
+          // The frame drawn after the action: two frames of the page's loop.
+          const drawn = await page.evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(performance.now()))))`);
+          const [drop, ghost, stored, click, placed] = await Promise.all(['drop', 'ghost', 'stored', 'click', 'placed'].map((m) => markAt(page, m)));
+          console.log(`     ${wait ? 'clic après l’enregistrement' : 'clic aussitôt'}, passe ${run} : dépôt → fantôme ${ms(drop, ghost)} ms ; fantôme → .bib enregistrés ${ms(ghost, stored)} ms ; clic → action ${ms(click, placed)} ms, → image ${ms(click, drawn)} ms`);
+          const notice = await toastsText(page);
+          if (!new RegExp(`2.000 publications importées de « bibliotheque-${run}\\.bib »\\.`).test(notice)) throw new Error(`notification inattendue : ${notice}`);
+          await page.press('z', 'KeyZ', 90, 2);
+          if (!(await until(() => count() === before, 30000))) throw new Error('un Ctrl+Z ne retire pas tout l’import');
+          await sleep(500);
+          for (let i = 0; i < 20 && (await page.evaluate(`document.querySelectorAll('.toast').length`)) > 0; i++) await sleep(250);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      }
     },
   },
 ];

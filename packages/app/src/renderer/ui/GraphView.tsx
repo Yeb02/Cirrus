@@ -1,6 +1,7 @@
-import { type Action, type Id, phantomsOf, type State, type Vec2 } from '@cirrus/core';
+import { type Action, type FileRef, type Id, phantomsOf, type State, type Vec2 } from '@cirrus/core';
 import {
-  type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate, type NavInput,
+  bibBlock, blockHalves, type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
+  type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
   type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
@@ -17,17 +18,19 @@ import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
   absentBuild, addMemberBuild, ALREADY_HERE, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild,
-  joinBuild, dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, removeMemberBuild, renameBuild,
-  scaleBuild, splitBuild, withRepercussion,
+  joinBuild, dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, readableStep, removeMemberBuild,
+  renameBuild, scaleBuild, splitBuild, withRepercussion,
 } from '../actions.ts';
+import type { BibFile } from '../../main/bib.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
-import { carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
+import { backgroundNotice, carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
+import { bibImportBuild, bibNotice, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
 import { type ImportDeps, publicationBuild } from '../publications/build.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 
@@ -68,11 +71,34 @@ type Placing =
   /** A node put down by hand in a plan its change of group reaches (spec 10); `extend`: the action it completes. */
   | { kind: 'repercussion'; node: Id; to: Id | null; extend: Id }
   /** Splitting an arm (spec 8.5): the far node's phantom near the bundle, then the centre's near the far node. */
-  | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 };
+  | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 }
+  /** A .bib's block of publications (plan 4c, D9): what it brings is the graph's `bib` (BibImport). */
+  | { kind: 'bib' };
 const MODE: Record<Placing['kind'], Mode> = {
-  newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split', repercussion: 'place',
+  newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split', repercussion: 'place', bib: 'paste',
 };
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+const fr = (n: number) => n.toLocaleString('fr-FR');
+
+/**
+ * A .bib being imported (plan 4c, D9, task 6), from the ghost of its block to the action: what it plans, in its plan;
+ * each title's lines (the block's rows); its entries' .bib stored meanwhile — `stored` so far, `refs` once all are,
+ * `failed` why not —, which `stop` (Escape, another plan, a lost focus) ends; `settled` resolves once storing is over.
+ * `waiting`: put down by a click, the action waits for every .bib stored (Escape no longer gives it up). The block's
+ * half sizes at step 0, for its outline (they scale with the step).
+ */
+interface BibImport {
+  planned: PlannedBib; plan: Id; lines: number[]; halves: { halfW: number; halfH: number };
+  stored: number; refs: FileRef[] | null; failed: string | null; stop: boolean; settled: Promise<void>; waiting: boolean;
+}
+/**
+ * The import's marks for its measures (scripts/interface.mjs): the drop or the choice, the ghost shown, every .bib
+ * stored, the click, the action applied.
+ */
+const bibMark = (name: 'drop' | 'ghost' | 'stored' | 'click' | 'placed') => {
+  performance.clearMarks(`cirrus:bib:${name}`);
+  performance.mark(`cirrus:bib:${name}`);
+};
 
 /**
  * Hosts the WebGL canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
@@ -141,8 +167,11 @@ export function GraphView(props: {
   const graphPress = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
-  const [ghost, setGhost] = useState<{ x: number; y: number; text: string } | null>(null);
+  /** What follows the cursor: its label, and a .bib's block its outline (`box`, in pixels, centred on the cursor). */
+  const [ghost, setGhost] = useState<{ x: number; y: number; text: string; box?: { w: number; h: number } } | null>(null);
   const placing = useRef<Placing | null>(null);
+  /** A .bib being imported (plan 4c, D9), from its ghost to its action; null otherwise. */
+  const bib = useRef<BibImport | null>(null);
   /** The straight line that follows the cursor while a connection is drawn (screen coordinates). */
   const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [question, setQuestion] = useState<Question | null>(null);
@@ -172,9 +201,12 @@ export function GraphView(props: {
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
   /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
   const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[]; expected: Id } | null>(null);
-  /** A gesture, a question or a repercussion under way: Ctrl+Z and Ctrl+Y wait for it (I6 of the plan 3b review), and so does a node dropped from a list. */
+  /**
+   * A gesture, a question, a repercussion or a .bib's import under way: Ctrl+Z and Ctrl+Y wait for it (I6 of the plan
+   * 3b review), and so do a node dropped from a list and another .bib.
+   */
   const busy = () => gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
-    || repQueue.current !== null || questionRef.current !== null;
+    || repQueue.current !== null || questionRef.current !== null || bib.current !== null;
 
   /**
    * Gives the renderer the scene to show (plan 3c, task 6): when it follows the renderer's own by the changes gathered
@@ -278,8 +310,9 @@ export function GraphView(props: {
     e.renderer.setCamera(next);
     cameras.current.set(sc.plan.id, next);
     redraw();
-    // Wheel and arrows stay active while a connection is drawn: its line follows the node.
+    // Wheel and arrows stay active while a connection is drawn: its line follows the node; a .bib's block, its outline.
     if (placing.current?.kind === 'connect' && lastPointer.current) aimLine(lastPointer.current.x, lastPointer.current.y);
+    if (placing.current?.kind === 'bib') showBib();
   };
   const nav = (input: NavInput) => {
     const e = engine.current;
@@ -464,6 +497,110 @@ export function GraphView(props: {
     const c = clip.current;
     if (!c) { notify('Rien à coller : copiez d’abord une sélection (Ctrl+C).'); return; }
     startPlacing({ kind: 'paste' }, `Coller ${c.nodes.length} ${plural(c.nodes.length, 'nœud', 'nœuds')}`, at);
+  };
+  /** What a .bib's ghost says: its publications, and its .bib being stored, if they are. */
+  const bibLabel = (b: BibImport) => {
+    const n = b.planned.items.length, what = `Importer ${n === 1 ? 'une publication' : `${fr(n)} publications`}`;
+    if (b.refs !== null) return what;
+    return b.waiting ? `Enregistrement des fichiers .bib : ${fr(b.stored)} / ${fr(n)}…` : `${what} · fichiers .bib : ${fr(b.stored)} / ${fr(n)}`;
+  };
+  /**
+   * The ghost of the .bib's block (D9, the paste's ghost of plan 3b): its label, and its outline as the block would be
+   * put down at the zoom shown — at the readable step, so about the same size on screen at any zoom. At `at`, or where
+   * it was.
+   */
+  const showBib = (at?: { x: number; y: number }) => {
+    const b = bib.current, e = engine.current;
+    if (!b || !e) return;
+    const p = paramsRef.current, zoom = e.renderer.camera.zoom, s = p.factor ** readableStep(zoom, p);
+    const box = { w: 2 * b.halves.halfW * s * zoom, h: 2 * b.halves.halfH * s * zoom };
+    setGhost((g) => ({ x: at?.x ?? g?.x ?? 0, y: at?.y ?? g?.y ?? 0, text: bibLabel(b), box }));
+  };
+  /** The import given up (Escape, another plan, a lost focus, a refusal): its .bib no longer stored; what is stored stays. */
+  const dropBib = () => {
+    const b = bib.current;
+    if (!b) return;
+    b.stop = true;
+    bib.current = null;
+  };
+  /**
+   * A .bib the main process read (D9: dropped on the background, or chosen), for the plan `plan` shown then: decoded,
+   * planned against the base (planBib), its block following the cursor from `at` until a click puts it down (placeBib),
+   * its entries' .bib stored meanwhile, by batches (storeBibs). Nothing to import: the notification says why, and
+   * nothing follows the cursor. Another plan shown or a gesture begun while it was read: given up, said.
+   */
+  const startBib = (file: BibFile | null, at: { x: number; y: number }, plan: Id) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (file === null || !e || !sc) return;
+    if ('refused' in file) { notify(file.refused); return; }
+    if (sc.plan.id !== plan || busy()) { notify(`Le plan a changé, ou un geste a commencé, pendant la lecture du fichier .bib : rien n’est importé.`); return; }
+    const text = bibText(file);
+    if ('refused' in text) { notify(text.refused); return; }
+    const p = paramsRef.current, planned = planBib(stateRef.current, file.name, text.text, p.publicationMaxAuthors);
+    if (planned.items.length === 0) { notify(bibNotice(planned, 0, p.bibNoticeLines)); return; }
+    const measure = scenes.current.measure && scenes.current.key === sceneParamsKey(p) ? scenes.current.measure : measureLines(e.font, p);
+    const lines = planned.items.map((x) => measure(x.plan.title));
+    const b: BibImport = {
+      planned, plan, lines, halves: blockHalves(bibBlock(lines.length, 0, p, lines), 0, p, lines),
+      stored: 0, refs: null, failed: null, stop: false, settled: Promise.resolve(), waiting: false,
+    };
+    bib.current = b;
+    b.settled = storeBibs(planned.items.map((x) => x.plan.bib!), (batch) => window.cirrus.storeTexts(batch), (n) => {
+      b.stored = n;
+      if (bib.current === b) showBib();
+    }, () => b.stop).then((refs) => {
+      b.refs = refs;
+      if (refs) bibMark('stored');
+      if (bib.current === b && !b.waiting) showBib();
+    }, (err: unknown) => {
+      console.error('Enregistrement des fichiers .bib :', err);
+      b.failed = 'Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : rien n’est importé.';
+      // Still following the cursor: the gesture is given up, said.
+      if (bib.current === b && !b.waiting) { feed({ t: 'cancel' }); notify(b.failed); }
+    });
+    startPlacing({ kind: 'bib' }, bibLabel(b), at);
+    showBib(at);
+    bibMark('ghost');
+  };
+  /**
+   * The block put down at `at` (D9), at the zoom of the click, once its .bib are all stored (the ghost says so while
+   * they are not): one action, « Importer <n> publications », then the notification of the import (bibNotice). Its plan
+   * no longer shown by then, or the store failed: nothing is made, said.
+   */
+  const placeBib = (at: Vec2, zoom: number) => {
+    const b = bib.current;
+    if (!b) return;
+    bibMark('click');
+    b.waiting = true;
+    if (b.refs === null) showBib();
+    void b.settled.then(async () => {
+      if (bib.current !== b) return;
+      bib.current = null;
+      setGhost(null);
+      const sc = sceneRef.current;
+      if (b.failed || b.refs === null) { notify(b.failed ?? 'Les fichiers .bib n’ont pas été enregistrés : rien n’est importé.'); return; }
+      if (!sc || sc.plan.id !== b.plan) { notify('Le plan de l’import n’est plus affiché : rien n’est importé.'); return; }
+      const p = paramsRef.current, refs = b.refs;
+      const r = await edit(bibImportBuild(b.planned.items.map((x, i) => ({ plan: x.plan, file: refs[i] })), sc, at, zoom, p, b.lines, indexOf(sc)));
+      bibMark('placed');
+      if (r?.ok) notify(bibNotice(b.planned, b.planned.items.length, p.bibNoticeLines));
+    });
+  };
+  /** A .bib dropped on the graph's background at (sx, sy) (D9): read by the main process, then its block follows the cursor. */
+  const dropBibFile = async (path: string, at: { x: number; y: number }) => {
+    const plan = sceneRef.current?.plan.id;
+    if (!plan) return;
+    if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’importer un fichier .bib.'); return; }
+    bibMark('drop');
+    let file: BibFile;
+    try {
+      file = await window.cirrus.readBib(path);
+    } catch (e) {
+      console.error('Lecture du fichier .bib :', e);
+      notify('Le fichier .bib n’a pas pu être lu : rien n’est importé.');
+      return;
+    }
+    startBib(file, at, plan);
   };
   /**
    * The handles of the one connection selected, if it is drawn alone (spec 8.5): its marker, its trunk's rotation, the
@@ -904,13 +1041,16 @@ export function GraphView(props: {
   };
   /**
    * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
-   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); elsewhere, a notice (dropRoute).
+   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
+   * is imported (plan 4c, D9); elsewhere, a notice (dropRoute).
    */
   const dropFilesAt = (sx: number, sy: number, paths: string[], refused: Refusal[] = []): Promise<void> => {
     const h = hitAt(sx, sy), i = h.kind === 'item' ? sceneRef.current?.byId.get(h.id) : undefined;
-    const route = dropRoute('graph', nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false));
+    const under = nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false);
+    const route = dropRoute('graph', under, 'files', refused.length === 0 ? paths : undefined);
     if (route.to === 'node') return props.onDropFiles(route.node, paths, refused);
-    notify('Dépose le fichier sur un nœud pour l’y ajouter.');
+    if (route.to === 'bib') return dropBibFile(paths[0], { x: sx, y: sy });
+    notify(backgroundNotice([...paths, ...refused.map((r) => r.name)]));
     return Promise.resolve();
   };
   useImperativeHandle(props.ref, () => ({ dropFilesAt }));
@@ -1108,6 +1248,8 @@ export function GraphView(props: {
           break;
         }
         placing.current = null;
+        // A .bib's block (D9): its ghost stays where it is put down while its .bib are stored.
+        if (what.kind === 'bib') { placeBib(intent.at, zoom); break; }
         setGhost(null);
         if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label, indexOf(sc)));
         else if (what.kind === 'repercussion') {
@@ -1140,6 +1282,8 @@ export function GraphView(props: {
         placing.current = null;
         setGhost(null);
         if (what?.kind === 'connect') endConnect();
+        // A .bib's block (D9): nothing is made, its .bib no longer stored.
+        if (what?.kind === 'bib') dropBib();
         // Escape leaves this plan as it is; the next one opens (spec 10).
         if (what?.kind === 'repercussion') nextRepercussion();
         if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
@@ -1227,6 +1371,17 @@ export function GraphView(props: {
       case 'importPublication': {
         const cam = e.renderer.camera;
         setPublication({ key: performance.now(), plan: sc.plan.id, at: screenToWorld(cam, at.x, at.y), zoom: cam.zoom });
+        break;
+      }
+      case 'importBib': {
+        // The system's dialog, by the main process (D9): the .bib chosen follows the cursor from the menu's point.
+        if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’importer un fichier .bib.'); break; }
+        const plan = sc.plan.id;
+        bibMark('drop');
+        window.cirrus.pickBib().then((file) => startBib(file, at, plan), (err: unknown) => {
+          console.error('Lecture du fichier .bib :', err);
+          notify('Le fichier .bib n’a pas pu être lu : rien n’est importé.');
+        });
         break;
       }
       case 'rename': {
@@ -1517,7 +1672,7 @@ export function GraphView(props: {
         onPick={(item) => { const e = engine.current, sc = sceneRef.current; if (e && sc) moveCamera(fitItem(sc, item, e.renderer.camera, paramsRef.current)); }}
       />
       <Tooltip tip={tip} />
-      {ghost && <Ghost x={ghost.x} y={ghost.y} text={ghost.text} />}
+      {ghost && <Ghost x={ghost.x} y={ghost.y} text={ghost.text} box={ghost.box} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} onPick={(a) => pick(a, menu.hit, { x: menu.x, y: menu.y })} />}
       {editor && <TitleEditor x={editor.x} y={editor.y} width={editor.width} initial={editor.initial} onDone={(t) => { setEditor(null); editor.done(t); root.current?.focus(); }} />}
       {line && <svg className="connect-line"><line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} /></svg>}

@@ -141,6 +141,19 @@ test('doublons (revue I2, M2) : une même clé, ou un même titre et une même a
   expect(planPublication(index(), inputOf(BOOK()), 50)).toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${LI} ».` });
 });
 
+test('doublons (tâche 6, règle du contrôleur) : seule la clé propre d’une entrée est une marque ; une clé fabriquée est prise, jamais une marque — à la revérification non plus', () => {
+  const RESNET = 'Deep Residual Learning for Image Recognition';
+  run(editNode(s, ids.nodes.monde, { title: RESNET, tags: [tag('clé_bibtex', 'He_2016'), tag('doi', '10.1109/CVPR.2016.90'), tag('date_de_publication', '2016')] }));
+  const identity = parseBibtex('@inproceedings{He_2016, title={Identity Mappings in Deep Residual Networks}, author={He, Kaiming}, year={2016}, DOI={10.1007/978-3-319-46493-0_38}}').entries[0];
+  const p = planned(planPublication(PublicationIndex.of(s), { fields: { title: 'Identity Mappings in Deep Residual Networks', authors: ['Kaiming He'], year: '2016' }, entry: identity, doi: '10.1007/978-3-319-46493-0_38' }, 50));
+  expect(p.key).toBe('he2016');
+  // Its marks: its own key, He_2016, and not the one made for it.
+  expect(p.marks.keys).toEqual(['He_2016']);
+  // A node takes he2016 meanwhile (the user's own key, without an identifier): the import is no duplicate of it.
+  setTags(ids.nodes.occam, [tag('clé_bibtex', 'he2016')]);
+  expect(() => publicationBuild(p, [], sc, SKY, 1, P)(s)).not.toThrow();
+});
+
 test('doublons (re-revue N2) : un DOI de la base écrit avec le point de la phrase est ce DOI, et non un veto', async () => {
   const RESNET = 'Deep Residual Learning for Image Recognition';
   for (const written of ['10.1109/CVPR.2016.90.', 'https://doi.org/10.1109/CVPR.2016.90.']) {

@@ -1,0 +1,91 @@
+% Encoding: UTF-8
+% Plan 4c, task 6: the test base's bibliography, as a user keeps one: @string macros, accents in LaTeX, a key of
+% DBLP's form (not a safe key: author and year are taken), an arXiv preprint, the base's own book (a duplicate of its
+% node « An Introduction to Kolmogorov Complexity and Its Applications », by its key li2008), and an entry broken by a
+% missing comma, said by its line, the next ones read all the same. Imported whole, seven publications.
+
+@string{pit = "Problems of Information Transmission"}
+@string{ic = "Information and Control"}
+
+@article{shannon1948,
+  author  = {Shannon, Claude E.},
+  title   = {A Mathematical Theory of Communication},
+  journal = {Bell System Technical Journal},
+  volume  = {27},
+  number  = {3},
+  pages   = {379--423},
+  year    = 1948,
+  month   = jul,
+  doi     = {10.1002/j.1538-7305.1948.tb01338.x}
+}
+
+@article{DBLP:journals/ppi/Kolmogorov65,
+  author  = {Kolmogorov, A.~N.},
+  title   = {Three approaches to the quantitative definition of information},
+  journal = pit,
+  volume  = {1},
+  number  = {1},
+  pages   = {1--7},
+  year    = {1965}
+}
+
+@article{solomonoff1964,
+  author  = {Solomonoff, Ray J.},
+  title   = {A formal theory of inductive inference. {Part I}},
+  journal = ic,
+  volume  = {7},
+  number  = {1},
+  pages   = {1--22},
+  year    = {1964},
+  doi     = {10.1016/S0019-9958(64)90223-2}
+}
+
+@article{rissanen1978,
+  author  = {Rissanen, Jorma},
+  title   = {Modeling by shortest data description},
+  journal = {Automatica},
+  volume  = {14},
+  number  = {5},
+  pages   = {465--471},
+  year    = {1978},
+  doi     = {10.1016/0005-1098(78)90005-5}
+}
+
+@book{li2008,
+  author    = {Li, Ming and Vit{\'a}nyi, Paul},
+  title     = {An Introduction to {Kolmogorov} Complexity and Its Applications},
+  edition   = {3},
+  publisher = {Springer},
+  year      = {2008},
+  doi       = {10.1007/978-0-387-49820-1}
+}
+
+@book{grunwald2007,
+  author    = {Gr{\"u}nwald, Peter D.},
+  title     = {The Minimum Description Length Principle},
+  publisher = {MIT Press},
+  year      = {2007}
+}
+
+@misc{vaswani2017attention,
+  author        = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and Kaiser, {\L}ukasz and Polosukhin, Illia},
+  title         = {Attention Is All You Need},
+  year          = {2017},
+  eprint        = {1706.03762},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+@article{casse2020,
+  author = {Personne, Jean},
+  title  = {Une entrée sans virgule}
+  year   = {2020}
+}
+
+@book{hutter2005,
+  author    = {Hutter, Marcus},
+  title     = {Universal Artificial Intelligence: Sequential Decisions Based on Algorithmic Probability},
+  publisher = {Springer},
+  year      = {2005},
+  doi       = {10.1007/b138233}
+}

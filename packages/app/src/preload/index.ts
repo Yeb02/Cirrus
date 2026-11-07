@@ -46,6 +46,12 @@ contextBridge.exposeInMainWorld('cirrus', {
   },
   pickFiles: () => ipcRenderer.invoke('cirrus:files:pick'),
   storeText: (name: string, text: string) => ipcRenderer.invoke('cirrus:files:store-text', name, text),
+  storeTexts: (items: unknown) => ipcRenderer.invoke('cirrus:files:store-texts', items),
+  // A .bib dropped on the graph's background (plan 4c, task 6): read only if its path is a drop's, as importFiles.
+  readBib: (path: unknown) => (typeof path === 'string' && dropped.has(path)
+    ? ipcRenderer.invoke('cirrus:bib:read', path)
+    : Promise.resolve({ refused: `« ${nameOf(path).slice(0, 80)} » n’a pas été déposé : il n’est pas lu.` })),
+  pickBib: () => ipcRenderer.invoke('cirrus:bib:pick'),
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
   openUrl: (url: string) => ipcRenderer.invoke('cirrus:open-url', url),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),

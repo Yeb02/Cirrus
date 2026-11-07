@@ -1,5 +1,5 @@
 import {
-  type Action, type BibEntry, type BibFields, bibFields, bibIdentifiers, bibtexEntry, CITE_KEY_TAG, citeKey, cleanArxiv, cleanDoi, CommandError, type FileRef,
+  type Action, type BibEntry, type BibFields, bibFields, bibIdentifiers, bibShort, bibtexEntry, CITE_KEY_TAG, CiteKeys, citeKey, cleanArxiv, cleanDoi, CommandError, type FileRef,
   type NodeRec, normalizedTitle, parseBibtex, safeCiteKey, type State, type TagValue, type Vec2, yearIn,
 } from '@cirrus/core';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
@@ -80,7 +80,10 @@ function marksOf(n: NodeRec): Marks {
   return m;
 }
 
-/** An import's marks: its identifiers, its key (its entry's own, when it is kept, or the one made), its title and year. */
+/**
+ * An import's marks: its identifiers, its entry's own key (the file's or the server's, whether it is kept or not; one
+ * made by citeKey is only taken, never a mark: the controller's ruling of task 6), its title and year.
+ */
 function marksOfInput(p: PublicationInput, key: string | null): Marks {
   const m: Marks = { dois: [], arxivs: [], keys: key === null ? [] : [key], titleYear: titleYear(p.fields.title, p.fields.year) };
   if (p.doi !== undefined) addId(m, p.doi);
@@ -89,21 +92,27 @@ function marksOfInput(p: PublicationInput, key: string | null): Marks {
 }
 
 const shown = (title: string) => (title === '' ? 'Sans titre' : title);
-const already = (why: string, title: string) => `Déjà dans la base (${why}) : « ${title} ».`;
-/** A node bearing a key, or a title and a year: its title, and its identifiers, which may contradict the match. */
-interface Holder extends Ids { title: string }
+/**
+ * A publication there, or an entry of the same file above (task 6): its title, its line in the file if it is one, and
+ * its identifiers, which may contradict a match by key or by title and year.
+ */
+interface Holder extends Ids { title: string; line?: number }
+/** Why an import is a duplicate, the publication there named (its title cut, bibShort: it may come from a file). */
+const already = (why: string, h: Holder) => (h.line === undefined
+  ? `Déjà dans la base (${why}) : « ${bibShort(h.title)} ».`
+  : `Déjà plus haut dans le fichier, ligne ${h.line} (${why}) : « ${bibShort(h.title)} ».`);
 
 /**
  * The publications of a base, by what makes a duplicate (D7), built once from the state: the nodes outside the trash.
  * `keys`: every `clé_bibtex`, the trash's too, which a key made for a new node avoids (citeKey). Task 6 adds the entries
- * of a .bib to it as they are planned (`add`), so that one file's duplicates are found too.
+ * of a .bib to it as they are planned (`add`), so that one file's duplicates are found too, named by their line.
  */
 export class PublicationIndex {
-  private readonly doi = new Map<string, string>();
-  private readonly arxiv = new Map<string, string>();
+  private readonly doi = new Map<string, Holder>();
+  private readonly arxiv = new Map<string, Holder>();
   private readonly key = new Map<string, Holder[]>();
   private readonly titleYear = new Map<string, Holder[]>();
-  readonly keys = new Set<string>();
+  readonly keys = new CiteKeys();
 
   static of(s: State): PublicationIndex {
     const index = new PublicationIndex();
@@ -114,10 +123,10 @@ export class PublicationIndex {
     return index;
   }
 
-  private mark(m: Marks, title: string): void {
-    for (const d of m.dois) if (!this.doi.has(d)) this.doi.set(d, title);
-    for (const a of m.arxivs) if (!this.arxiv.has(a)) this.arxiv.set(a, title);
-    const holder: Holder = { title, dois: m.dois, arxivs: m.arxivs };
+  private mark(m: Marks, title: string, line?: number): void {
+    const holder: Holder = { title, dois: m.dois, arxivs: m.arxivs, ...(line !== undefined ? { line } : {}) };
+    for (const d of m.dois) if (!this.doi.has(d)) this.doi.set(d, holder);
+    for (const a of m.arxivs) if (!this.arxiv.has(a)) this.arxiv.set(a, holder);
     const hold = (map: Map<string, Holder[]>, v: string) => {
       const list = map.get(v);
       if (list) list.push(holder);
@@ -135,31 +144,37 @@ export class PublicationIndex {
    */
   duplicate(m: Marks): string | null {
     for (const d of m.dois) {
-      const title = this.doi.get(d);
-      if (title !== undefined) return already('même DOI', title);
+      const h = this.doi.get(d);
+      if (h !== undefined) return already('même DOI', h);
     }
     for (const a of m.arxivs) {
-      const title = this.arxiv.get(a);
-      if (title !== undefined) return already('même identifiant arXiv', title);
+      const h = this.arxiv.get(a);
+      if (h !== undefined) return already('même identifiant arXiv', h);
     }
     const differ = (mine: string[], theirs: string[]) => mine.length > 0 && theirs.length > 0 && !theirs.some((x) => mine.includes(x));
     const agrees = (h: Holder) => !differ(m.dois, h.dois) && !differ(m.arxivs, h.arxivs);
     for (const k of m.keys) {
       const h = this.key.get(k)?.find(agrees);
-      if (h) return already('même clé BibTeX', h.title);
+      if (h) return already('même clé BibTeX', h);
     }
     const h = m.titleYear === null ? undefined : this.titleYear.get(m.titleYear)?.find(agrees);
-    return h ? already('même titre et même année', h.title) : null;
+    return h ? already('même titre et même année', h) : null;
   }
 
-  /** A publication planned (task 6: the next entries of the same file see it). */
-  add(plan: PlannedPublication): void {
-    this.mark(plan.marks, shown(plan.title));
+  /**
+   * A publication planned from the entry of `line` of a .bib (task 6): the next entries of the same file see it, by
+   * its marks — its own key, never the one made (the controller's ruling) —, and its key, made or not, is taken.
+   */
+  add(plan: PlannedPublication, line: number): void {
+    this.mark(plan.marks, shown(plan.title), line);
     if (plan.key !== null) this.keys.add(plan.key);
   }
 }
 
-/** A publication ready to be made: its node's title and tags, its key and its .bib, what makes it a duplicate. */
+/**
+ * A publication ready to be made: its node's title and tags, its key and its .bib, what makes it a duplicate (`marks`:
+ * its entry's own key, not the one made for it).
+ */
 export interface PlannedPublication {
   title: string;
   tags: TagValue[];
@@ -191,14 +206,15 @@ export function planPublication(index: PublicationIndex, p: PublicationInput, ma
     tags,
     key,
     bib: key !== null && p.entry !== null ? { name: `${key}.bib`, text: bibtexEntry(p.entry, key) } : null,
-    marks: marksOfInput(p, key),
+    marks: marksOfInput(p, own),
   };
 }
 
 /**
  * The import as one action (one Ctrl+Z): the node of `plan` put down at `at` with `files` (already in the store), at the
  * step readable at this zoom, entering the group whose envelope receives it (newNodeBuild). Refused when it is computed
- * if the publication is in the base by then (another import meanwhile), the node there named.
+ * if the publication is in the base by then (another import meanwhile), the node there named — by its marks, so its
+ * entry's own key, never the one made for it (the controller's ruling of task 6).
  */
 export function publicationBuild(
   plan: PlannedPublication, files: FileRef[], scene: PlanScene, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex,

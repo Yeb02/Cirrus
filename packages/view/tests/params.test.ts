@@ -186,6 +186,18 @@ test('publications : auteurs gardés en tags et pages d’un PDF déposé lues, 
   expect(withOverrides({ publicationMaxAuthors: 0, publicationPdfPages: 99 })).toMatchObject({ publicationMaxAuthors: 1, publicationPdfPages: 20 });
 });
 
+test('un .bib importé : l’écart entre les boîtes de son bloc et les lignes de sa notification, réglages avancés du groupe « Publications » (plan 4c, tâche 6)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['bibBlockGapPx', 24, 'Écart entre les boîtes du bloc d’un .bib importé (px au cran lisible)', 0, 400, 1],
+    ['bibNoticeLines', 5, 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', 1, 100, 1],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Publications', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ bibBlockGapPx: -3, bibNoticeLines: 0 })).toMatchObject({ bibBlockGapPx: 0, bibNoticeLines: 1 });
+});
+
 test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage principal du groupe « Paquets et installation » (plan 4b, tâche 2)', () => {
   expect(DEFAULT_PARAMS.latexPackages).toEqual([]);
   expect(PARAM_SPECS.find((s) => s.key === 'latexPackages')).toEqual({

@@ -25,6 +25,38 @@ export interface BibEntry {
 /** What is wrong in a .bib, in French, at the line of the entry concerned. */
 export interface BibProblem { line: number; message: string }
 
+/**
+ * A text longer than this is not read at all (a fixed bound of security, the controller's ruling M8, task 6): about
+ * 150 Mo held at the bound while it is read (the text, the table of its braces, its values), some 8 000 entries with
+ * their abstracts. parseBibtex checks it itself, so every path is bounded: a server's answer, a .bib dropped or chosen.
+ */
+export const BIB_MAX_CHARS = 16 * 2 ** 20;
+/**
+ * A file larger than this cannot be a text of BIB_MAX_CHARS characters, whatever its encoding — UTF-16 with its BOM,
+ * two bytes a character; UTF-8 and Windows-1252, one at least —: the main process does not read it (task 6).
+ */
+export const BIB_MAX_BYTES = 2 * BIB_MAX_CHARS + 2;
+/**
+ * A name taken from a file — a key, a type, a field's or a macro's name, a title — is said in a message with this many
+ * characters at most, then « … » (a fixed bound of security: 200 problems naming a macro of a megabyte each would hold
+ * 400 Mo; and a notification stays legible, task 6).
+ */
+export const BIB_NAME_CHARS = 80;
+
+/** `s` as a message says it: BIB_NAME_CHARS characters at most, then « … », never cutting a character in two. */
+export function bibShort(s: string): string {
+  if (s.length <= BIB_NAME_CHARS) return s;
+  const c = s.charCodeAt(BIB_NAME_CHARS - 1);
+  return `${s.slice(0, c >= 0xd800 && c <= 0xdbff ? BIB_NAME_CHARS - 1 : BIB_NAME_CHARS)}…`;
+}
+
+/**
+ * A .bib read: its entries, its problems; `omitted`, the problems past BIB_MAX_PROBLEMS, which the problem « Et N
+ * autres problèmes. » counts; `stopped`, why the reading stopped before the end of the text if it did (too large, too
+ * many entries, too broken), the last of the problems too.
+ */
+export interface BibRead { entries: BibEntry[]; problems: BibProblem[]; omitted: number; stopped: BibProblem | null }
+
 /** A value longer than this, its macros resolved, is refused: its entry set aside (a fixed bound of security). */
 export const BIB_MAX_VALUE_CHARS = 1 << 20;
 /** The problems listed at most; one more counts the others (a fixed bound). */
@@ -83,10 +115,15 @@ interface Value { text: string; parts: { s: string; bare: boolean }[] }
  * BIB_MAX_VALUE_CHARS at most, all of them four times the text's length (plus one value's cap), BIB_MAX_ENTRIES
  * entries read, BIB_MAX_PROBLEMS problems listed, and the characters examined — every scan counted, a broken entry's
  * read again included — BIB_WORK_PER_CHAR times the text's length plus BIB_WORK_SLACK: the time is linear whatever
- * the file (re-review N1).
+ * the file (re-review N1). A text of more than BIB_MAX_CHARS characters is not read (task 6, M8); a name the file
+ * gives is said in a problem cut to BIB_NAME_CHARS (bibShort).
  */
-export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibProblem[] } {
+export function parseBibtex(text: string): BibRead {
   const n = text.length;
+  if (n > BIB_MAX_CHARS) {
+    const tooLarge = { line: 1, message: `Le fichier fait ${fr(n)} caractères, plus que les ${fr(BIB_MAX_CHARS)} qu’un .bib peut compter : il n’est pas lu.` };
+    return { entries: [], problems: [tooLarge], omitted: 0, stopped: tooLarge };
+  }
   const entries: BibEntry[] = [], problems: BibProblem[] = [];
   let omitted = 0, omittedLine = 0;
   // Every brace's match, beforehand: a value never closed costs one look-up, not a reading to the end of the file.
@@ -223,7 +260,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         if (defined !== undefined) add(defined, null);
         else if (MONTHS.has(month)) add(MONTHS.get(month)!, month);
         else {
-          unknown(name);
+          unknown(bibShort(name));
           add('', name);
         }
         p = q;
@@ -243,7 +280,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
     // An « @ » without a type is no command.
     if (type === '') return at + 1;
     /** What is said broken: the entry, by its key once read, a macro, the preamble, a comment. */
-    let label = `Entrée @${type} abîmée`;
+    let label = `Entrée @${bibShort(type)} abîmée`;
     try {
       p = skip(typeEnd);
       const open = p < n ? text.charCodeAt(p) : -1;
@@ -261,7 +298,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         }
         return typeEnd;
       }
-      if (open !== OPEN && open !== LPAREN) throw new Broken(`« { » ou « ( » est attendu après « @${text.slice(skip(at + 1), typeEnd)} ».`);
+      if (open !== OPEN && open !== LPAREN) throw new Broken(`« { » ou « ( » est attendu après « @${bibShort(text.slice(skip(at + 1), typeEnd))} ».`);
       const closer = open === OPEN ? CLOSE : RPAREN;
       const closeName = open === OPEN ? '}' : ')';
       p = skip(p + 1);
@@ -277,19 +314,19 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
           if (p >= n) throw end();
           if (text.charCodeAt(p) === closer) return p + 1;
           const q = ident(p);
-          const name = text.slice(p, q);
+          const name = text.slice(p, q), said = bibShort(name);
           if (name === '') throw new Broken('le nom d’une macro est attendu.');
-          label = `Macro « ${name} » abîmée`;
+          label = `Macro « ${said} » abîmée`;
           p = skip(q);
           if (p >= n) throw end();
-          if (text.charCodeAt(p) !== EQUALS) throw new Broken(`« = » est attendu après « ${name} ».`);
-          const r = value(skip(p + 1), (m) => problem(at, `Macro « ${name} » : la macro « ${m} » n’est définie nulle part ; elle est laissée vide.`));
+          if (text.charCodeAt(p) !== EQUALS) throw new Broken(`« = » est attendu après « ${said} ».`);
+          const r = value(skip(p + 1), (m) => problem(at, `Macro « ${said} » : la macro « ${m} » n’est définie nulle part ; elle est laissée vide.`));
           strings.set(name.toLowerCase(), r.v.text);
           p = r.p;
           if (p >= n) throw end();
           const c = text.charCodeAt(p);
           if (c === COMMA) p = skip(p + 1);
-          else if (c !== closer) throw new Broken(`« , » ou « ${closeName} » est attendu après la macro « ${name} ».`);
+          else if (c !== closer) throw new Broken(`« , » ou « ${closeName} » est attendu après la macro « ${said} ».`);
         }
       }
       // An entry (none past BIB_MAX_ENTRIES: reading stops there): its key, unless its first word is a field's name.
@@ -304,12 +341,12 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
       const after = skip(q);
       if (after < n && text.charCodeAt(after) === EQUALS) key = '';
       else {
-        if (key !== '') label = `Entrée « ${key} » abîmée`;
+        if (key !== '') label = `Entrée « ${bibShort(key)} » abîmée`;
         p = after;
         if (p >= n) throw end();
         const c = text.charCodeAt(p);
         if (c === COMMA) p = skip(p + 1);
-        else if (c !== closer) throw new Broken(key === '' ? 'sa clé est attendue.' : `« , » est attendu après la clé « ${key} ».`);
+        else if (c !== closer) throw new Broken(key === '' ? 'sa clé est attendue.' : `« , » est attendu après la clé « ${bibShort(key)} ».`);
       }
       const entry: BibEntry = { type, key, fields: new Map(), raw: new Map(), line: lineOf(at) };
       const warnings: string[] = [];
@@ -317,14 +354,14 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         if (p >= n) throw end();
         if (text.charCodeAt(p) === closer) { p++; break; }
         const nameEnd = ident(p);
-        const name = text.slice(p, nameEnd).toLowerCase();
+        const name = text.slice(p, nameEnd).toLowerCase(), said = bibShort(name);
         if (name === '') throw new Broken('le nom d’un champ est attendu.');
         p = skip(nameEnd);
         if (p >= n) throw end();
-        if (text.charCodeAt(p) !== EQUALS) throw new Broken(`« = » est attendu après le champ « ${name} ».`);
+        if (text.charCodeAt(p) !== EQUALS) throw new Broken(`« = » est attendu après le champ « ${said} ».`);
         p = skip(p + 1);
         const r = value(p, (m) => warnings.push(`la macro « ${m} » n’est définie nulle part ; elle est laissée vide.`));
-        if (entry.fields.has(name)) warnings.push(`le champ « ${name} » est en double ; le premier est gardé.`);
+        if (entry.fields.has(name)) warnings.push(`le champ « ${said} » est en double ; le premier est gardé.`);
         else {
           entry.fields.set(name, r.v.text);
           entry.raw.set(name, rawOf(r.v));
@@ -333,9 +370,9 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         if (p >= n) throw end();
         const c = text.charCodeAt(p);
         if (c === COMMA) p = skip(p + 1);
-        else if (c !== closer) throw new Broken(`« , » ou « ${closeName} » est attendu après le champ « ${name} » (ligne ${lineOf(p)}).`);
+        else if (c !== closer) throw new Broken(`« , » ou « ${closeName} » est attendu après le champ « ${said} » (ligne ${lineOf(p)}).`);
       }
-      const named = key === '' ? `Entrée @${type}` : `Entrée « ${key} »`;
+      const named = key === '' ? `Entrée @${bibShort(type)}` : `Entrée « ${bibShort(key)} »`;
       for (const w of warnings) problem(at, `${named} : ${w}`);
       if (key !== '') {
         const lower = key.toLowerCase(), first = keys.get(lower);
@@ -400,9 +437,12 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
     }
   }
   if (omitted > 0) problems.push({ line: omittedLine, message: `Et ${fr(omitted)} autre${omitted > 1 ? 's' : ''} problème${omitted > 1 ? 's' : ''}.` });
-  if (tooMany >= 0) problems.push({ line: lineOf(tooMany), message: `Le fichier compte plus de ${fr(BIB_MAX_ENTRIES)} entrées : les suivantes ne sont pas lues.` });
-  if (stoppedAt >= 0) problems.push({ line: lineOf(stoppedAt), message: `Le fichier est trop abîmé pour être lu en entier : la lecture s’arrête ligne ${lineOf(stoppedAt)}.` });
-  return { entries, problems };
+  // At most one: past BIB_MAX_ENTRIES, the reading goes to the end of the text at once.
+  let stopped: BibProblem | null = null;
+  if (tooMany >= 0) stopped = { line: lineOf(tooMany), message: `Le fichier compte plus de ${fr(BIB_MAX_ENTRIES)} entrées : les suivantes ne sont pas lues.` };
+  else if (stoppedAt >= 0) stopped = { line: lineOf(stoppedAt), message: `Le fichier est trop abîmé pour être lu en entier : la lecture s’arrête ligne ${lineOf(stoppedAt)}.` };
+  if (stopped) problems.push(stopped);
+  return { entries, problems, omitted, stopped };
 }
 
 // LaTeX to Unicode (D7: a title's accents, `\'e` giving « é »).
@@ -682,22 +722,52 @@ function letters(n: number): string {
 }
 
 /**
+ * The keys held, compared without case as BibTeX compares them (a « Repeated entry » otherwise, review M1): kept in
+ * lower case, and, for each base of the keys citeKey makes, the first suffix not known to be taken. Keys are only ever
+ * added, so a suffix found taken stays so: a key made for each of a .bib's thousands of entries costs a few look-ups,
+ * even when they all share a base (task 6: no author, no year, the same first word).
+ */
+export class CiteKeys {
+  private readonly lower = new Set<string>();
+  private readonly next = new Map<string, number>();
+  constructor(keys: Iterable<string> = []) {
+    for (const k of keys) this.add(k);
+  }
+  add(key: string): void {
+    this.lower.add(key.toLowerCase());
+  }
+  has(key: string): boolean {
+    return this.lower.has(key.toLowerCase());
+  }
+  /** The first suffix of `base` that may be free (citeKey). */
+  from(base: string): number {
+    return this.next.get(base) ?? 1;
+  }
+  /** Every suffix of `base` before `i` is taken. */
+  reached(base: string, i: number): void {
+    this.next.set(base, i);
+  }
+}
+
+/**
  * A publication's key (D7): the entry's if it has one that safeCiteKey takes and no other node holds (`taken`, without
  * case); otherwise its first author's family name and its year (`li2008`) — without an author, its title's first word;
  * without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case.
+ * `taken` as CiteKeys for many keys made one after the other (a .bib's, task 6): a Set is read whole at each call.
  */
-export function citeKey(entry: BibEntry, taken: ReadonlySet<string>): string {
-  // Keys compared without case, as BibTeX compares them (a « Repeated entry » otherwise, review M1).
-  const lower = new Set<string>();
-  for (const k of taken) lower.add(k.toLowerCase());
-  if (entry.key !== '' && safeCiteKey(entry.key) && !lower.has(entry.key.toLowerCase())) return entry.key;
+export function citeKey(entry: BibEntry, taken: ReadonlySet<string> | CiteKeys): string {
+  const keys = taken instanceof CiteKeys ? taken : new CiteKeys(taken);
+  if (entry.key !== '' && safeCiteKey(entry.key) && !keys.has(entry.key)) return entry.key;
   const family = keyLetters(bibNames(entry.fields.get('author') ?? '')[0]?.last ?? '');
   const firstWord = keyLetters(latexToUnicode(entry.fields.get('title') ?? '').split(' ').find((w) => keyLetters(w) !== '') ?? '');
   const year = yearIn(entry.fields.get('year') ?? '') ?? yearIn(entry.fields.get('date') ?? '') ?? '';
   const base = (family || firstWord || 'publication').slice(0, 60) + year;
-  for (let i = 1; ; i++) {
+  for (let i = keys.from(base); ; i++) {
     const key = i === 1 ? base : base + letters(i);
-    if (!lower.has(key) && safeCiteKey(key)) return key;
+    if (!keys.has(key) && safeCiteKey(key)) {
+      keys.reached(base, i);
+      return key;
+    }
   }
 }
 

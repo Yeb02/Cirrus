@@ -6,7 +6,7 @@ import {
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { FileRef } from '@cirrus/core';
-import { type ChangeRow, filePath, importFile, storeBytes } from '@cirrus/store';
+import { type ChangeRow, filePath, importFile, storeBytes, storeBytesAsync } from '@cirrus/store';
 import { checkFileName } from '../renderer/files/merge.ts';
 
 /**
@@ -174,14 +174,62 @@ export function importPaths(storeDir: string, paths: string[], maxBytes: number)
  * what is not a string.
  */
 export function storeText(storeDir: string, name: unknown, text: unknown, maxBytes: number): FileRef {
+  return storeBytes(storeDir, name as string, textBytes(name, text, maxBytes));
+}
+
+const mb = (bytes: number) => (bytes / 2 ** 20).toLocaleString('fr-FR', { maximumFractionDigits: 1 });
+/** storeText's checks: a name checkFileName takes, a string of `maxBytes` at most in UTF-8 (a leading BOM dropped); its bytes. */
+function textBytes(name: unknown, text: unknown, maxBytes: number): Buffer {
   if (typeof name !== 'string' || typeof text !== 'string') throw new Error('Enregistrement refusé : nom ou texte invalide.');
   const why = checkFileName(name, []);
   if (why) throw new Error(why);
   const bytes = Buffer.from(text.startsWith('\uFEFF') ? text.slice(1) : text, 'utf8');
-  if (bytes.length > maxBytes) {
-    throw new Error(`Le texte fait plus de ${(maxBytes / 2 ** 20).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo : il n’est pas enregistré.`);
-  }
-  return storeBytes(storeDir, name, bytes);
+  if (bytes.length > maxBytes) throw new Error(`Le texte fait plus de ${mb(maxBytes)} Mo : il n’est pas enregistré.`);
+  return bytes;
+}
+
+/** The texts storeTexts takes in one call at most (a fixed bound of the IPC: the interface sends BIB_STORE_BATCH). */
+export const STORE_TEXTS_MAX = 1000;
+/**
+ * The texts written at once (storeBytesAsync, by the file system's thread pool): the store's fsync and the antivirus
+ * cost a few milliseconds a file (task 6: 2 000 files, 14 s one after the other, about 5 s eight at a time).
+ */
+const STORE_PARALLEL = 8;
+
+/**
+ * Texts stored as files, as storeText stores each, in one call (plan 4c, task 6: a .bib's entries, a file each), several
+ * written at once without holding this process: their references, in order. Every one is checked before any is written
+ * — a list of STORE_TEXTS_MAX at most, each storeText's checks, all of them `maxBytes` at most together —, and the first
+ * refused rejects the call with its reason, in French, nothing written. A write that fails rejects it too; the others
+ * already written stay (the store never erases).
+ */
+export async function storeTexts(storeDir: string, items: unknown, maxBytes: number): Promise<FileRef[]> {
+  if (!Array.isArray(items) || items.length > STORE_TEXTS_MAX) throw new Error('Enregistrement refusé : liste de textes invalide.');
+  let total = 0;
+  const all = items.map((x: unknown) => {
+    if (x === null || typeof x !== 'object') throw new Error('Enregistrement refusé : nom ou texte invalide.');
+    const { name, text } = x as { name: unknown; text: unknown };
+    const bytes = textBytes(name, text, maxBytes);
+    total += bytes.length;
+    return { name: name as string, bytes };
+  });
+  if (total > maxBytes) throw new Error(`Les textes font plus de ${mb(maxBytes)} Mo ensemble : ils ne sont pas enregistrés.`);
+  const refs: FileRef[] = new Array(all.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < all.length) {
+      const i = next++;
+      try {
+        refs[i] = await storeBytesAsync(storeDir, all[i].name, all[i].bytes);
+      } catch (e) {
+        // The others take no more.
+        next = all.length;
+        throw e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(STORE_PARALLEL, all.length) }, worker));
+  return refs;
 }
 
 /**

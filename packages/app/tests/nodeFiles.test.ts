@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { NODE_MIME } from '../src/renderer/files/annotations.ts';
 import { mergeFiles } from '../src/renderer/files/merge.ts';
 import {
-  carried, carriesFiles, dropNotice, droppedPaths, dropRoute, dropZone, EXECUTABLE_SHOWN, fileMenu, NOT_ON_DISK, openNotice, refusalNotice, refusesStrayDrop,
+  backgroundNotice, carried, carriesFiles, dropNotice, droppedPaths, dropRoute, dropZone, EXECUTABLE_SHOWN, fileMenu, NOT_ON_DISK, openNotice, refusalNotice, refusesStrayDrop,
   systemOnClick,
 } from '../src/renderer/files/nodeFiles.ts';
 import { nodeOpenedBy } from '../src/renderer/ui/panels/Panels.tsx';
@@ -168,6 +168,26 @@ test('carried et dropRoute (plan 4c, tâche 3) : un nœud tiré d’une liste n�
     at(...GRAPH, 'div.popup', 'ul', 'li'), at(...GRAPH, 'div.ask', 'button'), at(...MAIN, 'div.panels', 'section.panel.file-preview', 'div.body', 'aside.annotation-margin'),
     at(...APP, 'div.full-screen', 'div.viewer'), at(...APP, 'div.tabs', 'div.tab.on'),
   ]) expect(route(where, null, NODE)).toEqual({ to: 'refused' });
+});
+
+test('dropRoute (plan 4c, tâche 6) : un .bib seul lâché sur le fond du graphe s’importe ; sur un nœud ou son pop-up, c’est un fichier du nœud ; sur le dialogue d’import, refusé', () => {
+  const canvas = at(...GRAPH, 'div.canvas-host', 'canvas');
+  expect(dropRoute(dropZone(canvas), null, 'files', ['C:\\docs\\bibliographie.bib'])).toEqual({ to: 'bib' });
+  expect(dropRoute(dropZone(canvas), null, 'files', ['C:\\docs\\REFS.BIB'])).toEqual({ to: 'bib' });
+  // On a node, a group, a far node's phantom: a file of that node, as any file (plan 4a).
+  expect(dropRoute(dropZone(canvas), 'n', 'files', ['C:\\docs\\bibliographie.bib'])).toEqual({ to: 'node', node: 'n' });
+  expect(dropRoute(dropZone(at(...MAIN, 'div.panels', 'section.panel.node-popup', 'div.body', 'ul.files')), 'mdl', 'files', ['C:\\docs\\bibliographie.bib']))
+    .toEqual({ to: 'node', node: 'mdl' });
+  // The import dialog takes a PDF only: the graph never takes a .bib let go there; nor what else floats over it.
+  for (const where of [at(...GRAPH, 'div.publication-dialog', 'p.status'), at(...GRAPH, 'div.ask', 'button'), at(...GRAPH, 'div.popup', 'ul')]) {
+    expect(dropRoute(dropZone(where), null, 'files', ['C:\\docs\\bibliographie.bib'])).toEqual({ to: 'refused' });
+  }
+  // With another file, two of them, another kind, or none: a notice on the background, as before.
+  for (const names of [['a.bib', 'b.bib'], ['a.bib', 'notes.md'], ['notes.md'], ['bib'], [], undefined]) {
+    expect(dropRoute(dropZone(canvas), null, 'files', names), JSON.stringify(names)).toEqual({ to: 'notice' });
+  }
+  expect(backgroundNotice(['notes.md'])).toBe('Dépose le fichier sur un nœud pour l’y ajouter.');
+  expect(backgroundNotice(['a.bib', 'notes.md'])).toBe('Dépose un seul fichier .bib à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.');
 });
 
 test('droppedPaths : le chemin de chaque fichier du disque ; un fichier fait par une page est refusé, nommé', () => {

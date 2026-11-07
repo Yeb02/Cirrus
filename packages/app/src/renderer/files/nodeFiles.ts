@@ -3,7 +3,7 @@ import type { ImportResult, OpenResult } from '../../main/files.ts';
 import { filesBuild, UP_TO_DATE } from '../actions.ts';
 import type { EditSession } from '../session.ts';
 import { NODE_MIME } from './annotations.ts';
-import { fileKind, type FileKind } from './kind.ts';
+import { extensionOf, fileKind, type FileKind } from './kind.ts';
 import { type Merge, mergeFiles } from './merge.ts';
 
 /** A file not imported, and why, in French (main/files.ts importPaths). */
@@ -67,24 +67,37 @@ export function dropZone(target: EventTarget | DropTarget | null): DropZone | nu
 
 /**
  * Where a drop goes: files into a node's files, or to a notice, on the graph, where no node takes them (they are taken
- * all the same, so nothing shows them); a node dragged out of a list, placed in the plan shown (plan 4c, D4:
- * placeDroppedBuild); or refused — files by the window's guard (refusesStrayDrop), a node by nothing taking it.
+ * all the same, so nothing shows them); a .bib alone on the graph's background, imported whole (plan 4c, D9); a node
+ * dragged out of a list, placed in the plan shown (plan 4c, D4: placeDroppedBuild); or refused — files by the window's
+ * guard (refusesStrayDrop), a node by nothing taking it.
  */
-export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'place' } | { to: 'refused' };
+export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'bib' } | { to: 'place' } | { to: 'refused' };
+
+/** Whether a file's name or path is a .bib's (D9). */
+const isBib = (name: string) => extensionOf(name.slice(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1)) === 'bib';
 
 /**
  * The route of what is let go on `zone` (dropZone). Files (`what`, by default), `node` being the node that zone gives
  * them to: a pop-up's own (null once it is gone: its pop-up then takes none); on the graph, the node or group under the
  * point, the one a click there would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent
- * or a centre phantom, none). A node dragged out of a list (plan 4c, task 3): placed on the graph, whatever lies under
+ * or a centre phantom, none) — where one .bib alone (`names`, the files' paths) is imported (plan 4c, task 6), on a node
+ * a file of it as any other. A node dragged out of a list (plan 4c, task 3): placed on the graph, whatever lies under
  * the point (the group it enters is read in the plan, by placeDroppedBuild); taken nowhere else — a pop-up, what floats
- * over the graph, a preview, the full screen (modal, D4).
+ * over the graph (the import dialog among it, which takes a PDF only), a preview, the full screen (modal, D4).
  */
-export function dropRoute(zone: DropZone | null, node: Id | null, what: Carried = 'files'): DropRoute {
+export function dropRoute(zone: DropZone | null, node: Id | null, what: Carried = 'files', names?: readonly string[]): DropRoute {
   if (what === 'node') return zone === 'graph' ? { to: 'place' } : { to: 'refused' };
   if (zone === null) return { to: 'refused' };
   if (node !== null) return { to: 'node', node };
-  return zone === 'graph' ? { to: 'notice' } : { to: 'refused' };
+  if (zone !== 'graph') return { to: 'refused' };
+  return names?.length === 1 && isBib(names[0]) ? { to: 'bib' } : { to: 'notice' };
+}
+
+/** The notice of files let go on the graph's background that it does not import (dropRoute: `notice`). */
+export function backgroundNotice(names: readonly string[]): string {
+  return names.some(isBib)
+    ? 'Dépose un seul fichier .bib à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.'
+    : 'Dépose le fichier sur un nœud pour l’y ajouter.';
 }
 
 /** Why a dropped file that is not on the disk (one a web page made, dragged from a browser) is not imported. */
