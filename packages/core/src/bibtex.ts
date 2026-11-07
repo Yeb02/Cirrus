@@ -31,6 +31,15 @@ export const BIB_MAX_VALUE_CHARS = 1 << 20;
 export const BIB_MAX_PROBLEMS = 200;
 /** The entries read at most, 25 times the 2 000 of a large library (plan 4c): those past it are said, not read (a fixed bound). */
 export const BIB_MAX_ENTRIES = 50_000;
+/**
+ * The characters the reading examines at most, BIB_WORK_PER_CHAR times the text's length plus BIB_WORK_SLACK: past it,
+ * it stops, the entries read kept, and says where (a fixed bound of security, the controller's ruling of re-review N1).
+ * A broken entry is read again from its next « @ » at the start of a line, and entries broken on purpose can make each
+ * one read the same long tail. A sound file examines each character once at most, braced values jumped over (they are
+ * the value budget's): the real one of the tests, 2 000 entries included, 0.4 times its length.
+ */
+export const BIB_WORK_PER_CHAR = 8;
+export const BIB_WORK_SLACK = 1 << 20;
 
 /** The months BibTeX's styles define, as BibTeX's own (plain.bst) names them. */
 const MONTHS = new Map(Object.entries({
@@ -45,6 +54,8 @@ const MONTH_NAMES = new Map([...MONTHS].map(([macro, name]) => [name.toLowerCase
 
 /** A refusal of the entry being read: its reason, in French. */
 class Broken extends Error {}
+/** The work's cap reached (BIB_WORK_PER_CHAR): the reading stops. */
+class Exhausted extends Error {}
 
 const OPEN = 123, CLOSE = 125, QUOTE = 34, HASH = 35, PERCENT = 37, COMMA = 44, EQUALS = 61, AT = 64, LPAREN = 40, RPAREN = 41, NEWLINE = 10;
 const isSpace = (c: number) => c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0xfeff || c === 0x2028 || c === 0x2029;
@@ -67,9 +78,12 @@ interface Value { text: string; parts: { s: string; bare: boolean }[] }
  * @preamble are no entries; outside an entry everything is a comment, and so is a « % » to the end of its line between
  * an entry's tokens (biber's, JabRef's), which puts an entry out of use. A broken entry is set aside and said, at its
  * line, and reading goes on from the next « @ » at the start of a line; a field twice keeps the first, a key twice is
- * said (both entries kept); a macro defined nowhere is left empty, and said. Linear: each brace's match is found once,
- * beforehand (a parenthesis's, at the first @comment(). Bounded: a value of BIB_MAX_VALUE_CHARS at most, all of them
- * four times the text's length (plus one value's cap), BIB_MAX_ENTRIES entries read, BIB_MAX_PROBLEMS problems listed.
+ * said (both entries kept); a macro defined nowhere is left empty, and said. Each brace's match is found once,
+ * beforehand (a parenthesis's, at the first @comment(), so a group is jumped over at once. Bounded: a value of
+ * BIB_MAX_VALUE_CHARS at most, all of them four times the text's length (plus one value's cap), BIB_MAX_ENTRIES
+ * entries read, BIB_MAX_PROBLEMS problems listed, and the characters examined — every scan counted, a broken entry's
+ * read again included — BIB_WORK_PER_CHAR times the text's length plus BIB_WORK_SLACK: the time is linear whatever
+ * the file (re-review N1).
  */
 export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibProblem[] } {
   const n = text.length;
@@ -118,20 +132,33 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
   const strings = new Map<string, string>();
   const keys = new Map<string, number>();
   let budget = 4 * n + BIB_MAX_VALUE_CHARS;
+  /** The characters examined so far, every scan's (BIB_WORK_PER_CHAR); `stoppedAt`, where the reading stopped at its cap. */
+  let work = 0, stoppedAt = -1;
+  const workCap = BIB_WORK_PER_CHAR * n + BIB_WORK_SLACK;
+  /** `k` characters examined: past the cap, the reading stops (Exhausted). A scan is charged once done, n at most. */
+  const charge = (k: number) => {
+    work += k;
+    if (work > workCap) throw new Exhausted();
+  };
 
   /** Past blanks, and « % » comments to the end of their line. */
-  const skip = (p: number) => {
+  const skip = (from: number) => {
+    let p = from;
     for (;;) {
       while (p < n && isSpace(text.charCodeAt(p))) p++;
       if (p < n && text.charCodeAt(p) === PERCENT) {
         const eol = text.indexOf('\n', p);
         p = eol < 0 ? n : eol + 1;
-      } else return p;
+      } else {
+        charge(p - from);
+        return p;
+      }
     }
   };
   const ident = (p: number) => {
     let q = p;
     while (q < n && isIdent(text.charCodeAt(q))) q++;
+    charge(q - p);
     return q;
   };
   const end = () => new Broken('le fichier finit avant la fin de l’entrée.');
@@ -164,17 +191,22 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         p = q + 1;
       } else if (c === QUOTE) {
         // Up to the quote outside braces, a brace group jumped over at once; a closing brace that closes none of
-        // them stops it (BibTeX refuses it too). So two such walks never cross the same character: one that starts
-        // in a group another jumped over ends at that group's closing brace at the latest (review, I1). Linear.
-        let q = p + 1;
-        for (; q < n; q++) {
-          const d = text.charCodeAt(q);
-          if (d === QUOTE) break;
-          if (d === CLOSE) throw new Broken(`l’accolade fermante de la ligne ${lineOf(q)} ne ferme rien entre les guillemets.`);
-          if (d === OPEN) {
-            if (match[q] < 0) throw new Broken(`l’accolade ouverte ligne ${lineOf(q)} n’est jamais fermée.`);
-            q = match[q];
+        // them stops it (BibTeX refuses it too). So the walks of two different quotes never cross the same character:
+        // one that starts in a group another jumped over ends at that group's closing brace at the latest (review,
+        // I1). The same quote, walked again by entries read again after a broken one, is charged each time (N1).
+        let q = p + 1, steps = 0;
+        try {
+          for (; q < n; q++, steps++) {
+            const d = text.charCodeAt(q);
+            if (d === QUOTE) break;
+            if (d === CLOSE) throw new Broken(`l’accolade fermante de la ligne ${lineOf(q)} ne ferme rien entre les guillemets.`);
+            if (d === OPEN) {
+              if (match[q] < 0) throw new Broken(`l’accolade ouverte ligne ${lineOf(q)} n’est jamais fermée.`);
+              q = match[q];
+            }
           }
+        } finally {
+          charge(steps);
         }
         if (q >= n) throw new Broken(`le guillemet ouvert ligne ${lineOf(p)} n’est jamais fermé.`);
         add(text.slice(p + 1, q), null);
@@ -182,6 +214,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
       } else if (isDigit(c)) {
         let q = p;
         while (q < n && isDigit(text.charCodeAt(q))) q++;
+        charge(q - p);
         add(text.slice(p, q), text.slice(p, q));
         p = q;
       } else if (isIdent(c)) {
@@ -266,6 +299,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
       }
       let q = p;
       while (q < n && isKeyChar(text.charCodeAt(q))) q++;
+      charge(q - p);
       let key = text.slice(p, q);
       const after = skip(q);
       if (after < n && text.charCodeAt(after) === EQUALS) key = '';
@@ -321,33 +355,44 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
    * The next « @ » that may start a command, from `p`: at the start of a line or after a blank or the end of an entry
    * (an address's « @ » starts none), past « % » comments; `lineStart`, after a broken entry: at a line's start only.
    */
-  const next = (p: number, lineStart: boolean): number => {
+  const next = (from: number, lineStart: boolean): number => {
+    // What it examines, charged on the way out: the characters passed, and the blanks looked at behind an « @ ».
+    let p = from, behind = 0;
+    const found = (at: number) => { charge(at - from + behind); return at; };
     for (; p < n; p++) {
       const c = text.charCodeAt(p);
       if (c === PERCENT) {
         const eol = text.indexOf('\n', p);
-        if (eol < 0) return -1;
+        if (eol < 0) break;
         p = eol;
       } else if (c === AT) {
         let b = p - 1;
         if (lineStart) {
           while (b >= 0 && isSpace(text.charCodeAt(b)) && text.charCodeAt(b) !== NEWLINE) b--;
-          if (b < 0 || text.charCodeAt(b) === NEWLINE) return p;
+          behind += p - 1 - b;
+          if (b < 0 || text.charCodeAt(b) === NEWLINE) return found(p);
         } else {
           const d = b < 0 ? NEWLINE : text.charCodeAt(b);
-          if (isSpace(d) || d === CLOSE || d === RPAREN) return p;
+          if (isSpace(d) || d === CLOSE || d === RPAREN) return found(p);
         }
       }
     }
+    charge(n - from + behind);
     return -1;
   };
   for (let p = 0, afterError = false; p < n;) {
-    const at = next(p, afterError);
-    if (at < 0) break;
+    // Where the reading is, should the work's cap stop it: the « @ » looked for, then the command read.
+    let at = p;
     try {
+      at = next(p, afterError);
+      if (at < 0) break;
       p = command(at);
       afterError = false;
     } catch (e) {
+      if (e instanceof Exhausted) {
+        stoppedAt = at;
+        break;
+      }
       if (!(e instanceof Broken)) throw e;
       problem(at, e.message);
       p = at + 1;
@@ -356,6 +401,7 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
   }
   if (omitted > 0) problems.push({ line: omittedLine, message: `Et ${fr(omitted)} autre${omitted > 1 ? 's' : ''} problème${omitted > 1 ? 's' : ''}.` });
   if (tooMany >= 0) problems.push({ line: lineOf(tooMany), message: `Le fichier compte plus de ${fr(BIB_MAX_ENTRIES)} entrées : les suivantes ne sont pas lues.` });
+  if (stoppedAt >= 0) problems.push({ line: lineOf(stoppedAt), message: `Le fichier est trop abîmé pour être lu en entier : la lecture s’arrête ligne ${lineOf(stoppedAt)}.` });
   return { entries, problems };
 }
 
@@ -548,10 +594,14 @@ const ARXIV_DOI = /^10\.48550\/arxiv\.(.+)$/i;
 const MAX_ID_CHARS = 1000;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-/** A DOI as written in a field: past « doi: » or a resolver's address; null if it is none. Its case is kept. */
+/**
+ * A DOI as written in a field: past « doi: » or a resolver's address, without the punctuation that ends a sentence
+ * (« . », « , », « ; »: a DOI that differs is a veto against a duplicate, re-review N2); null if it is none. Its case
+ * is kept.
+ */
 export function cleanDoi(s: string): string | null {
   if (s.length > MAX_ID_CHARS + 100) return null;
-  const t = s.trim().replace(/^doi:\s*/i, '').replace(/^https?:\/\/[^/\s]+\/(?=10\.)/i, '');
+  const t = s.trim().replace(/^doi:\s*/i, '').replace(/^https?:\/\/[^/\s]+\/(?=10\.)/i, '').replace(/[.,;]+$/, '');
   return t.length <= MAX_ID_CHARS && DOI.test(t) && !CONTROL.test(t) ? t : null;
 }
 

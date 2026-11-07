@@ -44,15 +44,18 @@ function titleYear(title: string, year: string | null): string | null {
 
 /**
  * The identifier a tag's value or an import gives, read as parseIdentifier reads what the user types — a link to a
- * DOI's resolver or to an arXiv page included, arXiv's own DOI being its arXiv identifier —, else as a .bib writes it.
+ * DOI's resolver or to an arXiv page included, arXiv's own DOI being its arXiv identifier —, else as a .bib writes it;
+ * a DOI without the punctuation that ends a sentence (cleanDoi: a DOI that differs is a veto, re-review N2).
  */
 function readId(v: string): PublicationId | null {
-  const id = parseIdentifier(v);
-  if (id !== null) return id;
-  const doi = cleanDoi(v);
-  if (doi !== null) return parseIdentifier(`doi:${doi}`) ?? { doi };
-  const arxiv = cleanArxiv(v);
-  return arxiv === null ? null : { arxiv };
+  let id = parseIdentifier(v);
+  if (id === null) {
+    const doi = cleanDoi(v), arxiv = doi === null ? cleanArxiv(v) : null;
+    id = doi !== null ? { doi } : arxiv !== null ? { arxiv } : null;
+  }
+  if (id === null || !('doi' in id)) return id;
+  const doi = cleanDoi(id.doi) ?? id.doi;
+  return parseIdentifier(`doi:${doi}`) ?? { doi };
 }
 /** `v`'s identifier added to `ids`, as compared, whichever tag holds it (review M3). */
 function addId(ids: Ids, v: string): void {

@@ -675,7 +675,7 @@ Fixées par le contrôleur avant la tâche :
     - `raw`, les mêmes comme BibTeX les écrit : texte entre accolades, nombre nu, macro inconnue du fichier gardée en macro (un mois aussi).
   - Il lit `@type{…}` et `@type(…)`, les valeurs entre accolades (imbriquées), entre guillemets (un guillemet dans des accolades est du texte), les nombres, les macros (définies avant leur usage, sans casse), `@string`, `@comment`, `@preamble`, et les commentaires `%` (Ruling plus bas).
   - Une entrée abîmée est signalée à sa ligne, avec la raison, et la lecture reprend au prochain « @ » en début de ligne. Un champ en double garde le premier ; une clé en double (sans casse) est signalée, les deux entrées gardées ; une macro inconnue est laissée vide, et signalée.
-  - Linéaire : la correspondance de chaque accolade est calculée une fois, d'avance (celle des parenthèses au premier `@comment(`). Rien n'est récursif.
+  - La correspondance de chaque accolade est calculée une fois, d'avance (celle des parenthèses au premier `@comment(`), et rien n'est récursif. Le temps total est borné par le compteur de travail de la ronde 2 de la revue (`BIB_WORK_PER_CHAR`).
   - Borné (Ruling plus bas) : une valeur de `BIB_MAX_VALUE_CHARS` au plus, toutes ensemble quatre fois la taille du texte plus une valeur, `BIB_MAX_ENTRIES` entrées lues, `BIB_MAX_PROBLEMS` problèmes listés.
 - `latexToUnicode(s)` : accents (`\'e`, `\"{o}`, `{\'e}`, `\c c`, `\'\i`) composés en NFC, lettres (`{\o}`, `\ss`, `\L`), `--` et `---`, ``` `` ``` et `''`, `~` en espace, accolades de protection et `$` retirés, caractères échappés (`\&`, `\%`…), lettres grecques ; une commande inconnue est retirée et son argument gardé (`\emph{x}` : x). Une passe, sans récursion.
 - `bibNames(field)` et `bibAuthors(field)` : les noms découpés comme BibTeX les découpe (« Prénom von Nom », « von Nom, Prénom », « von Nom, Jr, Prénom »), un nom entre accolades d'un seul tenant (`{Groupe de travail}`), « and » hors accolades et sans casse, « others » écarté. `bibAuthors` les écrit « Prénom von Nom Jr », comme `cslToFields`.
@@ -788,7 +788,7 @@ La revue (`task-5-review.md`) a demandé cinq corrections : I1, I2 avec M2, M1, 
 - **I1, les guillemets jamais fermés étaient quadratiques.**
   - Le problème : une valeur entre guillemets jamais fermée qui saute des groupes d'accolades, puis une longue queue. Chaque entrée reprise refaisait le parcours jusqu'à la fin : 49 s pour 1,1 Mo.
   - Correction : le parcours entre guillemets s'arrête à la première accolade fermante qui ne ferme aucun de ses groupes (« l'accolade fermante de la ligne N ne ferme rien entre les guillemets. »). BibTeX la refuse aussi. Le chemin de `@preamble` passe par la même fonction.
-  - Pourquoi c'est linéaire : un parcours qui commence dans un groupe qu'un autre a sauté finit au plus tard à l'accolade qui ferme ce groupe. Deux parcours ne passent donc jamais par le même caractère. Aucune table nouvelle n'est nécessaire.
+  - Ce que cela garantit, corrigé à la ronde 2 : un parcours qui commence dans un groupe qu'un autre a sauté finit au plus tard à l'accolade qui ferme ce groupe. Les parcours de deux guillemets différents ne passent donc jamais par le même caractère. Un même guillemet peut être reparcouru par des entrées reprises, et une même queue relue : la lecture n'était pas linéaire au total (re-revue, N1).
   - Mesures : les deux cas de la revue (`@a{k,t="{` et `@preamble{"{`, 10 000 fois, puis 1 000 000 de caractères) prennent ensemble 145 ms au test, contre 53,5 s avant. Toute la sonde `hostile.mjs` du relecteur passe : son pire cas, 100 000 auteurs, prend 360 ms.
 - Ruling (contrôleur, I2 et M2) : **une même clé, ou un même titre normalisé et une même année, ne font un doublon que si aucun identifiant ne les contredit.**
   - Il y a contradiction quand les deux côtés ont un DOI et qu'ils diffèrent, ou un identifiant arXiv et qu'ils diffèrent. Un DOI d'un côté et un arXiv de l'autre ne se contredisent pas.
@@ -807,3 +807,25 @@ La revue (`task-5-review.md`) a demandé cinq corrections : I1, I2 avec M2, M1, 
   - suites, chaque paquet seul : `core` 127, `view` 246, `app` 397, tous passés ; `tsc` sans erreur dans `core` et `app` ;
   - scénarios : 17 sur 17, dont « importer une publication par DOI » sur les vraies réponses (`month = jul` dans le `.bib`) ;
   - captures : non refaites, rien de ce qui est dessiné n'a changé (l'analyseur et l'index des doublons seulement).
+
+### Revue, ronde 2
+
+La re-revue (`task-5-rereview.md`) a trouvé I1 partiel (N1, préexistant) et un Minor nouveau (N2).
+
+- Ruling (contrôleur, N1) : **un compteur de travail dans `parseBibtex`.**
+  - Le problème : une entrée abîmée qui atteint une longue queue la relit en entier, et chaque entrée reprise au « @ » suivant la relit encore. Les valeurs en accolades imbriquées et les commentaires `%` suffisent pour y arriver : 13,2 s pour 2 Mo.
+  - La règle : chaque boucle de balayage ajoute au compteur les caractères qu'elle examine. Ce sont l'identifiant, les blancs et commentaires, la clé, les chiffres, le parcours entre guillemets, et la recherche du « @ » suivant avec les blancs examinés derrière lui. Les valeurs en accolades, sautées, restent au budget des valeurs.
+  - Le plafond : `BIB_WORK_PER_CHAR` (8) fois la taille du texte, plus `BIB_WORK_SLACK` (1 Mio), une borne fixe de sécurité. Au-delà, la lecture s'arrête, les entrées déjà lues sont gardées, et le problème dit « Le fichier est trop abîmé pour être lu en entier : la lecture s’arrête ligne N. », à la ligne de la commande en cours.
+  - Les fichiers réels en sont loin, à 0,4 fois leur taille : `reel-50.bib` (0,39), le même fichier quarante fois, soit 2 000 entrées (0,39), les 2 000 entrées du test dont 20 abîmées (0,44), Shannon de Crossref (0,26), arXiv de DataCite (0,23).
+  - Le parcours entre guillemets garde sa règle de la ronde 1 : les parcours de deux guillemets différents ne passent pas par le même caractère. C'est le compteur qui borne le total, et les commentaires « Linear » de `bibtex.ts` ont été corrigés.
+  - Coût si faux : un fichier très abîmé, mais légitime, lu en partie seulement.
+- Ruling (contrôleur, N2) : **`cleanDoi` retire la ponctuation finale d'un DOI lu** (« . », « , », « ; »). C'est la part de M10 sur le point final, avancée.
+  - Pourquoi : un DOI différent est désormais un veto contre un doublon. Un tag `doi: 10.1109/CVPR.2016.90.`, écrit avec le point de la phrase, faisait recréer la publication.
+  - `readId` (`build.ts`) passe aussi par `cleanDoi` le DOI que `parseIdentifier` rend, puisque `parseIdentifier` le garde tel qu'il est tapé.
+  - `findIdentifier` retirait déjà cette ponctuation avant `parseIdentifier`.
+  - Le DOI tapé dans le dialogue part au réseau tel quel, mais sa comparaison avant le réseau retire le point : un doublon est donc dit sans demande.
+  - Coût si faux : un DOI qui finirait vraiment par un point (aucun n'est connu) serait lu sans lui.
+- **Vérifications** :
+  - tests vus rouges : la queue de 2 Mo en 18 529 ms au lieu de moins d'une seconde ; `cleanDoi('10.1109/CVPR.2016.90.')` gardait le point ; le nœud au DOI pointé faisait planifier l'import au lieu de le refuser « même DOI » ;
+  - sondes du relecteur : `tail.mjs`, 129 ms (identifiant), 62 ms (blancs) et 87 ms (guillemet) pour 2 Mo, au lieu de 13,2 s, 2,4 s et 2,4 s ; `hostile.mjs` passe en entier ; le fuzz de `probe.mjs`, 107 952 textes, donne les mêmes entrées, et les mêmes nombres et lignes de problèmes qu'avant la ronde 1 ; `dots.mjs` donne « même DOI » pour les formes pointées ;
+  - suites, scénarios : voir le rapport de la tâche 5, section « Ronde 2 ».

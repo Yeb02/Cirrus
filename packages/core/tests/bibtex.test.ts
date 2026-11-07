@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import {
-  BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, bibAuthors, type BibEntry, bibFields, bibIdentifiers, bibNames, bibtexEntry, citeKey, cleanArxiv, cleanDoi, latexToUnicode,
+  BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, BIB_WORK_PER_CHAR, BIB_WORK_SLACK, bibAuthors, type BibEntry, bibFields, bibIdentifiers, bibNames, bibtexEntry, citeKey, cleanArxiv, cleanDoi, latexToUnicode,
   normalizedTitle, parseBibtex, safeCiteKey,
 } from '../src/bibtex.ts';
 
@@ -224,6 +224,24 @@ test('parseBibtex : des guillemets jamais fermés qui sautent des groupes d’ac
   }
 });
 
+test('parseBibtex : une longue queue que chaque entrée abîmée relit (re-revue N1) ; la lecture s’arrête au plafond de travail, ce qui est lu est gardé', () => {
+  const head = '@a(k,t={\n'.repeat(1230) + '%}\n'.repeat(1230) + '#';
+  for (const tail of ['x'.repeat(2_000_000), '"' + 'x'.repeat(2_000_000)]) {
+    const t0 = performance.now();
+    const r = parseBibtex(head + tail);
+    expect(performance.now() - t0, tail.slice(0, 2)).toBeLessThan(1000);
+    expect(r.problems.at(-1)!.message, tail.slice(0, 2)).toMatch(/^Le fichier est trop abîmé pour être lu en entier : la lecture s’arrête ligne \d+\.$/);
+  }
+  // Entries read before the cap are kept; a real file never comes near it (the real one, 40 times over).
+  const kept = parseBibtex('@misc{avant, title = {Lue}}\n' + head + 'x'.repeat(2_000_000));
+  expect(kept.entries.map((e) => e.key)).toEqual(['avant']);
+  const real = parseBibtex(Array.from({ length: 40 }, () => REAL).join('\n'));
+  expect(real.entries).toHaveLength(2000);
+  expect(real.problems.some((p) => p.message.startsWith('Le fichier est trop abîmé'))).toBe(false);
+  expect(BIB_WORK_PER_CHAR).toBe(8);
+  expect(BIB_WORK_SLACK).toBe(1 << 20);
+});
+
 test('parseBibtex : 2 000 entrées, dont des accolades jamais fermées, en moins d’une seconde', () => {
   const text = Array.from({ length: 2000 }, (_, i) => (i % 100 === 7
     ? `@article{casse${i},\n  title = {Jamais fermée,\n  year = {2000}\n`
@@ -322,6 +340,13 @@ test('bibIdentifiers : le DOI et l’identifiant arXiv d’une entrée, sous tou
   expect(bibIdentifiers(entry('@misc{x, doi = {pas un doi}, eprint = {2401.01234}}'))).toEqual({});
   expect(cleanDoi(' doi:10.1007/978-0-387-49820-1 ')).toBe('10.1007/978-0-387-49820-1');
   expect(cleanDoi('10.1234')).toBeNull();
+  // The punctuation that ends a sentence is no part of a DOI (re-revue N2): a DOI that differs is now a veto.
+  for (const s of ['10.1109/CVPR.2016.90.', '10.1109/CVPR.2016.90,', '10.1109/CVPR.2016.90;', 'https://doi.org/10.1109/CVPR.2016.90.', '10.1109/CVPR.2016.90.;,']) {
+    expect(cleanDoi(s), s).toBe('10.1109/CVPR.2016.90');
+  }
+  expect(cleanDoi('10.1002/(SICI)1097-4636(199706)35:4<477::AID-JBM8>3.0.CO;2-C')).toBe('10.1002/(SICI)1097-4636(199706)35:4<477::AID-JBM8>3.0.CO;2-C');
+  expect(cleanDoi('10.1234/.')).toBeNull();
+  expect(bibIdentifiers(entry('@misc{x, doi = {10.1109/CVPR.2016.90.}}'))).toEqual({ doi: '10.1109/CVPR.2016.90' });
   expect(cleanArxiv('arXiv:1706.03762v7')).toBe('1706.03762');
   expect(cleanArxiv('hep-th/9901001v2')).toBe('hep-th/9901001');
   expect(cleanArxiv('1706.037')).toBeNull();

@@ -141,6 +141,19 @@ test('doublons (revue I2, M2) : une même clé, ou un même titre et une même a
   expect(planPublication(index(), inputOf(BOOK()), 50)).toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${LI} ».` });
 });
 
+test('doublons (re-revue N2) : un DOI de la base écrit avec le point de la phrase est ce DOI, et non un veto', async () => {
+  const RESNET = 'Deep Residual Learning for Image Recognition';
+  for (const written of ['10.1109/CVPR.2016.90.', 'https://doi.org/10.1109/CVPR.2016.90.']) {
+    run(editNode(s, ids.nodes.monde, { title: RESNET, tags: [tag('date_de_publication', '2016'), tag('doi', written)] }));
+    expect(planPublication(PublicationIndex.of(s), { fields: { title: RESNET, authors: [], year: '2016' }, entry: null, doi: '10.1109/CVPR.2016.90' }, 50), written)
+      .toEqual({ refused: `Déjà dans la base (même DOI) : « ${RESNET} ».` });
+    // Typed with it too, refused before the network.
+    const { d, calls } = deps();
+    expect(await importByIdentifier('10.1109/CVPR.2016.90.', null, d), written).toEqual({ kind: 'notified', message: `Déjà dans la base (même DOI) : « ${RESNET} ».` });
+    expect(calls.fetch).toEqual([]);
+  }
+});
+
 test('doublons (revue M3) : toutes les valeurs d’un tag comptent, et une valeur écrite en lien est lue', () => {
   const index = () => PublicationIndex.of(s);
   setTags(ids.nodes.mdl, [tag('doi', '10.5555/preprint'), tag('doi', '10.5555/journal')]);
