@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Brouillon du 2026-11-05, à approuver par l'utilisateur.** Rien n'est lancé avant son accord sur les décisions D1 à D9.
+> **Approuvé par l'utilisateur le 2026-11-07** (« Le plan 4C : tout m'a l'air en ordre, procède. »).
 
 **Goal :** on lit et on annote ses PDF, et on fait entrer ses publications dans la base. On peut :
 - surligner un passage d'un PDF : cela crée un nœud d'annotation, qui porte le passage, le PDF et la page. Il n'entre dans aucun plan à sa création ;
