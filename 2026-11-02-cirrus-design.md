@@ -263,7 +263,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 - Le dialogue indique combien d'instances existent et avertit s'il s'agit de la dernière.
 - Cette règle remplace celle de la spécification, selon laquelle un plan ne pouvait supprimer que ses objets exclusifs. Le dialogue et la corbeille sont les garde-fous.
 - Un objet retiré de son dernier plan va à la corbeille.
-- **Exception, les annotations** (plan 4c) [C] : une annotation, un nœud qui porte une ancre (5.2), retirée de son dernier plan reste vivante, dans aucun plan, comme à sa création (section 12). Elle reste ainsi dans la marge du lecteur et dans le pop-up de son PDF. « Partout » la met à la corbeille, comme tout nœud, et de même « Supprimer » dans le menu de sa ligne, même hors de tout plan (section 12, revue finale). L'avertissement du dernier plan ne la nomme pas.
+- **Exception, les annotations** (plan 4c) [C] : une annotation, un nœud qui porte une ancre (5.2), retirée de son dernier plan reste vivante, dans aucun plan, comme à sa création (section 12). Elle reste ainsi dans la marge du lecteur et dans le pop-up de son PDF. « Partout » la met à la corbeille, comme tout nœud, et de même « Supprimer » dans le menu de sa ligne, même hors de tout plan (section 12, revue finale). Ce choix-là ne pose pas la question « partout ou ici seulement » : il ne peut que la supprimer partout, son libellé le dit, et Ctrl+Z la rend [C]. L'avertissement du dernier plan ne la nomme pas.
 
 **Cacher une sélection** (menu de sélection) retire les éléments de ce plan.
 - Un avertissement apparaît si c'est le dernier plan qui contient certains éléments.
@@ -567,7 +567,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Le menu d'une ligne** (revue finale) : un clic droit sur une ligne, dans la marge ou dans le pop-up du PDF, ouvre son menu [C].
   - « Ouvrir sa fiche » ouvre le pop-up de l'annotation à côté du panneau : on la renomme, la résume et la tague là, même dans aucun plan.
   - « Supprimer » la met à la corbeille partout, en une action, qu'un Ctrl+Z défait. Il se lit « Supprimer partout » quand elle figure dans un plan, qu'elle quitte aussi [C].
-  - En plein écran, modal, le menu n'offre que « Supprimer », un pas de ce plein écran : son Ctrl+Z et son Ctrl+Y le défont et le refont.
+  - En plein écran, modal, le menu n'offre que ce choix (« Supprimer », ou « Supprimer partout »), un pas de ce plein écran : son Ctrl+Z et son Ctrl+Y le défont et le refont.
 - **Versions** (D2) : une annotation porte sur la version du PDF où elle a été faite, que le magasin garde après une réimportation. Le lecteur ne dessine sur un PDF que les annotations de sa version. Celle d'une version précédente s'ouvre sur sa version, dans la même vue, sous une bannière et son bouton « Revenir à la version actuelle » [C].
 - **Poser une annotation dans un plan :** on glisse une ligne de la marge de l'aperçu, ou du pop-up, sur le graphe. Le plein écran est modal : on n'y glisse rien.
   - Elle prend la place du dépôt, au cran lisible. Lâchée dans l'enveloppe d'un groupe, elle y entre. Lâchée sur un nœud simple, celui de son PDF ou un autre, elle y entre aussi, et ce nœud devient un groupe, comme pour un nœud déplacé (section 10) [C].

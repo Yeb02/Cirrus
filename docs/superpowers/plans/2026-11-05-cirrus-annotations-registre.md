@@ -1329,3 +1329,151 @@ La revue de tout le plan (`e4d957f..b2c5657`) a demandé deux Important, I1 et I
   - « (revue finale, I2) » dans la marge : la page 2 en vue, son surlignage dessiné. Le menu de la ligne offre « Ouvrir sa fiche » et « Supprimer ». « Ouvrir sa fiche » ouvre le pop-up de l'annotation, qu'Échap ferme seul. « Supprimer » met l'annotation à la corbeille, et son surlignage et sa ligne partent. Ctrl+Z les rend ;
   - « (revue finale, I2) » en plein écran : le menu n'offre que « Supprimer ». Ctrl+Z rend l'annotation, Ctrl+Y la supprime de nouveau, et le plein écran reste ouvert.
 - **Captures** : une suite neuve de 29 images, sur le code final, dans le scratchpad. Contre `reference-3c` : 11 sur 11 à 0 pixel ; contre `plan4a` : 8 sur 8 ; contre `plan4b` : 5 sur 5 ; contre `plan4c` : 5 sur 5. Aucune image « à regarder », aucune référence refaite. Le commentaire changé de `bibliographie.bib` ne change pas `bloc-bib`.
+
+## Annexe : journal du contrôleur (plan 4c)
+
+Le journal de suivi de l’exécution, copié tel quel avant l’effacement de son dossier de travail : chaque tâche, chaque relecture et ronde de correction, chaque `Ruling:` du contrôleur et chaque mineur reporté, puis la revue finale et sa passe de correction.
+
+# SDD ledger — plan: docs/superpowers/plans/2026-11-05-cirrus-annotations-publications.md
+
+Plan approuvé par l'utilisateur le 2026-11-07. Spec : 2026-11-02-cirrus-design.md (sections 5.2, 5.4, 6.5, 10, 12, 18).
+Contexte commun des sous-agents : .superpowers/sdd/2026-11-05-cirrus-annotations-publications/context.md. Sous-agents : model opus.
+Base avant le plan : a1687a2 (+ le commit d'approbation du plan).
+
+## Pré-vol
+
+| Tâches | Produit → consommé | Constat |
+|---|---|---|
+| T1 → T2 | `Anchor`, `NodeRec.anchor`, `createAnnotation`, `annotationTitle(text, max)` → index, sélection, bouton « Annoter » | cohérent : la longueur du titre vient du réglage `annotationTitleChars` (T2), passé par l'interface |
+| T1 → T2, T3 | annotations de la base de test (p. 1 et 2, une version précédente, groupe dans « Lecture ») → vérifications et captures | cohérent |
+| T2 → T3 | glisser `application/x-cirrus-node` depuis la marge → dépôt sur le graphe (`dropRoute`) | cohérent |
+| T3 ↔ T6 | `files/nodeFiles.ts` (`dropRoute`) : dépôt d'un nœud (T3), d'un `.bib` sur le fond (T6) | même fichier, tâches successives : T6 part de la route de T3 |
+| T4 → T5 | IPC `publicationFetch`, `{ csl, bibtex, pdf?: FileRef }`, `cslToFields` → `publicationBuild`, dialogue | cohérent |
+| T5 → T6 | `parseBibtex`, `citeKey`, `publicationBuild` → `bibImportBuild` | cohérent |
+| T5, T6 | `packages/view/src/menus.ts` : « Importer une publication… », « Importer un fichier .bib… » | même menu du fond, successifs |
+| T2, T4 | réglages nouveaux (groupes « Annotations », « Publications ») → `PARAM_RUBRICS` (ajouté le 2026-11-07, après la rédaction du plan) | écart : le plan ne connaît pas les rubriques. Ruling ci-dessous |
+| T1 | tags `doi`, `arxiv` dans la base de test ; T5 les écrit sur les nœuds de publication | une clé absente du registre des tags est acceptée telle quelle (`normalizeTag`) : pas de définition requise dans une base vide |
+| T2, T3, T5, T6 | « Vérifier dans l'app construite » | écart : depuis le 2026-11-07, aucune fenêtre au premier plan. Ruling ci-dessous |
+| T1..T7 | auto-cohérence de chaque tâche | T1 : fichiers, tests et Produces concordent ; T2 : réglages listés concordent avec D3/D4 ; T3 : `placeDroppedBuild` s'appuie sur `importBuild` existant (actions.ts:262) ; T4 : messages français listés ; T5 : `storeText` existe (preload) ; T6 : `clip.ts` existe ; T7 : captures nommées |
+
+- Ruling: les groupes de réglages « Annotations » et « Publications » vont dans la rubrique « Fichiers », après « PDF » — le test des rubriques exige que chaque groupe soit dans une rubrique, et ce sont des réglages de lecture et d'import de fichiers — coût si faux : déplacer deux groupes de rubrique.
+- Ruling: « vérifier dans l'app construite » se fait par des scénarios ajoutés à `scripts/interface.mjs` (vrais événements, fenêtre en arrière-plan) et par les captures, jamais par une fenêtre au premier plan — demande de l'utilisateur du 2026-11-07 — coût si faux : une vérification visuelle qu'un scénario ne sait pas faire, consignée au rapport.
+
+## Tâches
+
+Task 1: dispatched (BASE e4d957f, implementer a9e84b7faa54f8a23, opus)
+
+Hors plan, avant la tâche 1 (2026-11-07, demandes de l'utilisateur) : 3c8a94a (nœud du menu qui disparaissait au dépôt ; npm run interface ; npm run essai), a1687a2 (réglages en rubriques avec recherche ; fenêtres de test en arrière-plan).
+Hors plan, mineur : app/tests/latexKill.test.ts « pdfLaTeX annulé » a échoué deux fois juste après les 24 captures (taskkill au-delà de 5 s sous charge), puis passé 6 fois sur 6 seul ou en fichier : sensible au temps, comme les tests d'échelle.
+Task 1: implementer DONE_WITH_CONCERNS — 9533c13 (anchor vérifié dans checkRecord/checkNode et non par une règle d invariants, Ruling au registre ; popup-vignettes de plan4a refaite ; ANNOTATION_TITLE_CHARS = 80 en constante du cœur). Suites complètes relancées par le contrôleur (mémoire basse chez l implémenteur). Revue : reviewer a40c3687bc0a68494 (opus), package review-e4d957f..9533c13.diff
+Task 1: suites du contrôleur sur 9533c13 — core 107, store 20, fixtures 13, view 243, app 345, bench/latex 7, bench/rendu 46 : 781/781 (92 fichiers)
+Task 1: revue — ✅ conforme, approuvée, aucun Critical/Important. Contrôleur : tsc propre sur les 5 paquets, push fait, ligne Co-Authored-By présente, popup-vignettes (plan4a) refaite regardée : seules les métadonnées et « Lecture » changent.
+Task 1: minor (deferred): validAnchor ne pourra que s'assouplir (il tourne au chargement des tables) — un commentaire le dirait (annotation.ts:17-28)
+Task 1: minor (deferred): isPlainObject dupliqué entre annotation.ts:14 et state.ts (~526)
+Task 1: minor (deferred): passage() de la base de test suppose des lignes non grasses sans le vérifier (fixtures/src/pdf.ts ~112)
+Task 1: minors reportés à la tâche 2 (portés dans son envoi) : passage vide ou blanc refusé ; texte borné en unités UTF-16 comme validAnchor ; annotationTitleChars entier ≥ 1.
+Task 1: complete (commits e4d957f..9533c13, tests: suites des 7 espaces → 781/781)
+Task 2: dispatched (BASE 9533c13, implementer ac374b9720d8df6d8, opus)
+Task 2: implementer DONE_WITH_CONCERNS — b2f0a8a (core 108, view 244, app 355 ; interface 8/8 ; plan4a plein-ecran-pdf refaite avec Ruling ; hors liste : UndoStack.nextUndo/nextRedo, blobSize ; index qui reparcourt les nœuds, Ruling). Revue : aaf0430665a699170 (opus), package review-9533c13..b2f0a8a.diff
+Task 2: pour la tâche 3 — removeFromPlan envoie à la corbeille une annotation qui quitte son dernier plan (spec 7), alors qu une annotation naît sans plan (D1) : à trancher en tâche 3.
+Task 2: revue — ✅ conforme, approuvée, aucun Critical/Important (nextUndo/nextRedo, blobSize, index et capture refaite vérifiés sur leur risque).
+Task 2: minor (deferred): le clignotement rejoue quand une page sort puis revient dans la zone dessinée, même pour une annotation annulée (PdfViewer.tsx:102, :630)
+Task 2: minor (deferred): deux goto rapprochés peuvent se résoudre dans le désordre ; un échec de getPage annule le déplacement (PdfViewer.tsx ~221-227)
+Task 2: minor (deferred): Ctrl+Z / Ctrl+Y en plein écran restent muets quand le pas suivant n'y a pas été fait ; docstring de FullScreen périmée (App.tsx:153, FullScreen.tsx:75-76)
+Task 2: minor (deferred): la sélection est effacée avant le verdict du cœur (App.tsx ~404)
+Task 2: minor (deferred): la première page vient de la première partie de texte, même blanche (annotations.ts:222-226)
+Task 2: minor (deferred): rotation testée à 0 et 90° seulement (annotations.test.ts)
+Task 2: minor (deferred): PdfViewer.tsx grossit : sélection et annotation à sortir dans un hook
+Task 2: complete (commits 9533c13..b2f0a8a, tests: core 108, view 244, app 355, interface 8/8, captures 24/24 à 0 px après Ruling)
+- Ruling: une annotation qui quitte son dernier plan reste vivante, sans plan, et non à la corbeille (exception à la spec 7 pour un nœud qui porte un anchor) — D1 la fait naître sans plan et la range sous son PDF ; la retirer d'un plan ne doit pas la faire disparaître de la marge ; « Supprimer partout » la met à la corbeille — coût si faux : une condition de removeFromPlan et ses tests.
+Task 3: dispatched (BASE b2f0a8a, implementer a0b38e8f555f46e99, opus), avec le Ruling removeFromPlan
+Task 3: implementer DONE — 1b3b406 (core 109, store 20, view 244, app 363 ; interface 11/11 ; plan4a popup-vignettes refaite avec Ruling)
+Task 3: revue dispatchée (acc34fb04a67dd569, opus), package review-b2f0a8a..1b3b406.diff
+Task 3: revue — ✅ conforme, approuvée, aucun Critical/Important ; risques vérifiés : invariants (nœud vivant sans placement permis), id NODE_MIME inconnu ou à la corbeille refusé par un toast, sonde blobSize une fois par jeu de versions.
+Task 3: minor (deferred): la cible du dépôt reste allumée si le glisser passe sur un pop-up ou une question puis y est lâché (GraphView onDragOver/onDragLeave)
+Task 3: minor (deferred): dropTarget calculé trois fois par dépôt, contre I2 de la revue finale du plan 3 (placeDroppedBuild, importBuild)
+Task 3: minor (deferred): pas de test de la question « partout » sur le dépôt d'une annotation, du blob absent dans le pop-up, du clic sur une ligne de la liste du pop-up, du cadrage sur « Déjà dans ce plan. »
+Task 3: minor (deferred): NodePopup.tsx (+80 lignes d'annotations) et GraphView.tsx (+45) grossissent ; dropRoute ignore node quand what === 'node'
+Task 3: minor (deferred): un PDF mis à la corbeille garde des annotations vivantes sans plan, atteignables en le restaurant (à revoir si la corbeille se vide un jour)
+Task 3: minor (deferred): memo d'AnnotationItem sans effet dans le pop-up (onOpen recréé à chaque rendu)
+Task 3: complete (commits b2f0a8a..1b3b406, tests: core 109, store 20, view 244, app 363, interface 11/11, captures 24/24 à 0 px après Ruling popup-vignettes)
+Task 4: dispatched (BASE 1b3b406, implementer abd0316e744f3a07d, opus) — avec la relecture hors réseau pour les scénarios et captures (CIRRUS_PUBLICATIONS_REPLAY, base de test seulement)
+- Ruling (Task 4): data.crosscite.org ajouté à PUBLICATION_SOURCES.hosts — doi.org renvoie le DOI arXiv (10.48550/arXiv.1706.03762) par une 302 vers data.crosscite.org, le service de négociation de contenu de DataCite qui succède à data.datacite.org (D5) ; un seul chemin pour tout DOI DataCite — coût si faux : un hôte de la liste.
+Task 4: implementer DONE — 2561aff (view 245, app 380 ; interface 12/12 ; captures 24/24 à 0 px ; vérif réseau : doi.org, api.crossref.org, data.crosscite.org, arxiv.org ; relecture CIRRUS_PUBLICATIONS_REPLAY)
+Task 4: revue dispatchée (a4fa28f7d50692355, opus, sécurité du chemin réseau), package review-1b3b406..2561aff.diff
+- Ruling (pour Task 5): une clé d'entrée BibTeX qui n'est pas un label sûr (celle de DataCite est une URL) est écartée : citeKey prend alors auteur + année (D7), et le .bib est écrit avec la clé retenue — une URL ne peut être ni un nom de fichier ni une clé de \cite — coût si faux : la clé d'un nœud.
+- Ruling (pour Task 5): un même titre normalisé (casse, accents, ponctuation) et une même année comptent aussi comme doublon, en plus du DOI, de l'identifiant arXiv et de la clé (D7) — le livre de Li et Vitányi de la base de test n'a pas de tag doi et Crossref lui donne la clé Li_2008 : sans cela, il serait recréé — coût si faux : un import refusé que l'utilisateur voulait (la notification nomme le nœud existant).
+Task 4: revue — ✅ conforme, approuvée, aucun Critical/Important ; six risques nommés vérifiés (hôte exact et canonique, plafonds en lecture, net.request manuel sans cookies ni invite de proxy, relecture limitée à la base de test et soumise aux mêmes contrôles, IPC borné sans texte serveur, PDF nommé par l'identifiant).
+Task 4: minor (deferred): le téléchargement du PDF n'a pas de borne totale (seulement entre deux morceaux), ni d'annulation (fetch.ts:142,160) — la tâche 5 ne bloque pas l'interface et permet de fermer le dialogue
+Task 4: minor (deferred): le PDF tient en mémoire à deux fois sa taille avant le magasin (fetch.ts:167-168, storeBytes)
+Task 4: minor (deferred): tests de l'hôte sans point final, majuscules, sosie xn--, //evil ; redirection permise et limite de sauts du PDF non testées
+Task 4: minor (deferred): exchange à 9 paramètres positionnels ; journal qui nomme la première adresse ; message de redirection technique pour un DOI d'une autre agence ; TAG de csl.ts mange « a<b and c>d » ; erreur de certificat dite « Pas de connexion. »
+Task 4: complete (commits 1b3b406..2561aff, tests: view 245, app 380, interface 12/12, captures 24/24 à 0 px)
+Task 5: dispatched (BASE 2561aff, implementer add7409ece7948907, opus), avec les deux Rulings (clé non sûre, doublon titre + année), le dialogue non bloquant, D8 dans la zone de dépôt du dialogue
+Task 5: implementer DONE — 318d9c7 (core 125, view 246, app 395 ; interface 17/17 ; captures à 0 px) ; réponses Shannon composées (pas enregistrées) ; safeCiteKey ASCII + « _.+- »
+Task 5: revue dispatchée (a87756da5f0c35762, opus, analyseur hostile, doublons, __proto__, dialogue, findIdentifier, citeKey, bundle), package review-2561aff..318d9c7.diff
+- Ruling (Task 5, contrôleur): les réponses Shannon composées sont remplacées par les vraies, enregistrées le 2026-11-07 (doi.org → api.crossref.org/v1/works/…/transform). Crossref écrit month=July (pas jul) : l'analyseur lira aussi les noms de mois anglais complets, sans casse, comme macros de mois (écrits jul dans le .bib) — sinon le mois est vide, signalé, et le .bib écrit porte une macro que BibTeX ne connaît pas — coût si faux : une macro July qu'un fichier aurait définie autrement (son @string l'emporte toujours).
+Task 5: revue — spec ✅ ; qualité : changements demandés (I1 balayage entre guillemets quadratique, 1,1 Mo → 49 s ; I2 clés Nom_Année de Crossref qui font de faux doublons) ; 10 minors (task-5-review.md)
+- Ruling (Task 5, I2 + M2): une clé ou un titre + année ne fait un doublon que si aucun identifiant ne la contredit — deux DOI différents, ou deux arXiv différents, des deux côtés ; la clé reçue passe alors par citeKey (he2016, he2016b) — D7 prévoit que les clés se heurtent (li2008b), une clé n'est donc pas une identité ; le livre de Li et Vitányi (sans DOI dans la base) reste un doublon — coût si faux : un doublon recréé quand deux nœuds d'un même article portent des DOI différents (préprint et journal le sont par arXiv contre DOI, non contradictoires).
+- Ruling (Task 5): M1 (clé propre comparée sans casse) et M3 (toutes les valeurs indexées, liens lus par parseIdentifier) entrent dans la vague de correction, car I2 en dépend — coût si faux : une ronde un peu plus longue.
+- Ruling (Task 5): M8 (borne du texte donné à parseBibtex) passe à la tâche 6, qui doit borner le .bib lu : une même constante de core servira aux deux chemins — coût si faux : rien avant la tâche 6.
+Task 5: minor (deferred): M4 findIdentifier peut proposer l'identifiant d'un ouvrage cité (estampille sans date, DOI cité dans des actes) — pas de contrôle titre reçu / première page
+Task 5: minor (deferred): M5 morceaux d'une ligne joints par une espace dans pdfClues (DOI coupé) ; M6 une page illisible jette les métadonnées déjà lues
+Task 5: minor (deferred): M7 syntaxe des identifiants dupliquée entre core/bibtex.ts et main/identifier.ts (CONTROL, segments . et ..), RESERVED copié de merge.ts, deux MAX_ID_CHARS différents
+Task 5: minor (deferred): M9 cycle de vie du dialogue sans test unitaire (alive de dropPdf, dépôt pendant busy)
+Task 5: minor (deferred): M10 COM0/LPT0 acceptés ; latexToUnicode('\^{}') vide ; cleanDoi garde un point final ; Ctrl+Z avalé quand le focus est sur un bouton du dialogue
+Task 5: fix round 1 dispatched (resume add7409ece7948907) — I1, I2 (Ruling), M1, M3, vraies réponses Shannon + mois anglais complets
+Task 5: fix round 1 DONE — 7943ef2 (core 127, view 246, app 397 ; interface 17/17 ; captures non refaites, rendu inchangé)
+Task 5: re-revue dispatchée (aa57589c11fa03183, opus), package review-318d9c7..7943ef2.diff
+Task 5: re-revue ronde 1 — I2, M1, M2, M3, mois, Shannon corrigés ; I1 partiel : N1 (Important, préexistant) une entrée abîmée qui atteint une longue queue la relit et chaque reprise à at + 1 la repaie (n^1,5 : 2 Mo → 13 s) ; N2 (Minor, introduit) un DOI à point final dans la base sert de veto et recrée la publication (task-5-rereview.md)
+- Ruling (Task 5, N1): compteur de travail dans parseBibtex (variante simple du relecteur) : au-delà de 8n + 1 Mio caractères examinés, la lecture s'arrête avec un problème dit à la ligne atteinte — linéaire par construction, comme le budget des valeurs déjà en place ; un fichier réel n'en approche jamais — coût si faux : un .bib très abîmé lu en partie, ce que le problème dit.
+- Ruling (Task 5, N2): la ponctuation finale (. , ;) d'un DOI lu est retirée dans cleanDoi (part de M10 avancée), parce que la règle I2 fait d'un DOI différent un veto — coût si faux : un DOI qui finirait réellement par un point (les DOI enregistrés n'en finissent pas).
+Task 5: fix round 2 dispatched (resume add7409ece7948907) — N1, N2, commentaires « Linear » corrigés
+Task 5: fix round 2 DONE — acb2527 (core 128, view 246, app 398 ; interface 17/17) ; re-revue de la ronde 2 faite par le contrôleur (diff de 2 fichiers source lu en entier : chaque balayage facturé, Exhausted non avalé par le catch de command, cleanDoi sans point final ; bibtex.test 18/18 et publicationImport.test 17/17 relancés) — approuvée
+Task 5: minor (deferred): un DOI tapé avec son point final part au réseau tel quel (parseIdentifier du principal ne le retire pas) : « Publication introuvable. » ; la comparaison avant le réseau le retire
+Task 5: minor (deferred): @string{jul = "juillet"} et month = July donnent « July », alors que month = jul donne « juillet » (sans effet sur le nœud)
+Task 5: complete (commits 2561aff..acb2527, tests: core 128, view 246, app 398, interface 17/17, captures 24/24 à 0 px au commit 318d9c7, rendu inchangé depuis)
+- Ruling (pour Task 6, M8): BIB_MAX_CHARS = 16 × 2^20 caractères dans core, vérifié par parseBibtex lui-même (au-delà : aucune entrée, un problème qui dit la taille), donc sur tous les chemins (réponse du serveur, .bib déposé ou choisi) — environ 150 Mo transitoires au plafond, 8 000 entrées avec résumés — coût si faux : un .bib énorme refusé, que l'utilisateur coupe.
+- Ruling (pour Task 6): seule la clé propre d'une entrée (celle du fichier ou du serveur) est une marque de doublon ; une clé fabriquée par citeKey est seulement prise (évitée ensuite), jamais une marque — publicationBuild et PublicationIndex.add suivent cette règle (remarque de la re-revue) — coût si faux : deux entrées d'un fichier comparées sur une clé que l'une n'a jamais eue.
+Task 6: dispatched (BASE acb2527, implementer ab2fc77a7e6d24792, opus) — avec BIB_MAX_CHARS, clé propre seule comme marque, doublons internes par index.add, une action au clic, notification bornée, routage du dépôt, sélecteur par le principal avec entrée de test
+Task 6: implementer DONE — 5d14235 (core 132, store 21, fixtures 13, view 251, app 414, bench 7+46 ; interface 21/21 ; captures 24/24 à 0 px) ; nouvelle IPC storeTexts (lots de 100, 8 écritures à la fois), storeBytesAsync, CiteKeys linéaire, réglages bibBlockGapPx et bibNoticeLines, BIB_NAME_CHARS 80
+Task 6: revue dispatchée (a8c4f249b1e81e011, opus, IPC storeTexts et magasin asynchrone, readBib, CiteKeys, doublons, cycle de la pose, routage, notification, grille), package review-acb2527..5d14235.diff
+Task 6: revue — spec ✅ ; qualité : changements demandés (I1 la notification d'un import dure 4 s, illisible) ; 12 minors (task-6-review.md) ; risques 1-8 vérifiés (storeTexts borné et validé, course sur un même blob sondée sans erreur, CiteKeys 0 écart sur 135 685 appels)
+- Ruling (Task 6, I1): un réglage avancé bibNoticeMs (20 000 ms, groupe Publications) pour la notification d'un import de .bib, qu'un clic ou Échap ferme plus tôt — une liste de doublons se lit, et rien ne reste affiché sans fin — coût si faux : une notification de 20 s.
+- Ruling (Task 6): M1 (clés de doublon sans casse, comme BibTeX), M2 (une même clé dite une fois), M3 (les clés propres sûres de tout le fichier réservées d'abord comme prises, puis la fabrication : un \cite{li2008} existant garde sa publication), M4 (pas de geste de pose pendant l'attente après le clic, fantôme effacé à un changement de plan, refus sans « (Échap) »), M5 (réessais sur EPERM/EBUSY/EACCES du fichier temporaire), M6 (la raison du magasin dans la notification), M7 (l'import par identifiant revérifie la clé prise entre-temps) entrent dans la ronde : chacun a un effet visible et coûte peu — coût si faux : une ronde plus longue.
+Task 6: minor (deferred): M8 duplications (fr/plural, libellé « Importer <n> publications » deux fois, slice(0, 80) du préchargement, isBib/nameOf)
+Task 6: minor (deferred): M9 deux mkdir récursifs par fichier ; huit écritures occupent le pool de libuv pendant ~5 s
+Task 6: minor (deferred): M10 cycle de la pose sans test unitaire (GraphView) ; M12 GraphView +185 lignes (hook useBibImport à extraire)
+Task 6: minor (deferred): M11 nom d'un texte enregistré non borné en longueur (préexistant avec storeText)
+Task 6: fix round 1 dispatched (resume ab2fc77a7e6d24792) — I1, M1-M7
+Task 6: fix round 1 DONE — 0bc38e2 (core 132, store 23, view 251, app 419 ; interface 22/22 ; captures non refaites, rendu des références inchangé) ; M7 : refus d'une clé prise entre-temps
+Task 6: re-revue de la ronde 1 faite par le contrôleur (diff source lu en entier : clés sans casse dans mark et duplicate, réserve des clés propres avant fabrication, décompte omitted cohérent avec bibNotice, renommages réessayés sans masquer existsSync, notification closable et bibNoticeMs, attente sans geste ni menu, fantôme effacé à un changement de plan ; bibImport, toasts, publicationImport 34/34 et filesRetry 2/2 relancés) — approuvée
+Task 6: minor (deferred): un même Échap peut fermer un panneau flottant et la notification de l'import
+Task 6: minor (deferred): la réserve des clés propres se fait avant le plan : une clé fabriquée saute aussi la clé d'une entrée écartée plus bas comme doublon
+Task 6: complete (commits acb2527..0bc38e2, tests: core 132, store 23, view 251, app 419, interface 22/22, captures 24/24 à 0 px au commit 5d14235, rendu des références inchangé depuis)
+Task 7: dispatched (BASE 0bc38e2, implementer a6db4134268aa70dd, opus) — mesures au registre, captures plan4c déterministes, spec 5.2, 5.4, 7, 12, 18 (et 19 si les groupes y sont)
+Task 7: implementer DONE_WITH_CONCERNS — b2c5657 (891/891 sur 7 paquets, tsc propre, interface 22/22, captures : deux suites de 29 identiques, 0 px contre reference-3c 11, plan4a 8, plan4b 5, plan4c 5) ; aucun seuil manqué (.bib de 2 000 entrées : 11 à 31 ms l'analyse, 111 à 156 ms du dépôt au fantôme)
+Task 7: revue faite par le contrôleur — diff de la spec lu en entier (sections 4, 5.2, 5.4, 6.3, 7, 12, 18, 19, conformes aux Rulings ; 4 et 6.3 touchées en plus, justes), les cinq captures plan4c regardées (lecteur et marge, pop-up et section Annotations, plan Lecture en groupe, dialogue rempli, fantôme du bloc) — approuvée
+Task 7: minor (deferred): une pose de 2 000 publications sur six a pris 561 ms au lieu d'environ 230 ms, cause non établie ; l'image vient 0,58 à 0,94 s après le clic
+Task 7: minor (deferred): les surlignages d'une page sortie de la vue restent jusqu'à 6 images (64 ms) ; « pages visibles » lu comme vue ± pdfPagesAhead (1)
+Task 7: minor (deferred): la preuve des pages visibles ne se revérifie que par npm run mesures, pas par npm run interface
+Task 7: complete (commits 0bc38e2..b2c5657, tests: 891/891, interface 22/22, captures 29/29 à 0 px sur quatre références)
+Final: revue de toute la branche dispatchée (a808eb2406e0f9f1f, opus, e4d957f..b2c5657, Review Focus et intégration)
+Final: revue — prêt avec corrections ; aucun Critical ; I1 (reveal rejoué à chaque remontage de l'aperçu : place de lecture perdue, version précédente qui revient), I2 (une annotation hors plan ne peut être ni supprimée ni ouverte en fiche) ; 6 minors ; Rulings coûteux R1 (clés à « : » et « / » remplacées, casse les \cite de DBLP) et R2 (titre + année sans les auteurs) ; 16 lignes écartées (final-review.md)
+- Final: Ruling (R1 révisé): la clé propre d'une entrée est gardée si BibTeX et LaTeX la lisent — ASCII imprimable, sans blanc ni \ { } % # , ~ " ' ( ) =, sans « :// », 200 au plus — et seul le nom du fichier <clé>.bib est nettoyé (< > : " / \ | ? * remplacés par _, noms réservés de Windows évités) — l'import d'un .bib doit charger la bibliographie actuelle (spec 12), et les clés de DBLP ou « Auteur:Année » de l'utilisateur sont dans ses \cite ; l'adresse de DataCite reste refusée — coût si faux : une clé qu'un outil refuserait, que le rouge du registre ne verrait pas.
+- Final: Ruling (R2 révisé): un même titre et une même année ne font pas un doublon quand les deux côtés ont un premier auteur et que leurs noms de famille normalisés diffèrent — même règle de contradiction que les identifiants ; le livre de Li et Vitányi reste un doublon — coût si faux : deux nœuds pour une même œuvre dont le premier auteur est écrit autrement (« Li » contre « Li, M. » se normalisent pareil).
+- Final: Ruling (re-grade): M6 (add-reading.ts accepte la vraie base) passe Important — la règle de l'utilisateur est qu'aucun test ni script ne touche la vraie base ; M5 (les empreintes des ancres sont des références de fichiers) passe Important — une ligne de spec qui évite une perte de données à la synchronisation (plan 5) — coût si faux : une ligne et une garde de trop.
+Final: minor (deferred): M1 le PDF d'arXiv est téléchargé avant les doublons vus après le réseau (clé, titre et année), et reste orphelin au magasin
+Final: minor (deferred): M2 un .bib presque entièrement abîmé gèle la fenêtre jusqu'à 25 s à 16 Mio (deux Error par entrée abîmée)
+Final: minor (deferred): M3 renommer un PDF annoté puis le réimporter rend ses annotations anciennes inouvrables (retrouvées par anchor.file)
+Final: minor (deferred): M4 le tag clé_bibtex et la clé écrite dans <clé>.bib peuvent diverger ; la spec ne dit pas lequel fait foi (à trancher au plan du document)
+Final: minor (deferred): ⤢ d'un aperçu sur une version précédente ouvre le plein écran sur la version actuelle
+Final: minor (deferred): la paire préprint / actes d'un même article : la seconde entrée est écartée et sa clé n'est pas reprise (ses \cite ne la trouvent plus)
+Final: fix pass dispatched (a771e4be64b95ff07, opus, BASE b2c5657) — I1, I2, R1, R2, M5, M6
+Final: fix pass DONE — d8e4504 (902/902 sur 7 paquets, tsc propre, interface 25/25, captures 29/29 à 0 px sur quatre références) ; Rulings : pas de dialogue avant « Supprimer » (Ctrl+Z), clés à ^^ refusées, con/aux gardées en clé (fichier seul nettoyé), lockBase dans @cirrus/store, make-fixture refuse aussi la vraie base
+Final: re-revue de la passe dispatchée (ab8725e9b729abde2, opus), package review-b2c5657..d8e4504.diff
+Final: re-revue de la passe — approuvée : I1, I2, R1, R2, M5, M6 corrigés, aucun Critical ni Important nouveau (94/94 ciblés ; sondes : pdfLaTeX et bibtex.exe lisent les 23 clés gardées, la garde de M6 refuse toutes les variantes du chemin de la vraie base)
+Final: N3 (spec 7 « demande toujours » contre le « Supprimer » sans question ; spec 12 « Supprimer » contre « Supprimer partout ») corrigé par le contrôleur dans la spec
+Final: minor (deferred): N1 familyName lit « Anon » (auteur inconnu, spec 5.4) comme un vrai nom : un nœud auteur: Anon ne bloque plus un import de même titre et même année
+Final: minor (deferred): N2 familyName ne ramène pas ł, ø, ß, æ à l'ASCII ; « De Gaulle, Charles » donne degaulle et « Charles De Gaulle » gaulle
+Final: plan 4c clos (e4d957f..d8e4504 et la correction de spec du contrôleur) ; ce journal copié en annexe du registre, dossier de travail effacé
