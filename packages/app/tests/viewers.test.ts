@@ -8,7 +8,7 @@ import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { filesBuild, removeFileBuild, renameFileBuild } from '../src/renderer/actions.ts';
 import { fileClick, fileDoubleClick, fileMenu, thumbFor } from '../src/renderer/files/nodeFiles.ts';
-import { rangeHeader, ReadError, readHead } from '../src/renderer/files/read.ts';
+import { blobSize, rangeHeader, ReadError, readHead } from '../src/renderer/files/read.ts';
 import { ClickGuard } from '../src/renderer/ui/clickGuard.ts';
 import { tabTarget } from '../src/renderer/ui/FullScreen.tsx';
 import { placeBeside, type Rect } from '../src/renderer/ui/panels/geometry.ts';
@@ -86,6 +86,25 @@ test('readHead : la plage du plafond quand le fichier le dépasse, jamais plus q
   const missing = readHead(ref('a.txt', 3), 1000);
   await expect(missing).rejects.toBeInstanceOf(ReadError);
   await expect(missing).rejects.toThrow('« a.txt » est introuvable dans la base.');
+});
+
+test('blobSize : la taille d’une version du magasin par l’en-tête de sa réponse, sans lire son contenu ; une version absente le dit (plan 4c, D2)', async () => {
+  const hash = 'e'.repeat(64);
+  let pulled = 0;
+  const answer = (status: number, headers: Record<string, string>) => vi.fn(async (_url: string) => new Response(
+    new ReadableStream<Uint8Array>({ pull(c) { pulled++; c.enqueue(new Uint8Array(1024)); } }),
+    { status, headers },
+  ));
+  const ok = answer(200, { 'Content-Length': '4791' });
+  vi.stubGlobal('fetch', ok);
+  expect(await blobSize({ name: 'Li_Vitányi_chapitre_1.pdf', hash })).toBe(4791);
+  expect(ok.mock.calls[0][0]).toBe(`cirrus-file://blob/${hash}/Li_Vit%C3%A1nyi_chapitre_1.pdf`);
+  // Its body let go unread (the stream may have queued a chunk ahead).
+  expect(pulled).toBeLessThanOrEqual(1);
+  vi.stubGlobal('fetch', answer(404, {}));
+  await expect(blobSize({ name: 'a.pdf', hash })).rejects.toThrow(new ReadError('Cette version de « a.pdf » est introuvable dans la base.'));
+  vi.stubGlobal('fetch', answer(200, {}));
+  await expect(blobSize({ name: 'a.pdf', hash })).rejects.toBeInstanceOf(ReadError);
 });
 
 test('la vue par genre : image, PDF, texte (tex compris, retour à la ligne pour txt, md et log seulement), tableau ; aucune pour un autre', () => {

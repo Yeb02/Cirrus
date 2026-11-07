@@ -1,3 +1,4 @@
+import { ANNOTATION_TITLE_CHARS } from '@cirrus/core';
 import { hexToRgb } from './color.ts';
 
 export type Rgb = [number, number, number];
@@ -166,6 +167,16 @@ export interface RenderParams {
   pdfGapPx: number;
   /** and the largest drawing of a page, in megapixels: past it, the page is drawn less dense and stretched. */
   pdfCanvasMaxMp: number;
+  // PDF annotations (plan 4c, D1 to D4)
+  /** A passage annotated is drawn over its page in this colour, at this opacity, */
+  annotationColor: Rgb;
+  annotationOpacity: number;
+  /** and blinks this long when it is opened from a list (0: not at all). */
+  annotationFlashMs: number;
+  /** An annotation's title: the start of its passage, this many characters, then « … » (D1). */
+  annotationTitleChars: number;
+  /** The reader's margin, which lists the PDF's annotations (D4), this wide when it is open. */
+  annotationMarginPx: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -346,6 +357,11 @@ export const DEFAULT_PARAMS: RenderParams = {
   pdfDocsKept: 4,
   pdfGapPx: 12,
   pdfCanvasMaxMp: 16,
+  annotationColor: hexToRgb('#ffd23f'),
+  annotationOpacity: 0.35,
+  annotationFlashMs: 1200,
+  annotationTitleChars: ANNOTATION_TITLE_CHARS,
+  annotationMarginPx: 240,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -535,6 +551,11 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('pdfDocsKept', 'PDF gardés ouverts en mémoire', A, 'PDF', 1, 32, 1),
   num('pdfGapPx', 'Écart entre les pages d’un PDF et autour d’elles (px)', A, 'PDF', 0, 64, 1),
   num('pdfCanvasMaxMp', 'Taille maximale du dessin d’une page de PDF (mégapixels)', A, 'PDF', 1, 64, 1),
+  color('annotationColor', 'Surlignage des annotations', 'Annotations'),
+  num('annotationOpacity', 'Opacité du surlignage des annotations', A, 'Annotations', 0.05, 1, 0.01),
+  num('annotationFlashMs', 'Durée du clignotement d’un passage ouvert depuis la liste (ms)', A, 'Annotations', 0, 10_000, 50),
+  num('annotationTitleChars', 'Caractères du passage repris dans le titre d’une annotation', A, 'Annotations', 1, 500, 1),
+  num('annotationMarginPx', 'Largeur de la marge des annotations du lecteur PDF (px)', A, 'Annotations', 120, 800, 10),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
@@ -597,7 +618,7 @@ export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Apparence', groups: ['Couleurs', 'Fond', 'Nœuds', 'Groupes', 'Connexions', 'Flèches et marqueurs', 'Amorces', 'Fantômes et signes', 'Sélection et dépôt'] },
   { title: 'Navigation', groups: ['Échelles', 'Niveaux de détail', 'Zoom et déplacement', 'Pointeur'] },
   { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications'] },
-  { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF'] },
+  { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
   { title: 'Performances et base', groups: ['Rendu', 'Base'] },
 ];

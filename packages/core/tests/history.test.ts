@@ -77,6 +77,23 @@ test('préparer une annulation ne déplace la pile qu’une fois confirmée (éc
   expect(stack.canRedo).toBe(false);
 });
 
+test('le pas que la prochaine annulation défera, et celui que le prochain rétablissement refera (plan 4c : le plein écran)', () => {
+  const { s, plan, stack } = setup();
+  expect([stack.nextUndo, stack.nextRedo]).toEqual([null, null]);
+  const a = run(s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  stack.record(a);
+  const b = run(s, createNode(s, { plan, title: 'B', x: 0, y: 0, k: 0 }));
+  stack.record(b);
+  expect([stack.nextUndo, stack.nextRedo]).toEqual([b.id, null]);
+  run(s, stack.undo(s)!);
+  expect([stack.nextUndo, stack.nextRedo]).toEqual([a.id, b.id]);
+  // Prepared only, the stack has not moved.
+  stack.prepareUndo(s);
+  expect([stack.nextUndo, stack.nextRedo]).toEqual([a.id, b.id]);
+  run(s, stack.redo(s)!);
+  expect([stack.nextUndo, stack.nextRedo]).toEqual([b.id, null]);
+});
+
 test('un rétablissement refusé dit « rétablir » (M3 du plan 2)', () => {
   const { s, plan, stack } = setup();
   const a = run(s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));

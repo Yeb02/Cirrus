@@ -2,7 +2,7 @@ import type { FileRef, Id } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { useRef } from 'react';
 import type { ViewStates } from '../../files/viewState.ts';
-import { type LatexContext, Viewer } from '../viewers/Viewer.tsx';
+import { type AnnotationContext, type LatexContext, Viewer } from '../viewers/Viewer.tsx';
 import { FloatingPanel, type Frame } from './FloatingPanel.tsx';
 
 const ExpandIcon = () => (
@@ -17,11 +17,12 @@ const ExpandIcon = () => (
  * the panel says why (`gone`), its last name in the header. While its content is in full screen (`covered`: views keep
  * their place by content), its view here is left, its place kept, and comes back where the full screen leaves it.
  * A .tex shows its compiled PDF (plan 4b, task 5: `latex`, App's state and registry); a link to a node clicked in a
- * PDF goes to `onNodeLink` (task 6).
+ * PDF goes to `onNodeLink` (task 6). A PDF is read with its annotations (plan 4c: `annotations`), whose margin's can be
+ * dragged out onto the graph.
  */
 export function FilePreview(props: {
   frame: Frame; node: Id; found: FileRef | null; gone: string; covered: boolean; params: RenderParams; views: ViewStates; latex: LatexContext;
-  onFull(): void; onNodeLink(node: Id): void;
+  annotations?: AnnotationContext; onFull(): void; onNodeLink(node: Id): void;
 }) {
   const f = props.found;
   const lastName = useRef('');
@@ -35,7 +36,7 @@ export function FilePreview(props: {
         : (
           <Viewer
             key={f.hash} file={f} node={props.node} mode="preview" params={props.params} views={props.views} latex={props.latex}
-            onNodeLink={props.onNodeLink}
+            annotations={props.annotations} onNodeLink={props.onNodeLink}
           />
         )}
     </FloatingPanel>

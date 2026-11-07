@@ -1,19 +1,34 @@
-import type { Id } from '@cirrus/core';
+import type { Anchor, Id } from '@cirrus/core';
 import { AbortException, type PDFDocumentProxy, type PDFPageProxy, RenderingCancelledException, TextLayer } from 'pdfjs-dist';
 import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type AnnotationEntry, type PageHit, rectsOnScreen, selectionToAnchor } from '../../files/annotations.ts';
 import { type ViewRef, viewKey } from '../../files/kind.ts';
 import { CSS_PER_PT, destination, openPdf, type PdfDoc, pageSize, pdfFailure } from '../../files/pdf.ts';
 import {
-  type Anchor, anchorAt, currentPage, fitWidthZoom, type PageSize, pageNumber, pageOffsets, placeAnchor, visiblePages, wheelSteps, zoomBy,
+  anchorAt, currentPage, fitWidthZoom, type PageSize, pageNumber, pageOffsets, placeAnchor, type Anchor as ViewPoint, visiblePages, wheelSteps, zoomBy,
 } from '../../files/pdfLayout.ts';
 import { loading } from '../../files/read.ts';
 import { linkTarget } from '../latex/links.ts';
+import { AnnotationLayer, type Flash, type MarkStyle } from './AnnotationLayer.tsx';
 import { keptView, Message, useKeptView, type ViewProps } from './common.tsx';
 
 /** Fitted to the width of the first page (a wider one overflows), or at a zoom of its own (1: the pages' real size). */
 type Mode = { fit: true } | { fit: false; zoom: number };
 /** A document point to put at the view's place (vx, vy) at the next layout: where the view is, or a zoom's centre. */
-interface Target { a: Anchor; vx: number; vy: number }
+interface Target { a: ViewPoint; vx: number; vy: number }
+/**
+ * Annotating (plan 4c, D3): a passage selected in the PDF of node `pdf` offers « Annoter » (and Ctrl+Maj+A), which hands
+ * its anchor to `onAnnotate`; that says whether it took it (its selection then goes) or refused it (too long: it stays).
+ */
+export interface Annotate { pdf: Id; onAnnotate(a: Anchor): boolean }
+/** To a page (from 1), its passage `flash` blinking there (D4: an annotation opened from a list); a new `seq`, a new move. */
+export interface Goto { page: number; flash?: Anchor; seq: number }
+
+const NO_MARKS: readonly AnnotationEntry[] = [];
+/** A colour of the settings (0 to 1 a channel) for CSS. */
+const css = ([r, g, b]: readonly number[], alpha: number) => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${alpha})`;
+const sameAnchor = (a: Anchor | null, b: Anchor | null) =>
+  a === b || (a !== null && b !== null && a.page === b.page && a.text === b.text && JSON.stringify(a.rects) === JSON.stringify(b.rects));
 /**
  * A link of a page, in percents of the page: to an address (http, https, mailto: openUrl), to a destination, or to a
  * node of the base (plan 4b, D7: `cirrus://node/<id>`, never handed to the system).
@@ -44,8 +59,14 @@ function free(canvas: HTMLCanvasElement): void {
  * by a hash that changes with each compilation. Otherwise its parent keys it by the file's hash.
  * Drawn again only when its props change (memo): a parent that changes at each key typed (the .tex workbench) gives it
  * the same `live` and `onNodeLink` (task 5 review).
+ * Annotations (plan 4c): `annotations`, those of this version (D2), are drawn over the pages drawn (AnnotationLayer);
+ * with `annotate`, a passage selected offers « Annoter » at its end, and Ctrl+Maj+A in the view does the same — never
+ * for a selection that is empty, only blanks, or begun outside the view (selectionToAnchor). `goto` brings a page into
+ * view, its passage `flash` in the middle of it and blinking, even before the document is read.
  */
-export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: ViewRef; live?: { keptAs: string }; onNodeLink?(node: Id): void }) {
+export const PdfViewer = memo(function PdfViewer(props: ViewProps & {
+  file: ViewRef; live?: { keptAs: string }; onNodeLink?(node: Id): void; annotations?: readonly AnnotationEntry[]; annotate?: Annotate; goto?: Goto;
+}) {
   const { file, params } = props;
   const box = useRef<HTMLDivElement>(null);
   const [opened, setOpened] = useState<PDFDocumentProxy | { message: string } | null>(null);
@@ -65,6 +86,18 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
   const nodeLink = useRef(props.onNodeLink);
   nodeLink.current = props.onNodeLink;
   const onNode = useCallback((id: Id) => nodeLink.current?.(id), []);
+  /** The pages read, by index, while they are drawn: a selection's page and its viewport (pageOf). */
+  const proxies = useRef(new Map<number, PDFPageProxy>());
+  const onPage = useCallback((i: number, p: PDFPageProxy | null) => { if (p) proxies.current.set(i, p); else proxies.current.delete(i); }, []);
+  /** The passage selected in the view, as an anchor, while « Annoter » is offered for it. */
+  const [picked, setPicked] = useState<Anchor | null>(null);
+  const annotateRef = useRef(props.annotate);
+  annotateRef.current = props.annotate;
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  /** A move asked (goto) and not made yet: the document is not read, or the passage's page is being read. */
+  const pendingGoto = useRef<Goto | null>(null);
+  const [flash, setFlash] = useState<Flash | null>(null);
 
   // The document, held while the view shows it; every page at the first one's size until it is read. A new one (live)
   // takes the place of the last, which is let go once the pages have moved to it.
@@ -162,7 +195,57 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
       el.scrollLeft = p.x - t.vx;
     }
     scrolled();
+    // A move asked before the document was read: from where the view would have opened.
+    if (pendingGoto.current) moveTo();
   }, [ready, offsets, contentW, view?.h]);
+
+  /**
+   * The move asked (goto), once the document is read: its page's top at the view's top; with a passage, the passage
+   * centred in the view (as far as the scroll goes; one wider than the view, its start), and blinking. The passage's
+   * place is read from its page, its rotation included (a page not drawn is read first).
+   */
+  const moveTo = () => {
+    const g = pendingGoto.current, d = held.current?.doc, l = live.current;
+    if (!g || !d || !l.ready) return;
+    pendingGoto.current = null;
+    const page = Math.min(l.sizes.length - 1, Math.max(0, Math.round(g.page) - 1));
+    if (!g.flash) {
+      goTo(page);
+      return;
+    }
+    const passage = g.flash;
+    void loading((async () => {
+      let p: PDFPageProxy;
+      try {
+        p = proxies.current.get(page) ?? await d.getPage(page + 1);
+      } catch (e) {
+        console.error(`Page ${page + 1} du PDF :`, e);
+        return;
+      }
+      const el = box.current, now = live.current;
+      if (!el || held.current?.doc !== d || !now.ready || pendingGoto.current) return;
+      // At zoom 1, in CSS pixels: the passage's bounds on its page. Wider than the view, its start is kept in it, at
+      // the pages' gap from its left; taller, its top at the view's top.
+      const vp = p.getViewport({ scale: CSS_PER_PT }), all = rectsOnScreen(passage, vp);
+      const top = Math.min(...all.map((x) => x.top)), bottom = Math.max(...all.map((x) => x.bottom));
+      const left = Math.min(...all.map((x) => x.left)), right = Math.max(...all.map((x) => x.right));
+      const fits = (right - left) * now.zoom <= el.clientWidth;
+      target.current = {
+        a: { page, frac: top / vp.height, relX: (fits ? (left + right) / 2 : left) - vp.width / 2 },
+        vx: fits ? el.clientWidth / 2 : now.params.pdfGapPx, vy: Math.max(0, (el.clientHeight - (bottom - top) * now.zoom) / 2),
+      };
+      const at = placeAnchor(target.current.a, now.offsets, now.sizes, now.zoom, now.contentW);
+      el.scrollTop = at.y - target.current.vy;
+      el.scrollLeft = at.x - target.current.vx;
+      scrolled();
+      setFlash({ anchor: passage, seq: g.seq });
+    })());
+  };
+  useLayoutEffect(() => {
+    if (!props.goto) return;
+    pendingGoto.current = props.goto;
+    if (placed.current) moveTo();
+  }, [props.goto?.seq]);
 
   /** A new zoom (or the fit), the document point at (vx, vy) of the view staying there. */
   const zoomTo = (m: Mode, vx: number, vy: number) => {
@@ -199,6 +282,78 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
     el.scrollTop = live.current.offsets[page];
     scrolled();
   };
+
+  /**
+   * The page of an element of the view (a text of the selection, a line break), at its place in the window and the
+   * zoom shown, its rotation included; null outside the pages drawn. Each page's box measured once per selection.
+   */
+  const pageHits = () => {
+    const seen = new Map<Element, PageHit | null>(), scale = live.current.zoom * CSS_PER_PT;
+    return (el: Element): PageHit | null => {
+      const pageBox = el.closest<HTMLElement>('.pdf-page');
+      if (!pageBox || !box.current?.contains(pageBox)) return null;
+      let hit = seen.get(pageBox);
+      if (hit === undefined) {
+        const index = Number(pageBox.dataset.page) - 1, p = proxies.current.get(index), r = pageBox.getBoundingClientRect();
+        hit = p ? { page: index + 1, viewport: p.getViewport({ scale, offsetX: r.left, offsetY: r.top }) } : null;
+        seen.set(pageBox, hit);
+      }
+      return hit;
+    };
+  };
+  const annotating = props.annotate !== undefined;
+  /** The passage selected in this view, as it is now: null for none, or for a selection begun outside the view. */
+  const selected = (): Anchor | null => {
+    const sel = document.getSelection(), an = annotateRef.current, el = box.current;
+    const range = sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
+    return range && an && el && live.current.ready && el.contains(range.startContainer) ? selectionToAnchor(sel!, pageHits(), an.pdf, fileRef.current) : null;
+  };
+  // The passage selected, read again when the selection changes — once a press that makes it is over, so that
+  // « Annoter » does not follow the pointer — and dropped when it leaves the view (or is made outside it).
+  useEffect(() => {
+    if (!annotating) return;
+    const el = box.current!;
+    let pressing = false, frame = 0;
+    const read = () => {
+      frame = 0;
+      const a = selected();
+      setPicked((p) => (sameAnchor(p, a) ? p : a));
+    };
+    const change = () => { if (!pressing && frame === 0) frame = requestAnimationFrame(read); };
+    const down = (e: PointerEvent) => {
+      // A press on « Annoter » is its click's.
+      if ((e.target as Element | null)?.closest?.('.annotate')) return;
+      pressing = true;
+      setPicked(null);
+    };
+    const up = () => { if (pressing) { pressing = false; change(); } };
+    document.addEventListener('selectionchange', change);
+    el.addEventListener('pointerdown', down);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    window.addEventListener('blur', up);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener('selectionchange', change);
+      el.removeEventListener('pointerdown', down);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      window.removeEventListener('blur', up);
+    };
+  }, [annotating]);
+  /**
+   * « Annoter » (or Ctrl+Maj+A): the passage selected, read at once (a key right after the press that made it comes
+   * before the frame that reads it), to `onAnnotate`; taken, its selection goes. False when there is none.
+   */
+  const annotateNow = (): boolean => {
+    const a = selected(), an = annotateRef.current;
+    if (!a || !an) return false;
+    if (an.onAnnotate(a)) {
+      document.getSelection()?.removeAllRanges();
+      setPicked(null);
+    }
+    return true;
+  };
   // A page's real size, once it is read: the layout follows it (the first page's size until then).
   const onSize = useCallback((i: number, s: PageSize) => {
     setSizes((prev) => (prev[i] && prev[i].w === s.w && prev[i].h === s.h ? prev : prev.map((x, k) => (k === i ? s : x))));
@@ -226,6 +381,19 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
     })();
   }, [opened]);
 
+  // The annotations of this version, by page index; how they are drawn.
+  const marks = useMemo(() => {
+    const m = new Map<number, AnnotationEntry[]>();
+    for (const e of props.annotations ?? NO_MARKS) {
+      const list = m.get(e.anchor.page - 1);
+      if (list) list.push(e);
+      else m.set(e.anchor.page - 1, [e]);
+    }
+    return m;
+  }, [props.annotations]);
+  const { annotationColor: tint, annotationOpacity: alpha, annotationFlashMs: flashMs } = params;
+  const markStyle = useMemo<MarkStyle>(() => ({ color: css(tint, alpha), solid: css(tint, 1), flashMs }), [tint, alpha, flashMs]);
+
   const n = sizes.length;
   const pages = [];
   if (ready) {
@@ -236,11 +404,19 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
         <PdfPage
           key={i} doc={doc} index={i} top={offsets[i]} left={(contentW - w) / 2} width={w} height={h} scale={scale}
           drawn={i >= range.first && i < range.last} maxPixels={maxPixels} onSize={onSize} onDest={onDest}
-          onNode={props.onNodeLink ? onNode : undefined}
+          onNode={props.onNodeLink ? onNode : undefined} onPage={onPage} marks={marks.get(i)} markStyle={markStyle}
+          flash={flash && flash.anchor.page - 1 === i ? flash : undefined}
         />,
       );
     }
   }
+  /** « Annoter », right under the end of the passage selected (its last line), on its page at this zoom. */
+  const offer = (() => {
+    const proxy = picked && ready ? proxies.current.get(picked.page - 1) : undefined;
+    if (!picked || !proxy || !sizes[picked.page - 1]) return null;
+    const i = picked.page - 1, [end] = rectsOnScreen({ rects: [picked.rects[picked.rects.length - 1]] }, proxy.getViewport({ scale: zoom * CSS_PER_PT }));
+    return { left: (contentW - sizes[i].w * zoom) / 2 + end.right, top: offsets[i] + end.bottom };
+  })();
   const message = opened === null ? 'Lecture…' : 'message' in opened ? opened.message : null;
   const p = params;
   return (
@@ -286,12 +462,30 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & { file: View
       <div
         ref={box} className="pdf-scroll" tabIndex={doc ? 0 : -1} onScroll={scrolled}
         onKeyDown={(e) => {
+          // Ctrl+Maj+A (D3), the view's own: no other shortcut of the app reads it.
+          if (annotating && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'a') {
+            if (annotateNow()) e.preventDefault();
+            return;
+          }
           if (e.ctrlKey || e.altKey || e.metaKey) return;
           if (e.key === '+' || e.key === '=') { e.preventDefault(); step(1); }
           else if (e.key === '-') { e.preventDefault(); step(-1); }
         }}
       >
-        {ready && <div className="pdf-sizer" style={{ width: contentW, height: offsets[n] }}>{pages}</div>}
+        {ready && (
+          <div className="pdf-sizer" style={{ width: contentW, height: offsets[n] }}>
+            {pages}
+            {offer && annotating && (
+              <button
+                className="annotate" style={offer} title="Annoter ce passage (Ctrl+Maj+A)"
+                // The selection stays, and the focus where it is.
+                onMouseDown={(e) => e.preventDefault()} onClick={() => annotateNow()}
+              >
+                Annoter
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {message && <Message text={message} />}
     </div>
@@ -311,6 +505,10 @@ export interface PageProps {
    * drawn anew with each compilation); the reader's take it, as any link, so that its keys go to the reader.
    */
   keepFocus?: boolean;
+  /** The page read while it is drawn (null once let go): the reader finds a selection's page and viewport by it. */
+  onPage?(index: number, page: PDFPageProxy | null): void;
+  /** The annotations drawn on this page (plan 4c), the passage blinking on it, and how they are drawn. */
+  marks?: readonly AnnotationEntry[]; flash?: Flash; markStyle?: MarkStyle;
 }
 
 /**
@@ -416,8 +614,10 @@ export const PdfPage = memo(function PdfPage(props: PageProps) {
   // its place (live): that drawing stays until the new one replaces it.
   useEffect(() => {
     if (page === null) box.current?.querySelectorAll('canvas').forEach(free);
+    props.onPage?.(index, page);
     return () => { page?.cleanup(); };
   }, [page]);
+  useEffect(() => () => props.onPage?.(index, null), []);
   useEffect(() => {
     const el = box.current!;
     return () => el.querySelectorAll('canvas').forEach(free);
@@ -426,6 +626,9 @@ export const PdfPage = memo(function PdfPage(props: PageProps) {
   const style = { top: props.top, left: props.left, width: props.width, height: props.height, '--total-scale-factor': scale } as CSSProperties;
   return (
     <div ref={box} className="pdf-page" style={style} data-page={index + 1}>
+      {page && props.markStyle && ((props.marks?.length ?? 0) > 0 || props.flash) && (
+        <AnnotationLayer page={page} scale={scale} marks={props.marks ?? NO_MARKS} flash={props.flash} style={props.markStyle} />
+      )}
       <div
         ref={textBox} className="textLayer"
         onPointerDown={(e) => {

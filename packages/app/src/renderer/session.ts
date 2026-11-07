@@ -94,6 +94,15 @@ export class EditSession {
     return this.journalSeq;
   }
 
+  /** The step the next undo would undo, and the one the next redo would redo: their identifiers (UndoStack), null for none. */
+  get nextUndo(): Id | null {
+    return this.stack.nextUndo;
+  }
+
+  get nextRedo(): Id | null {
+    return this.stack.nextRedo;
+  }
+
   /**
    * Whether a change written to the base could not be applied to the copy (it no longer matches the base): its snapshot
    * must not be saved; the next start rebuilds the state from the journal, or from the tables.

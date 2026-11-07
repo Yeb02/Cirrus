@@ -46,6 +46,21 @@ export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSig
   return { bytes: n === out.length ? out : out.subarray(0, n), truncated: range !== null };
 }
 
+/**
+ * The size of a version of a file the store keeps (plan 4c, D2: the one an annotation was made on, re-imported since;
+ * the node no longer holds its FileRef), by the length the cirrus-file: protocol answers it with: its content is not
+ * read, the answer's stream let go at once. A blob missing from the store, or an answer without its length, rejects
+ * with a ReadError, in French.
+ */
+export async function blobSize(ref: { name: string; hash: string }, signal?: AbortSignal): Promise<number> {
+  const res = await fetch(fileUrl({ ...ref, size: 0 }), { signal });
+  void res.body?.cancel().catch(() => {});
+  if (res.status === 404) throw new ReadError(`Cette version de « ${ref.name} » est introuvable dans la base.`);
+  const size = Number(res.headers.get('content-length') ?? Number.NaN);
+  if (!res.ok || !Number.isSafeInteger(size) || size < 0) throw new ReadError(`Cette version de « ${ref.name} » n’a pas pu être lue (${res.status}).`);
+  return size;
+}
+
 /** What the views are still reading or loading: a file, a view's code, a language, an image. */
 const pending = new Set<Promise<unknown>>();
 

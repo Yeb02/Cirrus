@@ -1,9 +1,12 @@
-import { type Action, type FileRef, type Id, type LatexStatus, type NodeRec, preambleText, type State } from '@cirrus/core';
+import {
+  type Action, type Anchor, annotationTitle, createAnnotation, type FileRef, type Id, type LatexStatus, type NodeRec, preambleText, type State,
+} from '@cirrus/core';
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import { type Build, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
+import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { loading, MB, viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
@@ -116,6 +119,10 @@ export function App() {
   const [preambleOpen, setPreambleOpen] = useState(false);
   const preambleRef = useRef(preambleOpen);
   preambleRef.current = preambleOpen;
+  /** The last annotation index built (plan 4c): the next one reads again only what changed. */
+  const builtAnnotations = useRef<AnnotationIndex | null>(null);
+  /** The steps made in the full screen open (its annotations): the only ones its Ctrl+Z and Ctrl+Y undo and redo. */
+  const fullSteps = useRef(new Set<Id>());
 
   const toast = (text: string) => {
     const id = Math.random();
@@ -133,15 +140,20 @@ export function App() {
   };
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field, or a LaTeX field being edited, they
-  // belong to the text (spec 6.4: textOwnsKeys). Not under a full screen, a file's or the preamble's: they would change
-  // the graph hidden under it (ruling of the task 5 review).
+  // belong to the text (spec 6.4: textOwnsKeys). Not under the preamble's full screen; under a file's, only for the
+  // steps made there (plan 4c: its annotations, D3) — the others would change the graph hidden under it (ruling of the
+  // task 5 review).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!session.current || !e.ctrlKey || fullRef.current || preambleRef.current) return;
+      if (!session.current || !e.ctrlKey || preambleRef.current) return;
       if (textOwnsKeys(e.target instanceof Element ? (e.target as HTMLElement) : null)) return;
-      const k = e.key.toLowerCase();
-      if (k === 'z' && !e.shiftKey) { e.preventDefault(); void session.current.undo().then((r) => report(r, 'Annulé')); }
-      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); void session.current.redo().then((r) => report(r, 'Rétabli')); }
+      const k = e.key.toLowerCase(), undo = k === 'z' && !e.shiftKey, redo = k === 'y' || (k === 'z' && e.shiftKey);
+      if (!undo && !redo) return;
+      const next = undo ? session.current.nextUndo : session.current.nextRedo;
+      if (fullRef.current && (next === null || !fullSteps.current.has(next))) return;
+      e.preventDefault();
+      if (undo) void session.current.undo().then((r) => report(r, 'Annulé'));
+      else void session.current.redo().then((r) => report(r, 'Rétabli'));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -294,6 +306,17 @@ export function App() {
     return () => { clearTimeout(timer); done(); };
   }, [state, rev, texts, params.latexTypingPauseMs]);
 
+  // The annotations (plan 4c, D4), built again at each change of the state from the last index: what did not change
+  // is not read again, and an index where nothing changed is the same (the readers draw nothing again).
+  const annotations = useMemo(() => {
+    if (!state) return null;
+    const built = AnnotationIndex.build(state, builtAnnotations.current ?? undefined);
+    builtAnnotations.current = built;
+    return built;
+  }, [state, rev]);
+  // A full screen opened or closed: its steps are no longer its own.
+  useEffect(() => { fullSteps.current = new Set(); }, [full]);
+
   /** Captures wait for the first drawn frame; a due snapshot waits for it too (R16). */
   const firstFrame = () => {
     if (readySent.current) return;
@@ -364,6 +387,22 @@ export function App() {
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
   /**
+   * A passage annotated in a reader (plan 4c, D3): a node of its own, in no plan, its title the start of the passage
+   * (annotationTitleChars), one action. Too long a passage is refused, said in a notification (false: the selection
+   * stays); so is a PDF gone meanwhile (createAnnotation's refusal). Made in the full screen, the step is its own: its
+   * Ctrl+Z undoes it there.
+   */
+  const annotate = (a: Anchor, inFull: boolean): boolean => {
+    const refusal = anchorRefusal(a);
+    if (refusal) { toast(refusal); return false; }
+    const title = annotationTitle(a.text, titleChars(paramsRef.current.annotationTitleChars));
+    void session.current!.run((s) => createAnnotation(s, a, title)).then((r) => {
+      if (r.ok && inFull) fullSteps.current.add(r.action.id);
+      report(r);
+    });
+    return true;
+  };
+  /**
    * Files imported into a node (plan 4a, D6): copied into the store by the main process (`imported`), then added through
    * the session as one action; what came of it in toasts — the refused files (`refused`: already here, not on the disk)
    * in one, then what the drop did or why not.
@@ -426,7 +465,7 @@ export function App() {
         <Panels
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
-          onNodeLink={nodeLink} covered={preambleOpen}
+          onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
         />
         <Toasts toasts={toasts}><LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} /></Toasts>
       </div>
@@ -438,6 +477,7 @@ export function App() {
           <FullScreen
             node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
             nodeTitle={(id) => { const n = resolveTarget(state, { kind: 'node', node: id })?.node; return n ? n.title || 'Sans titre' : null; }}
+            annotations={annotations} onAnnotate={(a) => annotate(a, true)}
             tex={{
               state, registry, workbench,
               onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),

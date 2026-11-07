@@ -1,7 +1,8 @@
-import type { Action, FileRef, Id, NodeRec, State } from '@cirrus/core';
+import type { Action, Anchor, FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams, SceneItem } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Build } from '../../actions.ts';
+import type { AnnotationIndex } from '../../files/annotations.ts';
 import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
 import type { ViewStates } from '../../files/viewState.ts';
@@ -159,7 +160,8 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * PanelBoundary: one that fails says so in its frame, which still moves and closes; the others and the window stay.
  * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built), and so are the
  * pop-ups' summaries; a link to a node clicked in a panel goes to `onNodeLink`, with that panel's place (App's: it
- * opens the node's pop-up beside it, openLinked).
+ * opens the node's pop-up beside it, openLinked). A PDF's preview draws and lists its annotations (plan 4c, App's
+ * `annotations`), and a passage selected in it is annotated by `onAnnotate`.
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -167,7 +169,7 @@ export function Panels(props: {
   state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
-  onNodeLink(node: Id, near: Rect): void; covered?: boolean;
+  onNodeLink(node: Id, near: Rect): void; covered?: boolean; annotations: AnnotationIndex | null; onAnnotate(a: Anchor): boolean;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -262,6 +264,7 @@ export function Panels(props: {
                 frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
                 covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
                 latex={{ state: props.state, registry: props.registry }}
+                annotations={props.annotations ? { index: props.annotations, onAnnotate: props.onAnnotate, draggable: true } : undefined}
                 onFull={() => { if (file) props.onFullScreen(node, file.name); }} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               />
             </PanelBoundary>

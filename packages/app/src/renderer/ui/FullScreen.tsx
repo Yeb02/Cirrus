@@ -1,6 +1,7 @@
-import type { FileRef, Id, NodeRec, State } from '@cirrus/core';
+import type { Anchor, FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { lazy, type RefObject, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import type { AnnotationIndex } from '../files/annotations.ts';
 import { fileKind } from '../files/kind.ts';
 import { offersSystem } from '../files/nodeFiles.ts';
 import { loading } from '../files/read.ts';
@@ -79,16 +80,19 @@ export function useModal(root: RefObject<HTMLElement | null>, close: RefObject<(
  * A link to a node clicked in a PDF here (plan 4b, task 6) opens nothing, the full screen being modal: its header says
  * « Lien vers « titre » : ferme le plein écran pour l’ouvrir. » for toastMs (`nodeTitle`: the node's title, null when it
  * is gone, which it says too).
+ * A PDF is read and annotated here with its annotations (plan 4c, D4: `annotations`, `onAnnotate`); they are not
+ * dragged out of its margin, the full screen being modal.
  */
 export function FullScreen(props: {
   node: NodeRec; file: FileRef; params: RenderParams; views: ViewStates; onClose(): void; onSystem(file: FileRef): void; tex?: TexContext;
-  nodeTitle(node: Id): string | null;
+  nodeTitle(node: Id): string | null; annotations?: AnnotationIndex | null; onAnnotate?(a: Anchor): boolean;
 }) {
   const { node, file, tex } = props;
   const root = useRef<HTMLDivElement>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const latest = useRef(props);
   latest.current = props;
+  const annotate = useCallback((a: Anchor) => latest.current.onAnnotate?.(a) ?? false, []);
   const noticeTimer = useRef<number | undefined>(undefined);
   const onNodeLink = useCallback((id: Id) => {
     const title = latest.current.nodeTitle(id);
@@ -116,7 +120,13 @@ export function FullScreen(props: {
         {offersSystem(file.name) && <button className="system" onClick={() => props.onSystem(file)}>Ouvrir avec l’application du système</button>}
         <button className="close" title="Quitter le plein écran (Échap)" onClick={() => leave()}>×</button>
       </header>
-      {!isTex ? <Viewer key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} onNodeLink={onNodeLink} />
+      {!isTex
+        ? (
+          <Viewer
+            key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} onNodeLink={onNodeLink}
+            annotations={props.annotations && props.onAnnotate ? { index: props.annotations, onAnnotate: annotate, draggable: false } : undefined}
+          />
+        )
         : !tex.registry ? <Notice text="Lecture…" />
         : (
           <Suspense fallback={<Notice text="Lecture…" />}>

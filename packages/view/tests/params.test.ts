@@ -1,3 +1,4 @@
+import { ANNOTATION_TITLE_CHARS } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { DEFAULT_PARAMS, diffFromDefaults, PARAM_RUBRICS, PARAM_SPECS, withOverrides } from '../src/params.ts';
 import { sceneParamsKey } from '../src/scene.ts';
@@ -138,6 +139,26 @@ test('lecteur PDF : pages d’avance, pas et bornes du zoom, documents gardés, 
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'PDF', kind: 'number', min, max, step });
   }
+});
+
+test('annotations : couleur (réglage principal), opacité, clignotement, titre et marge, groupe « Annotations » de la rubrique « Fichiers » (plan 4c, tâche 2)', () => {
+  expect(PARAM_SPECS.find((s) => s.key === 'annotationColor')).toEqual({
+    key: 'annotationColor', label: 'Surlignage des annotations', section: 'graphique', group: 'Annotations', kind: 'color',
+  });
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['annotationOpacity', 0.35, 'Opacité du surlignage des annotations', 0.05, 1, 0.01],
+    ['annotationFlashMs', 1200, 'Durée du clignotement d’un passage ouvert depuis la liste (ms)', 0, 10_000, 50],
+    ['annotationTitleChars', ANNOTATION_TITLE_CHARS, 'Caractères du passage repris dans le titre d’une annotation', 1, 500, 1],
+    ['annotationMarginPx', 240, 'Largeur de la marge des annotations du lecteur PDF (px)', 120, 800, 10],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Annotations', kind: 'number', min, max, step });
+  }
+  expect(DEFAULT_PARAMS.annotationTitleChars).toBe(80);
+  // Never 0 nor negative: a title keeps at least a character of its passage.
+  expect(withOverrides({ annotationTitleChars: 0, annotationOpacity: 3 })).toMatchObject({ annotationTitleChars: 1, annotationOpacity: 1 });
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Fichiers')!.groups).toEqual(['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations']);
 });
 
 test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage principal du groupe « Paquets et installation » (plan 4b, tâche 2)', () => {

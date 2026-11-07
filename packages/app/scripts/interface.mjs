@@ -4,7 +4,7 @@
 // the browser's own default actions — the focus a press gives, a click after a press — happen as for the user, which
 // the pointer replays of the captures (CIRRUS_POINTER) skip. Then it reads what the page shows and what the base kept.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,10 +15,10 @@ const appDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const electron = createRequire(import.meta.url)('electron');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. */
-async function launch(data, profile) {
+/** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…). */
+async function launch(data, profile, more = {}) {
   // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/index.ts); the page is told it has it.
-  const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1' };
+  const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
   // Port 0: Chromium picks a free one, and writes it in the profile (DevToolsActivePort).
   const child = spawn(electron, [appDir, `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: 'ignore' });
@@ -69,15 +69,96 @@ async function launch(data, profile) {
       return r;
     },
     async type(text) { await send('Input.insertText', { text }); await sleep(100); },
-    async press(key, code = key, keyCode) {
-      for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: keyCode });
+    /** A key; `modifiers` as DevTools counts them: Alt 1, Ctrl 2, Meta 4, Maj 8. */
+    async press(key, code = key, keyCode, modifiers = 0) {
+      for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: keyCode, modifiers });
       await sleep(600);
+    },
+    /** The left button pressed at `from`, moved in `steps` to `to`, and let go there: a selection made by the mouse. */
+    async drag(from, to, steps = 12) {
+      await mouse('mouseMoved', from.x, from.y);
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+      for (let i = 1; i <= steps; i++) {
+        const x = from.x + ((to.x - from.x) * i) / steps, y = from.y + ((to.y - from.y) * i) / steps;
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+        await sleep(20);
+      }
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
+      await sleep(400);
+    },
+    /**
+     * The client rectangle of the `k`-th character of `needle`, found in the text of the first element `scope` (its
+     * text nodes joined: pdf.js may split a line into runs), or null.
+     */
+    async charRect(scope, needle, k) {
+      return evaluate(`(() => {
+        const root = document.querySelector(${JSON.stringify(scope)});
+        if (!root) return null;
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), parts = [];
+        let all = '';
+        for (let n = w.nextNode(); n; n = w.nextNode()) { parts.push([n, all.length]); all += n.data; }
+        const i = all.indexOf(${JSON.stringify(needle)});
+        if (i < 0) return null;
+        const at = i + ${k}, [node, start] = parts.findLast(([, s]) => s <= at);
+        const r = document.createRange();
+        r.setStart(node, at - start);
+        r.setEnd(node, at - start + 1);
+        const b = r.getBoundingClientRect();
+        return { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+      })()`);
     },
   };
   // The graph drawn, then a moment for the first frames.
   for (let i = 0; i < 120 && !(await evaluate(`!!document.querySelector('.graph canvas')`)); i++) await sleep(250);
   await sleep(2000);
   return { page, close: async () => { ws.close(); child.kill(); await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r))); } };
+}
+
+// Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
+// wide enough to read it at about its real size beside its margin.
+const CHAPTER = 'Li_Vitányi_chapitre_1.pdf';
+const PUBLICATION = { env: { CIRRUS_VIEW: '-420,-300,1' }, settings: { previewWidthPx: 1000, previewHeightPx: 820 } };
+const PAGE_1 = '.file-preview .pdf-page[data-page="1"] .textLayer';
+/** The publication's pop-up, by a click on it, then its chapter's preview, by a click on the file, read to its text. */
+async function openChapter(page) {
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup')`, 1000)); i++) await page.click(792, 461);
+  await page.evaluate(`document.querySelector('.node-popup .file[data-name="${CHAPTER}"]')?.scrollIntoView({ block: 'center' })`);
+  const file = await page.centre(`.node-popup .file[data-name="${CHAPTER}"]`, '');
+  await page.click(file.x, file.y);
+  if (!(await page.until(`!!document.querySelector('${PAGE_1} span') && !!document.querySelector('.file-preview .annotation-margin li')`, 15000))) {
+    throw new Error('l’aperçu du chapitre ne montre pas le texte de sa première page, ou pas sa marge');
+  }
+}
+/** The base's live annotations: identifier and anchor. */
+const anchorsOf = (base) => base(`SELECT id, json_extract(json, '$.anchor') AS a FROM nodes WHERE trashed = 0 AND json_extract(json, '$.anchor') IS NOT NULL`)
+  .map((r) => ({ id: r.id, ...JSON.parse(r.a) }));
+/** Whether `check` becomes true within `ms` (the base is written by the main process, a moment after the action). */
+async function until(check, ms = 5000) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (check()) return true;
+  return false;
+}
+/** A real drag over the text of `scope`, from the first character of `from` to the last of `to` (the caret after it). */
+async function selectText(page, scope, from, to) {
+  const a = await page.charRect(scope, from, 0), b = await page.charRect(scope, to, to.length - 1);
+  if (!a || !b) throw new Error(`« ${from} » ou « ${to} » n’est pas dans le texte de la page`);
+  await page.drag({ x: a.left + (a.right - a.left) * 0.25, y: (a.top + a.bottom) / 2 }, { x: b.right - (b.right - b.left) * 0.2, y: (b.top + b.bottom) / 2 });
+}
+/** How far a highlight's rectangle is from the characters it covers, in pixels: its left and right sides, its middle's height. */
+async function alignment(page, mark, scope, first, last) {
+  const m = await page.evaluate(`(() => { const b = document.querySelector(${JSON.stringify(mark)})?.getBoundingClientRect(); return b && { left: b.left, top: b.top, right: b.right, bottom: b.bottom }; })()`);
+  const a = await page.charRect(scope, first, 0), b = await page.charRect(scope, last, last.length - 1);
+  if (!m || !a || !b) throw new Error('pas de surlignage, ou pas son texte');
+  return { left: m.left - a.left, right: m.right - b.right, middle: (m.top + m.bottom) / 2 - (a.top + a.bottom) / 2, height: m.bottom - m.top, text: a.bottom - a.top };
+}
+const fmt = (o) => Object.entries(o).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ');
+/**
+ * The tolerance of a highlight's sides, in pixels at the reader's zoom: 0.75 point. The text layer's characters, drawn
+ * in a font of the system stretched to each run's width, stand up to half a point from the glyphs the canvas draws,
+ * where the test base's rectangles (Helvetica's widths) are.
+ */
+async function sideTolerance(page, scope) {
+  const zoom = parseFloat(await page.evaluate(`document.querySelector('${scope} .pdf-tools .zoom').textContent`)) / 100;
+  return 0.75 * zoom * (96 / 72);
 }
 
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
@@ -118,6 +199,198 @@ const SCENARIOS = [
       if (found.length !== 1 || !found[0].startsWith('Largeur du résumé et de la relation compilés')) throw new Error(`la recherche montre ${JSON.stringify(found)}`);
     },
   },
+  {
+    // Plan 4c, D3: a passage of the preview selected by the mouse, « Annoter »: a node in the base, its highlight drawn,
+    // in the margin; Ctrl+Z removes it, from the base, the page and the margin (Review Focus 4).
+    name: 'surligner dans l’aperçu, puis Ctrl+Z',
+    ...PUBLICATION,
+    async run(page, base) {
+      await openChapter(page);
+      const before = anchorsOf(base);
+      // The fixture's page 1 annotation, on this version: the same passage, as the user would select it.
+      await selectText(page, PAGE_1, 'La complexité de Kolmogorov', 'constante près.');
+      if (!(await page.until(`!!document.querySelector('.file-preview .annotate')`))) throw new Error('« Annoter » n’apparaît pas au bord de la sélection');
+      const selected = await page.evaluate('getSelection().toString()');
+      const button = await page.centre('.file-preview .annotate', 'Annoter');
+      await page.click(button.x, button.y);
+      if (!(await until(() => anchorsOf(base).length === before.length + 1))) throw new Error('l’annotation n’est pas dans la base');
+      const made = anchorsOf(base).find((a) => !before.some((b) => b.id === a.id));
+      const fixture = before.find((a) => a.hash === made.hash && a.page === 1);
+      if (made.page !== 1 || made.file !== CHAPTER || !fixture) throw new Error(`ancre inattendue : ${JSON.stringify(made)}`);
+      const diff = made.rects.map((r, i) => r.map((v, k) => Math.abs(v - (fixture.rects[i]?.[k] ?? Number.NaN))));
+      console.log(`     texte sélectionné ${JSON.stringify(selected)} ; texte de l’ancre ${JSON.stringify(made.text)} ; celui de la base de test ${JSON.stringify(fixture.text)}`);
+      console.log(`     rectangles ${JSON.stringify(made.rects)} ; écarts à ceux de la base de test (pt) ${JSON.stringify(diff.map((d) => d.map((v) => +v.toFixed(2))))}`);
+      if (made.text !== fixture.text) throw new Error('le texte de l’ancre n’est pas celui que la base de test donne pour ce passage');
+      if (made.rects.length !== 2 || diff.some((d) => d[0] > 1.5 || d[2] > 1.5)) throw new Error('les rectangles ne suivent pas les lignes du passage');
+      if (await page.evaluate('getSelection().isCollapsed') !== true) throw new Error('la sélection reste après l’annotation');
+      if (!(await page.until(`document.querySelectorAll('.file-preview .annotation-margin li').length === 4`))) throw new Error('la marge ne montre pas l’annotation');
+      if (!(await page.until(`document.querySelectorAll('.file-preview .pdf-page[data-page="1"] .annotation-layer .mark').length === 4`))) throw new Error('le surlignage n’est pas dessiné');
+      // Ctrl+Z, the focus in the reader (the drag gave it): the annotation goes, from the base, the page and the margin.
+      if (!(await page.evaluate(`!!document.activeElement?.closest('.file-preview .pdf-scroll')`))) throw new Error('le lecteur n’a pas le focus après la sélection');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => anchorsOf(base).length === before.length))) throw new Error('Ctrl+Z n’a pas retiré l’annotation de la base');
+      if (!(await page.until(`document.querySelectorAll('.file-preview .annotation-margin li').length === 3 && document.querySelectorAll('.file-preview .pdf-page[data-page="1"] .annotation-layer .mark').length === 2`))) {
+        throw new Error('l’annotation retirée reste dans la marge ou sur la page');
+      }
+    },
+  },
+  {
+    // In full screen (D3, D4): select, Ctrl+Maj+A; Ctrl+Z there undoes that step of the full screen, never one made
+    // before it (the preview's annotation stays), and Ctrl+Y redoes it. The margin's annotations are not dragged out of
+    // the full screen (modal); the preview's are.
+    name: 'surligner en plein écran, Ctrl+Maj+A, puis Ctrl+Z et Ctrl+Y sur ses seuls pas',
+    ...PUBLICATION,
+    async run(page, base) {
+      await openChapter(page);
+      const dragged = await page.evaluate(`document.querySelectorAll('.file-preview .annotation-margin li[draggable="true"]').length`);
+      if (dragged !== 3) throw new Error(`l’aperçu offre ${dragged} annotations à glisser au lieu de 3`);
+      const start = anchorsOf(base).length;
+      // A step made in the preview, before the full screen.
+      await selectText(page, PAGE_1, 'Ce chapitre fixe', 'notations du livre');
+      await page.press('A', 'KeyA', 65, 2 | 8);
+      if (!(await until(() => anchorsOf(base).length === start + 1))) throw new Error('Ctrl+Maj+A n’a pas annoté dans l’aperçu');
+      const expand = await page.centre('.file-preview .expand', '');
+      await page.click(expand.x, expand.y);
+      const scope = '.full-screen .pdf-page[data-page="1"] .textLayer';
+      if (!(await page.until(`!!document.querySelector('${scope} span')`, 15000))) throw new Error('le plein écran ne montre pas le texte du chapitre');
+      if (await page.evaluate(`document.querySelectorAll('.full-screen .annotation-margin li[draggable="true"]').length`) !== 0) throw new Error('le plein écran offre ses annotations au glisser');
+      const stay = async (what) => { await sleep(800); if (anchorsOf(base).length !== start + 1) throw new Error(what); };
+      await page.press('z', 'KeyZ', 90, 2);
+      await stay('Ctrl+Z en plein écran a défait l’annotation faite dans l’aperçu');
+      const before = anchorsOf(base);
+      await selectText(page, scope, 'Fichier d’exemple', 'base de test');
+      await page.press('A', 'KeyA', 65, 2 | 8);
+      if (!(await until(() => anchorsOf(base).length === before.length + 1))) throw new Error('Ctrl+Maj+A n’a pas créé l’annotation en plein écran');
+      const made = anchorsOf(base).find((a) => !before.some((b) => b.id === a.id));
+      console.log(`     ancre ${JSON.stringify({ page: made.page, text: made.text, rects: made.rects })}`);
+      if (made.text !== 'Fichier d’exemple de la base de test' || made.rects.length !== 1) throw new Error(`ancre inattendue : ${JSON.stringify(made)}`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => anchorsOf(base).length === before.length))) throw new Error('Ctrl+Z en plein écran n’a pas retiré son annotation');
+      await page.press('z', 'KeyZ', 90, 2);
+      await stay('un second Ctrl+Z en plein écran a défait l’annotation faite dans l’aperçu');
+      await page.press('y', 'KeyY', 89, 2);
+      if (!(await until(() => anchorsOf(base).length === before.length + 1))) throw new Error('Ctrl+Y en plein écran n’a pas rétabli son annotation');
+      if (!(await page.until(`!!document.querySelector('.full-screen')`))) throw new Error('le plein écran s’est fermé');
+    },
+  },
+  {
+    // D3, Review Focus 3: a selection dragged from page 1 into page 2 annotates page 1 only, cut at its end (its last
+    // line, then its page number, in the order its text is drawn).
+    name: 'une sélection sur deux pages est coupée à la fin de la première',
+    ...PUBLICATION,
+    async run(page, base) {
+      await openChapter(page);
+      const page2 = '.file-preview .pdf-page[data-page="2"] .textLayer';
+      // Page 1's last lines and page 2's heading in view together: page 1's « Écrire » just under the view's top.
+      const start = await page.charRect(PAGE_1, 'Écrire à', 0);
+      await page.evaluate(`(() => { const s = document.querySelector('.file-preview .pdf-scroll'); s.scrollTop += ${start.top} - s.getBoundingClientRect().top - 24; })()`);
+      if (!(await page.until(`!!document.querySelector('${page2} span')`, 10000))) throw new Error('la page 2 n’est pas dessinée');
+      await sleep(300);
+      const before = anchorsOf(base);
+      const a = await page.charRect(PAGE_1, 'Écrire à', 0), b = await page.charRect(page2, 'Notations et', 'Notations'.length - 1);
+      if (!a || !b) throw new Error('le texte de la fin de la page 1 ou du début de la page 2 n’est pas trouvé');
+      const view = await page.evaluate(`(() => { const r = document.querySelector('.file-preview .pdf-scroll').getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; })()`);
+      if (a.top < view.top || b.bottom > view.bottom) throw new Error(`les deux bouts de la sélection ne sont pas dans la vue : ${JSON.stringify({ a, b, view })}`);
+      await page.drag({ x: a.left + (a.right - a.left) * 0.25, y: (a.top + a.bottom) / 2 }, { x: b.right - (b.right - b.left) * 0.2, y: (b.top + b.bottom) / 2 }, 20);
+      const selected = await page.evaluate('getSelection().toString()');
+      if (!/Notations/.test(selected)) throw new Error(`la sélection ne passe pas sur la page 2 : ${JSON.stringify(selected)}`);
+      if (!(await page.until(`!!document.querySelector('.file-preview .annotate')`))) throw new Error('« Annoter » n’apparaît pas');
+      await page.press('A', 'KeyA', 65, 2 | 8);
+      if (!(await until(() => anchorsOf(base).length === before.length + 1))) throw new Error('l’annotation n’est pas dans la base');
+      const made = anchorsOf(base).find((x) => !before.some((y) => y.id === x.id));
+      console.log(`     sélection ${JSON.stringify(selected)} ; ancre ${JSON.stringify({ page: made.page, text: made.text, rects: made.rects })}`);
+      if (made.page !== 1 || !made.text.startsWith('Écrire à l’auteur : auteur@example.org') || /Notations/.test(made.text)) throw new Error('la sélection n’est pas coupée à la fin de la page 1');
+      if (made.rects.some((r) => r[1] < 0 || r[3] > 842)) throw new Error('un rectangle sort de la page 1');
+    },
+  },
+  {
+    // D4: an annotation opened from the margin shows its page, its passage blinking; the highlights stay on their text
+    // at the fit and at a strong zoom (Review Focus 3).
+    name: 'ouvrir une annotation depuis la marge, surlignage aligné à deux zooms',
+    ...PUBLICATION,
+    async run(page) {
+      await openChapter(page);
+      const mark = '.file-preview .pdf-page[data-page="1"] .annotation-layer .mark';
+      if (!(await page.until(`document.querySelectorAll('${mark}').length === 2`))) throw new Error('le surlignage de la page 1 n’est pas dessiné');
+      const zoomOf = () => page.evaluate(`document.querySelector('.file-preview .pdf-tools .zoom').textContent`);
+      const check = async () => {
+        const a = await alignment(page, mark, PAGE_1, 'La complexité de Kolmogorov', 'Kolmogorov d’une'), tol = await sideTolerance(page, '.file-preview');
+        console.log(`     à ${await zoomOf()} (tolérance ${tol.toFixed(2)} px) : ${fmt(a)}`);
+        if (Math.abs(a.left) > tol || Math.abs(a.right) > tol || Math.abs(a.middle) > a.text / 2) throw new Error(`surlignage décalé à ${await zoomOf()} : ${fmt(a)}`);
+      };
+      await check();
+      for (let i = 0; i < 8; i++) {
+        const plus = await page.centre('.file-preview .zoom-in', '');
+        await page.click(plus.x, plus.y);
+      }
+      await page.until(`document.querySelectorAll('${mark}').length === 2`);
+      await page.evaluate(`document.querySelector('${mark}').scrollIntoView({ block: 'center', inline: 'center' })`);
+      await sleep(500);
+      await check();
+      const entry = await page.centre('.file-preview .annotation-margin li', 'p\\. 2');
+      await page.click(entry.x, entry.y);
+      const flash = '.file-preview .pdf-page[data-page="2"] .annotation-layer .flash';
+      if (!(await page.until(`!!document.querySelector('${flash}')`))) throw new Error('le passage de la page 2 ne clignote pas');
+      const shownPage = await page.evaluate(`document.querySelector('.file-preview .pdf-tools .page input').value`);
+      if (shownPage !== '2') throw new Error(`la page montrée est la ${shownPage}, pas la 2`);
+      // Wider than the view at this zoom: its start in it, on its first word.
+      const f = await alignment(page, flash, '.file-preview .pdf-page[data-page="2"] .textLayer', 'Un code est préfixe', 'Un');
+      const inView = await page.evaluate(`(() => { const v = document.querySelector('.file-preview .pdf-scroll').getBoundingClientRect(), b = document.querySelector('${flash}').getBoundingClientRect(); return b.top >= v.top && b.bottom <= v.bottom && b.left >= v.left && b.left < v.right; })()`);
+      if (!inView || Math.abs(f.left) > (await sideTolerance(page, '.file-preview'))) throw new Error(`le début du passage clignotant n’est pas sur son texte, dans la vue : ${fmt(f)}`);
+      const animated = await page.evaluate(`document.querySelector('${flash}').getAnimations().length`);
+      if (animated < 1) throw new Error('le passage ne clignote pas (aucune animation)');
+    },
+  },
+  {
+    // D2, Review Focus 2: the annotation of the version before the re-import opens on that version (its blob, kept by
+    // the store), its passage blinking, drawn there and only there; a banner leads back to the current version.
+    name: 'l’annotation d’une version précédente s’ouvre sur sa version',
+    ...PUBLICATION,
+    async run(page) {
+      await openChapter(page);
+      const label = await page.evaluate(`[...document.querySelectorAll('.file-preview .annotation-margin li .version')].map((e) => e.textContent)`);
+      if (label.length !== 1 || label[0] !== 'sur une version précédente') throw new Error(`la marge nomme ${JSON.stringify(label)}`);
+      const entry = await page.centre('.file-preview .annotation-margin li', 'version précédente');
+      await page.click(entry.x, entry.y);
+      if (!(await page.until(`!!document.querySelector('.file-preview .version-banner') && /qui l’engendre\\./.test(document.querySelector('${PAGE_1}')?.textContent ?? '')`, 15000))) {
+        throw new Error('la version précédente ne s’ouvre pas');
+      }
+      const mark = '.file-preview .pdf-page[data-page="1"] .annotation-layer .mark';
+      if (!(await page.until(`document.querySelectorAll('${mark}').length === 2 && !!document.querySelector('.file-preview .pdf-page[data-page="1"] .annotation-layer .flash')`))) {
+        throw new Error('l’annotation de la version précédente n’y est pas dessinée, ou ne clignote pas');
+      }
+      const a = await alignment(page, mark, PAGE_1, 'La complexité de Kolmogorov', 'Kolmogorov d’une'), tol = await sideTolerance(page, '.file-preview');
+      if (Math.abs(a.left) > tol || Math.abs(a.right) > tol) throw new Error(`surlignage décalé sur la version précédente : ${fmt(a)}`);
+      const back = await page.centre('.file-preview .version-banner button', 'Revenir');
+      await page.click(back.x, back.y);
+      if (!(await page.until(`!document.querySelector('.file-preview .version-banner') && /constante près\\./.test(document.querySelector('${PAGE_1}')?.textContent ?? '')`, 15000))) {
+        throw new Error('« Revenir à la version actuelle » ne ramène pas la version actuelle');
+      }
+    },
+  },
+  {
+    // Review Focus 4: that version's blob missing from the store (a base copied without it): the reader says so in its
+    // place, the margin stays, and the current version comes back.
+    name: 'une version absente du magasin le dit, et rien ne casse',
+    ...PUBLICATION,
+    async run(page, base, data) {
+      await openChapter(page);
+      const current = JSON.parse(base(`SELECT json FROM nodes WHERE json_extract(json, '$.anchor') IS NULL AND json LIKE '%${CHAPTER}%'`)[0].json)
+        .files.find((f) => f.name === CHAPTER).hash;
+      const earlier = anchorsOf(base).find((a) => a.hash !== current).hash;
+      rmSync(join(data, 'files', earlier.slice(0, 2), earlier));
+      const entry = await page.centre('.file-preview .annotation-margin li', 'version précédente');
+      await page.click(entry.x, entry.y);
+      const said = `Cette version de « ${CHAPTER} » est introuvable dans la base.`;
+      if (!(await page.until(`[...document.querySelectorAll('.file-preview .viewer-message')].some((m) => m.textContent === ${JSON.stringify(said)})`, 10000))) {
+        throw new Error('le lecteur ne dit pas que la version manque');
+      }
+      if (await page.evaluate(`document.querySelectorAll('.file-preview .annotation-margin li').length`) !== 3) throw new Error('la marge n’est plus là');
+      const back = await page.centre('.file-preview .version-banner button', 'Revenir');
+      await page.click(back.x, back.y);
+      if (!(await page.until(`/constante près\\./.test(document.querySelector('${PAGE_1}')?.textContent ?? '')`, 15000))) throw new Error('la version actuelle ne revient pas');
+    },
+  },
 ];
 
 let failed = 0;
@@ -127,12 +400,13 @@ for (const s of SCENARIOS) {
   let app = null;
   try {
     execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
-    app = await launch(data, profile);
+    if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
+    app = await launch(data, profile, s.env);
     const base = (sql) => {
       const db = new DatabaseSync(join(data, 'cirrus.db'), { readOnly: true });
       try { return db.prepare(sql).all(); } finally { db.close(); }
     };
-    await s.run(app.page, base);
+    await s.run(app.page, base, data);
     console.log(`ok   ${s.name}`);
   } catch (e) {
     failed++;

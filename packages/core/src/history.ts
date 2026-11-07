@@ -85,4 +85,10 @@ export class UndoStack {
 
   get canUndo(): boolean { return this.done.length > 0; }
   get canRedo(): boolean { return this.undone.length > 0; }
+  /**
+   * The identifier of the step the next undo would undo, and of the one the next redo would redo (null: none), as they
+   * were recorded: a full screen undoes only the steps it made itself (plan 4c).
+   */
+  get nextUndo(): string | null { return this.done.at(-1)?.id ?? null; }
+  get nextRedo(): string | null { return this.undone.at(-1)?.id ?? null; }
 }
