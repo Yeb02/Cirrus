@@ -1,7 +1,8 @@
 import type { LatexStatus } from '@cirrus/core';
-import { DEFAULT_PARAMS, hexToRgb, PARAM_SPECS, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
+import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
 import { latexStateText } from '../latex/install.ts';
+import { type RubricView, settingsTree } from './settingsTree.ts';
 
 type Value = RenderParams[keyof RenderParams];
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -78,61 +79,100 @@ function Control(props: { spec: ParamSpec; value: Value; onChange(v: Value): voi
   }
 }
 
-function Section(props: { title: string; specs: ParamSpec[]; params: RenderParams; onChange(key: keyof RenderParams, v: Value): void }) {
-  const groups = [...new Set(props.specs.map((s) => s.group))];
+type Change = (key: keyof RenderParams, v: Value) => void;
+
+function Param(props: { spec: ParamSpec; params: RenderParams; onChange: Change }) {
+  const s = props.spec;
+  return (
+    // A div, not a label: a label would pass any click on its text to the reset button inside (I3 of the review).
+    <div className="param">
+      <span className="label">
+        {s.label}
+        {!same(props.params[s.key], DEFAULT_PARAMS[s.key]) && (
+          <button className="reset" title="Valeur par défaut" aria-label={`Remettre « ${s.label} » par défaut`}
+            onClick={(e) => { e.preventDefault(); props.onChange(s.key, DEFAULT_PARAMS[s.key]); }}>↺</button>
+        )}
+      </span>
+      <Control spec={s} value={props.params[s.key]} onChange={(v) => props.onChange(s.key, v)} />
+    </div>
+  );
+}
+
+/** Groups and their settings, those of `pick` (the main ones, the advanced ones, or both in a search). */
+function Groups(props: { groups: RubricView['groups']; pick: 'main' | 'advanced' | 'both'; params: RenderParams; onChange: Change; prefix?: string }) {
   return (
     <>
-      {groups.map((g) => (
-        <div key={g} className="param-group">
-          <h3>{g}</h3>
-          {props.specs.filter((s) => s.group === g).map((s) => (
-            // A div, not a label: a label would pass any click on its text to the reset button inside (I3 of the review).
-            <div key={s.key} className="param">
-              <span className="label">
-                {s.label}
-                {!same(props.params[s.key], DEFAULT_PARAMS[s.key]) && (
-                  <button className="reset" title="Valeur par défaut" aria-label={`Remettre « ${s.label} » par défaut`}
-                    onClick={(e) => { e.preventDefault(); props.onChange(s.key, DEFAULT_PARAMS[s.key]); }}>↺</button>
-                )}
-              </span>
-              <Control spec={s} value={props.params[s.key]} onChange={(v) => props.onChange(s.key, v)} />
-            </div>
-          ))}
-        </div>
-      ))}
+      {props.groups.map((g) => {
+        const specs = props.pick === 'main' ? g.main : props.pick === 'advanced' ? g.advanced : [...g.main, ...g.advanced];
+        if (specs.length === 0) return null;
+        return (
+          <div key={g.name} className="param-group">
+            <h4>{props.prefix ? `${props.prefix} › ${g.name}` : g.name}</h4>
+            {specs.map((s) => <Param key={s.key} spec={s} params={props.params} onChange={props.onChange} />)}
+          </div>
+        );
+      })}
     </>
   );
 }
 
+/** The rubrics open, and those whose advanced settings show: kept from one opening of the panel to the next. */
+const opened = new Set<string>();
+const advancedShown = new Set<string>();
+
 /**
- * The graphic settings side panel (spec 19): generated from PARAM_SPECS, the main settings first, every other rendering
- * or interaction constant under « Avancés ». Changes apply at once; they are not in the history nor undoable. Its
- * « LaTeX » section (task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX » when it is absent or
- * its installation failed, and opens the preamble's full screen.
+ * The settings side panel (spec 19): generated from PARAM_SPECS, under the rubrics of PARAM_RUBRICS (settingsTree), each
+ * folded until clicked; in each, its main settings, then « Avancés » for every other rendering or interaction constant.
+ * A search shows every setting it finds, advanced ones included. Changes apply at once; they are not in the history nor
+ * undoable. The « LaTeX » rubric (plan 4b, task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX »
+ * when it is absent or its installation failed, and opens the preamble's full screen.
  */
 export function SettingsPanel(props: {
   params: RenderParams; onChange(p: RenderParams): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
 }) {
-  const [advanced, setAdvanced] = useState(false);
-  const set = (key: keyof RenderParams, v: Value) => props.onChange({ ...props.params, [key]: v });
+  const [query, setQuery] = useState('');
+  const [, refresh] = useState(0);
+  const toggle = (set: Set<string>, title: string) => { if (!set.delete(title)) set.add(title); refresh((n) => n + 1); };
+  const set: Change = (key, v) => props.onChange({ ...props.params, [key]: v });
   const state = props.latex?.state;
+  const tree = settingsTree(query);
+  const latexSetup = (
+    <div className="param-group latex-setup">
+      <p className="latex-state">{latexStateText(props.latex)}</p>
+      <div className="latex-actions">
+        {(state === 'absent' || state === 'failed') && <button onClick={props.onInstallLatex}>Installer LaTeX</button>}
+        <button onClick={props.onEditPreamble}>Modifier le préambule…</button>
+      </div>
+    </div>
+  );
   return (
-    <aside className="settings" aria-label="Paramètres graphiques">
+    <aside className="settings" aria-label="Réglages">
       <header>
-        <h2>Paramètres graphiques</h2>
+        <h2>Réglages</h2>
         <button className="close" aria-label="Fermer le bandeau" onClick={props.onClose}>×</button>
       </header>
-      <Section title="graphique" specs={PARAM_SPECS.filter((s) => s.section === 'graphique')} params={props.params} onChange={set} />
-      <div className="param-group latex-setup">
-        <h3>LaTeX</h3>
-        <p className="latex-state">{latexStateText(props.latex)}</p>
-        <div className="latex-actions">
-          {(state === 'absent' || state === 'failed') && <button onClick={props.onInstallLatex}>Installer LaTeX</button>}
-          <button onClick={props.onEditPreamble}>Modifier le préambule…</button>
-        </div>
-      </div>
-      <button className="toggle" onClick={() => setAdvanced((a) => !a)}>{advanced ? '▾' : '▸'} Avancés</button>
-      {advanced && <Section title="avancé" specs={PARAM_SPECS.filter((s) => s.section === 'avancé')} params={props.params} onChange={set} />}
+      <input type="search" className="search" placeholder="Chercher un réglage" aria-label="Chercher un réglage" value={query} onChange={(e) => setQuery(e.target.value)} />
+      {query.trim() !== ''
+        ? tree.length === 0
+          ? <p className="none">Aucun réglage ne correspond.</p>
+          : tree.map((r) => <Groups key={r.title} groups={r.groups} pick="both" params={props.params} onChange={set} prefix={r.title} />)
+        : tree.map((r) => {
+          const open = opened.has(r.title), advanced = advancedShown.has(r.title);
+          const count = r.groups.reduce((n, g) => n + g.advanced.length, 0);
+          return (
+            <section key={r.title} className="rubric" data-rubric={r.title}>
+              <button className="rubric-title" aria-expanded={open} onClick={() => toggle(opened, r.title)}>{open ? '▾' : '▸'} {r.title}</button>
+              {open && (
+                <div className="rubric-body">
+                  {r.title === 'LaTeX' && latexSetup}
+                  <Groups groups={r.groups} pick="main" params={props.params} onChange={set} />
+                  {count > 0 && <button className="toggle" aria-expanded={advanced} onClick={() => toggle(advancedShown, r.title)}>{advanced ? '▾' : '▸'} Avancés ({count})</button>}
+                  {advanced && <Groups groups={r.groups} pick="advanced" params={props.params} onChange={set} />}
+                </div>
+              )}
+            </section>
+          );
+        })}
       <button className="reset-all" onClick={() => props.onChange({ ...DEFAULT_PARAMS })}>Tout réinitialiser</button>
     </aside>
   );

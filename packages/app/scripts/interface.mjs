@@ -17,7 +17,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. */
 async function launch(data, profile) {
-  const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000' };
+  // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/index.ts); the page is told it has it.
+  const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1' };
   delete env.ELECTRON_RUN_AS_NODE;
   // Port 0: Chromium picks a free one, and writes it in the profile (DevToolsActivePort).
   const child = spawn(electron, [appDir, `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: 'ignore' });
@@ -42,10 +43,17 @@ async function launch(data, profile) {
   });
   const send = (method, params = {}) => new Promise((r) => { const id = ++next; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
   const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
+  // The focus as if the window had it: its focus events, document.hasFocus() (the drawing pauses without it).
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   const mouse = (type, x, y, button = 'none') =>
     send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: type === 'mouseMoved' ? 0 : 1, buttons: type === 'mousePressed' ? (button === 'right' ? 2 : 1) : 0 });
   const page = {
     evaluate,
+    /** Whether `expr` becomes true within `ms`: a first launch after a build is slower than the next ones. */
+    async until(expr, ms = 5000) {
+      for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (await evaluate(expr)) return true;
+      return false;
+    },
     async click(x, y, button = 'left') {
       await mouse('mouseMoved', x, y);
       await mouse('mousePressed', x, y, button);
@@ -78,11 +86,12 @@ const SCENARIOS = [
     // « Nouveau nœud » (spec 12): the ghost put down, the title typed in place, Entrée: the node is in the base.
     name: 'nouveau nœud par le menu',
     async run(page, base) {
-      await page.click(250, 850, 'right');
+      // The graph takes its first clicks once its engine is up: the menu is asked again until it opens.
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(250, 850, 'right');
       const item = await page.centre('.context-menu button', 'Nouveau nœud');
       await page.click(item.x, item.y);
       await page.move(400, 800);
-      if (!(await page.evaluate(`document.querySelector('.ghost')?.textContent === 'Nouveau nœud'`))) throw new Error('le fantôme ne suit pas le curseur');
+      if (!(await page.until(`document.querySelector('.ghost')?.textContent === 'Nouveau nœud'`))) throw new Error('le fantôme ne suit pas le curseur');
       await page.click(400, 800);
       const focused = await page.evaluate(`document.activeElement?.className === 'title-editor'`);
       if (!focused) throw new Error('l’éditeur du titre n’a pas le focus après le dépôt (il s’est refermé)');
@@ -90,6 +99,23 @@ const SCENARIOS = [
       await page.press('Enter', 'Enter', 13);
       const titles = base(`SELECT json_extract(json, '$.title') AS t FROM nodes WHERE json_extract(json, '$.title') = 'Nœud d’essai'`);
       if (titles.length !== 1) throw new Error('le nœud n’est pas dans la base');
+    },
+  },
+  {
+    // The settings by rubrics (the user, 2026-11-07): a rubric opens on a click; a search finds a setting by its label.
+    name: 'réglages par rubriques et recherche',
+    async run(page) {
+      const gear = await page.centre('.tabs .gear', '⚙');
+      await page.click(gear.x, gear.y);
+      const rubric = await page.centre('.settings .rubric-title', 'LaTeX');
+      await page.click(rubric.x, rubric.y);
+      const shown = await page.evaluate(`[...document.querySelectorAll('.settings .rubric[data-rubric="LaTeX"] .param .label')].map((l) => l.textContent)`);
+      if (!shown.some((t) => t.startsWith('Largeur du résumé'))) throw new Error('la largeur du résumé compilé n’est pas parmi les réglages principaux de « LaTeX »');
+      const search = await page.centre('.settings input.search', '');
+      await page.click(search.x, search.y);
+      await page.type('largeur du resume');
+      const found = await page.evaluate(`[...document.querySelectorAll('.settings .param .label')].map((l) => l.textContent)`);
+      if (found.length !== 1 || !found[0].startsWith('Largeur du résumé et de la relation compilés')) throw new Error(`la recherche montre ${JSON.stringify(found)}`);
     },
   },
 ];

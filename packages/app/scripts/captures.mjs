@@ -94,8 +94,8 @@ const SCENES = [
     name: 'tex-erreur', view: '0,140,1', pointer: 'down 617 181; up 617 181',
     click: [fileThenFull('complexité.tex'), 'type:\\oups ', '.full-screen .tex-status .log'].join(','),
   },
-  // The preamble's editor, from the settings' « Modifier le préambule… », its sample compiled.
-  { name: 'preambule', panel: true, click: '.settings .latex-actions button:last-child' },
+  // The preamble's editor, from « Modifier le préambule… » in the settings' LaTeX rubric (opened first), its sample compiled.
+  { name: 'preambule', panel: true, click: '.settings .rubric[data-rubric="LaTeX"] .rubric-title,.settings .latex-actions button:last-child' },
 ];
 
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */

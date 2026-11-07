@@ -757,7 +757,8 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
 
 ## 19. Paramètres
 
-- **Exposition :** tous les paramètres sont exposés dans l'app pour que l'utilisateur les ajuste, les graphiques dans un bandeau latéral « paramètres graphiques ».
+- **Exposition :** tous les paramètres sont exposés dans l'app pour que l'utilisateur les ajuste, dans un bandeau latéral « Réglages ».
+- **Rubriques** (demande de l'utilisateur, 2026-11-07 : « une hiérarchie des options qui les range par type ») : le bandeau range ses groupes de réglages sous six rubriques repliées, Apparence, Navigation, Fenêtres, Fichiers, LaTeX, Performances et base. Une rubrique ouverte montre ses réglages principaux, puis « Avancés (n) » pour les autres. Un champ de recherche trouve un réglage par son libellé, son groupe ou sa rubrique, sans tenir compte des accents ni de la casse, avancés compris. Les rubriques ouvertes restent ouvertes d'une ouverture du bandeau à la suivante, pendant la session [C].
 - **Paramètres graphiques :**
   - distance du titre des connexions ;
   - seuils de disparition du texte ;
@@ -776,7 +777,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - seuil séparant un clic d'un déplacement ;
   - délais de pause et de synchro ;
   - réponse par défaut des dialogues « partout ou ici seulement ».
-- **LaTeX (plan 4b) :** les réglages de la chaîne forment un groupe « LaTeX » des avancés : les processus préparés, les délais, la largeur et l'agrandissement du résumé compilé, le cache, le journal, la pause de frappe, l'enregistrement d'un .tex, les suggestions de l'éditeur, le délai de `tlmgr`, l'attente d'un téléchargement bloqué, le délai avant de chercher à nouveau un paquet, et la liste partagée des paquets ajoutés (`latexPackages`). Une section « LaTeX » du bandeau dit l'état de LaTeX, propose de l'installer et ouvre le préambule, qui est une donnée de la base et non un réglage (section 13, D5).
+- **LaTeX (plan 4b) :** les réglages de la chaîne forment la rubrique « LaTeX ». La largeur du résumé compilé (9 cm) et la liste des paquets ajoutés y sont des réglages principaux (2026-11-07) ; les autres sont des avancés : les processus préparés, les délais, la largeur et l'agrandissement du résumé compilé, le cache, le journal, la pause de frappe, l'enregistrement d'un .tex, les suggestions de l'éditeur, le délai de `tlmgr`, l'attente d'un téléchargement bloqué, le délai avant de chercher à nouveau un paquet, et la liste partagée des paquets ajoutés (`latexPackages`). En tête de la rubrique, un bloc dit l'état de LaTeX, propose de l'installer et ouvre le préambule, qui est une donnée de la base et non un réglage (section 13, D5).
 - **Mode performance :** envisageable si les bancs de mesure le rendent nécessaire (section 21). Un interrupteur dans les paramètres graphiques allégerait alors les effets coûteux : flou des enveloppes, rubans à largeur variable, ciel étoilé, résolution du rendu.
 - **Stockage :** les valeurs sont centralisées sur le serveur et communes à tous les PC. Des valeurs propres à un PC seront revues plus tard si besoin.
 - **Hors ligne :** chaque PC garde sa copie, et la modification la plus récente l'emporte à la reconnexion.

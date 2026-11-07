@@ -60,6 +60,13 @@ if (bench) {
 }
 // Bench and captures keep their own profile: the tabs they open (localStorage) never replace the user's.
 if (bench || capture) app.setPath('userData', join(app.getPath('temp'), 'cirrus-mesure'));
+/**
+ * Captures, and the interface's checks (CIRRUS_BACKGROUND=1, scripts/interface.mjs), keep out of the user's way (the
+ * user, 2026-11-07): the window opens beyond the screens, without the focus nor a taskbar button. Windows would then
+ * count it occluded and Chromium stop drawing it: that computation is turned off.
+ */
+const background = capture !== undefined || process.env.CIRRUS_BACKGROUND === '1';
+if (background) app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // The store's files, for fetch, <img> and pdf.js (plan 4a, D1): privileges are given before ready. Without corsEnabled,
 // Chromium refuses fetch and XHR from the page (file://, or the dev server's http://) to the scheme (registry, task 1).
 protocol.registerSchemesAsPrivileged([
@@ -111,8 +118,10 @@ function createWindow(): void {
   const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
   // The bench measures on the laptop's own panel, full screen (spec 21), like the plan 1 bench.
   const display = bench ? (screen.getAllDisplays().find((d) => d.internal) ?? screen.getPrimaryDisplay()) : null;
+  const beyond = Math.max(...screen.getAllDisplays().map((d) => d.bounds.x + d.bounds.width)) + 100;
   const win = new BrowserWindow({
     ...(display ? { ...display.bounds, fullscreen: true } : { width, height }),
+    ...(background && !display ? { x: beyond, y: 0, skipTaskbar: true } : {}),
     show: false, title: 'Cirrus', backgroundColor: '#0a1120', autoHideMenuBar: true,
     webPreferences: {
       preload: join(import.meta.dirname, '..', 'preload', 'index.cjs'),
@@ -124,7 +133,7 @@ function createWindow(): void {
       additionalArguments: [`--cirrus-launch=${JSON.stringify(launch)}`],
     },
   });
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => (background ? win.showInactive() : win.show()));
   // Closing: the interface sends its snapshot (if anything changed) and says so; past snapshotQuitMs, the window closes
   // anyway (the journal has every action). Bench and captures quit by app.exit, without this.
   let closing = false;

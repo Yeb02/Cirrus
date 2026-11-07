@@ -47,7 +47,7 @@ export function Tabs(props: {
         )}
       </div>
       <div className="spacer" />
-      <button className={`gear${props.settingsOpen ? ' on' : ''}`} aria-label="Paramètres graphiques" title="Paramètres graphiques" onClick={props.onSettings}>⚙</button>
+      <button className={`gear${props.settingsOpen ? ' on' : ''}`} aria-label="Réglages" title="Réglages" onClick={props.onSettings}>⚙</button>
     </div>
   );
 }
