@@ -664,3 +664,119 @@ Fixées par le contrôleur avant la tâche :
   - `cslToFields` et `parseIdentifier` s'importent depuis l'interface ;
   - une liste d'auteurs peut compter des milliers de noms : le nombre de tags `auteur` est à décider ;
   - le PDF est au magasin avant toute action, comme un fichier importé : l'action de la tâche 5 n'a plus qu'à le référencer.
+
+## Tâche 5 : BibTeX, nœuds de publication, dialogue d'import, PDF déposé
+
+### Fait
+
+- **`core/src/bibtex.ts`**, un analyseur à nous, sans dépendance :
+  - `parseBibtex(text)` donne `{ entries, problems }`. Une `BibEntry` a son type (en minuscules), sa clé (`''` sans clé), sa ligne et deux `Map` de champs :
+    - `fields`, les valeurs : macros `@string` du fichier remplacées, mois nommés (`jul` : « July »), concaténations `#` jointes, LaTeX gardé ;
+    - `raw`, les mêmes comme BibTeX les écrit : texte entre accolades, nombre nu, macro inconnue du fichier gardée en macro (un mois aussi).
+  - Il lit `@type{…}` et `@type(…)`, les valeurs entre accolades (imbriquées), entre guillemets (un guillemet dans des accolades est du texte), les nombres, les macros (définies avant leur usage, sans casse), `@string`, `@comment`, `@preamble`, et les commentaires `%` (Ruling plus bas).
+  - Une entrée abîmée est signalée à sa ligne, avec la raison, et la lecture reprend au prochain « @ » en début de ligne. Un champ en double garde le premier ; une clé en double (sans casse) est signalée, les deux entrées gardées ; une macro inconnue est laissée vide, et signalée.
+  - Linéaire : la correspondance de chaque accolade est calculée une fois, d'avance (celle des parenthèses au premier `@comment(`). Rien n'est récursif.
+  - Borné (Ruling plus bas) : une valeur de `BIB_MAX_VALUE_CHARS` au plus, toutes ensemble quatre fois la taille du texte plus une valeur, `BIB_MAX_ENTRIES` entrées lues, `BIB_MAX_PROBLEMS` problèmes listés.
+- `latexToUnicode(s)` : accents (`\'e`, `\"{o}`, `{\'e}`, `\c c`, `\'\i`) composés en NFC, lettres (`{\o}`, `\ss`, `\L`), `--` et `---`, ``` `` ``` et `''`, `~` en espace, accolades de protection et `$` retirés, caractères échappés (`\&`, `\%`…), lettres grecques ; une commande inconnue est retirée et son argument gardé (`\emph{x}` : x). Une passe, sans récursion.
+- `bibNames(field)` et `bibAuthors(field)` : les noms découpés comme BibTeX les découpe (« Prénom von Nom », « von Nom, Prénom », « von Nom, Jr, Prénom »), un nom entre accolades d'un seul tenant (`{Groupe de travail}`), « and » hors accolades et sans casse, « others » écarté. `bibAuthors` les écrit « Prénom von Nom Jr », comme `cslToFields`.
+- `bibFields(entry)` (titre, auteurs, année de `year` puis de `date`), `bibIdentifiers(entry)` (le DOI ; l'identifiant arXiv par le DOI d'arXiv, `eprint` avec `archiveprefix` ou `eprinttype`, « arXiv:… » dans `eprint`, `journal`, `note` ou `howpublished`, une page d'arXiv dans `url`), `cleanDoi`, `cleanArxiv`, `normalizedTitle`, `yearIn`.
+- `safeCiteKey(key)`, `citeKey(entry, taken)` (D7, Rulings plus bas) et `bibtexEntry(entry, key)` : l'entrée écrite seule sous sa clé, un champ par ligne. Relue, elle donne les mêmes champs.
+- `createNode` prend aussi `files` (déjà au magasin) : le nœud naît avec, en une opération.
+- **`app/src/renderer/publications/build.ts`** :
+  - `PublicationIndex.of(state)` : les publications de la base, par DOI, identifiant arXiv, clé et titre normalisé avec l'année ; ses `keys`, toutes les `clé_bibtex`, corbeille comprise. `add(plan)` sert à la tâche 6 (les doublons d'un même fichier).
+  - `planPublication(index, input, maxAuthors)` : le titre, les tags de D7, la clé et le `.bib`, ou le refus d'un doublon, qui nomme le nœud.
+  - `publicationBuild(plan, files, scene, at, zoom, p, index?)` : une action, le nœud posé au point, au cran lisible, entrant dans le groupe dont l'enveloppe le reçoit (`newNodeBuild`, partagé avec `createBuild` dans `actions.ts`). Refusée au calcul si la publication est entrée entre-temps.
+  - `publicationOf(result, dropped)` lit la réponse du principal (le CSL par `cslToFields` seulement, le BibTeX par `parseBibtex`).
+  - `importByIdentifier(text, dropped, deps)` et `createFromPdf(pdf, title, deps)` : le chemin d'un import, testable sans fenêtre (les dépendances sont passées), jusqu'à son issue (`done`, `failed`, `notified`, `dropped`).
+- **`identify.ts`** : `findIdentifier(text, meta)` (D8), pur. **`pdfClues.ts`** : `readPdfClues(ref, pages, kept)`, les métadonnées et le texte des premières pages par pdf.js.
+- **`ui/PublicationDialog.tsx`** : le champ, « Importer » (ou Entrée), l'état (« Recherche… », la raison d'un échec, l'identifiant trouvé), « Créer le nœud » pour un PDF sans identifiant, « Fermer » (ou Échap). Le dialogue entier prend un PDF déposé.
+- **Le menu du fond** (`view/src/menus.ts`) : « Importer une publication… », après « Nouveau nœud » et « Coller ». `GraphView` ouvre le dialogue, retient le point du clic droit, son zoom et son plan, et pose le nœud par la session.
+- **L'IPC** (`main/index.ts`, `fetch.ts`, préchargement, `env.d.ts`) : `publicationFetch(text, { pdf: false })` ne télécharge pas le PDF d'arXiv (un PDF déposé, D8). Le principal ne prend que `{ pdf: false }` exactement ; toute autre valeur garde le téléchargement de la tâche 4.
+- **Réglages** (groupe « Publications », avancés) : `publicationMaxAuthors` (50, de 1 à 10 000) et `publicationPdfPages` (2, de 1 à 20).
+- `nodeFiles.ts` : le graphe ne prend pas les fichiers lâchés sur le dialogue (`GRAPH_REFUSES`). C'est le dialogue qui les prend.
+- **Données** : `core/tests/data/reel-50.bib`, cinquante références réelles écrites comme les écrivent JabRef, Google Scholar, DBLP, Crossref et la main ; `app/tests/data/publications/shannon-1948.{csl.json,bib}`, composées sur le modèle de Crossref (Ruling plus bas). `.gitattributes` garde `core/tests/data/` octet pour octet.
+
+### Décisions
+
+- Ruling (contrôleur) : **une clé d'entrée qui n'est pas une clé sûre est écartée** : `citeKey` prend alors le nom et l'année (D7), et le `.bib` est écrit sous la clé retenue (l'entrée réécrite avec elle). Une adresse (la clé de DataCite, `https://doi.org/10.48550/arxiv.1706.03762`) ne peut être ni un nom de fichier ni une clé de `\cite`.
+  - Ce que `safeCiteKey` prend : des lettres et chiffres ASCII et « _ . + - », d'abord une lettre, un chiffre ou « _ », 200 au plus, pas un nom que Windows réserve (`con`, `aux`…), et `safeLabel`.
+  - Il refuse donc aussi les clés de DBLP (`DBLP:conf/nips/…` : « : » et « / » ne sont pas permis dans un nom de fichier, et « : » est actif avec babel en français) et une clé non ASCII (BibTeX lit en 8 bits).
+  - Coût si faux : la clé d'un nœud, celle que l'utilisateur citait étant remplacée par nom et année.
+- Ruling (contrôleur) : **un même titre normalisé (casse, accents, ponctuation, espaces) et une même année font aussi un doublon**, en plus du DOI, de l'identifiant arXiv et de la clé (D7). Le livre de la base de test n'a pas de tag `doi`, et Crossref lui donne la clé `Li_2008` : sans cette règle, il serait recréé. La notification nomme le nœud existant. Les DOI se comparent sans la casse (DataCite les écrit en majuscules).
+  - Coût si faux : un import refusé que l'utilisateur voulait (deux œuvres du même titre la même année).
+- Ruling : **les doublons**, dans cet ordre : même DOI, même identifiant arXiv (sans version ; un tag `doi` qui est celui d'arXiv compte comme son identifiant), même clé d'entrée (telle qu'écrite), même titre et même année. Message : « Déjà dans la base (même DOI) : « titre ». ». Un nœud à la corbeille n'est pas un doublon. Le DOI ou l'identifiant tapé est comparé avant le réseau ; la clé, le titre et l'année, après la réponse ; tout est vérifié de nouveau au calcul de l'action.
+  - Options : compter la corbeille (refuser un import que l'on peut vouloir refaire) ; ne vérifier qu'après la réponse (une demande au réseau pour rien).
+  - Coût si faux : une règle de plus ou de moins dans `PublicationIndex`.
+- Ruling : **les champs du nœud viennent du CSL** (`cslToFields` : titre, auteurs, année), **le `.bib` et la clé du BibTeX**. Le BibTeX ne complète que ce que le CSL n'a pas. Un BibTeX illisible refuse l'import (« Le BibTeX reçu est illisible : la publication n’est pas importée. ») plutôt que de créer un nœud sans `.bib`.
+  - Coût si faux : un import refusé quand le serveur envoie un BibTeX abîmé (il a déjà passé le contrôle de type de la tâche 4).
+- Ruling : **le `.bib` du nœud est l'entrée réécrite** (`bibtexEntry`) et non le texte reçu : un champ par ligne, les macros du fichier remplacées, un mois et une macro inconnue gardés en macro. Un seul chemin pour le réseau et pour un `.bib` entier (tâche 6), où un `.bib` par nœud doit se lire seul, sans les `@string` de son fichier.
+  - Coût si faux : la mise en page du texte reçu, perdue.
+- Ruling : **la clé fabriquée** est le nom de famille du premier auteur (sans particule), en lettres ASCII minuscules, puis l'année : `vaswani2017`, `neumann1944`, `vitanyi2008`. Sans auteur, le premier mot du titre ; sans l'un ni l'autre, « publication ». En cas de collision, sans casse, avec toute `clé_bibtex` de la base, corbeille comprise : b, c… z, puis aa, ab… Une clé que Windows réserve est sautée (`conb`).
+  - Coût si faux : la forme des clés fabriquées.
+- Ruling : **les tags** : `auteur` (au plus `publicationMaxAuthors`, 50 : un article de collaboration en compte des milliers, et le `.bib` les garde tous), `date_de_publication` (l'année), `clé_bibtex`, `doi` tel que donné, `arxiv` sans sa version (l'article ; le PDF garde la sienne dans son nom). Une entrée de `.bib` qui a les deux identifiants (tâche 6) porte les deux tags. Les clés de tag ne sont pas ajoutées au registre : un tag d'une clé inconnue est libre.
+  - Coût si faux : un réglage, ou un tag de plus.
+- Ruling : **deux réglages nouveaux**, avancés, dans « Publications » : `publicationMaxAuthors` (50) et `publicationPdfPages` (2, les « deux premières pages » de D8, en valeur par défaut). Les autres bornes sont des bornes fixes de sécurité (Ruling suivant).
+- Ruling : **bornes fixes de sécurité** (comme les 5 redirections de la tâche 4), pas des réglages :
+  - une valeur de 2^20 caractères (1 048 576), toutes les valeurs d'un fichier quatre fois sa taille plus une valeur, 50 000 entrées (25 fois les 2 000 du plan), 200 problèmes listés ;
+  - 8 accents au plus sur une lettre : une longue suite de marques de classes alternées ferait réordonner la normalisation Unicode sans fin. `normalizedTitle` retire les marques du texte avant de le décomposer, pour la même raison (il lit aussi des titres de CSL) ;
+  - un identifiant de 1 000 caractères au plus, sans caractère de contrôle ;
+  - pour un PDF déposé : 200 000 caractères de texte, 100 métadonnées de 2 000 caractères, un titre de 300.
+  - Coût si faux : un réglage de plus.
+- Ruling : **la lecture d'un `.bib`** suit biber et JabRef là où BibTeX est plus strict :
+  - « % » commente jusqu'à la fin de la ligne entre les entrées et entre les jetons d'une entrée (une entrée mise en commentaire n'est pas lue) ;
+  - un « @ » n'ouvre une commande qu'en début de texte, après un blanc ou après la fin d'une entrée (celui d'une adresse électronique n'en ouvre pas) ;
+  - après une entrée abîmée, la lecture reprend au prochain « @ » en début de ligne ;
+  - une accolade fermante de trop entre guillemets rend l'entrée abîmée, comme pour BibTeX.
+  - Coût si faux : une entrée de plus ou de moins lue dans un fichier abîmé.
+- Ruling : **`latexToUnicode`** : `~` devient une espace ordinaire et non insécable (un titre de nœud se coupe et se cherche) ; l'apostrophe ASCII reste telle quelle, comme dans les titres du CSL ; ``` `` ``` et `''` deviennent « “ » et « ” ».
+  - Coût si faux : un caractère.
+- Ruling : **l'identifiant d'un PDF déposé** (`findIdentifier`) se cherche dans cet ordre : les métadonnées (celles dont le nom dit DOI d'abord), puis l'estampille d'arXiv dans la marge (« arXiv:1706.03762v7 [cs.CL] »), puis le premier DOI du texte, puis une autre mention « arXiv:… », puis un lien. Un préprint arXiv cite souvent des DOI dans sa première page ; un éditeur imprime le sien en tête. Chaque candidat passe par `parseIdentifier`, comme au principal.
+  - Coût si faux : un mauvais identifiant proposé, que l'utilisateur voit avant « Importer ».
+- Ruling : **le dialogue** :
+  - en haut du graphe, il ne bloque rien ;
+  - il retient le point du clic droit, son zoom et son plan : le nœud s'y pose, même si la vue a bougé ;
+  - un autre plan affiché le ferme, et le résultat attendu est abandonné (le nœud n'aurait plus de scène où se poser) ;
+  - un doublon, ou une action refusée, se dit par une notification, et le dialogue se ferme ; un échec du réseau ou de la lecture se dit dans le dialogue, qui reste ouvert pour corriger l'identifiant ;
+  - un rejet de l'IPC (une réponse qu'Electron ne sait pas cloner) devient « L’import de la publication a échoué : le processus principal n’a pas répondu. », un rejet de `storeText` « Le fichier .bib de la publication n’a pas pu être enregistré dans la base. », la cause allant à la console ;
+  - un PDF importé sans le sien (`pdfMessage`) se dit par une notification ;
+  - « Créer le nœud » n'est offert que pour un PDF sans identifiant.
+  - Coût si faux : un import à relancer après un changement d'onglet.
+- Ruling : **pdf.js reste chargé à la demande** : le dialogue importe `pdfClues.ts` au premier PDF déposé. Importé directement, il portait le paquet principal de 970 à 1 775 Ko.
+- Ruling : **`shannon-1948.csl.json` et `shannon-1948.bib` ne sont pas enregistrés mais composés** sur le modèle des réponses de Crossref de la tâche 4 : aucune session réseau n'était permise à cette tâche. Le scénario « par DOI » en a besoin, car le livre enregistré est un doublon de la base de test. Leur `about`, dans `index.json`, le dit.
+  - Coût si faux : le scénario vérifie notre lecture d'une réponse plausible de Crossref, pas de la vraie.
+
+### Mesures
+
+- 2 000 entrées réelles (le fichier de 50 répété 40 fois, 569 Ko, 1 950 clés en double signalées) : 29 ms sur ce PC, après une première lecture à 48 ms. Le test des 2 000 entrées, dont 20 abîmées : 18 ms.
+- Le fichier réel de 50 entrées : 5 ms. 20 000 `@comment(` jamais fermés : 249 ms (11,5 s avant la table des parenthèses).
+- Le paquet principal de l'interface : 970 Ko, et le module `pdfClues` 2 Ko à part.
+
+### Vérifications
+
+- **Tests écrits d'abord** (rouges pour la raison attendue) :
+  - `core/tests/bibtex.test.ts` ne se chargeait pas : `bibtex.ts` n'existait pas ;
+  - `core/tests/commands.test.ts`, la création avec ses fichiers : `expected [] to deeply equal [ { name: 'li2008.bib', … } ]` ;
+  - `app/tests/publicationImport.test.ts` ne se chargeait pas : `identify.ts` n'existait pas ; puis 2 échecs sur 13, les tags `auteur` absents tant que `publicationMaxAuthors` n'existait pas ;
+  - `view/tests/params.test.ts` et `menus.test.ts` : `publicationMaxAuthors: expected undefined to be 50`, `expected [ 'newNode' ] to deeply equal [ 'newNode', 'importPublication' ]` ;
+  - `app/tests/publications.test.ts`, `pdf: false` : `expected { name: '1706.03762.pdf', … } to be undefined` ;
+  - `app/tests/nodeFiles.test.ts`, le dialogue : `expected { to: 'node', node: 'n' } to deeply equal { to: 'refused' }` ;
+  - à la relecture : 20 000 `@comment(` en 11 485 ms au lieu de moins d'une seconde ; `cleanDoi` gardait un caractère de contrôle ; un nœud qui a `arxiv` puis `doi` n'était indexé que par le premier.
+- **Suites**, chaque paquet seul, `--maxWorkers=1` : `core` 125 tests (14 fichiers), `view` 246 (30), `app` 395 (37). Tous passés. `tsc --noEmit -p .` sans erreur dans les trois.
+- **Scénarios d'interface** : 17 sur 17, dont cinq nouveaux sur les réponses rejouées, par de vrais clics, frappes et dépôts de fichiers :
+  - « importer une publication par arXiv, avec son PDF ; Ctrl+Z » : le nœud posé au point du clic droit, ses tags, son PDF (octet pour octet), son `vaswani2017.bib` ; un Ctrl+Z le retire ;
+  - « importer une publication par DOI » : `Shannon_1948`, son `month = jul` ;
+  - « importer une publication par un PDF déposé, puis un PDF sans identifiant » : un vrai dépôt de fichier du disque (`Input.dispatchDragEvent`), l'identifiant trouvé dans le PDF remplit le champ, « Importer » garde `attention.pdf` au lieu de télécharger celui d'arXiv ; puis « Créer le nœud » pour `Li_Vitányi_extrait.pdf` ;
+  - « hors ligne » : « Pas de connexion. » puis « Identifiant non reconnu. » dans le dialogue, rien de créé, et le pop-up d'un nœud s'ouvre pendant que le dialogue est ouvert ;
+  - « en double » : le livre de la base de test, refusé par son titre et son année, puis l'article d'arXiv importé deux fois, le second refusé avant le réseau.
+- Ce qu'un scénario ne vérifie pas :
+  - le dialogue fermé pendant « Recherche… » : le rejeu répond aussitôt. `importByIdentifier` le vérifie à chaque étape (tests) ;
+  - un dépôt de plusieurs fichiers ou d'un fichier qui n'est pas un PDF sur le dialogue : des messages du composant, sans logique à tester ailleurs.
+- **Captures** : deux suites neuves de 24 images, la seconde sur le code final. Pour chacune : contre `reference-3c`, 11 sur 11 à 0 pixel ; contre `plan4a`, 8 sur 8 ; contre `plan4b`, 5 sur 5. Aucune image n’est refaite : le menu et le dialogue ne sont dans aucune capture.
+
+### Notes
+
+- **Pour la tâche 6** :
+  - `parseBibtex`, `bibFields`, `bibIdentifiers`, `PublicationIndex` (avec `add`), `planPublication` et `publicationBuild` sont prêts. L'import d'un `.bib` entier est une action ; on peut composer les `publicationBuild` dans un `combine`, ou faire un `newNodeBuild` par entrée ;
+  - `parseBibtex` tient en mémoire quatre octets par caractère du texte (la table des accolades) : la tâche 6 doit borner la taille du `.bib` qu'elle lit ;
+  - deux entrées d'un même fichier dont la clé n'est pas sûre (DBLP) ne sont pas des doublons par la clé : la seconde prend `…b`. Seuls leur DOI, leur identifiant arXiv, ou leur titre et leur année les rapprochent ;
+  - une clé en double dans le fichier est signalée par l'analyseur, et les deux entrées sont rendues : c'est `PublicationIndex.add` qui écarte la seconde.

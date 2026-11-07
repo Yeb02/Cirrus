@@ -37,8 +37,10 @@ test('élément d’une sélection de plusieurs : le menu de sélection (spec 9.
 test('fantôme, amorce, connexion, fond', () => {
   expect(actions(menuFor(s, sc, item(sc, ids.phantoms.node), emptySelection(), false))).toEqual(['teleport', 'joinArm']);
   expect(actions(menuFor(s, these, { kind: 'stub', conn: 0, stub: 0, connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: '' }, emptySelection(), false))).toEqual(['importNode']);
-  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode']);
-  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste']);
+  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode', 'importPublication']);
+  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste', 'importPublication']);
+  // Plan 4c, task 5: a publication imported by its identifier, put down where the menu was opened.
+  expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[1].label).toBe('Importer une publication…');
 });
 
 test('chaque article a un libellé français', () => {
@@ -63,5 +65,5 @@ test('une connexion disposée à la main peut retrouver sa disposition automatiq
 
 test('clic droit sur le fond d’un groupe ouvert : le menu de ce groupe, puis de quoi créer ou coller (spec 9.1, I11 de la relecture 3b)', () => {
   const m = actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true, ids.nodes.groupeML));
-  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste']);
+  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste', 'importPublication']);
 });

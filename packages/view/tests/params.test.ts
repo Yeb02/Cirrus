@@ -174,6 +174,18 @@ test('publications : plafond des métadonnées et délai des serveurs, réglages
   expect(PARAM_RUBRICS.find((r) => r.title === 'Fichiers')!.groups).toEqual(['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications']);
 });
 
+test('publications : auteurs gardés en tags et pages d’un PDF déposé lues, réglages avancés du groupe « Publications » (plan 4c, tâche 5)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['publicationMaxAuthors', 50, 'Auteurs d’une publication importée gardés en tags « auteur »', 1, 10_000, 1],
+    ['publicationPdfPages', 2, 'Pages d’un PDF déposé où chercher son DOI ou son identifiant arXiv', 1, 20, 1],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Publications', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ publicationMaxAuthors: 0, publicationPdfPages: 99 })).toMatchObject({ publicationMaxAuthors: 1, publicationPdfPages: 20 });
+});
+
 test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage principal du groupe « Paquets et installation » (plan 4b, tâche 2)', () => {
   expect(DEFAULT_PARAMS.latexPackages).toEqual([]);
   expect(PARAM_SPECS.find((s) => s.key === 'latexPackages')).toEqual({

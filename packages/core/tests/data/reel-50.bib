@@ -1,0 +1,476 @@
+% Encoding: UTF-8
+% Plan 4c, task 5: fifty real references, written the ways real .bib files write them (JabRef, Google Scholar, DBLP,
+% Crossref, by hand): @string macros and their concatenations, months, accents in LaTeX, protection braces, von names,
+% a corporate author, « and others », @comment, @preamble, % comments, an entry commented out.
+
+@preamble{ "\providecommand{\noopsort}[1]{}" # "\providecommand{\url}[1]{#1}" }
+
+@string{nips = "Advances in Neural Information Processing Systems"}
+@string{jmlr = "Journal of Machine Learning Research"}
+@string{ieee = "IEEE"}
+@string{pami = ieee # " Transactions on Pattern Analysis and Machine Intelligence"}
+@String(pit = "Problems of Information Transmission")
+
+@comment{jabref-meta: databaseType:bibtex;}
+@comment{Une @article{faux, title = {pas une entrée}} dans un commentaire.}
+
+% @article{retire2020, title = {Une entrée mise en commentaire}, year = 2020}
+
+@article{shannon1948,
+  author  = {Shannon, Claude E.},
+  title   = {A Mathematical Theory of Communication},
+  journal = {Bell System Technical Journal},
+  volume  = {27},
+  number  = {3},
+  pages   = {379--423},
+  year    = 1948,
+  month   = jul,
+  doi     = {10.1002/j.1538-7305.1948.tb01338.x}
+}
+
+@article{Kolmogorov:1965,
+  author  = {Kolmogorov, A.~N.},
+  title   = {Three approaches to the quantitative definition of information},
+  journal = pit,
+  volume  = {1},
+  number  = {1},
+  pages   = {1--7},
+  year    = {1965}
+}
+
+@article{solomonoff1964formal,
+  title={A formal theory of inductive inference. {Part I}},
+  author={Solomonoff, Ray J.},
+  journal={Information and Control},
+  volume={7},
+  number={1},
+  pages={1--22},
+  year={1964},
+  publisher={Elsevier}
+}
+
+@article{rissanen1978,
+  author = {Jorma Rissanen},
+  title = "Modeling by shortest data description",
+  journal = "Automatica",
+  volume = 14,
+  number = 5,
+  pages = "465--471",
+  year = 1978,
+  doi = {10.1016/0005-1098(78)90005-5}
+}
+
+@article{chaitin1966,
+  author = {Chaitin, Gregory J.},
+  title = {On the Length of Programs for Computing Finite Binary Sequences},
+  journal = {Journal of the {ACM}},
+  volume = {13},
+  number = {4},
+  pages = {547--569},
+  year = {1966},
+  doi = {10.1145/321356.321363}
+}
+
+@book{li2008introduction,
+  title={An Introduction to {K}olmogorov Complexity and Its Applications},
+  author={Li, Ming and Vit{\'a}nyi, Paul},
+  edition={3},
+  year={2008},
+  publisher={Springer},
+  doi={10.1007/978-0-387-49820-1}
+}
+
+@book{grunwald2007,
+  author    = {Gr{\"u}nwald, Peter D.},
+  title     = {The Minimum Description Length Principle},
+  publisher = {MIT Press},
+  address   = {Cambridge, MA},
+  year      = {2007}
+}
+
+@inproceedings{DBLP:conf/nips/VaswaniSPUJGKP17,
+  author    = {Ashish Vaswani and Noam Shazeer and Niki Parmar and Jakob Uszkoreit and Llion Jones and Aidan N. Gomez and {\L}ukasz Kaiser and Illia Polosukhin},
+  title     = {Attention is All you Need},
+  booktitle = nips # " 30",
+  pages     = {5998--6008},
+  year      = {2017},
+  eprint    = {1706.03762},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL}
+}
+
+@inproceedings{he2016deep,
+  title={Deep residual learning for image recognition},
+  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle={Proceedings of the {IEEE} Conference on Computer Vision and Pattern Recognition},
+  pages={770--778},
+  year={2016}
+}
+
+@inproceedings{krizhevsky2012imagenet,
+  title={{ImageNet} classification with deep convolutional neural networks},
+  author={Krizhevsky, Alex and Sutskever, Ilya and Hinton, Geoffrey E.},
+  booktitle=nips # { 25},
+  pages={1097--1105},
+  year={2012}
+}
+
+@article{lecun1998gradient,
+  title={Gradient-based learning applied to document recognition},
+  author={LeCun, Yann and Bottou, L{\'e}on and Bengio, Yoshua and Haffner, Patrick},
+  journal={Proceedings of the IEEE},
+  volume={86},
+  number={11},
+  pages={2278--2324},
+  year={1998},
+  publisher={IEEE}
+}
+
+@article{hochreiter1997,
+  author = {Hochreiter, Sepp and Schmidhuber, J{\"u}rgen},
+  title = {Long Short-Term Memory},
+  journal = {Neural Computation},
+  volume = {9},
+  number = {8},
+  pages = {1735--1780},
+  year = {1997},
+  month = nov,
+  doi = {10.1162/neco.1997.9.8.1735}
+}
+
+@article{rumelhart1986,
+  author = {Rumelhart, David E. and Hinton, Geoffrey E. and Williams, Ronald J.},
+  title = {Learning representations by back-propagating errors},
+  journal = {Nature},
+  volume = {323},
+  number = {6088},
+  pages = {533--536},
+  year = {1986},
+  doi = {10.1038/323533a0}
+}
+
+@inproceedings{goodfellow2014generative,
+  title={Generative Adversarial Nets},
+  author={Goodfellow, Ian and Pouget-Abadie, Jean and Mirza, Mehdi and Xu, Bing and Warde-Farley, David and Ozair, Sherjil and Courville, Aaron and Bengio, Yoshua},
+  booktitle=nips # " 27",
+  year={2014}
+}
+
+@inproceedings{kingma2014auto,
+  title     = {Auto-Encoding Variational {B}ayes},
+  author    = {Kingma, Diederik P. and Welling, Max},
+  booktitle = {2nd International Conference on Learning Representations, {ICLR}},
+  year      = {2014},
+  eprint    = {1312.6114},
+  eprinttype = {arxiv}
+}
+
+@inproceedings{kingma2015adam,
+  title={Adam: A Method for Stochastic Optimization},
+  author={Kingma, Diederik P. and Ba, Jimmy},
+  booktitle={3rd International Conference on Learning Representations, {ICLR}},
+  year={2015},
+  note={arXiv:1412.6980}
+}
+
+@article{srivastava2014dropout,
+  author  = {Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov},
+  title   = {Dropout: A Simple Way to Prevent Neural Networks from Overfitting},
+  journal = jmlr,
+  year    = {2014},
+  volume  = {15},
+  number  = {56},
+  pages   = {1929--1958}
+}
+
+@inproceedings{devlin2019bert,
+  title = "{BERT}: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+  author = "Devlin, Jacob  and
+    Chang, Ming-Wei  and
+    Lee, Kenton  and
+    Toutanova, Kristina",
+  booktitle = "Proceedings of the 2019 Conference of the North {A}merican Chapter of the Association for Computational Linguistics",
+  year = "2019",
+  pages = "4171--4186",
+  doi = "10.18653/v1/N19-1423"
+}
+
+@inproceedings{brown2020language,
+  title={Language Models are Few-Shot Learners},
+  author={Brown, Tom B. and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared and others},
+  booktitle=nips # " 33",
+  pages={1877--1901},
+  year={2020}
+}
+
+@inproceedings{zhang2017understanding,
+  title={Understanding deep learning requires rethinking generalization},
+  author={Zhang, Chiyuan and Bengio, Samy and Hardt, Moritz and Recht, Benjamin and Vinyals, Oriol},
+  booktitle={International Conference on Learning Representations},
+  year={2017}
+}
+
+@article{belkin2019reconciling,
+  title={Reconciling modern machine-learning practice and the classical bias--variance trade-off},
+  author={Belkin, Mikhail and Hsu, Daniel and Ma, Siyuan and Mandal, Soumik},
+  journal={Proceedings of the National Academy of Sciences},
+  volume={116},
+  number={32},
+  pages={15849--15854},
+  year={2019},
+  doi={10.1073/pnas.1903070116}
+}
+
+@inproceedings{nakkiran2020deep,
+  title={Deep Double Descent: Where Bigger Models and More Data Hurt},
+  author={Nakkiran, Preetum and Kaplun, Gal and Bansal, Yamini and Yang, Tristan and Barak, Boaz and Sutskever, Ilya},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://arxiv.org/abs/1912.02292}
+}
+
+@inproceedings{valleperez2019,
+  author = {Valle-P{\'e}rez, Guillermo and Camargo, Chico Q. and Louis, Ard A.},
+  title = {Deep learning generalizes because the parameter-function map is biased towards simple functions},
+  booktitle = {International Conference on Learning Representations},
+  year = {2019}
+}
+
+@article{schmidhuber1997discovering,
+  title={Discovering neural nets with low {K}olmogorov complexity and high generalization capability},
+  author={Schmidhuber, J{\"u}rgen},
+  journal={Neural Networks},
+  volume={10},
+  number={5},
+  pages={857--873},
+  year={1997}
+}
+
+@inproceedings{hinton1993keeping,
+  title={Keeping the neural networks simple by minimizing the description length of the weights},
+  author={Hinton, Geoffrey E. and van Camp, Drew},
+  booktitle={Proceedings of the Sixth Annual Conference on Computational Learning Theory},
+  pages={5--13},
+  year={1993}
+}
+
+@book{vapnik1998,
+  author = {Vapnik, Vladimir N.},
+  title = {Statistical Learning Theory},
+  publisher = {Wiley},
+  address = {New York},
+  year = 1998
+}
+
+@book{scholkopf2002,
+  author = {Sch{\"o}lkopf, Bernhard and Smola, Alexander J.},
+  title = {Learning with Kernels: Support Vector Machines, Regularization, Optimization, and Beyond},
+  publisher = {MIT Press},
+  year = {2002}
+}
+
+@book{cover2006,
+  author = {Cover, Thomas M. and Thomas, Joy A.},
+  title = {Elements of Information Theory},
+  edition = {2},
+  publisher = {Wiley-Interscience},
+  year = {2006}
+}
+
+@book{mackay2003,
+  author = {MacKay, David J. C.},
+  title = {Information Theory, Inference, and Learning Algorithms},
+  publisher = {Cambridge University Press},
+  year = {2003}
+}
+
+@book{vonneumann1944,
+  author = {von Neumann, John and Morgenstern, Oskar},
+  title = {Theory of Games and Economic Behavior},
+  publisher = {Princeton University Press},
+  year = {1944}
+}
+
+@article{turing1937,
+  author = {Turing, A. M.},
+  title = {On Computable Numbers, with an Application to the {E}ntscheidungsproblem},
+  journal = {Proceedings of the London Mathematical Society},
+  volume = {s2-42},
+  number = {1},
+  pages = {230--265},
+  year = {1937},
+  doi = {10.1112/plms/s2-42.1.230}
+}
+
+@article{godel1931,
+  author = {G{\"o}del, Kurt},
+  title = {{\"U}ber formal unentscheidbare S{\"a}tze der {P}rincipia {M}athematica und verwandter {S}ysteme {I}},
+  journal = {Monatshefte f{\"u}r Mathematik und Physik},
+  volume = {38},
+  pages = {173--198},
+  year = {1931}
+}
+
+@article{definetti1937,
+  author = {de Finetti, Bruno},
+  title = {La pr{\'e}vision : ses lois logiques, ses sources subjectives},
+  journal = {Annales de l'institut Henri Poincar{\'e}},
+  volume = {7},
+  number = {1},
+  pages = {1--68},
+  year = {1937}
+}
+
+@article{vandermaaten2008,
+  author  = {Laurens van der Maaten and Geoffrey Hinton},
+  title   = {Visualizing Data using t-{SNE}},
+  journal = jmlr,
+  year    = {2008},
+  volume  = {9},
+  number  = {86},
+  pages   = {2579--2605}
+}
+
+@article{erdos1959,
+  author = {Erd{\H{o}}s, Paul and R{\'e}nyi, Alfr{\'e}d},
+  title = {On random graphs {I}},
+  journal = {Publicationes Mathematicae Debrecen},
+  volume = {6},
+  pages = {290--297},
+  year = {1959}
+}
+
+@incollection{bennett1988,
+  author = {Bennett, Charles H.},
+  title = {Logical depth and physical complexity},
+  booktitle = {The Universal {T}uring Machine: A Half-Century Survey},
+  editor = {Herken, Rolf},
+  publisher = {Oxford University Press},
+  pages = {227--257},
+  year = {1988}
+}
+
+@article{levin1973,
+  author = {Levin, Leonid A.},
+  title = {Universal sequential search problems},
+  journal = pit,
+  volume = {9},
+  number = {3},
+  pages = {265--266},
+  year = {1973}
+}
+
+@book{hutter2005,
+  author = {Hutter, Marcus},
+  title = {Universal Artificial Intelligence: Sequential Decisions Based on Algorithmic Probability},
+  publisher = {Springer},
+  address = {Berlin},
+  year = {2005}
+}
+
+@article{wolpert1996lack,
+  title={The Lack of A Priori Distinctions Between Learning Algorithms},
+  author={Wolpert, David H.},
+  journal={Neural Computation},
+  volume={8},
+  number={7},
+  pages={1341--1390},
+  year={1996}
+}
+
+@article{blumer1987occam,
+  title={Occam's Razor},
+  author={Blumer, Anselm and Ehrenfeucht, Andrzej and Haussler, David and Warmuth, Manfred K.},
+  journal={Information Processing Letters},
+  volume={24},
+  number={6},
+  pages={377--380},
+  year={1987}
+}
+
+@inproceedings{mikolov2013distributed,
+  title={Distributed Representations of Words and Phrases and their Compositionality},
+  author={Mikolov, Tomas and Sutskever, Ilya and Chen, Kai and Corrado, Greg S. and Dean, Jeff},
+  booktitle=nips # " 26",
+  pages={3111--3119},
+  year={2013}
+}
+
+@article{silver2016mastering,
+  title={Mastering the game of {Go} with deep neural networks and tree search},
+  author={Silver, David and Huang, Aja and Maddison, Chris J. and Guez, Arthur and Sifre, Laurent and van den Driessche, George and others},
+  journal={Nature},
+  volume={529},
+  number={7587},
+  pages={484--489},
+  year={2016},
+  % publisher={Nature Publishing Group},
+  doi={10.1038/nature16961}
+}
+
+@misc{kaplan2020scaling,
+  title={Scaling Laws for Neural Language Models},
+  author={Jared Kaplan and Sam McCandlish and Tom Henighan and Tom B. Brown and Benjamin Chess and Rewon Child and Scott Gray and Alec Radford and Jeffrey Wu and Dario Amodei},
+  year={2020},
+  eprint={2001.08361},
+  archivePrefix={arXiv},
+  primaryClass={cs.LG}
+}
+
+@article{hoffmann2022training,
+  title={Training Compute-Optimal Large Language Models},
+  author={Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur and others},
+  journal={arXiv preprint arXiv:2203.15556},
+  year={2022}
+}
+
+@inproceedings{deletang2024language,
+  title={Language Modeling Is Compression},
+  author={Del{\'e}tang, Gr{\'e}goire and Ruoss, Anian and Duquenne, Paul-Ambroise and Catt, Elliot and Genewein, Tim and Mattern, Christopher and Grau-Moya, Jordi and Wenliang, Li Kevin and Aitchison, Matthew and Orseau, Laurent and Hutter, Marcus and Veness, Joel},
+  booktitle={The Twelfth International Conference on Learning Representations},
+  year={2024}
+}
+
+@misc{openai2023gpt4,
+  author = {{OpenAI}},
+  title = {{GPT}-4 Technical Report},
+  year = {2023},
+  eprint = {2303.08774},
+  archivePrefix = {arXiv}
+}
+
+@misc{https://doi.org/10.48550/arxiv.1503.02531,
+  doi = {10.48550/ARXIV.1503.02531},
+  url = {https://arxiv.org/abs/1503.02531},
+  author = {Hinton, Geoffrey and Vinyals, Oriol and Dean, Jeff},
+  title = {Distilling the Knowledge in a Neural Network},
+  publisher = {arXiv},
+  year = {2015}
+}
+
+@misc{tishby2000information,
+  title={The information bottleneck method},
+  author={Tishby, Naftali and Pereira, Fernando C. and Bialek, William},
+  year={2000},
+  eprint={physics/0004057},
+  archivePrefix={arXiv}
+}
+
+@book{levy1937,
+  author = {L{\'e}vy, Paul},
+  title = {Th{\'e}orie de l'addition des variables al{\'e}atoires},
+  publisher = {Gauthier-Villars},
+  address = {Paris},
+  year = {1937}
+}
+
+@article{bengio2013representation,
+  author = {Bengio, Yoshua and Courville, Aaron and Vincent, Pascal},
+  title = {Representation Learning: A Review and New Perspectives},
+  journal = pami,
+  volume = {35},
+  number = {8},
+  pages = {1798--1828},
+  year = {2013},
+  doi = {10.1109/TPAMI.2013.50}
+}

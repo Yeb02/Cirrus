@@ -15,6 +15,7 @@ export {
   placedIn, placementKey, placementOf, placementsIn, planId, planRow, preambleText, reindex, relationRows, type State,
 } from './state.ts';
 export * from './latex.ts';
+export * from './bibtex.ts';
 export * from './invariants.ts';
 export * from './commands.ts';
 export * from './history.ts';

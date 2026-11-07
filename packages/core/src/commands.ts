@@ -1,7 +1,9 @@
 import { validAnchor } from './annotation.ts';
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
-import type { Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
+import type {
+  Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue,
+} from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
 import {
@@ -239,12 +241,15 @@ export function createPlan(s: State, name: string, type: PlanType): Action {
   });
 }
 
-export function createNode(s: State, a: { plan: Id; title: string; x: number; y: number; k: number; summary?: string; tags?: TagValue[] }): Action {
+/** A node placed in `plan`; `files`: already in the store (an imported publication's, plan 4c). */
+export function createNode(
+  s: State, a: { plan: Id; title: string; x: number; y: number; k: number; summary?: string; tags?: TagValue[]; files?: FileRef[] },
+): Action {
   planOf(s, a.plan);
   const tags = normalizeTags(s, a.tags ?? []);
   return transact(s, (d) => {
     const id = uuidv7();
-    d.node(id, { id, title: a.title, summary: a.summary ?? '', tags, files: [] });
+    d.node(id, { id, title: a.title, summary: a.summary ?? '', tags, files: a.files ? [...a.files] : [] });
     d.placement(a.plan, id, { plan: a.plan, node: id, x: a.x, y: a.y, k: a.k });
     return d.finish(`Créer « ${a.title} »`);
   });

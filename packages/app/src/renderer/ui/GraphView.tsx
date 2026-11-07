@@ -28,6 +28,8 @@ import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
 import { carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
+import { type ImportDeps, publicationBuild } from '../publications/build.ts';
+import { PublicationDialog } from './PublicationDialog.tsx';
 
 /** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
 export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
@@ -147,6 +149,12 @@ export function GraphView(props: {
   const questionRef = useRef(question);
   questionRef.current = question;
   const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
+  /**
+   * « Importer une publication… » (plan 4c, task 5): the dialog, and where its node goes — the world point and the zoom
+   * of the right click that opened it, in its plan. Another plan shown closes it (a result still to come dropped).
+   */
+  const [publication, setPublication] = useState<{ key: number; plan: Id; at: Vec2; zoom: number } | null>(null);
+  useEffect(() => { setPublication((d) => (d !== null && d.plan !== props.plan ? null : d)); }, [props.plan]);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
@@ -1216,6 +1224,11 @@ export function GraphView(props: {
         setGhost({ x: at.x, y: at.y, text: 'Nouveau nœud' });
         gestures.current.start('place');
         break;
+      case 'importPublication': {
+        const cam = e.renderer.camera;
+        setPublication({ key: performance.now(), plan: sc.plan.id, at: screenToWorld(cam, at.x, at.y), zoom: cam.zoom });
+        break;
+      }
       case 'rename': {
         if (clicked < 0) break;
         const it = sc.items[clicked], sp = worldToScreen(e.renderer.camera, it.x, it.y);
@@ -1329,6 +1342,24 @@ export function GraphView(props: {
     if (!e) return;
     for (const intent of gestures.current.feed(input, e.renderer.camera)) handle(intent);
   };
+  /**
+   * What the import dialog asks of the graph (plan 4c, D5 to D8): the IPC, and the node put down where the menu was
+   * opened (publicationBuild), at the zoom of then, through the session — one action. Its plan no longer shown, nothing.
+   */
+  const publicationDeps = (d: { plan: Id; at: Vec2; zoom: number }): Omit<ImportDeps, 'open'> => ({
+    state: () => stateRef.current,
+    fetch: (text, options) => window.cirrus.publicationFetch(text, options),
+    storeText: (name, text) => window.cirrus.storeText(name, text),
+    maxAuthors: () => paramsRef.current.publicationMaxAuthors,
+    put: async (plan, files) => {
+      const sc = sceneRef.current, session = sessionRef.current;
+      if (!sc || !session || sc.plan.id !== d.plan) return { ok: false, message: 'Le plan de l’import n’est plus affiché : rien n’est importé.' };
+      const r = await session.run(publicationBuild(plan, files, sc, d.at, d.zoom, paramsRef.current, indexOf(sc)));
+      if (r.ok) onResultRef.current(r);
+      return r;
+    },
+    log: (what, e) => console.error(what, e),
+  });
   const buttonOf = (b: number): 0 | 1 | 2 => (b === 2 ? 2 : b === 1 ? 1 : 0);
   /** The buttons held, as the last pointer event gave them. */
   const buttons = useRef(0);
@@ -1500,6 +1531,12 @@ export function GraphView(props: {
         />
       )}
       {question && <AskDialog q={question} onClose={() => { setQuestion(null); root.current?.focus(); }} />}
+      {publication && (
+        <PublicationDialog
+          key={publication.key} params={props.params} deps={publicationDeps(publication)} onNotify={notify}
+          onClose={() => { setPublication(null); root.current?.focus({ preventScroll: true }); }}
+        />
+      )}
     </div>
   );
 }

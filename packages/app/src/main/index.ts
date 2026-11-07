@@ -314,15 +314,15 @@ const publicationsFetch: FetchFn = publicationsReplay ? replayFetch(publications
 // A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
 // network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
 // string parseIdentifier reads); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within
-// maxImportMb, stored before any action refers to it.
-ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown) => {
+// maxImportMb, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the dialog, task 5).
+ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown, options: unknown) => {
   if (!store) return { ok: false, message: 'La base n’est pas ouverte.' };
   const p = currentParams();
   return importPublication(text, {
     fetch: publicationsFetch, store: (name, bytes) => storeBytes(dir, name, bytes),
     maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs,
     log: (m) => console.warn(m),
-  });
+  }, options);
 });
 
 /**

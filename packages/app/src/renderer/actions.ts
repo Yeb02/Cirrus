@@ -190,13 +190,27 @@ export const groupAt = (scene: PlanScene, at: Vec2, zoom: number, p: RenderParam
 export function createBuild(scene: PlanScene, title: string, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
   const name = title.trim();
   if (!name) return null;
+  return newNodeBuild(scene, { title: name }, at, zoom, p, `Créer « ${name} »`, index);
+}
+
+/**
+ * createBuild's node with its tags and its files, already in the store (an imported publication, plan 4c, D7), as one
+ * action labelled `label`: put down at `at`, at the readable step, entering the group whose envelope receives it.
+ */
+export function newNodeBuild(
+  scene: PlanScene, rec: { title: string; tags?: TagValue[]; files?: FileRef[] }, at: Vec2, zoom: number, p: RenderParams, label: string, index?: SceneIndex,
+): (s: State) => Action {
   const k = readableStep(zoom, p);
   const group = groupAt(scene, at, zoom, p, index);
   const plan = scene.plan.id;
   return (st) => {
     let id = '';
-    return combine(st, `Créer « ${name} »`, [
-      (x) => { const a = createNode(x, { plan, title: name, x: at.x, y: at.y, k }); id = (a.ops[0] as { after: { id: Id } }).after.id; return a; },
+    return combine(st, label, [
+      (x) => {
+        const a = createNode(x, { plan, title: rec.title, x: at.x, y: at.y, k, tags: rec.tags, files: rec.files });
+        id = (a.ops[0] as { after: { id: Id } }).after.id;
+        return a;
+      },
       ...(group !== null ? [(x: State) => include(x, plan, id, group)] : []),
     ]);
   };

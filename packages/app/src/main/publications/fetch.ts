@@ -230,10 +230,10 @@ async function pdfOf(deps: PublicationDeps, id: string): Promise<{ pdf: FileRef 
  * The publication `id` (D5, D6): its CSL-JSON and BibTeX from the DOI resolver (an arXiv identifier by the DOI arXiv gives it),
  * both asked at once, both needed (the first that fails stops the other, and its reason alone is said); then, for an arXiv
  * article, its PDF, which only goes into the store if its first bytes are %PDF and it fits in maxImportMb; without it
- * the publication comes all the same, `pdfMessage` saying why. Never throws: every failure is a refusal in French (the
- * cause, if any, logged).
+ * the publication comes all the same, `pdfMessage` saying why; with `pdf: false` (a PDF the user dropped, which the node
+ * keeps: plan 4c, D8), it is not asked for. Never throws: every failure is a refusal in French (the cause, if any, logged).
  */
-export async function fetchPublication(id: PublicationId, deps: PublicationDeps): Promise<PublicationResult> {
+export async function fetchPublication(id: PublicationId, deps: PublicationDeps, options: { pdf?: boolean } = {}): Promise<PublicationResult> {
   const sources = deps.sources ?? PUBLICATION_SOURCES;
   const url = sources.doiUrl('doi' in id ? id.doi : arxivDoi(id.arxiv));
   const cap = deps.maxKb * 1024;
@@ -247,7 +247,7 @@ export async function fetchPublication(id: PublicationId, deps: PublicationDeps)
     // The first failure, which stopped the other.
     if (failed.signal.aborted) throw failed.signal.reason;
     const found = { ok: true as const, id, csl: (csl as PromiseFulfilledResult<Csl>).value, bibtex: (bibtex as PromiseFulfilledResult<string>).value };
-    return 'arxiv' in id ? { ...found, ...(await pdfOf(deps, id.arxiv)) } : found;
+    return 'arxiv' in id && options.pdf !== false ? { ...found, ...(await pdfOf(deps, id.arxiv)) } : found;
   } catch (e) {
     if (e instanceof Refusal) return { ok: false, message: e.message };
     deps.log?.(`Publication, ${url} : ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
@@ -257,11 +257,13 @@ export async function fetchPublication(id: PublicationId, deps: PublicationDeps)
 
 /**
  * The IPC's entry (`cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string that
- * parseIdentifier reads (MAX_IDENTIFIER_CHARS at most), or nothing is asked of the network.
+ * parseIdentifier reads (MAX_IDENTIFIER_CHARS at most), or nothing is asked of the network. `options`: `{ pdf: false }`
+ * only, exactly, leaves an arXiv article's PDF out (a PDF dropped, task 5); anything else, the PDF is downloaded.
  */
-export async function importPublication(text: unknown, deps: PublicationDeps): Promise<PublicationResult> {
+export async function importPublication(text: unknown, deps: PublicationDeps, options?: unknown): Promise<PublicationResult> {
   const id = typeof text === 'string' ? parseIdentifier(text) : null;
-  return id ? fetchPublication(id, deps) : { ok: false, message: UNRECOGNIZED };
+  const pdf = !(typeof options === 'object' && options !== null && !Array.isArray(options) && Object.hasOwn(options, 'pdf') && (options as { pdf: unknown }).pdf === false);
+  return id ? fetchPublication(id, deps, { pdf }) : { ok: false, message: UNRECOGNIZED };
 }
 
 /** What requestFetch needs of Electron's net.request: a ClientRequest's few calls and events. */

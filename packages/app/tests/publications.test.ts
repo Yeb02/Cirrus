@@ -405,6 +405,23 @@ test('importPublication : ce qui n’est pas un texte d’identifiant reconnu es
   expect(await importPublication(' doi:10.1234/essai ', depsOf(fetch).deps)).toEqual({ ok: true, id: ESSAI, csl: CSL_OK, bibtex: BIB_OK });
 });
 
+test('importPublication : `pdf: false` (un PDF déposé, task 5, D8) — les métadonnées seules, le PDF d’arXiv ni demandé ni stocké ; toute autre option garde le téléchargement', async () => {
+  const replayed = () => fakeFetch((url, accept, signal) => replayFetch(DATA)(url, { headers: { Accept: accept }, redirect: 'manual', signal }));
+  const without = replayed(), d = depsOf(without.fetch);
+  const r = await importPublication('arXiv:1706.03762', d.deps, { pdf: false });
+  if (!r.ok) throw new Error(r.message);
+  expect(r.pdf).toBeUndefined();
+  expect(r.pdfMessage).toBeUndefined();
+  expect(d.stored).toEqual([]);
+  expect(without.calls.some((c) => new URL(c.url).hostname === 'arxiv.org')).toBe(false);
+  // What the page may send instead: the PDF is downloaded, as before.
+  for (const options of [undefined, null, 'non', { pdf: 'false' }, { pdf: true }, []]) {
+    const withPdf = replayed(), e = depsOf(withPdf.fetch);
+    const x = await importPublication('arXiv:1706.03762', e.deps, options);
+    expect(x.ok && x.pdf?.name, JSON.stringify(options)).toBe('1706.03762.pdf');
+  }
+});
+
 test('cslToFields : titre, auteurs « Prénom Nom » et année, lus défensivement ; un champ inattendu est ignoré', () => {
   expect(cslToFields(CSL_OK)).toEqual({ title: 'Un titre', authors: ['Ada Lovelace'], year: '1843' });
   for (const csl of [null, undefined, 3, 'titre', [], [CSL_OK], {}, { title: 3 }, { title: '  \n ' }, { title: [] }, { title: [4] }, JSON.parse('{"__proto__": {"title": "piège"}}')]) {

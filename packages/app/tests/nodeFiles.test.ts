@@ -111,6 +111,8 @@ test('dropZone et dropRoute : un dépôt va au nœud ou au groupe du graphe, au 
   // What floats over the graph and refuses files: a connection's pop-up, a question.
   check('le pop-up d’une connexion', graphDrop(at(...GRAPH, 'div.popup', 'ul', 'li'), node), { to: 'refused' });
   check('une question', graphDrop(at(...GRAPH, 'div.ask', 'button'), node), { to: 'refused' });
+  // The import dialog (plan 4c, task 5): the graph never takes a PDF dropped there, the dialog's own drop zone does.
+  expect(graphDrop(at(...GRAPH, 'div.publication-dialog', 'p.status'), node), 'le dialogue d’import').toEqual({ to: 'refused' });
   // A node's pop-up takes them anywhere on it, its list of files and its fields included; not once its node is gone.
   const popup = [...MAIN, 'div.panels', 'section.panel.node-popup'];
   check('la liste des fichiers d’un pop-up', popupDrop(at(...popup, 'div.body', 'ul.files', 'li.file.with-thumb', 'span.name'), 'mdl'), { to: 'node', node: 'mdl' });

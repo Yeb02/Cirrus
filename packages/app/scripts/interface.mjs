@@ -4,7 +4,7 @@
 // the browser's own default actions — the focus a press gives, a click after a press — happen as for the user, which
 // the pointer replays of the captures (CIRRUS_POINTER) skip. Then it reads what the page shows and what the base kept.
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -127,6 +127,18 @@ async function launch(data, profile, more = {}) {
       }
     },
     /**
+     * Files of the disk dragged from the system and let go at `at` (plan 4c, task 5): entered, moved over and dropped
+     * by DevTools' Input domain, the page's dragover and drop handlers receiving them as from the explorer.
+     */
+    async dropFiles(at, paths) {
+      const data = { items: [], files: paths, dragOperationsMask: 1 };
+      for (const type of ['dragEnter', 'dragOver', 'dragOver', 'drop']) {
+        await send('Input.dispatchDragEvent', { type, x: at.x, y: at.y, data });
+        await sleep(60);
+      }
+      await sleep(300);
+    },
+    /**
      * The client rectangle of the `k`-th character of `needle`, found in the text of the first element `scope` (its
      * text nodes joined: pdf.js may split a line into runs), or null.
      */
@@ -241,6 +253,29 @@ async function popupRow(page, n) {
 /** The text of the rows of `list`. */
 const rows = (page, list) => page.evaluate(`[...document.querySelectorAll('${list} li')].map((li) => li.textContent)`);
 const said = (page, text) => page.until(`[...document.querySelectorAll('.toast')].some((t) => t.textContent === ${JSON.stringify(text)})`);
+
+// Plan 4c, task 5: publications imported from the dialog of the background's menu, on recorded answers (never the
+// network), the view as PUBLICATION's (the test base's book at its centre, the sky at SKY).
+const IMPORT = { env: { ...PUBLICATION.env, CIRRUS_PUBLICATIONS_REPLAY: join(appDir, 'tests', 'data', 'publications') } };
+const ATTENTION = 'Attention Is All You Need';
+/** Another point of the sky, 140 px under SKY: free once a node is put down at SKY. */
+const SKY2 = { x: SKY.x, y: SKY.y + 140 };
+/** « Importer une publication… » in the menu of the sky's background at `at`: the dialog, its field focused. */
+async function openImport(page, at = SKY) {
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(at.x, at.y, 'right');
+  const item = await page.centre('.context-menu button', 'Importer une publication');
+  await page.click(item.x, item.y);
+  if (!(await page.until(`document.activeElement?.matches('.publication-dialog input') === true`))) throw new Error('le dialogue d’import ne s’ouvre pas, ou son champ n’a pas le focus');
+}
+const sql = (s) => `'${s.replaceAll('\'', '\'\'')}'`;
+/** The live nodes of that title, their records. */
+const titledIn = (base, title) => base(`SELECT json FROM nodes WHERE trashed = 0 AND json_extract(json, '$.title') = ${sql(title)}`).map((r) => JSON.parse(r.json));
+const statusOf = (page) => page.evaluate(`document.querySelector('.publication-dialog .status')?.textContent ?? null`);
+const dialogOpen = (page) => page.evaluate(`!!document.querySelector('.publication-dialog')`);
+/** A blob of the test base's store. */
+const blob = (data, hash) => readFileSync(join(data, 'files', hash.slice(0, 2), hash));
+/** The node's tags, `key: value` each. */
+const tagsOf = (n) => n.tags.map((t) => `${t.key}: ${t.value}`);
 
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
 const SCENARIOS = [
@@ -615,6 +650,147 @@ const SCENARIOS = [
         if (x?.message !== 'Identifiant non reconnu.') throw new Error(`${expr} : ${JSON.stringify(x)}`);
       }
       if (nodes() !== before) throw new Error('l’import a créé des nœuds');
+    },
+  },
+  {
+    // D5 to D7: an arXiv identifier typed, Entrée; the node put down where the menu was opened, its tags, its PDF
+    // (downloaded: replayed) and its .bib — DataCite's key, an address, set aside for vaswani2017 —, the dialog closed;
+    // one Ctrl+Z removes it.
+    name: 'importer une publication par arXiv, avec son PDF ; Ctrl+Z',
+    ...IMPORT,
+    async run(page, base, data) {
+      const at = await worldAt(page, SKY);
+      await openImport(page);
+      await page.type('arXiv:1706.03762');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+      const n = titledIn(base, ATTENTION)[0];
+      const authors = ['Ashish Vaswani', 'Noam Shazeer', 'Niki Parmar', 'Jakob Uszkoreit', 'Llion Jones', 'Aidan N. Gomez', 'Lukasz Kaiser', 'Illia Polosukhin'];
+      const tags = [...authors.map((a) => `auteur: ${a}`), 'date_de_publication: 2017', 'clé_bibtex: vaswani2017', 'arxiv: 1706.03762'];
+      if (JSON.stringify(tagsOf(n)) !== JSON.stringify(tags)) throw new Error(`tags inattendus : ${JSON.stringify(tagsOf(n))}`);
+      if (JSON.stringify(n.files.map((f) => f.name)) !== '["1706.03762.pdf","vaswani2017.bib"]') throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
+      const pdf = readFileSync(join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf'));
+      if (!blob(data, n.files[0].hash).equals(pdf)) throw new Error('le PDF du nœud n’est pas celui d’arXiv (rejoué)');
+      const bib = blob(data, n.files[1].hash).toString('utf8');
+      if (!bib.startsWith('@misc{vaswani2017,\n') || !bib.includes('title = {Attention Is All You Need}')) throw new Error(`.bib inattendu : ${bib.slice(0, 120)}`);
+      const p = placementOf(base, idsOf(base).lobby, n.id);
+      if (!p || Math.abs(p.x - at.x) > 1 || Math.abs(p.y - at.y) > 1) throw new Error(`le nœud n’est pas posé où le menu s’est ouvert : ${JSON.stringify(p)} au lieu de ${JSON.stringify(at)}`);
+      if (await dialogOpen(page)) throw new Error('le dialogue reste ouvert après l’import');
+      console.log(`     ${n.files.map((f) => `${f.name} (${f.size} o)`).join(', ')} ; posé en ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, cran ${p.k}`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => titledIn(base, ATTENTION).length === 0))) throw new Error('un Ctrl+Z ne retire pas toute l’importation');
+    },
+  },
+  {
+    // D5, D7: a DOI of Crossref (replayed: composed on Crossref's model), « Importer » clicked; Crossref's key kept, its
+    // month a macro in the .bib.
+    name: 'importer une publication par DOI',
+    ...IMPORT,
+    async run(page, base, data) {
+      await openImport(page);
+      await page.type('10.1002/j.1538-7305.1948.tb01338.x');
+      const button = await page.centre('.publication-dialog button.import', 'Importer');
+      await page.click(button.x, button.y);
+      const title = 'A Mathematical Theory of Communication';
+      if (!(await until(() => titledIn(base, title).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+      const n = titledIn(base, title)[0];
+      const tags = ['auteur: C. E. Shannon', 'date_de_publication: 1948', 'clé_bibtex: Shannon_1948', 'doi: 10.1002/j.1538-7305.1948.tb01338.x'];
+      if (JSON.stringify(tagsOf(n)) !== JSON.stringify(tags)) throw new Error(`tags inattendus : ${JSON.stringify(tagsOf(n))}`);
+      if (JSON.stringify(n.files.map((f) => f.name)) !== '["Shannon_1948.bib"]') throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
+      const bib = blob(data, n.files[0].hash).toString('utf8');
+      if (!bib.startsWith('@article{Shannon_1948,\n') || !bib.includes('  month = jul,\n')) throw new Error(`.bib inattendu : ${bib}`);
+    },
+  },
+  {
+    // D8: a PDF dropped on the dialog (a real drag of a file of the disk) enters the store; its arXiv identifier, found
+    // in its text, fills the field; « Importer » keeps it (arXiv's not downloaded). Then a PDF without an identifier:
+    // « Créer le nœud », its file's name as title, the PDF attached.
+    name: 'importer une publication par un PDF déposé, puis un PDF sans identifiant',
+    ...IMPORT,
+    async run(page, base, data) {
+      const dir = mkdtempSync(join(tmpdir(), 'cirrus-depot-'));
+      try {
+        const dropped = join(dir, 'attention.pdf'), plain = join(dir, 'Li_Vitányi_extrait.pdf');
+        copyFileSync(join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf'), dropped);
+        copyFileSync(join(appDir, '..', 'fixtures', 'assets', 'Li_Vitányi_extrait.pdf'), plain);
+        await openImport(page);
+        const zone = await page.centre('.publication-dialog .status', '');
+        await page.dropFiles(zone, [dropped]);
+        if (!(await page.until(`document.querySelector('.publication-dialog input')?.value === 'arXiv:1706.03762'`, 8000))) {
+          throw new Error(`l’identifiant n’est pas trouvé dans le PDF déposé (le dialogue dit « ${await statusOf(page)} »)`);
+        }
+        console.log(`     ${await statusOf(page)}`);
+        if (titledIn(base, ATTENTION).length !== 0) throw new Error('le dépôt a importé sans « Importer »');
+        const button = await page.centre('.publication-dialog button.import', 'Importer');
+        await page.click(button.x, button.y);
+        if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+        const n = titledIn(base, ATTENTION)[0];
+        if (JSON.stringify(n.files.map((f) => f.name)) !== '["attention.pdf","vaswani2017.bib"]') throw new Error(`le nœud ne garde pas le PDF déposé : ${JSON.stringify(n.files)}`);
+        if (!blob(data, n.files[0].hash).equals(readFileSync(dropped))) throw new Error('le PDF déposé n’est pas au magasin');
+        await openImport(page, SKY2);
+        await page.dropFiles(await page.centre('.publication-dialog .status', ''), [plain]);
+        if (!(await page.until(`!!document.querySelector('.publication-dialog button.create')`, 8000))) throw new Error(`« Créer le nœud » n’est pas proposé (le dialogue dit « ${await statusOf(page)} »)`);
+        console.log(`     ${await statusOf(page)}`);
+        const create = await page.centre('.publication-dialog button.create', 'Créer le nœud');
+        await page.click(create.x, create.y);
+        if (!(await until(() => titledIn(base, 'Li_Vitányi_extrait').length === 1))) throw new Error('le nœud du PDF sans identifiant n’est pas dans la base');
+        const m = titledIn(base, 'Li_Vitányi_extrait')[0];
+        if (m.tags.length !== 0 || JSON.stringify(m.files.map((f) => f.name)) !== '["Li_Vitányi_extrait.pdf"]') throw new Error(`nœud inattendu : ${JSON.stringify(m)}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      }
+    },
+  },
+  {
+    // Review Focus 5: hors ligne (a request nothing recorded answers, as without a network), then an identifier not
+    // recognised — said in French in the dialog, which stays open and blocks nothing (a node's pop-up opens meanwhile);
+    // nothing is created; « Fermer ».
+    name: 'importer une publication hors ligne : dit en français, rien n’est créé, rien n’est bloqué',
+    ...IMPORT,
+    async run(page, base) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n;
+      const before = count();
+      await openImport(page);
+      await page.type('10.1234/jamais-enregistre');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`document.querySelector('.publication-dialog .status')?.textContent === 'Pas de connexion.'`, 8000))) throw new Error(`le dialogue dit « ${await statusOf(page)} »`);
+      await page.click(792, 461);
+      if (!(await page.until(`!!document.querySelector('.node-popup') && !!document.querySelector('.publication-dialog')`))) throw new Error('le graphe ne répond pas pendant que le dialogue est ouvert');
+      const input = await page.centre('.publication-dialog input', '');
+      await page.click(input.x, input.y);
+      await page.press('a', 'KeyA', 65, 2);
+      await page.type('bonjour');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`document.querySelector('.publication-dialog .status')?.textContent === 'Identifiant non reconnu.'`))) throw new Error(`le dialogue dit « ${await statusOf(page)} »`);
+      const close = await page.centre('.publication-dialog button.cancel', 'Fermer');
+      await page.click(close.x, close.y);
+      if (await dialogOpen(page)) throw new Error('« Fermer » ne ferme pas le dialogue');
+      if (count() !== before) throw new Error('un import refusé a créé un nœud');
+    },
+  },
+  {
+    // D7 and the controller's ruling: the test base's book again by its DOI — no `doi` tag there, another key — is a
+    // duplicate by its title and year, notified naming the node; arXiv's article imported twice, the second refused
+    // before the network, by its identifier.
+    name: 'importer une publication en double : refusé, le nœud existant nommé',
+    ...IMPORT,
+    async run(page, base) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n;
+      const before = count();
+      await openImport(page);
+      await page.type('https://doi.org/10.1007/978-0-387-49820-1');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await said(page, `Déjà dans la base (même titre et même année) : « ${LI} ».`))) throw new Error(`pas de notification du doublon (le dialogue dit « ${await statusOf(page)} »)`);
+      if (await dialogOpen(page) || count() !== before) throw new Error('le doublon a créé un nœud, ou le dialogue reste ouvert');
+      await openImport(page);
+      await page.type('arXiv:1706.03762');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error('le premier import d’arXiv ne s’est pas fait');
+      await openImport(page, SKY2);
+      await page.type('https://arxiv.org/abs/1706.03762v7');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await said(page, `Déjà dans la base (même identifiant arXiv) : « ${ATTENTION} ».`))) throw new Error(`pas de notification du second import (le dialogue dit « ${await statusOf(page)} »)`);
+      if (titledIn(base, ATTENTION).length !== 1) throw new Error('le second import a créé un nœud');
     },
   },
 ];

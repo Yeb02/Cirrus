@@ -185,6 +185,10 @@ export interface RenderParams {
    * long without data during an arXiv PDF's download, whose size is maxImportMb's.
    */
   publicationTimeoutMs: number;
+  /** An imported publication keeps this many of its authors as tags `auteur` (D7), its .bib all of them; */
+  publicationMaxAuthors: number;
+  /** a PDF dropped in the import dialog is searched for its DOI or arXiv identifier in this many first pages (D8). */
+  publicationPdfPages: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -372,6 +376,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   annotationMarginPx: 240,
   publicationMaxKb: 2048,
   publicationTimeoutMs: 20_000,
+  publicationMaxAuthors: 50,
+  publicationPdfPages: 2,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -568,6 +574,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('annotationMarginPx', 'Largeur de la marge des annotations du lecteur PDF (px)', A, 'Annotations', 120, 800, 10),
   num('publicationMaxKb', 'Taille maximale des métadonnées d’une publication reçues du réseau (Ko)', A, 'Publications', 16, 65_536, 16),
   num('publicationTimeoutMs', 'Attente maximale d’un serveur de publications (ms)', A, 'Publications', 1000, 600_000, 500),
+  num('publicationMaxAuthors', 'Auteurs d’une publication importée gardés en tags « auteur »', A, 'Publications', 1, 10_000, 1),
+  num('publicationPdfPages', 'Pages d’un PDF déposé où chercher son DOI ou son identifiant arXiv', A, 'Publications', 1, 20, 1),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),

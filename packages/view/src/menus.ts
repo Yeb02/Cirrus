@@ -5,7 +5,7 @@ import type { Selection } from './selection.ts';
 
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
-  | 'copy' | 'paste' | 'newNode' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection';
+  | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection';
 
 export interface MenuItem { action: MenuAction; label: string }
 
@@ -21,6 +21,7 @@ const LABELS: Record<MenuAction, string> = {
   copy: 'Copier',
   paste: 'Coller',
   newNode: 'Nouveau nœud',
+  importPublication: 'Importer une publication…',
   teleport: 'S’y téléporter',
   joinArm: 'Réunir ce bras',
   importNode: 'Importer le nœud dans ce plan',
@@ -33,15 +34,15 @@ const LABELS: Record<MenuAction, string> = {
 /**
  * The context menu of what is under the cursor (spec 9.1, 8.5, 11.3): a right click on an element of a selection of
  * several opens the selection menu (copy, hide, − and +); a phantom offers to teleport to its original and to join
- * the arm back; a stub, to import its node; the background, to create a node or paste, after the menu of the open
- * group `under` the cursor if any. On a connection: split the
+ * the arm back; a stub, to import its node; the background, to create a node, paste, or import a publication by its
+ * identifier (plan 4c, D5), after the menu of the open group `under` the cursor if any. On a connection: split the
  * branch clicked if it leads to a node placed here, join the arm back on its far side; a line standing for several
  * connections (a closed group) has no menu.
  */
 export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, canPaste: boolean, under?: Id): MenuItem[] {
   const make = (actions: MenuAction[]) => actions.map((action) => ({ action, label: LABELS[action] }));
   if (hit.kind === 'background') {
-    const own = make(canPaste ? ['newNode', 'paste'] : ['newNode']);
+    const own = make(canPaste ? ['newNode', 'paste', 'importPublication'] : ['newNode', 'importPublication']);
     // The background of an open group: that group's menu, then what the background offers (spec 9.1, I11 of the review).
     const g = under === undefined ? undefined : scene.byId.get(under);
     return g === undefined ? own : [...menuFor(s, scene, { kind: 'item', item: g, id: under! }, sel, canPaste), ...own];

@@ -142,6 +142,27 @@ button, input, select { font: inherit; color: var(--ink); }
 .ask button { padding: 5px 12px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
 .ask button:focus { outline: 2px solid var(--accent); }
 .ask .cancel { background: none; border-color: transparent; color: var(--muted); }
+/* The import dialog (plan 4c, task 5): at the top of the graph, blocking nothing; the whole of it takes a PDF. */
+.publication-dialog {
+  position: absolute; left: 50%; top: 16px; transform: translateX(-50%); z-index: 38; width: 460px; max-width: calc(100% - 32px); box-sizing: border-box;
+  padding: 12px 16px 14px; background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.4); border-radius: 10px; box-shadow: 0 14px 40px rgba(2, 6, 16, 0.7);
+}
+.publication-dialog.over { border-color: var(--accent); border-style: dashed; }
+.publication-dialog h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.publication-dialog .identifier { display: flex; gap: 8px; }
+.publication-dialog input {
+  flex: 1; min-width: 0; box-sizing: border-box; background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 4px 7px;
+  color: var(--ink); font: 12.5px/1.4 Consolas, monospace;
+}
+.publication-dialog button { padding: 5px 12px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
+.publication-dialog button:disabled { cursor: default; opacity: 0.5; }
+.publication-dialog button:focus-visible, .publication-dialog input:focus { outline: 2px solid var(--accent); }
+.publication-dialog .pdf { margin: 8px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.publication-dialog .status { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.publication-dialog .status.error { color: var(--warn); }
+.publication-dialog .status.found { color: var(--ink); }
+.publication-dialog .choices { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+.publication-dialog .cancel { background: none; border-color: transparent; color: var(--muted); }
 .popup {
   position: absolute; z-index: 28; width: 320px; box-sizing: border-box; padding: 10px 12px 12px; user-select: text;
   background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); border-radius: 10px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);

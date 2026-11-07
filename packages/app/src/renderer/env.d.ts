@@ -69,8 +69,9 @@ export interface CirrusBridge {
    * its BibTeX entry, and for an arXiv article its PDF, already in the store (`pdf`), or why not (`pdfMessage`, in
    * French: the publication comes without it). Else `message`, in French (« Identifiant non reconnu. », « Publication
    * introuvable. », « Pas de connexion. », « Réponse inattendue du serveur de DOI. »…), and nothing was stored.
+   * `{ pdf: false }`: an arXiv article's PDF is not downloaded (a PDF dropped in the import dialog, which the node keeps).
    */
-  publicationFetch(text: string): Promise<PublicationResult>;
+  publicationFetch(text: string, options?: { pdf?: boolean }): Promise<PublicationResult>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

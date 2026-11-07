@@ -2,3 +2,5 @@
 packages/fixtures/assets/** -text
 # The publications' recorded answers (plan 4c, task 4): replayed as the servers sent them.
 packages/app/tests/data/publications/** -text
+# A real .bib of the parser's tests (plan 4c, task 5): its lines as written.
+packages/core/tests/data/** -text

@@ -1,5 +1,5 @@
 {
-  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed).",
+  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). Task 5: shannon-1948.* are not recorded but composed on the model of Crossref's answers above (no network in the tasks), for an import by DOI that is no duplicate of the test base.",
   "responses": [
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
@@ -10,6 +10,10 @@
     { "url": "https://doi.org/10.1007/978-0-387-49820-1", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1007%2F978-0-387-49820-1/transform" } },
     { "url": "https://api.crossref.org/v1/works/10.1007%2F978-0-387-49820-1/transform", "accept": "application/vnd.citationstyles.csl+json", "status": 200, "headers": { "content-type": "application/vnd.citationstyles.csl+json" }, "body": "li-vitanyi-2008.csl.json" },
     { "url": "https://api.crossref.org/v1/works/10.1007%2F978-0-387-49820-1/transform", "accept": "application/x-bibtex", "status": 200, "headers": { "content-type": "application/x-bibtex" }, "body": "li-vitanyi-2008.bib" },
+    { "url": "https://doi.org/10.1002/j.1538-7305.1948.tb01338.x", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform" } },
+    { "url": "https://doi.org/10.1002/j.1538-7305.1948.tb01338.x", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform" } },
+    { "url": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform", "accept": "application/vnd.citationstyles.csl+json", "status": 200, "headers": { "content-type": "application/vnd.citationstyles.csl+json" }, "body": "shannon-1948.csl.json" },
+    { "url": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform", "accept": "application/x-bibtex", "status": 200, "headers": { "content-type": "application/x-bibtex" }, "body": "shannon-1948.bib" },
     { "url": "https://doi.org/10.1007/cirrus-introuvable", "status": 404, "headers": { "content-type": "text/html;charset=utf-8" }, "body": "doi-introuvable.html" }
   ]
 }

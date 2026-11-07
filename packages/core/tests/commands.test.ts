@@ -31,6 +31,16 @@ test('créer un nœud le place dans le plan', () => {
   expect(s.placements.has(placementKey(p1, n))).toBe(true);
 });
 
+test('créer un nœud avec ses fichiers, déjà au magasin (une publication importée, plan 4c) : une opération ; sa liste est une copie', () => {
+  const { s, p1 } = world();
+  const files = [{ name: 'li2008.bib', hash: 'a'.repeat(64), size: 42 }];
+  const a = run(s, createNode(s, { plan: p1, title: 'Livre', x: 0, y: 0, k: 0, files }));
+  expect(a.ops.filter((o) => o.t === 'node')).toHaveLength(1);
+  const n = s.nodes.get(created(a, 'node'))!;
+  expect(n.files).toEqual(files);
+  expect(n.files).not.toBe(files);
+});
+
 test('retirer un nœud de son dernier plan le met à la corbeille, restaurable (Review Focus 5)', () => {
   const { s, p1, mk } = world();
   const n = mk('MDL');
