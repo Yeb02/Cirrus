@@ -1,0 +1,75 @@
+import { IDENTIFIER_LINKS } from './sources.ts';
+
+/**
+ * A publication's identifier as the user gives it (plan 4c, D5): a DOI, or an arXiv identifier, which keeps its version
+ * if it has one. Pure: the interface may read it too (task 5).
+ */
+export type PublicationId = { doi: string } | { arxiv: string };
+
+/** A longer text is no identifier (the IPC's bound too): no pattern runs on it. */
+export const MAX_IDENTIFIER_CHARS = 1000;
+
+/** arXiv's identifiers since 2007 (4 then 5 digits after the dot), then before: an archive, its class, 7 digits. */
+const NEW_ARXIV = /^\d{4}\.\d{4,5}(?:v\d+)?$/;
+const OLD_ARXIV = /^[a-z]+(?:-[a-z]+)*(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?$/;
+/** A DOI: « 10. », its registrant's digits, « / », a suffix without blanks (checked further in doiOf). */
+const DOI = /^10\.\d{4,9}\/\S+$/;
+/** The DOIs arXiv gives its articles (DataCite's prefix 10.48550): `arXiv.<identifier without version>`. */
+const ARXIV_DOI = /^10\.48550\/arxiv\.(.+)$/i;
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/** The DOI arXiv gives the article `id` (D5): its identifier without version. */
+export function arxivDoi(id: string): string {
+  return `10.48550/arXiv.${id.replace(/v\d+$/, '')}`;
+}
+
+function arxivOf(s: string): PublicationId | null {
+  const id = s.trim();
+  return NEW_ARXIV.test(id) || OLD_ARXIV.test(id) ? { arxiv: id } : null;
+}
+
+/**
+ * A DOI, refused with a control character or a segment « . » or « .. » (which an address would resolve away). arXiv's
+ * own DOI is its article: its PDF comes too (D6).
+ */
+function doiOf(s: string): PublicationId | null {
+  const doi = s.trim();
+  if (!DOI.test(doi) || CONTROL.test(doi) || doi.split('/').some((seg) => seg === '.' || seg === '..')) return null;
+  const ax = ARXIV_DOI.exec(doi);
+  return (ax && arxivOf(ax[1])) || { doi };
+}
+
+/** A link to a DOI's resolver or to an arXiv page (abs, pdf): its identifier; any other address, none. */
+function fromLink(text: string): PublicationId | null {
+  let url: URL;
+  let path: string;
+  try {
+    url = new URL(text);
+    path = decodeURIComponent(url.pathname);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (IDENTIFIER_LINKS.doi.includes(url.hostname)) return doiOf(path.slice(1));
+  if (IDENTIFIER_LINKS.arxiv.includes(url.hostname)) {
+    const m = /^\/(?:abs|pdf)\/(.+?)(?:\.pdf)?\/?$/.exec(path);
+    return m ? arxivOf(m[1]) : null;
+  }
+  return null;
+}
+
+/**
+ * The identifier `text` gives (plan 4c, task 4), or null: a DOI, bare or after « doi: », or as a link to its resolver;
+ * an arXiv identifier, new (`2401.01234v2`) or old (`hep-th/9901001`), bare or after « arXiv: », or as a link to its
+ * abstract or its PDF. Blanks around are ignored, the case of the prefixes too.
+ */
+export function parseIdentifier(text: string): PublicationId | null {
+  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return null;
+  const t = text.trim();
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return fromLink(t);
+  const ax = /^arxiv:(.*)$/is.exec(t);
+  if (ax) return arxivOf(ax[1]);
+  const doi = /^doi:(.*)$/is.exec(t);
+  if (doi) return doiOf(doi[1]);
+  return arxivOf(t) ?? doiOf(t);
+}

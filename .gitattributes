@@ -1,2 +1,4 @@
 # Fixture files are hashed and the PDF has byte offsets: keep them byte for byte on every checkout.
 packages/fixtures/assets/** -text
+# The publications' recorded answers (plan 4c, task 4): replayed as the servers sent them.
+packages/app/tests/data/publications/** -text

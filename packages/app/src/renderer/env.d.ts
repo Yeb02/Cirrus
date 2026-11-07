@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@cirrus/core';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
+import type { PublicationResult } from '../main/publications/fetch.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -62,6 +63,14 @@ export interface CirrusBridge {
    * went is told by onLatexStatus (`ready`, or `failed` with its reason). A call while one runs does nothing more.
    */
   latexInstall(): Promise<void>;
+  /**
+   * Imports a publication (plan 4c, D5, D6), the user having asked: the only call that reaches the network for it.
+   * `text`: a DOI, an arXiv identifier, or a link to either (parseIdentifier, which `id` gives back). Its CSL-JSON and
+   * its BibTeX entry, and for an arXiv article its PDF, already in the store (`pdf`), or why not (`pdfMessage`, in
+   * French: the publication comes without it). Else `message`, in French (« Identifiant non reconnu. », « Publication
+   * introuvable. », « Pas de connexion. », « Réponse inattendue du serveur de DOI. »…), and nothing was stored.
+   */
+  publicationFetch(text: string): Promise<PublicationResult>;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

@@ -31,14 +31,15 @@ test('TINYTEX_RELEASE : l’asset TinyTeX-1 Windows épinglé de la version v202
   expect(BASE_PACKAGES).toEqual(['pgf', 'xcolor', 'hyperref', 'amsmath', 'amsfonts', 'amscls', 'lm', 'graphics']);
 });
 
-test('LATEX_SOURCES : l’installateur de TinyTeX et le dépôt des paquets, en un seul endroit ; aucun autre module du principal ne nomme d’adresse ni de dépôt', () => {
+test('LATEX_SOURCES : l’installateur de TinyTeX et le dépôt des paquets, en un seul endroit ; aucun module du principal hors des sources (LaTeX, publications) ne nomme d’adresse ni de dépôt', () => {
   expect(LATEX_SOURCES).toEqual({ tinytex: TINYTEX_RELEASE, repository: 'ctan' });
   expect(TINYTEX_RELEASE).toBe(LATEX_SOURCES.tinytex);
   const main = join(repo, 'packages', 'app', 'src', 'main');
   const files = (readdirSync(main, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => join(main, f));
   expect(files.length).toBeGreaterThan(5);
   for (const f of files) {
-    if (f.endsWith(join('latex', 'sources.ts'))) continue;
+    // PUBLICATION_SOURCES (plan 4c, D5) has its own test: publications.test.ts.
+    if (f.endsWith(join('latex', 'sources.ts')) || f.endsWith(join('publications', 'sources.ts'))) continue;
     const text = readFileSync(f, 'utf8');
     expect(text, relative(main, f)).not.toMatch(/['"`]https?:\/\//);
     expect(text, relative(main, f)).not.toMatch(/['"`]ctan['"`]/);

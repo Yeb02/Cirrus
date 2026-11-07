@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { type Action, type CompileRequest, type FileRef, type Id, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
-import type { LocalStore } from '@cirrus/store';
+import { type LocalStore, storeBytes } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron';
 import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
@@ -16,6 +16,8 @@ import { LatexSetup } from './latex/setup.ts';
 import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
 import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
+import { type FetchFn, importPublication, requestFetch } from './publications/fetch.ts';
+import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings, writeSettings } from './settings.ts';
 
 /**
@@ -23,6 +25,7 @@ import { readSettings, writeSettings } from './settings.ts';
  * interface over IPC; it keeps no copy of the state (plan 3c, decision 3), the interface does. It serves the nodes' files
  * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). It compiles LaTeX, the PDFs
  * served by the same protocol, and installs TinyTeX when the user asks, then the packages it misses (latex/, plan 4b).
+ * It fetches a publication's metadata, and an arXiv article's PDF, when the user imports one (publications/, plan 4c).
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit.
  * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
@@ -296,6 +299,31 @@ ipcMain.on('cirrus:latex:warm', (_e, preamble: unknown) => { if (typeof preamble
 ipcMain.handle('cirrus:latex:status:get', () => latexSetup?.state() ?? { state: 'absent' });
 // TinyTeX's installation (D1, task 7): only this call, which the user's « Installer » makes, downloads it.
 ipcMain.handle('cirrus:latex:install', () => latexSetup?.install());
+
+/**
+ * A publication's network (plan 4c, D5, D6): Electron's stack (its proxy, its certificates), by net.request, whose
+ * redirects fetch.ts follows by hand. On a test base out of the user's way (CIRRUS_DATA, in capture mode or with
+ * CIRRUS_BACKGROUND=1), CIRRUS_PUBLICATIONS_REPLAY names recorded answers instead (replay.ts): the interface's scenarios
+ * and the captures import without the network. Never on the user's own base, where the variable is ignored.
+ */
+const publicationsReplay = replayDirOf(process.env, capture !== undefined);
+if (process.env.CIRRUS_PUBLICATIONS_REPLAY && !publicationsReplay) {
+  console.warn('CIRRUS_PUBLICATIONS_REPLAY ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
+}
+const publicationsFetch: FetchFn = publicationsReplay ? replayFetch(publicationsReplay) : requestFetch((options) => net.request(options));
+// A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
+// network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
+// string parseIdentifier reads); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within
+// maxImportMb, stored before any action refers to it.
+ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown) => {
+  if (!store) return { ok: false, message: 'La base n’est pas ouverte.' };
+  const p = currentParams();
+  return importPublication(text, {
+    fetch: publicationsFetch, store: (name, bytes) => storeBytes(dir, name, bytes),
+    maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs,
+    log: (m) => console.warn(m),
+  });
+});
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying

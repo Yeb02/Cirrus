@@ -177,6 +177,14 @@ export interface RenderParams {
   annotationTitleChars: number;
   /** The reader's margin, which lists the PDF's annotations (D4), this wide when it is open. */
   annotationMarginPx: number;
+  // Publications (plan 4c, D5, D6): what the main process takes from the network, at the user's request only
+  /** A publication's metadata (its CSL-JSON, its BibTeX) larger than this is refused, read no further; */
+  publicationMaxKb: number;
+  /**
+   * a server is waited for this long: a metadata request's whole exchange (its redirects and its body), and at most this
+   * long without data during an arXiv PDF's download, whose size is maxImportMb's.
+   */
+  publicationTimeoutMs: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -362,6 +370,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   annotationFlashMs: 1200,
   annotationTitleChars: ANNOTATION_TITLE_CHARS,
   annotationMarginPx: 240,
+  publicationMaxKb: 2048,
+  publicationTimeoutMs: 20_000,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -556,6 +566,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('annotationFlashMs', 'Durée du clignotement d’un passage ouvert depuis la liste (ms)', A, 'Annotations', 0, 10_000, 50),
   num('annotationTitleChars', 'Caractères du passage repris dans le titre d’une annotation', A, 'Annotations', 1, 500, 1),
   num('annotationMarginPx', 'Largeur de la marge des annotations du lecteur PDF (px)', A, 'Annotations', 120, 800, 10),
+  num('publicationMaxKb', 'Taille maximale des métadonnées d’une publication reçues du réseau (Ko)', A, 'Publications', 16, 65_536, 16),
+  num('publicationTimeoutMs', 'Attente maximale d’un serveur de publications (ms)', A, 'Publications', 1000, 600_000, 500),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
@@ -618,7 +630,7 @@ export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Apparence', groups: ['Couleurs', 'Fond', 'Nœuds', 'Groupes', 'Connexions', 'Flèches et marqueurs', 'Amorces', 'Fantômes et signes', 'Sélection et dépôt'] },
   { title: 'Navigation', groups: ['Échelles', 'Niveaux de détail', 'Zoom et déplacement', 'Pointeur'] },
   { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications'] },
-  { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations'] },
+  { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
   { title: 'Performances et base', groups: ['Rendu', 'Base'] },
 ];

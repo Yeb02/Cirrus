@@ -579,6 +579,44 @@ const SCENARIOS = [
       if (!(await page.until(`!!document.querySelector('.file-preview .pdf-page')`, 15000))) throw new Error('Ctrl+Z ne rend pas son lecteur au PDF');
     },
   },
+  {
+    // Plan 4c, task 4: a publication's import through the bridge, on the recorded answers (CIRRUS_PUBLICATIONS_REPLAY),
+    // never the network: the arXiv article's metadata, its PDF in the test base's store; the refusals in French, whatever
+    // the page sends; nothing created (task 5 builds the nodes).
+    name: 'importer une publication par le pont, réponses rejouées',
+    env: { CIRRUS_PUBLICATIONS_REPLAY: join(appDir, 'tests', 'data', 'publications') },
+    async run(page, base, data) {
+      const nodes = () => base('SELECT count(*) AS n FROM nodes')[0].n;
+      const before = nodes();
+      const ask = (expr) => page.evaluate(`window.cirrus.publicationFetch(${expr})`);
+      const r = await ask(JSON.stringify('arXiv:1706.03762'));
+      if (!r?.ok) throw new Error(`l’import d’arXiv a échoué : ${JSON.stringify(r)}`);
+      if (r.id?.arxiv !== '1706.03762' || r.csl?.title !== 'Attention Is All You Need' || !r.bibtex?.startsWith('@misc{')) {
+        throw new Error('l’identifiant, le CSL ou le BibTeX ne sont pas ceux enregistrés');
+      }
+      const pdf = readFileSync(join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf'));
+      if (r.pdf?.name !== '1706.03762.pdf' || r.pdf.size !== pdf.length) throw new Error(`le PDF rendu n’est pas celui enregistré : ${JSON.stringify(r.pdf)}`);
+      const blob = join(data, 'files', r.pdf.hash.slice(0, 2), r.pdf.hash);
+      if (!existsSync(blob) || !readFileSync(blob).equals(pdf)) throw new Error('le PDF n’est pas au magasin de la base de test');
+      const book = await ask(JSON.stringify('https://doi.org/10.1007/978-0-387-49820-1'));
+      if (!book?.ok || book.csl?.type !== 'book' || book.pdf !== undefined) throw new Error(`le livre de Crossref n’est pas importé sans PDF : ${JSON.stringify(book).slice(0, 200)}`);
+      const refusals = [
+        ['bonjour', 'Identifiant non reconnu.'], ['10.1007/cirrus-introuvable', 'Publication introuvable.'],
+        // Not recorded: as without a network, never the real one.
+        ['10.1234/jamais-enregistre', 'Pas de connexion.'],
+      ];
+      for (const [text, message] of refusals) {
+        const x = await ask(JSON.stringify(text));
+        if (x?.ok !== false || x.message !== message) throw new Error(`« ${text} » : ${JSON.stringify(x)} au lieu de « ${message} »`);
+      }
+      // Whatever the page sends: a number, an object, a text too long.
+      for (const expr of ['42', '{ doi: "10.1234/essai" }', `'10.1234/' + 'x'.repeat(5000)`]) {
+        const x = await ask(expr);
+        if (x?.message !== 'Identifiant non reconnu.') throw new Error(`${expr} : ${JSON.stringify(x)}`);
+      }
+      if (nodes() !== before) throw new Error('l’import a créé des nœuds');
+    },
+  },
 ];
 
 // `node scripts/interface.mjs <texte>`: only the scenarios whose name holds that text.

@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('cirrus', {
   latexWarm: (preamble: string) => ipcRenderer.send('cirrus:latex:warm', preamble),
   latexStatus: () => ipcRenderer.invoke('cirrus:latex:status:get'),
   latexInstall: () => ipcRenderer.invoke('cirrus:latex:install'),
+  publicationFetch: (text: string) => ipcRenderer.invoke('cirrus:publications:fetch', text),
   onLatexStatus: (fn: (s: unknown) => void) => {
     const listener = (_e: unknown, s: unknown) => fn(s);
     ipcRenderer.on('cirrus:latex:status', listener);

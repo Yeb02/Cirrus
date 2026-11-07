@@ -449,3 +449,218 @@ Fixées par le contrôleur avant la tâche :
 ### Notes
 
 - **Pour les tâches 4 à 6** : `dropRoute(zone, node, what)` distingue déjà ce que porte un glisser (`carried`). Un `.bib` ou un PDF déposé sur le fond y trouvera sa route à côté de `notice` et de `place`, sans toucher celle d'un nœud.
+
+## Tâche 4 : principal — sources des publications, métadonnées, PDF d'arXiv
+
+### Fait
+
+- **`main/publications/sources.ts`** : `PUBLICATION_SOURCES`, le seul module qui nomme un hôte ou une adresse de publication, comme `LATEX_SOURCES`. Il donne :
+  - `hosts` : `doi.org`, `api.crossref.org`, `data.crossref.org`, `api.datacite.org`, `data.datacite.org`, `data.crosscite.org` (Ruling plus bas) et `arxiv.org` ;
+  - `doiUrl(doi)` : `https://doi.org/<DOI>`, chaque caractère qu'une adresse lirait autrement échappé, le « / » gardé ;
+  - `arxivPdfUrl(id)` : `https://arxiv.org/pdf/<id>` ;
+  - à part, `IDENTIFIER_LINKS` : les hôtes des liens qu'un utilisateur colle (`doi.org`, `dx.doi.org`, `www.doi.org` ; `arxiv.org`, `www.arxiv.org`, `export.arxiv.org`). On les lit comme des identifiants, sans jamais les demander. Ce ne sont pas des sources : les plans 5 et 9 ne les changeront pas.
+- **`identifier.ts`** (pur) : `parseIdentifier(text)` reconnaît :
+  - un DOI nu, après « doi: », ou en lien ;
+  - un identifiant arXiv nouveau (`2401.01234v2`) ou ancien (`hep-th/9901001`, `math.GT/0309136`), nu, après « arXiv: », ou en lien `abs/` ou `pdf/` (avec ou sans `.pdf`) ;
+  - le DOI qu'arXiv donne (`10.48550/arXiv.<id>`), lu comme l'identifiant arXiv ;
+  - il refuse un texte de plus de `MAX_IDENTIFIER_CHARS` (1000), un DOI avec un caractère de contrôle, un blanc ou un segment « . » ou « .. », un lien vers un autre hôte ou dans un autre schéma.
+  - `arxivDoi(id)` donne `10.48550/arXiv.<id sans version>`.
+- **`csl.ts`** (pur) : `cslToFields(csl)` lit le titre, les auteurs « Prénom Nom » et l'année. Il ne lit que les champs propres de l'objet. Un champ d'un type inattendu est ignoré, et rien n'est évalué (détail dans les Rulings).
+- **`fetch.ts`** :
+  - `fetchPublication(id, deps)` demande à la fois le CSL-JSON et le BibTeX au résolveur de DOI. Pour un article arXiv, il télécharge ensuite le PDF, qui va au magasin par `deps.store` (`storeBytes`) ;
+  - `importPublication(text, deps)` est l'entrée de l'IPC : un texte que `parseIdentifier` lit, sinon « Identifiant non reconnu. », sans aucune demande ;
+  - `requestFetch(net.request)` est la `fetch` de production (Ruling plus bas).
+  - Le résultat : `{ ok: true, id, csl, bibtex, pdf?, pdfMessage? }`, ou `{ ok: false, message }`.
+- **`replay.ts`** : `replayFetch(dir)` rejoue des réponses enregistrées. `replayDirOf(env, capture)` dit quand l'app le prend (contrat plus bas).
+- **IPC** `cirrus:publications:fetch` (`main/index.ts`) ; `publicationFetch(text)` au préchargement et dans `env.d.ts`. Le gestionnaire refuse tant que la base n'est pas ouverte. Il lit les réglages au moment de l'appel.
+- **Réglages** (`params.ts`), groupe « Publications » de la rubrique « Fichiers », juste après « Annotations » : `publicationMaxKb` (2048) et `publicationTimeoutMs` (20 000), avancés. Le PDF a pour plafond `maxImportMb`.
+- **Données de test** : `app/tests/data/publications/`, avec `index.json` et les corps enregistrés. `.gitattributes` les garde octet pour octet (`-text`, `core.autocrlf` est actif).
+- **Test des adresses** : celui de `tinytex.test.ts` exempte aussi `publications/sources.ts`. Celui de `publications.test.ts` vérifie qu'aucun autre fichier de `app/src` (principal, préchargement, interface), commentaires compris, ne nomme un de ces hôtes.
+
+### Le chemin d'une demande (Review Focus 1 et 5)
+
+- Chaque demande part en GET, avec son `Accept`, et `redirect: 'manual'`.
+- Avant chaque demande, et donc à chaque redirection, l'adresse est vérifiée :
+  - HTTPS ;
+  - le port par défaut ;
+  - ni nom ni mot de passe ;
+  - le nom d'hôte exactement dans `hosts`, tel que l'écrit l'analyseur d'URL : `doi.org.evil.example`, `doi.org@evil.example` ou un port 8443 sont refusés.
+- Une redirection (301, 302, 303, 307 ou 308) se résout contre l'adresse qui la donne. On en suit 5 au plus. Une cible refusée n'est jamais demandée.
+- Un corps se lit morceau par morceau, et la lecture s'arrête au premier octet au-delà du plafond. Une longueur déclarée trop grande est refusée sans lecture. Une bombe gzip s'arrête de même : le plafond compte les octets décodés.
+- Le délai court aussi contre une `fetch` qui ignore son signal (une course).
+- La demande est abandonnée dans tous les cas, une fois la réponse lue ou refusée.
+- Une réponse se lit comme des données : du texte UTF-8 (un octet invalide devient U+FFFD), puis `JSON.parse`. Rien n'est évalué.
+
+### Réseau : les deux vérifications manuelles (2026-11-07)
+
+Un script jetable, qu'Electron 45 lance sans fenêtre (son Node 24.22 lit le TypeScript tel quel), appelle le chemin de production : `importPublication`, puis `requestFetch` sur `net.request`. Il enregistre chaque réponse.
+
+- **Première vérification**, trois identifiants :
+
+  | Demande | Accept | Statut | Réponse |
+  |---|---|---|---|
+  | `https://doi.org/10.48550/arXiv.1706.03762` | CSL, BibTeX | 302 | `Location: https://data.crosscite.org/10.48550%2FarXiv.1706.03762` (refusée : hôte hors de la liste) |
+  | `https://doi.org/10.1007/978-0-387-49820-1` | CSL, BibTeX | 302 | `Location: https://api.crossref.org/v1/works/10.1007%2F978-0-387-49820-1/transform` |
+  | `https://api.crossref.org/v1/works/10.1007%2F978-0-387-49820-1/transform` | CSL | 200 | `application/vnd.citationstyles.csl+json`, 2 436 octets (984 en gzip) |
+  | idem | BibTeX | 200 | `application/x-bibtex`, 331 octets |
+  | `https://doi.org/10.1007/cirrus-introuvable` | CSL, BibTeX | 404 | `text/html;charset=utf-8`, 10 616 octets (« Error: DOI Not Found ») |
+
+  - L'arXiv est refusé par le garde, comme il se doit, en 318 ms : « Redirection refusée : « doi.org » renvoie vers « data.crosscite.org », qui n’est pas un serveur permis. ». Ni `data.crosscite.org` ni le PDF n'ont reçu de demande. Arrêt, et décision du contrôleur (Ruling plus bas).
+  - Le livre de Crossref est importé en 420 ms : type `book`, « An Introduction to Kolmogorov Complexity and Its Applications », Ming Li et Paul Vitányi, 2008, et `@book{Li_2008, …}`.
+  - Le DOI inconnu donne « Publication introuvable. » en 127 ms.
+- **Seconde vérification**, le chemin arXiv seul, après l'ajout de `data.crosscite.org` :
+
+  | Demande | Accept | Statut | Réponse |
+  |---|---|---|---|
+  | `https://doi.org/10.48550/arXiv.1706.03762` | CSL, BibTeX | 302 | `Location: https://data.crosscite.org/10.48550%2FarXiv.1706.03762` |
+  | `https://data.crosscite.org/10.48550%2FarXiv.1706.03762` | CSL | 200 | `application/vnd.citationstyles.csl+json; charset=utf-8`, 2 240 octets |
+  | idem | BibTeX | 200 | `application/x-bibtex; charset=utf-8`, 589 octets |
+  | `https://arxiv.org/pdf/1706.03762` | `application/pdf` | 200 | `application/pdf`, 2 215 244 octets (égal à son `Content-Length`), `%PDF-1.5`, `filename="1706.03762v7.pdf"`, **sans redirection** |
+
+  - L'import est complet en 931 ms : type `article`, « Attention Is All You Need », huit auteurs de « Ashish Vaswani » à « Illia Polosukhin », 2017, `@misc{…}`, et le PDF `1706.03762.pdf` (sha256 `bdfaa68d…df697`).
+- **Hôtes atteints** : `doi.org`, `api.crossref.org`, `data.crosscite.org` et `arxiv.org`. **Jamais atteints** : `data.crossref.org`, `api.datacite.org` et `data.datacite.org`. Ils restent dans la liste de D5, car Crossref et DataCite peuvent y renvoyer.
+- **Données gardées pour les tests**, telles que reçues : les deux CSL, les deux BibTeX et la page 404. Le vrai PDF (2,2 Mo) n'est pas commité. Il est remplacé par `arxiv-1706.03762.pdf`, un PDF valide d'une page et de 842 octets, qui porte le titre et « arXiv:1706.03762 ».
+
+### Contrat du rejeu (pour les tâches 5 et 7)
+
+- **Activation** : `CIRRUS_PUBLICATIONS_REPLAY=<dossier>`, prise seulement avec `CIRRUS_DATA` et en mode capture (`CIRRUS_CAPTURE`) ou avec `CIRRUS_BACKGROUND=1`, comme dans `interface.mjs` (`replayDirOf`). Sur la base de l'utilisateur, la variable est ignorée, avec un avertissement dans la console, et le réseau sert.
+- **`<dossier>/index.json`** contient `{ "responses": [{ "url", "accept"?, "status", "headers"?, "body"? }] }`.
+  - Une demande prend la première réponse de son adresse dont l'`accept` est le sien, ou qui n'en a pas.
+  - `body` est un nom de fichier du dossier, jamais un chemin.
+  - On garde `content-type`, et `location` pour une redirection.
+  - Une demande sans réponse échoue comme hors ligne (`TypeError`), d'où « Pas de connexion. ». Le rejeu ne passe jamais au réseau.
+  - L'index se relit à chaque demande, si bien qu'un scénario peut le changer entre deux imports.
+- **Le dossier enregistré** est `packages/app/tests/data/publications`. Il répond à :
+  - `arXiv:1706.03762`, ou tout texte qui le désigne : son CSL, son BibTeX et le PDF de remplacement ;
+  - `10.1007/978-0-387-49820-1` : le livre de Crossref, sans PDF ;
+  - `10.1007/cirrus-introuvable` : « Publication introuvable. » ;
+  - tout autre identifiant reconnu : « Pas de connexion. ».
+
+### Décisions
+
+Fixées par le contrôleur avant la tâche :
+- les redirections se suivent à la main, chacune vérifiée, en HTTPS seulement ;
+- chaque corps est lu sous son plafond, et analysé comme des données ;
+- du HTML au lieu de JSON donne « Réponse inattendue du serveur de DOI. » ;
+- les réglages `publicationMaxKb` et `publicationTimeoutMs` vont dans le groupe « Publications », après « Annotations » ;
+- l'argument de l'IPC est un texte borné ;
+- le réseau ne sert qu'à la demande ;
+- les tests et les vérifications rejouent, et le rejeu ne vaut que sur une base de test ;
+- une seule vérification réseau, consignée ici.
+
+- Ruling (contrôleur, option A) : **`data.crosscite.org` entre dans `PUBLICATION_SOURCES.hosts`**, et `data.datacite.org` y reste.
+  - Constat : `doi.org` répond 302 vers `https://data.crosscite.org/10.48550%2FarXiv.1706.03762` au DOI d'arXiv `10.48550/arXiv.1706.03762`, en CSL comme en BibTeX (première vérification). `data.crosscite.org` est le service de négociation de contenu des DOI de DataCite, qui a succédé à celui de `data.datacite.org`. Celui-ci y renvoie et reste dans la liste de D5.
+  - Options :
+    - A, ajouter l'hôte (choix) ;
+    - B, demander directement `api.datacite.org` pour un identifiant arXiv, sans `doi.org` ;
+    - C, les deux.
+  - Pourquoi A plutôt que B : un seul chemin pour tout DOI de DataCite (arXiv, Zenodo…), comme le veut D5. Avec B, les autres DOI de DataCite resteraient refusés.
+  - Vérifié : `data.crosscite.org` répond lui-même, en 200, sans autre redirection (seconde vérification).
+  - Coût si faux : un hôte dans la liste.
+- Ruling : **la `fetch` de production est `requestFetch`, sur `net.request` d'Electron, et non `net.fetch`.**
+  - Contre un serveur local, `net.fetch` d'Electron 45 rejette en mode `manual` (« Redirect was cancelled »). En mode `follow`, il suit seul et cache où il est allé (`url` vide, `redirected` faux). Il ne permet donc aucune vérification par saut.
+  - `net.request` en `redirect: 'manual'` émet `redirect` (statut, adresse absolue) avant de suivre. `requestFetch` en fait une réponse 3xx avec `Location`, et arrête la demande. `fetch.ts` vérifie la cible, et la demande ou non.
+  - Il passe aussi `credentials: 'omit'`, ni cookie envoyé ni gardé, vérifié contre le serveur local, et `cache: 'no-store'`.
+  - Un écouteur qui lèverait serait une exception non rattrapée du principal : un statut hors bornes ou un en-tête refusé rejette la promesse à la place.
+  - Options :
+    - `net.fetch` en `follow`, sans contrôle des sauts ;
+    - le `fetch` global de Node (undici), qui rend bien les 3xx, mais sans le mandataire ni les certificats du système ;
+    - `net.request` (choix).
+  - Coût si faux : une soixantaine de lignes.
+- Ruling : **`parseIdentifier` vit dans `identifier.ts`, pur, et `cslToFields` dans `csl.ts`, pur.** L'interface (tâche 5) peut les importer, comme elle importe `LATEX_SOURCES`.
+  - Les hôtes des liens collés sont dans `sources.ts` (`IDENTIFIER_LINKS`), pour que le test des hôtes reste strict.
+  - Sont aussi reconnus, au-delà du brief :
+    - un identifiant arXiv nouveau, nu (`2401.01234`) ;
+    - le DOI d'arXiv, lu comme l'identifiant arXiv, pour que son PDF vienne aussi.
+  - L'identifiant arXiv garde sa version ; `arxivDoi` la retire, car le DOI d'arXiv n'en a pas, et le PDF prend la version demandée.
+  - Coût si faux : nul.
+- Ruling : **le résultat porte aussi `id`** (l'identifiant lu, pour les tags `doi` ou `arxiv` de D7) **et `pdfMessage`.**
+  - Le PDF d'arXiv qui ne vient pas laisse venir la publication, et `pdfMessage` dit pourquoi. C'est l'import « dégradé » du Review Focus 1. Les causes : pas `%PDF`, plus de `maxImportMb`, introuvable, erreur HTTP, redirection refusée, délai, plus de connexion, ou enregistrement impossible.
+  - Options :
+    - refuser tout l'import ;
+    - taire la raison ;
+    - la dire (choix).
+  - Coût si faux : la tâche 5 montre ou non `pdfMessage`.
+- Ruling : **le CSL et le BibTeX sont tous deux requis.** Ils sont demandés en même temps, et le premier qui échoue arrête l'autre : un 404 rapide n'attend pas le délai de l'autre demande. Seule sa raison est dite.
+  - Coût si faux : un BibTeX facultatif, et la tâche 5 fabrique alors la clé (D7 le prévoit).
+- Ruling : **le délai** (`publicationTimeoutMs`) **couvre tout l'échange d'une demande de métadonnées** : redirections et corps. Pour le PDF, c'est l'attente maximale de données, réarmée à chaque morceau, comme `latexDownloadStallMs` : un gros PDF sur une connexion lente va au bout, et un serveur qui distille ses métadonnées est coupé. Un seul réglage pour les deux.
+  - Coût si faux : un second réglage.
+- Ruling : **les valeurs des réglages.**
+  - `publicationMaxKb` vaut 2048 Ko, de 16 à 65 536, au pas de 16.
+    - Mesuré : 2,2 et 2,4 Ko de CSL, 0,3 et 0,6 Ko de BibTeX, 10 Ko pour la page 404.
+    - Le CSL de Crossref liste les références, et les articles d'une grande collaboration ont des milliers d'auteurs avec leurs affiliations : quelques centaines de Ko.
+    - 2 Mo laissent cette marge, et la mémoire reste bornée.
+  - `publicationTimeoutMs` vaut 20 000 ms, de 1 000 à 600 000, au pas de 500.
+    - Mesuré : de 0,1 à 0,5 s par échange, et 0,5 s pour le PDF de 2,2 Mo.
+    - L'API de Crossref met parfois plusieurs secondes.
+    - 20 s, c'est 40 fois l'échange le plus lent mesuré, sous les 60 s de `latexDownloadStallMs`.
+  - Coût si faux : deux valeurs.
+- Ruling : **les types attendus.**
+  - Le CSL : `application/json` ou `application/<…>+json`, en minuscules, sans paramètres ; puis un objet avec un titre (`cslToFields`).
+  - Le BibTeX : `application/x-bibtex` ou `text/x-bibtex`, et un texte qui commence par « @ » une fois débarrassé de ses blancs. Celui de Crossref commence par une espace.
+  - Ce sont les types reçus des deux serveurs. Sinon : « Réponse inattendue du serveur de DOI. ».
+  - Coût si faux : un type de plus.
+- Ruling : **les messages au-delà des quatre du brief**, en français :
+  - « Le serveur de DOI ne répond pas (délai de 20 s dépassé). » ;
+  - « Réponse trop grosse du serveur de DOI (plus de 2 048 Ko). » ;
+  - « Le serveur de DOI a répondu par une erreur (HTTP 503). » ;
+  - « Redirection refusée : « doi.org » renvoie vers « x », qui n’est pas un serveur permis. » ;
+  - « Redirection refusée : « doi.org » renvoie vers une adresse qui n’est pas en HTTPS. » ;
+  - « Trop de redirections depuis « doi.org ». » ;
+  - les raisons du PDF ;
+  - « L’import de la publication a échoué : erreur inattendue. » pour une erreur de programme, dont la cause va à la console ;
+  - « La base n’est pas ouverte. ».
+  - Un 404 ou un 410 donne « Publication introuvable. ». Une erreur de la pile réseau, quelle qu'elle soit (`fetch failed`, `net::ERR_*`), donne « Pas de connexion. », et sa cause va à la console.
+  - Coût si faux : des textes.
+- Ruling : **5 redirections au plus et 1000 caractères au plus sont des bornes fixes de sécurité**, et non des réglages, comme la liste `RUNNABLE` du plan 4a. Les chaînes de `doi.org` font un saut.
+  - Coût si faux : deux réglages.
+- Ruling : **`cslToFields`.**
+  - Le titre : une chaîne, ou la première d'une liste. Les balises en ligne que Crossref laisse (`<i>`, `<sub>`, `<scp>`, `<mml:…>`) sont retirées. Un « < » qui n'ouvre pas de balise reste. Les entités sont décodées (`&amp;`, `&#233;`, sauf les caractères de contrôle). Les blancs deviennent une espace.
+  - Les auteurs : `literal`, sinon le prénom, les particules, le nom et le suffixe (« Ludwig van Beethoven », « Martin Luther King Jr. »). Les éditeurs ne remplacent pas des auteurs absents : le tag est `auteur`.
+  - L'année : `issued`, puis `published-print`, puis `published-online`. La première `date-part` doit être un entier de 0 à 9999, sinon on prend quatre chiffres de `raw` ou `literal`.
+  - Seuls les champs propres de l'objet comptent : `{"__proto__": {"title": …}}` n'a pas de titre.
+  - Coût si faux : nul.
+- Ruling : **le PDF s'appelle `<identifiant>.pdf`**, le « / » d'un ancien identifiant devenu « _ » (`hep-th_9901001.pdf`). Il est lu en mémoire, sous `maxImportMb`, puis passé à `storeBytes`.
+  - arXiv borne ses dépôts à quelques dizaines de Mo.
+  - Coût si faux : écrire au fil de la lecture, dans un fichier temporaire.
+- Ruling : **aucune adresse électronique ni agent particulier n'est envoyé**. On garde l'agent d'Electron, et pas de « polite pool » de Crossref, qui demanderait une adresse.
+  - Coût si faux : un en-tête.
+- Ruling : **un scénario d'interface vérifie l'IPC dans l'app construite**, sur le rejeu : l'article d'arXiv, son PDF octet pour octet dans le magasin de la base de test, le livre sans PDF, les refus en français et ce qu'une page peut envoyer d'autre qu'un texte. Aucun nœud n'est créé : la tâche 5 construit les nœuds.
+
+### Vérifications
+
+- **Tests écrits d'abord** (rouge, pour la raison attendue) :
+  - `app/tests/publications.test.ts` ne se chargeait pas : `csl.ts` n'existait pas ;
+  - dans `view/tests/params.test.ts`, `publicationMaxKb` valait `undefined` ;
+  - le test de l'arrêt réciproque attendait tout le délai (5 s, délai du test dépassé).
+- **`publications.test.ts`**, 17 tests :
+  - les formes et les refus de `parseIdentifier` ;
+  - les sources, et l'absence de ces hôtes dans le reste de `app/src` ;
+  - l'article d'arXiv et le livre de Crossref rejoués, de bout en bout ;
+  - le DOI inconnu ;
+  - sans réseau, trois erreurs de la pile réseau ;
+  - les redirections refusées (autre hôte, identifiants dans l'adresse, port, hors HTTPS, `file:`, sans `Location`, sans fin) et une chaîne permise, relative, pour chaque statut ;
+  - du HTML ou autre chose au lieu du CSL ou du BibTeX ;
+  - une réponse trop grosse, lue au plus jusqu'à un morceau au-delà de son plafond, et annulée ; une longueur déclarée, non lue ; le plafond exact, pris ;
+  - un serveur muet, ou qui s'arrête en cours de réponse, ou qui distille ses métadonnées ;
+  - le PDF : bon, faux (HTML, espace en tête, tronqué), trop gros, redirigé ailleurs, introuvable, en erreur, sans réseau, magasin en échec, ou lent mais jamais muet ;
+  - l'arrêt réciproque des deux demandes ;
+  - les erreurs HTTP ;
+  - `importPublication` sur ce qui n'est pas un texte ;
+  - `cslToFields` défensif ;
+  - `requestFetch` sur une fausse `ClientRequest` ;
+  - le rejeu et `replayDirOf`.
+- **Suites**, chaque paquet seul, `--maxWorkers=1` : `view` 245 et `app` 380, tous passés. `tsc --noEmit -p .` est sans erreur dans `view` et `app`.
+- **Scénarios d'interface** : 12 sur 12, dont le nouveau, « importer une publication par le pont, réponses rejouées ».
+- **Captures** : une suite neuve de 24 images, sur le code final. Contre `reference-3c` : 11 sur 11 à 0 pixel ; contre `plan4a` : 8 sur 8 ; contre `plan4b` : 5 sur 5. Aucune image n'est refaite.
+
+### Notes
+
+- **Pour la tâche 5** :
+  - **la clé BibTeX de DataCite est une adresse** : `@misc{https://doi.org/10.48550/arxiv.1706.03762, …`. La clé de D7, « celle de l'entrée si elle en a une », donnerait un fichier `<clé>.bib` au nom refusé (`:` et `/`). Il faut la refuser comme clé, par `checkFileName`, et prendre le nom et l'année (`vaswani2017`). Celle de Crossref (`Li_2008`) est un nom permis ;
+  - le BibTeX de DataCite écrit le DOI en majuscules (`10.48550/ARXIV.1706.03762`) : on compare les DOI sans la casse pour les doublons. Un identifiant arXiv se compare sans sa version (`arxivDoi` la retire) ;
+  - la base de test a déjà « An Introduction to Kolmogorov Complexity and Its Applications », avec `clé_bibtex = li2008` et sans tag `doi`. Importer `10.1007/978-0-387-49820-1`, rejoué, n'en est un doublon par aucune règle de D7 : clé `Li_2008`, DOI absent. C'est à trancher, et c'est un scénario tout prêt ;
+  - le CSL traverse l'IPC tel quel, par clonage structuré ;
+  - `cslToFields` et `parseIdentifier` s'importent depuis l'interface ;
+  - une liste d'auteurs peut compter des milliers de noms : le nombre de tags `auteur` est à décider ;
+  - le PDF est au magasin avant toute action, comme un fichier importé : l'action de la tâche 5 n'a plus qu'à le référencer.

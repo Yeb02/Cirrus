@@ -158,7 +158,20 @@ test('annotations : couleur (réglage principal), opacité, clignotement, titre 
   expect(DEFAULT_PARAMS.annotationTitleChars).toBe(80);
   // Never 0 nor negative: a title keeps at least a character of its passage.
   expect(withOverrides({ annotationTitleChars: 0, annotationOpacity: 3 })).toMatchObject({ annotationTitleChars: 1, annotationOpacity: 1 });
-  expect(PARAM_RUBRICS.find((r) => r.title === 'Fichiers')!.groups).toEqual(['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations']);
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Fichiers')!.groups.slice(0, 5)).toEqual(['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations']);
+});
+
+test('publications : plafond des métadonnées et délai des serveurs, réglages avancés du groupe « Publications », après « Annotations » dans « Fichiers » (plan 4c, tâche 4)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['publicationMaxKb', 2048, 'Taille maximale des métadonnées d’une publication reçues du réseau (Ko)', 16, 65_536, 16],
+    ['publicationTimeoutMs', 20_000, 'Attente maximale d’un serveur de publications (ms)', 1000, 600_000, 500],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Publications', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ publicationMaxKb: 0, publicationTimeoutMs: 1e9 })).toMatchObject({ publicationMaxKb: 16, publicationTimeoutMs: 600_000 });
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Fichiers')!.groups).toEqual(['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications']);
 });
 
 test('paquets LaTeX ajoutés : une liste de mots, vide par défaut, réglage principal du groupe « Paquets et installation » (plan 4b, tâche 2)', () => {
