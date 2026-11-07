@@ -11,6 +11,8 @@
     "capture": "electron-vite build && node scripts/capture.mjs",
     "captures": "electron-vite build && node scripts/captures.mjs",
     "compare-captures": "node scripts/compare-captures.mjs",
+    "interface": "electron-vite build && node scripts/interface.mjs",
+    "essai": "electron-vite build && node scripts/essai.mjs",
     "font": "node scripts/build-font.mjs",
     "bench": "electron-vite build && node scripts/bench.mjs"
   },

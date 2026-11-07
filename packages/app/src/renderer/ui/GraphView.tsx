@@ -130,6 +130,12 @@ export function GraphView(props: {
     items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean; preview?: PlanScene; split?: PreviewSplit;
   } | null>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  /**
+   * A press the graph took (no pop-up or field over it stopped its pointerdown), until its mousedown: the graph gives
+   * itself the focus on the pointerdown, so the browser's own focus move on the mousedown that follows is cancelled —
+   * it would take the focus from what the press opened, the title editor of a node put down (spec 12), which closed.
+   */
+  const graphPress = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<{ x: number; y: number; width: number; initial: string; done(title: string | null): void } | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -1346,11 +1352,16 @@ export function GraphView(props: {
       onPointerDown={(ev) => {
         if (ignored(ev)) return;
         root.current!.focus();
+        graphPress.current = true;
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         root.current!.setPointerCapture(ev.pointerId);
         if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && grabHandle(sx, sy)) return;
         feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
+      }}
+      onMouseDown={(ev) => {
+        if (graphPress.current) ev.preventDefault();
+        graphPress.current = false;
       }}
       onPointerMove={(ev) => {
         if (ignored(ev)) return;
