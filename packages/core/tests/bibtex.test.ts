@@ -95,9 +95,13 @@ test('parseBibtex : une entrée abîmée est signalée avec sa ligne, et les sui
   expect(open.entries.map((e) => e.key)).toEqual(['y', 'z']);
   expect(open.problems).toEqual([{ line: 1, message: 'Entrée « x » abîmée : l’accolade ouverte ligne 1 n’est jamais fermée.' }]);
   // A quote never closed.
-  const quote = parseBibtex('@article{q, title = "Jamais fermé}\n\n@article{r, title = {Lue}}\n');
+  const quote = parseBibtex('@article{q, title = "Jamais fermé\n\n@article{r, title = {Lue}}\n');
   expect(quote.entries.map((e) => e.key)).toEqual(['r']);
   expect(quote.problems[0]).toEqual({ line: 1, message: 'Entrée « q » abîmée : le guillemet ouvert ligne 1 n’est jamais fermé.' });
+  // A closing brace between quotes that closes no group of theirs: the value stops there (BibTeX refuses it too).
+  const stray = parseBibtex('@article{s, title = "Une } de trop"}\n@article{t, title = {Lue}}\n');
+  expect(stray.entries.map((e) => e.key)).toEqual(['t']);
+  expect(stray.problems[0]).toEqual({ line: 1, message: 'Entrée « s » abîmée : l’accolade fermante de la ligne 1 ne ferme rien entre les guillemets.' });
   // The end of the file inside an entry.
   expect(parseBibtex('@article{fin, title = {x},').problems).toEqual([{ line: 1, message: 'Entrée « fin » abîmée : le fichier finit avant la fin de l’entrée.' }]);
   // A closing brace too many ends the entry; what follows it is a comment, as BibTeX reads it.
@@ -116,6 +120,16 @@ test('parseBibtex : macros, concaténations, mois, nombres ; une macro inconnue 
   expect(Object.fromEntries(m.raw)).toEqual({ title: '{Alpha et Bêta}', note: '{7e}', month: 'dec', year: '2020', x: 'inconnue # {!}' });
   // A macro is the one defined before its use, as BibTeX reads it; names without case.
   expect(parseBibtex('@misc{n, t = later}\n@string{later = "x"}\n@misc{o, t = LATER}').entries.map((e) => e.fields.get('t'))).toEqual(['', 'x']);
+});
+
+test('parseBibtex : un mois écrit en entier, sans casse (Crossref : month=July), est le mois ; réécrit sous sa macro de trois lettres ; un @string du fichier l’emporte', () => {
+  const r = parseBibtex('@article{a, month=July}\n@article{b, month = SEPTEMBER}\n@article{c, month = may}');
+  expect(r.problems).toEqual([]);
+  expect(r.entries.map((e) => [e.fields.get('month'), e.raw.get('month')])).toEqual([['July', 'jul'], ['September', 'sep'], ['May', 'may']]);
+  expect(bibtexEntry(r.entries[0], 'a')).toBe('@article{a,\n  month = jul\n}\n');
+  const own = parseBibtex('@string{july = "juillet"}\n@article{d, month = July}');
+  expect(own.problems).toEqual([]);
+  expect([own.entries[0].fields.get('month'), own.entries[0].raw.get('month')]).toEqual(['juillet', '{juillet}']);
 });
 
 test('parseBibtex : accolades imbriquées, entrée entre parenthèses, sans clé, champ en double, clé en double', () => {
@@ -199,6 +213,17 @@ test('parseBibtex : hostile — des @comment( jamais fermés, des accents qui s�
   expect(many.problems).toEqual([{ line: BIB_MAX_ENTRIES + 1, message: `Le fichier compte plus de ${(BIB_MAX_ENTRIES).toLocaleString('fr-FR')} entrées : les suivantes ne sont pas lues.` }]);
 });
 
+test('parseBibtex : des guillemets jamais fermés qui sautent des groupes d’accolades (revue I1) ; linéaire, une valeur ou un @preamble', () => {
+  for (const head of ['@a{k,t="{\n', '@preamble{"{\n']) {
+    const text = head.repeat(10_000) + '}'.repeat(20_000) + 'x'.repeat(1_000_000);
+    const t0 = performance.now();
+    const r = parseBibtex(text);
+    expect(performance.now() - t0, head).toBeLessThan(1000);
+    expect(r.entries, head).toEqual([]);
+    expect(r.problems.length, head).toBe(BIB_MAX_PROBLEMS + 1);
+  }
+});
+
 test('parseBibtex : 2 000 entrées, dont des accolades jamais fermées, en moins d’une seconde', () => {
   const text = Array.from({ length: 2000 }, (_, i) => (i % 100 === 7
     ? `@article{casse${i},\n  title = {Jamais fermée,\n  year = {2000}\n`
@@ -260,8 +285,9 @@ test('citeKey : la clé de l’entrée si elle est sûre, sinon nom du premier a
   expect(citeKey(datacite, new Set(['vaswani2017', 'vaswani2017b']))).toBe('vaswani2017c');
   const all = new Set(['vaswani2017', ...'bcdefghijklmnopqrstuvwxyz'.split('').map((c) => `vaswani2017${c}`)]);
   expect(citeKey(datacite, all)).toBe('vaswani2017aa');
-  // The entry's own key, taken: a generated one.
+  // The entry's own key, taken: a generated one; taken whatever its case, as BibTeX compares keys (revue M1).
   expect(citeKey(entry('@book{li2008, author = {Li, Ming}, year = 2008}'), taken)).toBe('li2008b');
+  expect(citeKey(entry('@misc{LI2008, author = {Li, M.}, year = 2008}'), new Set(['li2008']))).toBe('li2008b');
   expect(citeKey(entry('@book{DBLP:books/li2008, author = {Vit{\\\'a}nyi, Paul}, year = 2008}'), new Set())).toBe('vitanyi2008');
   expect(citeKey(entry('@book{x, author = {von Neumann, John and Morgenstern, Oskar}, year = 1944}'), new Set(['x']))).toBe('neumann1944');
   expect(citeKey(entry('@misc{, author = {{OpenAI}}, date = {2023-03-15}}'), new Set())).toBe('openai2023');

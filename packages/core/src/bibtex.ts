@@ -37,6 +37,11 @@ const MONTHS = new Map(Object.entries({
   jan: 'January', feb: 'February', mar: 'March', apr: 'April', may: 'May', jun: 'June',
   jul: 'July', aug: 'August', sep: 'September', oct: 'October', nov: 'November', dec: 'December',
 }));
+/**
+ * A month written whole, as Crossref writes it (`month=July`), is that month's macro, written back under it (`jul`):
+ * the controller's ruling of the review. An @string of the file of that name is read first.
+ */
+const MONTH_NAMES = new Map([...MONTHS].map(([macro, name]) => [name.toLowerCase(), macro]));
 
 /** A refusal of the entry being read: its reason, in French. */
 class Broken extends Error {}
@@ -158,18 +163,20 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         add(text.slice(p + 1, q), null);
         p = q + 1;
       } else if (c === QUOTE) {
-        // Up to the quote outside braces; a brace group is jumped over at once.
-        let q = p + 1, stray = -1;
+        // Up to the quote outside braces, a brace group jumped over at once; a closing brace that closes none of
+        // them stops it (BibTeX refuses it too). So two such walks never cross the same character: one that starts
+        // in a group another jumped over ends at that group's closing brace at the latest (review, I1). Linear.
+        let q = p + 1;
         for (; q < n; q++) {
           const d = text.charCodeAt(q);
           if (d === QUOTE) break;
+          if (d === CLOSE) throw new Broken(`l’accolade fermante de la ligne ${lineOf(q)} ne ferme rien entre les guillemets.`);
           if (d === OPEN) {
             if (match[q] < 0) throw new Broken(`l’accolade ouverte ligne ${lineOf(q)} n’est jamais fermée.`);
             q = match[q];
-          } else if (d === CLOSE && stray < 0) stray = q;
+          }
         }
         if (q >= n) throw new Broken(`le guillemet ouvert ligne ${lineOf(p)} n’est jamais fermé.`);
-        if (stray >= 0) throw new Broken(`une accolade fermante de trop, ligne ${lineOf(stray)}, entre guillemets.`);
         add(text.slice(p + 1, q), null);
         p = q + 1;
       } else if (isDigit(c)) {
@@ -179,9 +186,9 @@ export function parseBibtex(text: string): { entries: BibEntry[]; problems: BibP
         p = q;
       } else if (isIdent(c)) {
         const q = ident(p), name = text.slice(p, q), lower = name.toLowerCase();
-        const defined = strings.get(lower);
+        const defined = strings.get(lower), month = MONTH_NAMES.get(lower) ?? lower;
         if (defined !== undefined) add(defined, null);
-        else if (MONTHS.has(lower)) add(MONTHS.get(lower)!, lower);
+        else if (MONTHS.has(month)) add(MONTHS.get(month)!, month);
         else {
           unknown(name);
           add('', name);
@@ -625,18 +632,19 @@ function letters(n: number): string {
 }
 
 /**
- * A publication's key (D7): the entry's if it has one that safeCiteKey takes and no other node holds (`taken`, as
- * written); otherwise its first author's family name and its year (`li2008`) — without an author, its title's first word;
+ * A publication's key (D7): the entry's if it has one that safeCiteKey takes and no other node holds (`taken`, without
+ * case); otherwise its first author's family name and its year (`li2008`) — without an author, its title's first word;
  * without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case.
  */
 export function citeKey(entry: BibEntry, taken: ReadonlySet<string>): string {
-  if (entry.key !== '' && safeCiteKey(entry.key) && !taken.has(entry.key)) return entry.key;
+  // Keys compared without case, as BibTeX compares them (a « Repeated entry » otherwise, review M1).
+  const lower = new Set<string>();
+  for (const k of taken) lower.add(k.toLowerCase());
+  if (entry.key !== '' && safeCiteKey(entry.key) && !lower.has(entry.key.toLowerCase())) return entry.key;
   const family = keyLetters(bibNames(entry.fields.get('author') ?? '')[0]?.last ?? '');
   const firstWord = keyLetters(latexToUnicode(entry.fields.get('title') ?? '').split(' ').find((w) => keyLetters(w) !== '') ?? '');
   const year = yearIn(entry.fields.get('year') ?? '') ?? yearIn(entry.fields.get('date') ?? '') ?? '';
   const base = (family || firstWord || 'publication').slice(0, 60) + year;
-  const lower = new Set<string>();
-  for (const k of taken) lower.add(k.toLowerCase());
   for (let i = 1; ; i++) {
     const key = i === 1 ? base : base + letters(i);
     if (!lower.has(key) && safeCiteKey(key)) return key;

@@ -694,7 +694,7 @@ Fixées par le contrôleur avant la tâche :
 - **L'IPC** (`main/index.ts`, `fetch.ts`, préchargement, `env.d.ts`) : `publicationFetch(text, { pdf: false })` ne télécharge pas le PDF d'arXiv (un PDF déposé, D8). Le principal ne prend que `{ pdf: false }` exactement ; toute autre valeur garde le téléchargement de la tâche 4.
 - **Réglages** (groupe « Publications », avancés) : `publicationMaxAuthors` (50, de 1 à 10 000) et `publicationPdfPages` (2, de 1 à 20).
 - `nodeFiles.ts` : le graphe ne prend pas les fichiers lâchés sur le dialogue (`GRAPH_REFUSES`). C'est le dialogue qui les prend.
-- **Données** : `core/tests/data/reel-50.bib`, cinquante références réelles écrites comme les écrivent JabRef, Google Scholar, DBLP, Crossref et la main ; `app/tests/data/publications/shannon-1948.{csl.json,bib}`, composées sur le modèle de Crossref (Ruling plus bas). `.gitattributes` garde `core/tests/data/` octet pour octet.
+- **Données** : `core/tests/data/reel-50.bib`, cinquante références réelles écrites comme les écrivent JabRef, Google Scholar, DBLP, Crossref et la main ; `app/tests/data/publications/shannon-1948.{csl.json,bib}`, composées sur le modèle de Crossref, puis remplacées par les vraies réponses à la ronde 1 de la revue. `.gitattributes` garde `core/tests/data/` octet pour octet.
 
 ### Décisions
 
@@ -704,7 +704,7 @@ Fixées par le contrôleur avant la tâche :
   - Coût si faux : la clé d'un nœud, celle que l'utilisateur citait étant remplacée par nom et année.
 - Ruling (contrôleur) : **un même titre normalisé (casse, accents, ponctuation, espaces) et une même année font aussi un doublon**, en plus du DOI, de l'identifiant arXiv et de la clé (D7). Le livre de la base de test n'a pas de tag `doi`, et Crossref lui donne la clé `Li_2008` : sans cette règle, il serait recréé. La notification nomme le nœud existant. Les DOI se comparent sans la casse (DataCite les écrit en majuscules).
   - Coût si faux : un import refusé que l'utilisateur voulait (deux œuvres du même titre la même année).
-- Ruling : **les doublons**, dans cet ordre : même DOI, même identifiant arXiv (sans version ; un tag `doi` qui est celui d'arXiv compte comme son identifiant), même clé d'entrée (telle qu'écrite), même titre et même année. Message : « Déjà dans la base (même DOI) : « titre ». ». Un nœud à la corbeille n'est pas un doublon. Le DOI ou l'identifiant tapé est comparé avant le réseau ; la clé, le titre et l'année, après la réponse ; tout est vérifié de nouveau au calcul de l'action.
+- Ruling, amendé à la ronde 1 de la revue (plus bas) : **les doublons**, dans cet ordre : même DOI, même identifiant arXiv (sans version ; un tag `doi` qui est celui d'arXiv compte comme son identifiant), même clé d'entrée (telle qu'écrite), même titre et même année. Message : « Déjà dans la base (même DOI) : « titre ». ». Un nœud à la corbeille n'est pas un doublon. Le DOI ou l'identifiant tapé est comparé avant le réseau ; la clé, le titre et l'année, après la réponse ; tout est vérifié de nouveau au calcul de l'action.
   - Options : compter la corbeille (refuser un import que l'on peut vouloir refaire) ; ne vérifier qu'après la réponse (une demande au réseau pour rien).
   - Coût si faux : une règle de plus ou de moins dans `PublicationIndex`.
 - Ruling : **les champs du nœud viennent du CSL** (`cslToFields` : titre, auteurs, année), **le `.bib` et la clé du BibTeX**. Le BibTeX ne complète que ce que le CSL n'a pas. Un BibTeX illisible refuse l'import (« Le BibTeX reçu est illisible : la publication n’est pas importée. ») plutôt que de créer un nœud sans `.bib`.
@@ -742,7 +742,7 @@ Fixées par le contrôleur avant la tâche :
   - « Créer le nœud » n'est offert que pour un PDF sans identifiant.
   - Coût si faux : un import à relancer après un changement d'onglet.
 - Ruling : **pdf.js reste chargé à la demande** : le dialogue importe `pdfClues.ts` au premier PDF déposé. Importé directement, il portait le paquet principal de 970 à 1 775 Ko.
-- Ruling : **`shannon-1948.csl.json` et `shannon-1948.bib` ne sont pas enregistrés mais composés** sur le modèle des réponses de Crossref de la tâche 4 : aucune session réseau n'était permise à cette tâche. Le scénario « par DOI » en a besoin, car le livre enregistré est un doublon de la base de test. Leur `about`, dans `index.json`, le dit.
+- Ruling, remplacé à la ronde 1 de la revue (les vraies réponses, enregistrées par le contrôleur) : **`shannon-1948.csl.json` et `shannon-1948.bib` ne sont pas enregistrés mais composés** sur le modèle des réponses de Crossref de la tâche 4 : aucune session réseau n'était permise à cette tâche. Le scénario « par DOI » en a besoin, car le livre enregistré est un doublon de la base de test. Leur `about`, dans `index.json`, le dit.
   - Coût si faux : le scénario vérifie notre lecture d'une réponse plausible de Crossref, pas de la vraie.
 
 ### Mesures
@@ -780,3 +780,30 @@ Fixées par le contrôleur avant la tâche :
   - `parseBibtex` tient en mémoire quatre octets par caractère du texte (la table des accolades) : la tâche 6 doit borner la taille du `.bib` qu'elle lit ;
   - deux entrées d'un même fichier dont la clé n'est pas sûre (DBLP) ne sont pas des doublons par la clé : la seconde prend `…b`. Seuls leur DOI, leur identifiant arXiv, ou leur titre et leur année les rapprochent ;
   - une clé en double dans le fichier est signalée par l'analyseur, et les deux entrées sont rendues : c'est `PublicationIndex.add` qui écarte la seconde.
+
+### Revue, ronde 1
+
+La revue (`task-5-review.md`) a demandé cinq corrections : I1, I2 avec M2, M1, M3, et les vraies réponses de Shannon. M4 à M10 sont différés au ledger, et M8 (borner le texte donné à `parseBibtex`) ira à la tâche 6.
+
+- **I1, les guillemets jamais fermés étaient quadratiques.**
+  - Le problème : une valeur entre guillemets jamais fermée qui saute des groupes d'accolades, puis une longue queue. Chaque entrée reprise refaisait le parcours jusqu'à la fin : 49 s pour 1,1 Mo.
+  - Correction : le parcours entre guillemets s'arrête à la première accolade fermante qui ne ferme aucun de ses groupes (« l'accolade fermante de la ligne N ne ferme rien entre les guillemets. »). BibTeX la refuse aussi. Le chemin de `@preamble` passe par la même fonction.
+  - Pourquoi c'est linéaire : un parcours qui commence dans un groupe qu'un autre a sauté finit au plus tard à l'accolade qui ferme ce groupe. Deux parcours ne passent donc jamais par le même caractère. Aucune table nouvelle n'est nécessaire.
+  - Mesures : les deux cas de la revue (`@a{k,t="{` et `@preamble{"{`, 10 000 fois, puis 1 000 000 de caractères) prennent ensemble 145 ms au test, contre 53,5 s avant. Toute la sonde `hostile.mjs` du relecteur passe : son pire cas, 100 000 auteurs, prend 360 ms.
+- Ruling (contrôleur, I2 et M2) : **une même clé, ou un même titre normalisé et une même année, ne font un doublon que si aucun identifiant ne les contredit.**
+  - Il y a contradiction quand les deux côtés ont un DOI et qu'ils diffèrent, ou un identifiant arXiv et qu'ils diffèrent. Un DOI d'un côté et un arXiv de l'autre ne se contredisent pas.
+  - `PublicationIndex` garde, pour chaque clé et chaque titre-année, les nœuds qui les portent avec leurs identifiants.
+  - Une clé reçue ainsi écartée passe par `citeKey`. Crossref donne `He_2016` à deux articles de He et al. : le second devient `he2016`.
+  - Le livre de Li et Vitányi de la base de test reste un doublon : son nœud n'a pas de DOI.
+  - Coût si faux : une publication recréée quand deux fiches de la même œuvre portent des DOI différents (un chapitre et son livre, par exemple).
+- **M1, les clés comparées sans la casse.** `citeKey` compare désormais la clé propre de l'entrée sans la casse, comme BibTeX : `LI2008`, quand `li2008` est prise, donne `li2008b`.
+- **M3, toutes les valeurs indexées.**
+  - L'index retient toutes les valeurs des tags `doi`, `arxiv` et `clé_bibtex`.
+  - Il lit chaque identifiant par `parseIdentifier` avant `cleanDoi` et `cleanArxiv` : `https://arxiv.org/abs/1706.03762` et `https://doi.org/10.1000%2Fabc` sont lus, et le DOI d'arXiv compte comme l'identifiant arXiv, quel que soit le tag qui le porte.
+- **Les vraies réponses de Shannon**, enregistrées par le contrôleur le 2026-11-07, remplacent les réponses composées, octet pour octet. Le texte `about` d'`index.json` le dit. Le CSL réel a `type: "journal-article"`, que rien ne lit.
+- Ruling (contrôleur) : **un mois écrit en entier, sans casse (`month=July`, comme l'écrit Crossref), est lu comme la macro de ce mois**, sans problème signalé, et le `.bib` réécrit le met sous sa macro de trois lettres (`month = jul`). Un `@string` du fichier qui définit `july` l'emporte toujours.
+- **Vérifications** :
+  - tests vus rouges : I1 en 53 514 ms au lieu de moins d'une seconde ; l'ancien message pour l'accolade égarée ; `month=July` signalé comme macro inconnue, le mois vide ; `citeKey` qui rendait `LI2008` ; `He_2016` refusé (« même clé BibTeX ») ; la seconde valeur d'un tag `doi` ignorée ;
+  - suites, chaque paquet seul : `core` 127, `view` 246, `app` 397, tous passés ; `tsc` sans erreur dans `core` et `app` ;
+  - scénarios : 17 sur 17, dont « importer une publication par DOI » sur les vraies réponses (`month = jul` dans le `.bib`) ;
+  - captures : non refaites, rien de ce qui est dessiné n'a changé (l'analyseur et l'index des doublons seulement).

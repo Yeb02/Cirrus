@@ -1,5 +1,5 @@
 {
-  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). Task 5: shannon-1948.* are not recorded but composed on the model of Crossref's answers above (no network in the tasks), for an import by DOI that is no duplicate of the test base.",
+  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). shannon-1948.* recorded on 2026-11-07 too (review of task 5), for an import by DOI that is no duplicate of the test base: Crossref writes its month whole (month=July).",
   "responses": [
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },

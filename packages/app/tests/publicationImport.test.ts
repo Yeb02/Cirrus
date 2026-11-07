@@ -13,7 +13,7 @@ import { importPublication, type PublicationDeps, type PublicationResult } from 
 import { replayFetch } from '../src/main/publications/replay.ts';
 import { findIdentifier } from '../src/renderer/publications/identify.ts';
 import {
-  createFromPdf, type ImportDeps, importByIdentifier, planPublication, type PlannedPublication, publicationBuild, PublicationIndex, publicationOf,
+  createFromPdf, type ImportDeps, importByIdentifier, planPublication, type PlannedPublication, publicationBuild, PublicationIndex, type PublicationInput, publicationOf,
 } from '../src/renderer/publications/build.ts';
 
 const DATA = join(fileURLToPath(new URL('.', import.meta.url)), 'data', 'publications');
@@ -97,7 +97,8 @@ test('doublons : par le DOI sans la casse, par l’identifiant arXiv sans versio
   run(editNode(s, ids.nodes.mdl, { tags: s.nodes.get(ids.nodes.mdl)!.tags.filter((t) => t.key !== 'arxiv') }));
   setTags(ids.nodes.occam, [tag('doi', '10.48550/ARXIV.1706.03762')]);
   expect(planPublication(index(), inputOf(ARXIV()), 50)).toEqual({ refused: `Déjà dans la base (même identifiant arXiv) : « ${s.nodes.get(ids.nodes.occam)!.title} ».` });
-  // The entry's own key (a .bib's, task 6): li2008 is the test base's book.
+  // The entry's own key (a .bib's, task 6): li2008 is the test base's book. The entry has no identifier, which could
+  // contradict the match: a duplicate (the controller's ruling of the review, I2).
   const entry = parseBibtex('@book{li2008, title = {Un autre livre}, author = {Li, Ming}, year = 1999}').entries[0];
   expect(planPublication(index(), { fields: { title: 'Un autre livre', authors: ['Ming Li'], year: '1999' }, entry }, 50))
     .toEqual({ refused: 'Déjà dans la base (même clé BibTeX) : « Autre titre ».' });
@@ -108,6 +109,49 @@ test('doublons : par le DOI sans la casse, par l’identifiant arXiv sans versio
   // In the trash: no duplicate.
   run(editNode(s, ids.nodes.trashed, { tags: [tag('doi', '10.1234/corbeille')] }));
   expect('refused' in planPublication(index(), { fields: { title: 'X', authors: [], year: null }, entry: null, doi: '10.1234/CORBEILLE' }, 50)).toBe(false);
+});
+
+test('doublons (revue I2, M2) : une même clé, ou un même titre et une même année, que les identifiants contredisent n’en est pas un ; la clé passe alors par citeKey', () => {
+  const index = () => PublicationIndex.of(s);
+  const RESNET = 'Deep Residual Learning for Image Recognition';
+  run(editNode(s, ids.nodes.monde, { title: RESNET, tags: [tag('clé_bibtex', 'He_2016'), tag('doi', '10.1109/CVPR.2016.90'), tag('date_de_publication', '2016')] }));
+  // Crossref's key He_2016 for another paper of He et al. the same year, another DOI: planned, under he2016.
+  const identity = parseBibtex('@inproceedings{He_2016, title={Identity Mappings in Deep Residual Networks}, author={He, Kaiming}, year={2016}, DOI={10.1007/978-3-319-46493-0_38}}').entries[0];
+  const p = planned(planPublication(index(), { fields: { title: 'Identity Mappings in Deep Residual Networks', authors: ['Kaiming He'], year: '2016' }, entry: identity, doi: '10.1007/978-3-319-46493-0_38' }, 50));
+  expect(p.key).toBe('he2016');
+  expect(p.bib!.name).toBe('he2016.bib');
+  expect(p.bib!.text.startsWith('@inproceedings{he2016,\n')).toBe(true);
+  // The same title and year with two different DOIs (an editorial, an erratum…): planned too.
+  expect('refused' in planPublication(index(), { fields: { title: RESNET, authors: [], year: '2016' }, entry: null, doi: '10.9999/autre' }, 50)).toBe(false);
+  // Two arXiv identifiers that differ contradict it as well; a DOI on one side and an arXiv identifier on the other do not.
+  setTags(ids.nodes.mdl, [tag('clé_bibtex', 'preprint2020'), tag('arxiv', '2001.00001')]);
+  const preprint = (more: Partial<PublicationInput>) => planPublication(index(), {
+    fields: { title: 'Autre', authors: [], year: null }, entry: parseBibtex('@misc{preprint2020, year = 2020}').entries[0], ...more,
+  }, 50);
+  expect('refused' in preprint({ arxiv: '2002.00002' })).toBe(false);
+  expect(preprint({ doi: '10.9999/publie' })).toEqual({ refused: `Déjà dans la base (même clé BibTeX) : « ${s.nodes.get(ids.nodes.mdl)!.title} ».` });
+  // The same key, one side without an identifier: a duplicate, the node without one…
+  setTags(ids.nodes.occam, [tag('clé_bibtex', 'Occam_1990')]);
+  expect(planPublication(index(), {
+    fields: { title: 'Autre', authors: [], year: null }, entry: parseBibtex('@misc{Occam_1990, year = 1990}').entries[0], doi: '10.9999/occam',
+  }, 50)).toEqual({ refused: `Déjà dans la base (même clé BibTeX) : « ${s.nodes.get(ids.nodes.occam)!.title} ».` });
+  // …or the input without one; the same title and year without any identifier too.
+  expect(planPublication(index(), { fields: { title: RESNET, authors: [], year: '2016' }, entry: null }, 50)).toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${RESNET} ».` });
+  // The test base's book stays a duplicate of Crossref's (its node has no DOI).
+  expect(planPublication(index(), inputOf(BOOK()), 50)).toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${LI} ».` });
+});
+
+test('doublons (revue M3) : toutes les valeurs d’un tag comptent, et une valeur écrite en lien est lue', () => {
+  const index = () => PublicationIndex.of(s);
+  setTags(ids.nodes.mdl, [tag('doi', '10.5555/preprint'), tag('doi', '10.5555/journal')]);
+  const mdl = s.nodes.get(ids.nodes.mdl)!.title;
+  for (const doi of ['10.5555/preprint', '10.5555/journal']) {
+    expect(planPublication(index(), { fields: { title: 'X', authors: [], year: null }, entry: null, doi }, 50)).toEqual({ refused: `Déjà dans la base (même DOI) : « ${mdl} ».` });
+  }
+  setTags(ids.nodes.occam, [tag('arxiv', 'https://arxiv.org/abs/1706.03762'), tag('doi', 'https://doi.org/10.1000%2Fabc')]);
+  const occam = s.nodes.get(ids.nodes.occam)!.title;
+  expect(planPublication(index(), inputOf(ARXIV()), 50)).toEqual({ refused: `Déjà dans la base (même identifiant arXiv) : « ${occam} ».` });
+  expect(planPublication(index(), { fields: { title: 'X', authors: [], year: null }, entry: null, doi: '10.1000/ABC' }, 50)).toEqual({ refused: `Déjà dans la base (même DOI) : « ${occam} ».` });
 });
 
 test('publicationBuild : une action posée au point, au cran lisible, avec ses tags, son PDF et son .bib ; dans l’enveloppe d’un groupe, elle y entre ; un seul Ctrl+Z la retire', () => {
