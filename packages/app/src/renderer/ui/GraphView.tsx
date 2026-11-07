@@ -16,16 +16,17 @@ import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
-  absentBuild, addMemberBuild, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild, joinBuild,
-  dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeInPlanBuild, removeMemberBuild, renameBuild, scaleBuild, splitBuild,
-  withRepercussion,
+  absentBuild, addMemberBuild, ALREADY_HERE, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild,
+  joinBuild, dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, removeMemberBuild, renameBuild,
+  scaleBuild, splitBuild, withRepercussion,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog, type Question } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
-import { carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
+import { NODE_MIME } from '../files/annotations.ts';
+import { carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
 
 /** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
@@ -163,6 +164,9 @@ export function GraphView(props: {
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
   /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
   const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[]; expected: Id } | null>(null);
+  /** A gesture, a question or a repercussion under way: Ctrl+Z and Ctrl+Y wait for it (I6 of the plan 3b review), and so does a node dropped from a list. */
+  const busy = () => gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
+    || repQueue.current !== null || questionRef.current !== null;
 
   /**
    * Gives the renderer the scene to show (plan 3c, task 6): when it follows the renderer's own by the changes gathered
@@ -530,18 +534,26 @@ export function GraphView(props: {
    * announced; « partout » writes the drop and the plans needing no hand, then opens the others one after the other.
    */
   const dropAsking = (base: PlanScene, items: number[], dx: number, dy: number, at: Vec2, alt: boolean, restore: () => void) => {
-    const p = paramsRef.current, zoom = engine.current?.renderer.camera.zoom ?? 1, s = stateRef.current;
+    const p = paramsRef.current, zoom = engine.current?.renderer.camera.zoom ?? 1;
     // Where the drop enters, found once for the action and the question (I2 of the final review).
     const target = dropTarget(base, at, items, zoom, p, indexOf(base));
     const build = dropBuild(base, items, dx, dy, target, alt, p);
     if (!build) { restore(); return; }
-    const plan = base.plan.id;
+    askRepercussion(base.plan.id, dropMemberships(stateRef.current, base, items, target, alt), build, restore);
+  };
+  /**
+   * The drop `build` in `plan`, whose nodes change group (`moves`), written (spec 10): at once when no other plan would
+   * change; else after the « partout ou ici seulement » question, its cost announced — « partout » writes the drop and
+   * the plans needing no hand, then opens the others one after the other. `restore`: what a refusal or no answer undoes.
+   */
+  const askRepercussion = (plan: Id, moves: { node: Id; from: Id | null; to: Id | null }[], build: Build, restore: () => void) => {
+    const p = paramsRef.current, s = stateRef.current;
     // The other plans' scenes, for the whole drop: the cached ones when they are at the state's revision, else built
     // once, measured as the cached ones, with their measure's titles already laid out (I1 of the final review).
     const cache = scenes.current, key = sceneParamsKey(p), current = cache.key === key && cache.rev === sessionRef.current?.rev;
     const measure = cache.measure && cache.key === key ? cache.measure : measureLines(engine.current!.font, p);
     const sceneOf = dropScenes(s, measure, p, (q) => (current ? cache.byPlan.get(q)?.scene : undefined));
-    const reps = dropMemberships(s, base, items, target, alt).map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
+    const reps = moves.map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
     const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
     if (changed.length === 0) { void edit(build, restore); return; }
     const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
@@ -896,6 +908,42 @@ export function GraphView(props: {
   useImperativeHandle(props.ref, () => ({ dropFilesAt }));
   /** Files the graph takes: not on what floats over it and refuses them (dropZone). */
   const takesFiles = (ev: React.DragEvent) => carriesFiles(ev) && dropZone(ev.target) === 'graph';
+  /** A node dragged out of a list of annotations that the graph takes (plan 4c, task 3): its own route, never files (dropRoute). */
+  const takesNode = (ev: React.DragEvent) => carried(ev) === 'node' && dropRoute(dropZone(ev.target), null, 'node').to === 'place';
+  /** What a node dragged over the graph would enter, lit (spec 10: the group under the cursor lights up); null: none. */
+  const lit = useRef<number | null>(null);
+  const lightHost = (pt: { sx: number; sy: number } | null) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc || dragging.current) return;
+    const cam = e.renderer.camera;
+    const t = pt === null ? null : dropTarget(sc, screenToWorld(cam, pt.sx, pt.sy), [], cam.zoom, paramsRef.current, indexOf(sc));
+    if (t === lit.current) return;
+    lit.current = t;
+    e.renderer.setDropTarget(t);
+    redraw();
+  };
+  /**
+   * A node dragged out of a list of annotations (NODE_MIME), let go at (sx, sy) (plan 4c, D4): placed in this plan where
+   * it is let go, at the readable step, entering the group or the simple node under the point (placeDroppedBuild), with
+   * the « partout ou ici seulement » question when that inclusion exists elsewhere or may (spec 10: askRepercussion).
+   * Already here: said, and the view framed on it. Not while a gesture, a question or a repercussion is under way.
+   */
+  const dropNodeAt = (sx: number, sy: number, node: Id) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc) return;
+    if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant de poser ce nœud.'); return; }
+    const p = paramsRef.current, cam = e.renderer.camera, at = screenToWorld(cam, sx, sy), index = indexOf(sc);
+    const here = sc.byId.get(node);
+    if (here !== undefined) {
+      notify(ALREADY_HERE);
+      moveCamera(fitItem(sc, here, cam, p));
+      return;
+    }
+    const build = placeDroppedBuild(sc, node, at, cam.zoom, p, index);
+    const host = dropTarget(sc, at, [], cam.zoom, p, index);
+    if (host === null) void edit(build);
+    else askRepercussion(sc.plan.id, [{ node, from: null, to: sc.items[host].id }], build, () => {});
+  };
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
@@ -1317,9 +1365,7 @@ export function GraphView(props: {
   useEffect(() => {
     props.session?.setGuard(() => {
       settleWheel();
-      const busy = gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
-        || repQueue.current !== null || questionRef.current !== null;
-      return busy ? 'Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’annuler ou de rétablir.' : null;
+      return busy() ? 'Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’annuler ou de rétablir.' : null;
     });
   }, [props.session]);
   useEffect(() => {
@@ -1340,9 +1386,26 @@ export function GraphView(props: {
       ref={root}
       tabIndex={0}
       onContextMenu={(ev) => ev.preventDefault()}
-      // Files dropped on the graph (not on a connection's pop-up or a question over it: those refuse them).
-      onDragOver={(ev) => { if (takesFiles(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; } }}
+      // Files dropped on the graph (not on a connection's pop-up or a question over it: those refuse them); a node dragged
+      // out of a list of annotations, by its own route (plan 4c, task 3), the node or group it would enter lit meanwhile.
+      onDragOver={(ev) => {
+        const node = takesNode(ev);
+        if (!node && !takesFiles(ev)) return;
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'copy';
+        if (node && !ignored(ev)) lightHost(local(ev));
+      }}
+      onDragLeave={(ev) => { if (!root.current!.contains(ev.relatedTarget as Node | null)) lightHost(null); }}
       onDrop={(ev) => {
+        if (takesNode(ev)) {
+          ev.preventDefault();
+          lightHost(null);
+          if (ignored(ev)) return;
+          const node = ev.dataTransfer.getData(NODE_MIME), { sx, sy } = local(ev);
+          root.current!.focus();
+          if (node) dropNodeAt(sx, sy, node);
+          return;
+        }
         if (!takesFiles(ev)) return;
         ev.preventDefault();
         if (ignored(ev)) return;

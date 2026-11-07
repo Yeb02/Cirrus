@@ -314,3 +314,138 @@ Fixées par le contrôleur avant la tâche :
   - `AnnotationContext.reveal` ouvre une annotation dans un aperçu (version, page, clignotement) ;
   - la marge de l'aperçu est déjà une source de glisser (`NODE_MIME`) ;
   - une annotation retirée de son dernier plan, « ici seulement », part à la corbeille, et donc de l'index (`removeFromPlan`, spec 7).
+
+## Tâche 3 : pop-ups et pose dans un plan
+
+### Fait
+
+- **Cœur** (`commands.ts`) : `removeFromPlan` ne met plus à la corbeille une annotation qui quitte son dernier plan (décision du contrôleur, plus bas). « Supprimer partout » (`deleteEverywhere`) l'y met toujours.
+- **`actions.ts`** :
+  - `placeDroppedBuild(scene, node, at, zoom, p, index?)` : le dépôt d'un nœud tiré d'une liste. C'est `importBuild` (plan 3b), au cran lisible, qui entre dans le groupe dont l'enveloppe reçoit le point. Déposé sur un nœud simple, le nœud y entre aussi, et ce nœud devient un groupe `groupOffsetSteps` au-dessus de lui, comme le fait `dropBuild` pour un nœud lâché sur un nœud. Une action, un Ctrl+Z ;
+  - `ALREADY_HERE` (« Déjà dans ce plan. ») : le refus de `placeDroppedBuild` quand le nœud est déjà posé là au moment du calcul ;
+  - `lastPlanNodes` ne compte plus une annotation parmi les nœuds qui iraient à la corbeille.
+- **`files/nodeFiles.ts`** :
+  - `carried(e)` dit ce que porte un glisser : un nœud (`NODE_MIME`) d'abord, puis des fichiers, sinon rien. `carriesFiles` est faux pour un nœud, même accompagné de fichiers ;
+  - `dropRoute(zone, node, what = 'files')` : un nœud a sa propre route, `{ to: 'place' }` sur le graphe, quoi qu'il y ait sous le point, et `refused` partout ailleurs. La garde de la fenêtre (`refusesStrayDrop`) ne le refuse jamais.
+- **`files/annotations.ts`** : `annotationSource(s, anchor)` donne le fichier du PDF où s'ouvre une annotation. C'est celui qui porte son empreinte, quel que soit son nom, sinon celui de son nom, qui porte alors une version plus récente (`earlier`). Sinon, elle dit ce qui manque : le nœud du PDF absent ou à la corbeille, le fichier retiré du nœud.
+- **`ui/viewers/AnnotationMargin.tsx`** : la ligne d'une annotation devient `AnnotationItem`, que la marge et le pop-up partagent. Sa note (« sur une version précédente », ou ce qui manque) est donnée par la liste. Sans `onOpen`, elle ne s'ouvre pas, mais se glisse encore. Le DOM de la marge ne change pas.
+- **`ui/NodePopup.tsx`** :
+  - le pop-up d'un PDF a une section « Annotations », après « Fichiers », quand il en a. C'est la liste de la marge : page, début du passage, plans ou « dans aucun plan », « sur une version précédente ». Un clic ouvre l'annotation dans l'aperçu de son fichier, à côté du pop-up, à sa page, le passage clignotant. Chaque ligne se glisse sur le graphe ;
+  - le pop-up d'une annotation commence par « Annotation de « <PDF> », p. <n> », un bouton qui ouvre le PDF là ;
+  - ce qui manque se dit à la place, et la ligne ne s'ouvre plus : le PDF à la corbeille ou absent, le fichier retiré du nœud, ou la version absente du magasin. Celle-ci est demandée par `blobSize` à l'affichage (`useUnreadable`).
+- **`ui/panels/Panels.tsx`** : un panneau d'aperçu garde `reveal`, l'annotation qu'un pop-up lui demande de montrer. `withFile(…, reveal?)` la lui donne, et un aperçu déjà ouvert passe devant et la montre. `openFile(…, anchor?)` compte les demandes, si bien que la même annotation, redemandée, clignote de nouveau. `FilePreview` la passe à `AnnotationContext.reveal` (tâche 2).
+- **`ui/GraphView.tsx`** :
+  - le dépôt d'un `application/x-cirrus-node` a sa route (`takesNode`), distincte de celle des fichiers. Pendant le survol, le nœud ou le groupe qui le recevrait s'illumine (`setDropTarget`, spec 10). Lâché, il passe par `dropNodeAt`, et le graphe prend le focus ;
+  - `dropNodeAt` :
+    - déjà dans le plan : « Déjà dans ce plan. », et la vue se cadre sur lui (`fitItem`) ;
+    - sinon `placeDroppedBuild`, avec la question « partout ou ici seulement » quand il entre dans un groupe ;
+    - pendant un geste, une question ou une répercussion, le dépôt est refusé par une notification, comme Ctrl+Z ;
+  - la question de `dropAsking` devient `askRepercussion(plan, moves, build, restore)`, que le dépôt d'une annotation reprend : elle y passe d'aucun groupe (`from` nul) au nœud qui la reçoit. `busy()` rassemble les gestes en cours, pour Ctrl+Z et pour ce dépôt.
+- **`styles.css`** : les lignes d'annotation se dessinent par `.annotation-list` (la marge et le pop-up), avec les mêmes règles qu'avant pour la marge, plus la section du pop-up et la ligne « Annotation de … ».
+- **`scripts/interface.mjs`** :
+  - `dragDrop(from, to)` : un glisser-déposer HTML5 par la souris (détail plus bas) ;
+  - `node scripts/interface.mjs <texte>` ne lance que les scénarios dont le nom contient ce texte (après une construction) ;
+  - trois scénarios nouveaux (Vérifications).
+
+### Décisions
+
+Fixées par le contrôleur avant la tâche :
+- la liste du pop-up est celle de la marge, sa ligne réutilisée ; un clic ouvre le PDF à la page, le passage clignotant (`reveal`) ; on glisse aussi depuis le pop-up ;
+- le pop-up d'une annotation montre « Annotation de « <PDF> », p. <n> », et un clic l'ouvre là ; le PDF à la corbeille, ou la version absente, se disent, sans rien casser ;
+- déposée sur un nœud simple, l'annotation en fait un groupe dont elle est le premier membre, par la règle de `dropBuild` ;
+- la question « partout ou ici seulement » suit la section 10 et le chemin existant de la répercussion (plan 3b) ;
+- un glisser de nœud et un glisser de fichiers sont deux routes ; la garde de la fenêtre ne refuse pas un nœud sur le graphe.
+
+- Ruling: **une annotation qui quitte son dernier plan reste vivante, dans aucun plan, et ne va pas à la corbeille** (décision du contrôleur). C'est une exception à la spec 7, pour un nœud qui porte une ancre.
+  - Pourquoi : D1 la fait naître dans aucun plan et la range sous son PDF. Retirée d'un plan, elle ne doit pas quitter la marge et le pop-up. « Supprimer partout » la met toujours à la corbeille.
+  - Options :
+    - la corbeille (spec 7), qui la ferait disparaître des listes ;
+    - rester vivante (choix) ;
+    - le demander à chaque retrait.
+  - L'avertissement « ira à la corbeille (dernier plan) » ne la nomme plus (`lastPlanNodes`). Le test de l'index de la tâche 2, qui contournait l'ancien comportement, revient au cas simple : retirée de son dernier plan, elle reste dans l'index, dans aucun plan.
+  - Coût si faux : une condition dans `removeFromPlan` et un filtre dans `lastPlanNodes`.
+- Ruling: **« Déjà dans ce plan. » est dit deux fois** :
+  - par GraphView, qui lit la scène avant toute question, et cadre la vue sur le nœud ;
+  - par le refus de `placeDroppedBuild`, au calcul, si le nœud a été posé entre-temps.
+  - Options : rendre `null` (rien à tester), rendre `{ build, notice }` (une signature autre que celle du brief), le refus (choix).
+  - Coût si faux : nul.
+- Ruling: **un nœud tiré d'une liste entre dans tout nœud simple sur lequel on le lâche**, pas seulement dans celui de son PDF : c'est la règle de `dropBuild`, qui fait entrer un nœud libre dans le nœud où on le lâche.
+  - Coût si faux : une condition, l'hôte étant `anchor.pdf`.
+- Ruling: **les libellés de l'historique** sont « Poser un nœud dans ce plan » et « Poser un nœud dans « <titre> » ». Le titre d'une annotation, jusqu'à 80 caractères, alourdirait les notifications d'annulation.
+  - Coût si faux : nul.
+- Ruling: **la question « partout ou ici seulement » ne se pose que si l'annotation entre dans un groupe** et que la répercussion change un autre plan.
+  - Elle reprend `repercussion` avec `from` nul : là où l'annotation est posée sans groupe et où son hôte, ou un de ses ancêtres, existe, elle y entre ; un plan où elle est dans un autre groupe est laissé et nommé.
+  - Une annotation dans aucun autre plan, le cas ordinaire, ne pose pas de question.
+  - `importBuild` et le collage ne la posent pas (plan 3b) ; seul `dropAsking` la posait, et c'est son code, extrait en `askRepercussion`, que le dépôt reprend.
+  - Coût si faux : nul.
+- Ruling: **le nœud ou le groupe qui recevrait le dépôt s'illumine pendant le survol** (spec 10), par `setDropTarget`, recalculé à chaque `dragover`, par l'index de la scène.
+  - Il s'illumine même si le nœud se révèle déjà dans le plan : pendant le survol, le navigateur ne donne que le type de ce qu'on glisse, pas l'identifiant.
+  - Coût si faux : nul.
+- Ruling: **un dépôt pendant un geste, une question ou une répercussion est refusé**, par une notification : « Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant de poser ce nœud. » C'est la garde de Ctrl+Z (`busy()`). Après un dépôt, le graphe a le focus : Ctrl+Z et Suppr y agissent.
+  - Coût si faux : nul.
+- Ruling: **la section « Annotations » vient après « Fichiers », et seulement quand le nœud en a**, comme la marge. Ses lignes n'ont pas le liseré de la version montrée : le pop-up n'en montre aucune. Une ligne qui ne peut pas s'ouvrir dit pourquoi, et se glisse encore. La ligne « Annotation de … » ouvre le corps du pop-up d'une annotation, avant le résumé.
+  - Coût si faux : nul.
+- Ruling: **une version absente du magasin est cherchée à l'affichage du pop-up**, par `blobSize`, une demande par version montrée, dont le corps n'est pas lu. La demande compte parmi les chargements des vues : une capture l'attend.
+  - Options :
+    - la dire seulement au clic, où le lecteur la dit déjà (tâche 2) ;
+    - un appel au principal qui liste les blobs absents ;
+    - la demander à l'affichage (choix).
+  - Coût si faux : une demande par version, à chaque ouverture d'un pop-up qui en liste.
+- Ruling: **une annotation ouverte depuis un pop-up s'ouvre dans l'aperçu de son fichier, à côté de ce pop-up.** Un aperçu déjà ouvert de ce fichier passe devant et la montre. Il garde `reveal` : un clic sur le fichier lui-même ne relance pas le clignotement.
+  - Coût si faux : nul.
+- Ruling: **les scénarios glissent par `Input.setInterceptDrags`.**
+  - La souris presse la ligne et bouge, de vrais événements. Chromium commence son glisser, que remplit le `dragstart` de la ligne.
+  - DevTools intercepte ce glisser au lieu de le confier au système, et le livre au graphe (`Input.dispatchDragEvent` : entrée, survol, dépôt), comme le ferait le système.
+  - Les données livrées sont celles que la page a mises, et le scénario vérifie qu'elles ne portent que `NODE_MIME` et l'identifiant. Aucune solution de repli n'a servi.
+  - Coût si faux : nul.
+- Ruling: **`popup-vignettes` refaite dans `plan4a`.**
+  - Elle différait de 15 380 pixels (1,010 %). Les deux images ont été comparées à l'œil :
+    - la section « Annotations » paraît après « Fichiers », sa première ligne visible : « La complexité de Kolmogorov d’une chaîne est la taille du plus petit programme q… », « p. 1 », « dans aucun plan », « sur une version précédente » ;
+    - le corps du pop-up dépasse désormais ses 720 pixels : une barre de défilement paraît, et la colonne de droite (les tailles, le champ des tags, le résumé) se décale de sa largeur.
+  - Rien d'autre ne change. Le changement est le sujet même de la tâche.
+  - L'image vient de la seconde suite, copiée seule dans `plan4a`.
+  - Coût si faux : nul.
+
+### Vérifications
+
+- **Tests écrits d'abord** (rouge, pour la raison attendue) :
+  - `core/tests/annotation.test.ts` : l'annotation retirée de son dernier plan avait un `trashedAt` ;
+  - `app/tests/actions.test.ts` : `placeDroppedBuild is not a function`, `ALREADY_HERE` valait `undefined`, et `lastPlanNodes` nommait l'annotation ;
+  - `app/tests/nodeFiles.test.ts` : `carried is not a function` ;
+  - `app/tests/annotations.test.ts` : `annotationSource is not a function`, et l'annotation retirée de son dernier plan était à la corbeille ;
+  - `app/tests/panels.test.ts` : l'aperçu n'avait pas de `reveal`.
+- **Les tests nouveaux** :
+  - `placeDroppedBuild` : sur le fond, posée au point, au cran lisible, sans groupe ; dans l'enveloppe du PDF dans « Lecture », membre, le groupe gardant son cran ; sur le nœud simple du PDF dans le lobby, membre, le PDF devenu un groupe deux crans au-dessus, et l'action défaite en un pas ; déjà dans le plan, refusée « Déjà dans ce plan. », aussi quand elle y est posée entre le geste et le calcul ; à la corbeille, refusée ;
+  - les routes : un nœud contre des fichiers, sur le graphe, un pop-up, la marge, le pop-up d'une connexion, une question, le plein écran, les onglets ;
+  - `annotationSource` : la version courante, la précédente, le fichier renommé, la précédente alors perdue, le PDF à la corbeille, le PDF absent ;
+  - `withFile` et `reveal` ;
+  - le retrait d'une annotation de son dernier plan dans le cœur, l'index et `deleteBuild`.
+- **Suites**, chaque paquet seul, `--maxWorkers=1` : `core` 109, `store` 20, `view` 244, `app` 363, tous passés. `store` et `view` n'ont pas changé, mais dépendent de `removeFromPlan`. `tsc --noEmit -p .` : sans erreur dans `core` et `app`.
+- **Scénarios d'interface** : 11 sur 11, dont trois nouveaux, par de vrais glisser-déposer (`dragDrop`) :
+  1. « poser une annotation depuis le pop-up sur le nœud du PDF, qui devient un groupe ; Ctrl+Z ». Le scénario vérifie :
+     - la liste du pop-up, celle de la marge : trois lignes, les plans, « sur une version précédente » ;
+     - le glisser, qui ne porte que le nœud de l'annotation ;
+     - dans la base, l'annotation posée au cran 0, membre de la publication, qui passe du cran 0 au cran 2 ;
+     - la liste, qui dit « Lobby », et le focus sur le graphe ;
+     - Ctrl+Z, qui retire l'annotation du lobby et rend au PDF son cran et sa simplicité, l'annotation restant dans la base ;
+  2. « poser une annotation depuis l'aperçu sur le fond ; reposée, « Déjà dans ce plan. » » :
+     - posée à 0,15 unité du point du dépôt, au cran lisible, sans groupe ;
+     - la marge qui dit « Lobby » ;
+     - reposée : « Déjà dans ce plan. », et elle ne bouge pas ;
+  3. « le nœud du PDF mis à la corbeille pendant que ses listes sont ouvertes ». Le scénario :
+     - pose l'annotation, ouvre son pop-up et l'épingle ;
+     - clique « Annotation de « … », p. 2 » : le chapitre s'ouvre à la page 2, le passage clignotant ;
+     - épingle l'aperçu, le tire par son en-tête, ouvre le pop-up du PDF et sa liste, puis Suppr et « Partout ».
+     - Vérifié : la ligne de l'annotation dit « Le PDF « … » est à la corbeille. » et n'est plus un bouton ; le pop-up du PDF et son aperçu disent « Ce nœud n’existe plus. » ; aucun panneau n'a échoué ; l'annotation n'est pas à la corbeille ;
+     - Ctrl+Z rend le PDF : la ligne redevient un bouton, et l'aperçu montre de nouveau ses pages.
+  - Ce qu'un scénario ne vérifie pas :
+    - le cadrage sur le nœud déjà là, et l'illumination de l'hôte pendant le survol : le graphe se dessine en WebGL, sans DOM à lire ;
+    - la question « partout ou ici seulement » sur un dépôt d'annotation : la base de test n'a pas d'annotation posée sans groupe dans un plan où son PDF existe. Le chemin est celui de `dropAsking`, extrait sans changement ;
+    - la version absente du magasin dans le pop-up : la tâche 2 vérifie le lecteur ; le pop-up passe par le même `blobSize`.
+- **Captures** : deux suites neuves, chacune de 24 images, sur le code final, identiques au pixel entre elles (24 sur 24).
+  - Contre `reference-3c` : 11 sur 11 à 0 pixel. Contre `plan4b` : 5 sur 5 à 0 pixel.
+  - Contre `plan4a` : 7 sur 8 à 0 pixel. `plein-ecran-pdf`, dont le pop-up de la publication est sous le plein écran, ne change pas. `popup-vignettes` est refaite (Ruling plus haut) : avec elle, 8 sur 8 à 0 pixel.
+
+### Notes
+
+- **Pour les tâches 4 à 6** : `dropRoute(zone, node, what)` distingue déjà ce que porte un glisser (`carried`). Un `.bib` ou un PDF déposé sur le fond y trouvera sa route à côté de `notice` et de `place`, sans toucher celle d'un nœud.

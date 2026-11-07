@@ -1,8 +1,9 @@
 import type { FileRef } from '@cirrus/core';
 import { expect, test } from 'vitest';
+import { NODE_MIME } from '../src/renderer/files/annotations.ts';
 import { mergeFiles } from '../src/renderer/files/merge.ts';
 import {
-  carriesFiles, dropNotice, droppedPaths, dropRoute, dropZone, EXECUTABLE_SHOWN, fileMenu, NOT_ON_DISK, openNotice, refusalNotice, refusesStrayDrop,
+  carried, carriesFiles, dropNotice, droppedPaths, dropRoute, dropZone, EXECUTABLE_SHOWN, fileMenu, NOT_ON_DISK, openNotice, refusalNotice, refusesStrayDrop,
   systemOnClick,
 } from '../src/renderer/files/nodeFiles.ts';
 import { nodeOpenedBy } from '../src/renderer/ui/panels/Panels.tsx';
@@ -129,6 +130,42 @@ test('dropZone et dropRoute : un dépôt va au nœud ou au groupe du graphe, au 
     const taken = route.to !== 'refused';
     expect(refusesStrayDrop({ defaultPrevented: taken, dataTransfer: FILES }), where).toBe(!taken);
   }
+});
+
+test('carried et dropRoute (plan 4c, tâche 3) : un nœud tiré d’une liste n’est jamais pris pour des fichiers ; sur le graphe il se pose, ailleurs rien', () => {
+  const NODE = { types: [NODE_MIME] };
+  expect(carried({ dataTransfer: NODE })).toBe('node');
+  expect(carried({ dataTransfer: FILES })).toBe('files');
+  // Both (no list of Cirrus gives that): the node, never files.
+  expect(carried({ dataTransfer: { types: [NODE_MIME, 'Files'] } })).toBe('node');
+  expect(carried({ dataTransfer: TEXT })).toBeNull();
+  expect(carried({ dataTransfer: null })).toBeNull();
+  expect(carriesFiles({ dataTransfer: NODE })).toBe(false);
+  expect(carriesFiles({ dataTransfer: { types: [NODE_MIME, 'Files'] } })).toBe(false);
+  // The window's guard never refuses it: it is no file Chromium would show, and nothing takes it outside the graph.
+  expect(refusesStrayDrop({ defaultPrevented: false, dataTransfer: NODE })).toBe(false);
+  const canvas = at(...GRAPH, 'div.canvas-host', 'canvas');
+  /** The route of what `dataTransfer` carries, let go at `target` onto the node `under` (as GraphView or NodePopup reads it). */
+  const route = (target: ReturnType<typeof at>, under: string | null, dataTransfer: { types: string[] }) => {
+    const what = carried({ dataTransfer });
+    return what === null ? null : dropRoute(dropZone(target), under, what);
+  };
+  // On the graph: placed in the plan shown, whatever lies under the point (its host is read in the plan: placeDroppedBuild);
+  // files there go to that node, as before.
+  expect(route(canvas, 'n', NODE)).toEqual({ to: 'place' });
+  expect(route(canvas, null, NODE)).toEqual({ to: 'place' });
+  expect(route(canvas, 'n', FILES)).toEqual({ to: 'node', node: 'n' });
+  expect(route(canvas, null, FILES)).toEqual({ to: 'notice' });
+  expect(dropRoute('graph', 'n')).toEqual({ to: 'node', node: 'n' });
+  // A node's pop-up (its files, its fields), what floats over the graph, a preview, the full screen, the tabs: nothing.
+  const popup = [...MAIN, 'div.panels', 'section.panel.node-popup', 'div.body'];
+  expect(route(at(...popup, 'ul.files', 'li.file'), 'mdl', NODE)).toEqual({ to: 'refused' });
+  expect(route(at(...popup, 'ol.annotation-list', 'li'), 'mdl', NODE)).toEqual({ to: 'refused' });
+  expect(route(at(...popup, 'ul.files', 'li.file'), 'mdl', FILES)).toEqual({ to: 'node', node: 'mdl' });
+  for (const where of [
+    at(...GRAPH, 'div.popup', 'ul', 'li'), at(...GRAPH, 'div.ask', 'button'), at(...MAIN, 'div.panels', 'section.panel.file-preview', 'div.body', 'aside.annotation-margin'),
+    at(...APP, 'div.full-screen', 'div.viewer'), at(...APP, 'div.tabs', 'div.tab.on'),
+  ]) expect(route(where, null, NODE)).toEqual({ to: 'refused' });
 });
 
 test('droppedPaths : le chemin de chaque fichier du disque ; un fichier fait par une page est refusé, nommé', () => {

@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, applyOps, groupOf, invertAction, layoutKey, placementKey, setLayout, type State, type Vec2 } from '@cirrus/core';
+import {
+  applyOp, applyOps, CommandError, deleteEverywhere, groupOf, invertAction, layoutKey, placementKey, setLayout, type State, type Vec2,
+} from '@cirrus/core';
 import { buildFixture, buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import {
@@ -9,8 +11,9 @@ import {
 } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
 import {
-  absentBuild, addMemberBuild, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, filesBuild, groupAt, hideBuild, importBuild, joinBuild, lobbyConnectionBuild,
-  dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeInPlanBuild, removeFileBuild, removeMemberBuild, renameBuild, renameFileBuild, roleBuild,
+  absentBuild, addMemberBuild, ALREADY_HERE, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, filesBuild, groupAt, hideBuild, importBuild, joinBuild,
+  lobbyConnectionBuild, dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, removeFileBuild, removeMemberBuild,
+  renameBuild, renameFileBuild, roleBuild,
   scaleBuild, splitBuild,
   withRepercussion,
 } from '../src/renderer/actions.ts';
@@ -291,6 +294,74 @@ test('création, importation, collage : avec l’index, seuls les éléments sou
   // The node created there enters that group, as with the scan.
   const a = createBuild(counted, 'Nouveau', at, 1, P, index)!(state);
   expect(a.ops.some((o) => o.t === 'branch' && o.key.plan === lobby && o.key.node === group && o.after)).toBe(true);
+});
+
+// Plan 4c, task 3 (D4): an annotation dragged out of a list and let go on the graph.
+const LI = 'An Introduction to Kolmogorov Complexity and Its Applications';
+
+test('placeDroppedBuild : déposée sur le fond, l’annotation y est posée, au cran lisible à ce zoom, dans aucun groupe', () => {
+  const { nodes, plans } = ids, at = { x: 9000, y: 9000 };
+  expect(target(sc, [], at)).toBeNull();
+  const a = run(placeDroppedBuild(sc, nodes.annotationPage2, at, 0.25, P));
+  expect(a.label).toBe('Poser un nœud dans ce plan');
+  expect(s.placements.get(placementKey(plans.lobby, nodes.annotationPage2))).toMatchObject({ x: 9000, y: 9000, k: 2 }); // 16 px text at zoom 0.25 needs f^2
+  expect(groupOf(s, plans.lobby, nodes.annotationPage2)).toBeUndefined();
+});
+
+test('placeDroppedBuild : dans l’enveloppe du nœud du PDF, un groupe dans « Lecture », elle en devient membre ; le groupe garde son cran', () => {
+  const { nodes, plans } = ids;
+  const lecture = buildScene(s, plans.lecture, measure, P), g = lecture.items[lecture.byId.get(nodes.publication)!];
+  expect(g.kind).toBe('group');
+  const at = inPadding(g), k = s.placements.get(placementKey(plans.lecture, nodes.publication))!.k;
+  const a = run(placeDroppedBuild(lecture, nodes.annotationPage2, at, 1, P));
+  expect(a.label).toBe(`Poser un nœud dans « ${LI} »`);
+  expect(s.placements.get(placementKey(plans.lecture, nodes.annotationPage2))).toMatchObject({ x: at.x, y: at.y, k: 0 });
+  expect(groupOf(s, plans.lecture, nodes.annotationPage2)).toBe(nodes.publication);
+  expect(s.placements.get(placementKey(plans.lecture, nodes.publication))!.k).toBe(k);
+});
+
+test('placeDroppedBuild : sur le nœud simple du PDF, celui-ci devient un groupe, l’annotation pour premier membre (règles du plan 3) ; une action', () => {
+  const { nodes, plans } = ids;
+  const pub = sc.items[sc.byId.get(nodes.publication)!];
+  expect(pub.kind).toBe('node');
+  const before = s.placements.get(placementKey(plans.lobby, nodes.publication))!;
+  const a = run(placeDroppedBuild(sc, nodes.annotationPage2, { x: pub.x, y: pub.y }, 1, P));
+  expect(a.label).toBe(`Poser un nœud dans « ${LI} »`);
+  expect(groupOf(s, plans.lobby, nodes.annotationPage2)).toBe(nodes.publication);
+  // groupOffsetSteps above its largest member, as a node dropped on a node (dropBuild).
+  expect(s.placements.get(placementKey(plans.lobby, nodes.annotationPage2))!.k).toBe(0);
+  expect(s.placements.get(placementKey(plans.lobby, nodes.publication))!.k).toBe(P.groupOffsetSteps);
+  const after = buildScene(s, plans.lobby, measure, P);
+  expect(after.items[after.byId.get(nodes.publication)!].kind).toBe('group');
+  // Ctrl+Z: one step gives back the plan as it was.
+  applyOps(s, invertAction(a).ops);
+  expect(s.placements.has(placementKey(plans.lobby, nodes.annotationPage2))).toBe(false);
+  expect(s.placements.get(placementKey(plans.lobby, nodes.publication))).toEqual(before);
+  expect(groupOf(s, plans.lobby, nodes.annotationPage2)).toBeUndefined();
+});
+
+test('placeDroppedBuild : déjà dans ce plan, refusé « Déjà dans ce plan. », rien n’est écrit ; à la corbeille, refusé', () => {
+  const { nodes, plans } = ids;
+  expect(ALREADY_HERE).toBe('Déjà dans ce plan.');
+  const lecture = buildScene(s, plans.lecture, measure, P);
+  const here = placeDroppedBuild(lecture, nodes.annotationPage1, { x: 9000, y: 9000 }, 1, P)!;
+  expect(() => here(s)).toThrow(new CommandError(ALREADY_HERE));
+  expect(s.placements.get(placementKey(plans.lecture, nodes.annotationPage1))).toMatchObject({ x: 0, y: 0 });
+  // Placed meanwhile (another drop of it computed first): refused when it is computed.
+  const late = placeDroppedBuild(sc, nodes.annotationPage2, { x: 9000, y: 9000 }, 1, P)!;
+  run(placeDroppedBuild(sc, nodes.annotationPage2, { x: 8000, y: 8000 }, 1, P));
+  expect(() => late(s)).toThrow(ALREADY_HERE);
+  applyOps(s, deleteEverywhere(s, nodes.annotationEarlier).ops);
+  expect(() => placeDroppedBuild(sc, nodes.annotationEarlier, { x: 9000, y: 9000 }, 1, P)!(s)).toThrow(/corbeille/);
+});
+
+test('cacher ou supprimer ici une annotation de son dernier plan : elle ne part pas à la corbeille, l’avertissement ne la nomme pas (décision du contrôleur)', () => {
+  const { nodes, plans } = ids;
+  const lecture = buildScene(s, plans.lecture, measure, P);
+  expect(lastPlanNodes(s, lecture, [nodes.annotationPage1], false)).toEqual([]);
+  run(deleteBuild(lecture, [nodes.annotationPage1], false));
+  expect(s.placements.has(placementKey(plans.lecture, nodes.annotationPage1))).toBe(false);
+  expect(s.nodes.get(nodes.annotationPage1)!.trashedAt).toBeUndefined();
 });
 
 test('fichiers du nœud : un dépôt, un renommage, un retrait sur la base de test ; chaque action se défait seule par invertAction', () => {

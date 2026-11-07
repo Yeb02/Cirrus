@@ -2,6 +2,7 @@ import type { FileRef, Id } from '@cirrus/core';
 import type { ImportResult, OpenResult } from '../../main/files.ts';
 import { filesBuild, UP_TO_DATE } from '../actions.ts';
 import type { EditSession } from '../session.ts';
+import { NODE_MIME } from './annotations.ts';
 import { fileKind, type FileKind } from './kind.ts';
 import { type Merge, mergeFiles } from './merge.ts';
 
@@ -22,8 +23,22 @@ export interface NodeFiles {
 /** What a drag event says of what it carries (a DragEvent, or what stands for one). */
 type Dragged = { dataTransfer: { readonly types: readonly string[] } | null };
 
-/** Whether a drag carries files (from the explorer): text dragged in a field is left to the field. */
-export const carriesFiles = (e: Dragged): boolean => e.dataTransfer?.types.includes('Files') === true;
+/** What a drag carries: a node dragged out of a list of annotations (NODE_MIME, plan 4c, D4), files from the explorer. */
+export type Carried = 'node' | 'files';
+
+/**
+ * What a drag carries (plan 4c, task 3): a node from a list of Cirrus first — a node is never taken for files —, then
+ * files; null for anything else (text dragged in a field is left to the field).
+ */
+export function carried(e: Dragged): Carried | null {
+  const types = e.dataTransfer?.types;
+  if (!types) return null;
+  if (types.includes(NODE_MIME)) return 'node';
+  return types.includes('Files') ? 'files' : null;
+}
+
+/** Whether a drag carries files (from the explorer), and no node of a list: text dragged in a field is left to the field. */
+export const carriesFiles = (e: Dragged): boolean => carried(e) === 'files';
 
 /**
  * The window's guard (Review Focus 2): files that nothing took — no node's pop-up, not the graph, their default not
@@ -51,17 +66,22 @@ export function dropZone(target: EventTarget | DropTarget | null): DropZone | nu
 }
 
 /**
- * Where dropped files go: into a node's files; to a notice, on the graph, where no node takes them (they are taken all
- * the same, so nothing shows them); or refused, by the window's guard (refusesStrayDrop).
+ * Where a drop goes: files into a node's files, or to a notice, on the graph, where no node takes them (they are taken
+ * all the same, so nothing shows them); a node dragged out of a list, placed in the plan shown (plan 4c, D4:
+ * placeDroppedBuild); or refused — files by the window's guard (refusesStrayDrop), a node by nothing taking it.
  */
-export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'refused' };
+export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'place' } | { to: 'refused' };
 
 /**
- * The route of files let go on `zone` (dropZone), `node` being the node that zone gives them to: a pop-up's own (null
- * once it is gone: its pop-up then takes none); on the graph, the node or group under the point, the one a click there
- * would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent or a centre phantom, none).
+ * The route of what is let go on `zone` (dropZone). Files (`what`, by default), `node` being the node that zone gives
+ * them to: a pop-up's own (null once it is gone: its pop-up then takes none); on the graph, the node or group under the
+ * point, the one a click there would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent
+ * or a centre phantom, none). A node dragged out of a list (plan 4c, task 3): placed on the graph, whatever lies under
+ * the point (the group it enters is read in the plan, by placeDroppedBuild); taken nowhere else — a pop-up, what floats
+ * over the graph, a preview, the full screen (modal, D4).
  */
-export function dropRoute(zone: DropZone | null, node: Id | null): DropRoute {
+export function dropRoute(zone: DropZone | null, node: Id | null, what: Carried = 'files'): DropRoute {
+  if (what === 'node') return zone === 'graph' ? { to: 'place' } : { to: 'refused' };
   if (zone === null) return { to: 'refused' };
   if (node !== null) return { to: 'node', node };
   return zone === 'graph' ? { to: 'notice' } : { to: 'refused' };

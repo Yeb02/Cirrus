@@ -309,7 +309,9 @@ const hasMembers = (s: State, plan: Id, group: Id): boolean =>
 /**
  * "Here only" removal (spec 7): the node leaves this plan; its knowledge branches stay and are drawn as stubs. A group
  * keeps its links, hidden, so that its members show in their nearest ancestor present in the plan; a node with no
- * members leaves its group, and so do the hidden groups this leaves empty. Leaving its last plan sends it to the trash.
+ * members leaves its group, and so do the hidden groups this leaves empty. Leaving its last plan sends it to the trash,
+ * except a PDF annotation (plan 4c, D1: born in no plan, kept under its PDF; controller's ruling, task 3): it stays,
+ * in no plan, listed under its PDF; « Supprimer partout » (deleteEverywhere) trashes it.
  */
 export function removeFromPlan(s: State, plan: Id, node: Id): Action {
   const n = nodeOf(s, node);
@@ -321,7 +323,7 @@ export function removeFromPlan(s: State, plan: Id, node: Id): Action {
       leaveGroup(d, plan, x);
       x = parent;
     }
-    if (placementsOf(s, node).length === 0) d.node(node, { ...n, trashedAt: Date.now() });
+    if (placementsOf(s, node).length === 0 && n.anchor === undefined) d.node(node, { ...n, trashedAt: Date.now() });
     return d.finish(`Retirer « ${n.title} » de ce plan`);
   });
 }

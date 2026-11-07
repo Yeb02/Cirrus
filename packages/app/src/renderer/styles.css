@@ -380,15 +380,23 @@ button, input, select { font: inherit; color: var(--ink); }
 .annotation-margin .fold { padding: 1px 7px; border-radius: 5px; background: var(--sky2); border: 1px solid var(--edge); cursor: pointer; }
 .annotation-margin.folded .fold { margin: 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .annotation-margin ol { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 4px 0; list-style: none; }
-.annotation-margin li {
+/* An annotation of a list (the margin, a PDF's pop-up): its passage's start, its page, its plans, its note. */
+.annotation-list li {
   display: flex; flex-wrap: wrap; gap: 2px 6px; padding: 5px 10px; cursor: pointer; outline: none; border-left: 3px solid transparent;
 }
-.annotation-margin li:hover, .annotation-margin li:focus-visible { background: rgba(143, 184, 255, 0.1); }
-.annotation-margin li.here { border-left-color: var(--accent); }
-.annotation-margin li .page { color: var(--muted); font-variant-numeric: tabular-nums; }
-.annotation-margin li .start { flex: 1 1 100%; order: -1; overflow-wrap: anywhere; }
-.annotation-margin li .plans { color: var(--muted); }
-.annotation-margin li .version { color: var(--warn); }
+.annotation-list li:hover, .annotation-list li:focus-visible { background: rgba(143, 184, 255, 0.1); }
+.annotation-list li.here { border-left-color: var(--accent); }
+.annotation-list li.gone { cursor: grab; }
+.annotation-list li .page { color: var(--muted); font-variant-numeric: tabular-nums; }
+.annotation-list li .start { flex: 1 1 100%; order: -1; overflow-wrap: anywhere; }
+.annotation-list li .plans { color: var(--muted); }
+.annotation-list li .version { color: var(--warn); }
+.node-popup .annotation-list { margin: 0; padding: 0; list-style: none; font-size: 12.5px; user-select: none; }
+.node-popup .annotation-list li { padding: 4px 6px; }
+/* An annotation's pop-up: the PDF and the page it was made on, a click opening it there; or what is missing. */
+.node-popup .annotation-of { margin: 0 0 8px; font-size: 12.5px; }
+.node-popup .annotation-of button { padding: 0; border: none; background: none; color: var(--accent); cursor: pointer; font: inherit; text-align: left; }
+.node-popup .annotation-of .why { display: block; color: var(--warn); }
 /* Tokens of the text view (CodeMirror's classHighlighter), in the palette's cool tones. */
 .tok-keyword, .tok-tagName { color: #c3a6ff; }
 .tok-string, .tok-inserted { color: #a8d8a0; }

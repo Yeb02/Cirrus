@@ -1,4 +1,6 @@
-import { type Anchor, ANCHOR_MAX_RECTS, ANCHOR_MAX_TEXT, ANNOTATION_TITLE_CHARS, type Id, type NodeRec, nodeRow, placedIn, planId, type State } from '@cirrus/core';
+import {
+  type Anchor, ANCHOR_MAX_RECTS, ANCHOR_MAX_TEXT, ANNOTATION_TITLE_CHARS, type FileRef, type Id, type NodeRec, nodeRow, placedIn, planId, type State,
+} from '@cirrus/core';
 import type { PageViewport } from 'pdfjs-dist';
 import { sameName } from './merge.ts';
 
@@ -125,6 +127,25 @@ export class AnnotationIndex {
 export function ofFile(entries: readonly AnnotationEntry[], file: { name: string; hash: string }): readonly AnnotationEntry[] {
   const kept = entries.filter((e) => e.anchor.hash === file.hash || sameName(e.anchor.file, file.name));
   return kept.length === entries.length ? entries : kept;
+}
+
+/** Where an annotation opens: its PDF's file, `earlier` when that file holds another version since (D2); or why it cannot, in French. */
+export type AnnotationSource = { file: FileRef; earlier: boolean } | { why: string };
+
+/**
+ * The file of its PDF's node an annotation opens in (D2, D4), as the state has it: the one holding its version, by its
+ * hash whatever its name now; else the one under its file's name, which holds a later version (re-imported since: the
+ * reader then shows the earlier one). What is missing otherwise (Review Focus 4): the PDF's node gone or in the trash,
+ * the file no longer in it.
+ */
+export function annotationSource(s: State, a: Anchor): AnnotationSource {
+  const pdf = s.nodes.get(a.pdf);
+  if (!pdf) return { why: 'Le PDF de cette annotation n’existe plus.' };
+  if (pdf.trashedAt !== undefined) return { why: `Le PDF « ${pdf.title} » est à la corbeille.` };
+  const same = pdf.files.find((f) => f.hash === a.hash);
+  if (same) return { file: same, earlier: false };
+  const named = pdf.files.find((f) => sameName(f.name, a.file));
+  return named ? { file: named, earlier: true } : { why: `« ${a.file} » n’est plus dans « ${pdf.title} ».` };
 }
 
 // The geometry (D3; Review Focus 3).

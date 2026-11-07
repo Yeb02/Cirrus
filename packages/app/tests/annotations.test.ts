@@ -10,7 +10,7 @@ import { LocalStore } from '@cirrus/store';
 import { getDocument, type PageViewport, type PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import {
-  anchorRefusal, AnnotationIndex, type DOMRectLike, mergeLines, ofFile, type PageHit, pdfRects, rectsOnScreen, selectionToAnchor, titleChars,
+  anchorRefusal, AnnotationIndex, annotationSource, type DOMRectLike, mergeLines, ofFile, type PageHit, pdfRects, rectsOnScreen, selectionToAnchor, titleChars,
 } from '../src/renderer/files/annotations.ts';
 
 /** CSS pixels per point (pdf.ts's, which loads pdf.js's browser build): zoom 1 shows a page at its real size. */
@@ -213,6 +213,22 @@ test('index : les annotations d’un PDF dans l’ordre des pages, et celles de 
   expect(ofFile(all, { ...chapter, name: 'renommé.pdf' }).map((e) => e.node.id)).toEqual([ids.nodes.annotationPage1, ids.nodes.annotationPage2]);
 });
 
+test('annotationSource : le fichier du PDF qui porte sa version — par son empreinte, ou une version précédente sous son nom — ou ce qui manque (Review Focus 4)', () => {
+  const s = store.loadState(), pdf = ids.nodes.publication;
+  const anchorOf = (id: string) => s.nodes.get(id)!.anchor!;
+  const page1 = anchorOf(ids.nodes.annotationPage1), earlier = anchorOf(ids.nodes.annotationEarlier), chapter = fileOf(s, CHAPTER);
+  expect(annotationSource(s, page1)).toEqual({ file: chapter, earlier: false });
+  expect(annotationSource(s, earlier)).toEqual({ file: chapter, earlier: true });
+  // The chapter renamed: its version is found by its hash, under its new name; the earlier one, under the old name, no longer.
+  run(s, editNode(s, pdf, { files: s.nodes.get(pdf)!.files.map((f) => (f.name === CHAPTER ? { ...f, name: 'Chapitre 1.pdf' } : f)) }));
+  expect(annotationSource(s, page1)).toEqual({ file: { ...chapter, name: 'Chapitre 1.pdf' }, earlier: false });
+  expect(annotationSource(s, earlier)).toEqual({ why: `« ${CHAPTER} » n’est plus dans « An Introduction to Kolmogorov Complexity and Its Applications ».` });
+  // The PDF's node in the trash, or gone.
+  run(s, deleteEverywhere(s, pdf));
+  expect(annotationSource(s, page1)).toEqual({ why: 'Le PDF « An Introduction to Kolmogorov Complexity and Its Applications » est à la corbeille.' });
+  expect(annotationSource(s, { ...page1, pdf: 'jamais-vu' })).toEqual({ why: 'Le PDF de cette annotation n’existe plus.' });
+});
+
 test('index : une annotation à la corbeille ou annulée n’y est plus ; le PDF à la corbeille garde les siennes', () => {
   const s = store.loadState();
   run(s, deleteEverywhere(s, ids.nodes.annotationPage2));
@@ -244,21 +260,21 @@ test('index : une reconstruction après une modification ne relit que ce qui a c
   const i2 = AnnotationIndex.build(s, i1);
   expect(entry(i2, ids.nodes.annotationEarlier).plans.map((p) => p.id)).toEqual([ids.plans.lobby]);
   expect(entry(i2, ids.nodes.annotationPage1)).toBe(entry(i1, ids.nodes.annotationPage1));
-  // That placement undone: in no plan again. Removed « here only » from its last plan instead, it goes to the trash
-  // (spec 7), and out of the index.
-  run(s, invertAction(placed));
-  expect(entry(AnnotationIndex.build(s, i2), ids.nodes.annotationEarlier).plans).toEqual([]);
-  run(s, placed);
+  // Removed « here only » from its last plan: in no plan again, and still listed under its PDF (controller's ruling,
+  // task 3: an annotation leaving its last plan does not go to the trash).
   run(s, removeFromPlan(s, ids.plans.lobby, ids.nodes.annotationEarlier));
-  expect(entry(AnnotationIndex.build(s, i2), ids.nodes.annotationEarlier)).toBeUndefined();
-  // A new one, then its creation undone: in the list, then gone; the earlier version's list is empty now.
+  const back = AnnotationIndex.build(s, i2);
+  expect(s.nodes.get(ids.nodes.annotationEarlier)!.trashedAt).toBeUndefined();
+  expect(entry(back, ids.nodes.annotationEarlier).plans).toEqual([]);
+  expect(back.forVersion(ids.nodes.publication, earlier).map((e) => e.node.id)).toEqual([ids.nodes.annotationEarlier]);
+  // A new one, then its creation undone: in the list, then gone; the earlier version's list is not read again.
   const made = createAnnotation(s, { pdf: ids.nodes.publication, file: CHAPTER, hash: chapter.hash, page: 3, rects: [[72, 700, 300, 712]], text: 'K(x)' }, 'K(x)');
   run(s, made);
-  const i3 = AnnotationIndex.build(s, i2);
-  expect(i3.of(ids.nodes.publication).map((e) => e.anchor.page)).toEqual([1, 2, 3]);
-  expect(i3.forVersion(ids.nodes.publication, earlier)).toEqual([]);
+  const i3 = AnnotationIndex.build(s, back);
+  expect(i3.of(ids.nodes.publication).map((e) => e.anchor.page)).toEqual([1, 1, 2, 3]);
+  expect(i3.forVersion(ids.nodes.publication, earlier)).toBe(back.forVersion(ids.nodes.publication, earlier));
   run(s, invertAction(made));
   const i4 = AnnotationIndex.build(s, i3);
-  expect(i4.of(ids.nodes.publication).map((e) => e.anchor.page)).toEqual([1, 2]);
+  expect(i4.of(ids.nodes.publication).map((e) => e.anchor.page)).toEqual([1, 1, 2]);
   expect(i4.forVersion(ids.nodes.publication, chapter.hash)).toEqual(i1.forVersion(ids.nodes.publication, chapter.hash));
 });

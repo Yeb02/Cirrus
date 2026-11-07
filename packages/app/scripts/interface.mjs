@@ -37,9 +37,17 @@ async function launch(data, profile, more = {}) {
   await new Promise((r) => ws.addEventListener('open', r));
   let next = 0;
   const pending = new Map();
+  /** DevTools' events by method: each waiter takes the next one. */
+  const waiting = new Map();
   ws.addEventListener('message', (m) => {
     const x = JSON.parse(m.data);
     if (x.id && pending.has(x.id)) { pending.get(x.id)(x); pending.delete(x.id); }
+    else if (x.method && waiting.has(x.method)) { const take = waiting.get(x.method); waiting.delete(x.method); take(x.params); }
+  });
+  /** The next event `method`, or null after `ms`. */
+  const nextEvent = (method, ms) => new Promise((r) => {
+    const timer = setTimeout(() => { waiting.delete(method); r(null); }, ms);
+    waiting.set(method, (params) => { clearTimeout(timer); r(params); });
   });
   const send = (method, params = {}) => new Promise((r) => { const id = ++next; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
   const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
@@ -85,6 +93,38 @@ async function launch(data, profile, more = {}) {
       }
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
       await sleep(400);
+    },
+    /**
+     * A drag and drop (HTML5) by the mouse, from `from` to `to`: the left button pressed on the element at `from`, moved
+     * until Chromium starts its drag — the element's own dragstart fills it —, then that drag, intercepted by DevTools
+     * (Input.setInterceptDrags) instead of the system's, entered, moved over and let go at `to` (Input.dispatchDragEvent),
+     * the page's dragenter, dragover and drop handlers receiving it as from the system. Resolves with what the drag
+     * carried (its items), or throws if Chromium started none.
+     */
+    async dragDrop(from, to) {
+      await send('Input.setInterceptDrags', { enabled: true });
+      try {
+        const intercepted = nextEvent('Input.dragIntercepted', 4000);
+        await mouse('mouseMoved', from.x, from.y);
+        await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+        for (let i = 1; i <= 10; i++) {
+          const x = from.x + ((to.x - from.x) * i) / 10, y = from.y + ((to.y - from.y) * i) / 10;
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+          await sleep(30);
+        }
+        const drag = await intercepted;
+        if (!drag) throw new Error('Chromium n’a commencé aucun glisser-déposer depuis cet élément');
+        for (const [type, at] of [['dragEnter', to], ['dragOver', { x: to.x - 2, y: to.y }], ['dragOver', to]]) {
+          await send('Input.dispatchDragEvent', { type, x: at.x, y: at.y, data: drag.data });
+          await sleep(60);
+        }
+        await send('Input.dispatchDragEvent', { type: 'drop', x: to.x, y: to.y, data: drag.data });
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
+        await sleep(400);
+        return drag.data.items;
+      } finally {
+        await send('Input.setInterceptDrags', { enabled: false });
+      }
     },
     /**
      * The client rectangle of the `k`-th character of `needle`, found in the text of the first element `scope` (its
@@ -160,6 +200,47 @@ async function sideTolerance(page, scope) {
   const zoom = parseFloat(await page.evaluate(`document.querySelector('${scope} .pdf-tools .zoom').textContent`)) / 100;
   return 0.75 * zoom * (96 / 72);
 }
+
+// Plan 4c, task 3: an annotation put down in the lobby from a list, by a real drag (dragDrop).
+const LI = 'An Introduction to Kolmogorov Complexity and Its Applications';
+/** The lobby's identifier, the publication's, and its annotation of page 2 (in no plan in the test base). */
+function idsOf(base) {
+  const lobby = base(`SELECT id FROM plans WHERE json_extract(json, '$.type') = 'lobby'`)[0].id;
+  const publication = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = '${LI}'`)[0].id;
+  return { lobby, publication, page2: anchorsOf(base).find((a) => a.page === 2).id };
+}
+/** Node `node`'s place in `plan`, or null. */
+const placementOf = (base, plan, node) => {
+  const r = base(`SELECT json FROM placements WHERE plan = '${plan}' AND node = '${node}'`)[0];
+  return r ? JSON.parse(r.json) : null;
+};
+/** The group node `node` is in, in `plan`, as the base has it (the target of its inclusion shown there), or null. */
+function groupIn(base, plan, node) {
+  for (const r of base(`SELECT c.json FROM connections c JOIN branches b ON b.connection = c.id WHERE c.kind = 'inclusion' AND c.trashed = 0 AND b.plan = '${plan}' AND b.node = '${node}'`)) {
+    const m = JSON.parse(r.json).members;
+    if (m.some((x) => x.node === node && x.role === 'source')) return m.find((x) => x.role === 'target')?.node ?? null;
+  }
+  return null;
+}
+/** The world point under (x, y) of the window, the view centred on PUBLICATION's (−420, −300) at zoom 1. */
+async function worldAt(page, at) {
+  const c = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  return { x: -420 + at.x - c.x, y: -300 + at.y - c.y };
+}
+/** The publication's box on the graph, left of its pop-up (which opens right of the click): what of it shows there. */
+const ON_PUBLICATION = { x: 720, y: 500 };
+/** The sky at the top right of the view, over no node nor envelope (the test base's lobby). */
+const SKY = { x: 1530, y: 110 };
+/** The publication's pop-up, by a click on it, its list of annotations in view; the centre of its row « p. `n` ». */
+async function popupRow(page, n) {
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup .annotation-list li')`, 1000)); i++) await page.click(792, 461);
+  await page.evaluate(`document.querySelector('.node-popup .annotation-list')?.scrollIntoView({ block: 'center' })`);
+  await sleep(200);
+  return page.centre('.node-popup .annotation-list li', `p\\. ${n}`);
+}
+/** The text of the rows of `list`. */
+const rows = (page, list) => page.evaluate(`[...document.querySelectorAll('${list} li')].map((li) => li.textContent)`);
+const said = (page, text) => page.until(`[...document.querySelectorAll('.toast')].some((t) => t.textContent === ${JSON.stringify(text)})`);
 
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
 const SCENARIOS = [
@@ -391,10 +472,120 @@ const SCENARIOS = [
       if (!(await page.until(`/constante près\\./.test(document.querySelector('${PAGE_1}')?.textContent ?? '')`, 15000))) throw new Error('la version actuelle ne revient pas');
     },
   },
+  {
+    // Plan 4c, D4 (task 3): the PDF's pop-up lists its annotations, as the margin; one dragged from there onto the PDF's
+    // simple node enters it, the node becoming a group above it (plan 3's rules); Ctrl+Z gives the plan back.
+    name: 'poser une annotation depuis le pop-up sur le nœud du PDF, qui devient un groupe ; Ctrl+Z',
+    env: PUBLICATION.env, settings: { popupHeightPx: 720 },
+    async run(page, base) {
+      const { lobby, publication, page2 } = idsOf(base);
+      const row = await popupRow(page, 2);
+      const listed = await rows(page, '.node-popup .annotation-list');
+      console.log(`     liste du pop-up : ${JSON.stringify(listed)}`);
+      if (listed.length !== 3 || !listed.some((t) => /p\. 1.*Lecture/.test(t)) || !listed.some((t) => /p\. 2.*dans aucun plan/.test(t))
+        || listed.filter((t) => t.includes('sur une version précédente')).length !== 1) throw new Error('la liste du pop-up n’est pas celle de la marge');
+      const before = placementOf(base, lobby, publication);
+      const items = await page.dragDrop(row, ON_PUBLICATION);
+      console.log(`     glissé : ${JSON.stringify(items)}`);
+      if (items.length !== 1 || items[0].mimeType !== 'application/x-cirrus-node' || items[0].data !== page2) throw new Error('le glisser ne porte pas le seul nœud de l’annotation');
+      if (!(await until(() => placementOf(base, lobby, page2) !== null))) throw new Error('l’annotation n’est pas posée dans le lobby');
+      const placed = placementOf(base, lobby, page2), group = groupIn(base, lobby, page2), k = placementOf(base, lobby, publication).k;
+      console.log(`     posée ${JSON.stringify(placed)} ; groupe ${group === publication ? 'la publication' : group} ; cran de la publication ${before.k} → ${k}`);
+      if (group !== publication) throw new Error('l’annotation n’est pas entrée dans le nœud du PDF');
+      if (placed.k !== 0 || k !== 2) throw new Error('les crans ne sont pas le cran lisible et celui d’un groupe au-dessus de son membre');
+      if (!(await page.until(`[...document.querySelectorAll('.node-popup .annotation-list li')].some((li) => /p\\. 2.*Lobby/.test(li.textContent))`))) {
+        throw new Error('la liste ne dit pas le plan où l’annotation est posée');
+      }
+      if (!(await page.evaluate(`document.activeElement?.classList.contains('graph')`))) throw new Error('le graphe n’a pas le focus après le dépôt');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => placementOf(base, lobby, page2) === null))) throw new Error('Ctrl+Z n’a pas retiré l’annotation du lobby');
+      const after = placementOf(base, lobby, publication);
+      if (after.k !== before.k || groupIn(base, lobby, page2) !== null) throw new Error('Ctrl+Z n’a pas rendu au nœud du PDF son cran et sa simplicité');
+      if (anchorsOf(base).length !== 3) throw new Error('une annotation a quitté la base');
+    },
+  },
+  {
+    // D4: dragged from the preview's margin onto the sky, an annotation takes the drop's place at the readable step, in
+    // no group; dragged there again, « Déjà dans ce plan. », nothing written.
+    name: 'poser une annotation depuis l’aperçu sur le fond ; reposée, « Déjà dans ce plan. »',
+    ...PUBLICATION,
+    async run(page, base) {
+      const { lobby, page2 } = idsOf(base);
+      await openChapter(page);
+      const covered = await page.evaluate(`[...document.querySelectorAll('.panel')].some((p) => { const r = p.getBoundingClientRect(); return ${SKY.x} >= r.left && ${SKY.x} <= r.right && ${SKY.y} >= r.top && ${SKY.y} <= r.bottom; })`);
+      if (covered) throw new Error('un panneau couvre le point du dépôt');
+      const row = await page.centre('.file-preview .annotation-margin li', 'p\\. 2');
+      await page.dragDrop(row, SKY);
+      if (!(await until(() => placementOf(base, lobby, page2) !== null))) throw new Error('l’annotation n’est pas posée dans le lobby');
+      const placed = placementOf(base, lobby, page2), want = await worldAt(page, SKY);
+      console.log(`     posée ${JSON.stringify(placed)} ; point du dépôt ${JSON.stringify(want)}`);
+      if (Math.abs(placed.x - want.x) > 1 || Math.abs(placed.y - want.y) > 1 || placed.k !== 0) throw new Error('l’annotation n’est pas à la place du dépôt, au cran lisible');
+      if (groupIn(base, lobby, page2) !== null) throw new Error('l’annotation est entrée dans un groupe');
+      if (!(await page.until(`[...document.querySelectorAll('.file-preview .annotation-margin li')].some((li) => /p\\. 2.*Lobby/.test(li.textContent))`))) {
+        throw new Error('la marge ne dit pas le plan où l’annotation est posée');
+      }
+      await page.dragDrop(row, { x: SKY.x - 40, y: SKY.y + 30 });
+      if (!(await said(page, 'Déjà dans ce plan.'))) throw new Error('« Déjà dans ce plan. » n’est pas dit');
+      await sleep(500);
+      const again = placementOf(base, lobby, page2);
+      if (again.x !== placed.x || again.y !== placed.y) throw new Error('l’annotation déjà là a bougé');
+    },
+  },
+  {
+    // Review Focus 4: the PDF's node deleted everywhere while its pop-up's list, its reader and an annotation's pop-up
+    // show it: each says what is missing, nothing breaks; Ctrl+Z brings it all back. The annotation's line opens its
+    // PDF at its page, its passage blinking.
+    name: 'le nœud du PDF mis à la corbeille pendant que ses listes sont ouvertes',
+    env: PUBLICATION.env, settings: { popupHeightPx: 720, previewWidthPx: 500, previewHeightPx: 400 },
+    async run(page, base) {
+      const { lobby, page2 } = idsOf(base);
+      await page.dragDrop(await popupRow(page, 2), SKY);
+      if (!(await until(() => placementOf(base, lobby, page2) !== null))) throw new Error('l’annotation n’est pas posée dans le lobby');
+      // Its own pop-up: its PDF and its page, a click opening it there.
+      const line = `Annotation de « ${LI} », p. 2`;
+      for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.node-popup .annotation-of button')?.textContent === ${JSON.stringify(line)}`, 1000)); i++) {
+        await page.click(SKY.x, SKY.y);
+      }
+      const pin = (panel) => page.evaluate(`document.querySelector('${panel} .pin:not(.on)')?.click()`);
+      await pin('.node-popup');
+      const button = await page.centre('.node-popup .annotation-of button', 'Annotation de');
+      await page.click(button.x, button.y);
+      const flash = '.file-preview .pdf-page[data-page="2"] .annotation-layer .flash';
+      if (!(await page.until(`!!document.querySelector('${flash}') && document.querySelector('.file-preview .pdf-tools .page input')?.value === '2'`, 15000))) {
+        throw new Error('la ligne de l’annotation n’ouvre pas son PDF à sa page, le passage clignotant');
+      }
+      // The reader pinned, and taken by its header to the bottom left, off the PDF's node.
+      await pin('.file-preview');
+      const header = await page.centre('.file-preview > header .title', '');
+      await page.drag(header, { x: 200, y: 600 });
+      // The PDF's pop-up (its list) by a click on its node, which selects it; Suppr, « Partout ».
+      await page.click(ON_PUBLICATION.x, ON_PUBLICATION.y);
+      if (!(await page.until(`document.querySelectorAll('.node-popup .annotation-list li').length === 3`))) throw new Error('le pop-up du PDF ne liste pas ses annotations');
+      await page.press('Delete', 'Delete', 46);
+      const everywhere = await page.centre('.ask button', '^Partout$');
+      await page.click(everywhere.x, everywhere.y);
+      const trashed = `Le PDF « ${LI} » est à la corbeille.`;
+      if (!(await page.until(`document.querySelector('.node-popup .annotation-of .why')?.textContent === ${JSON.stringify(trashed)} && !document.querySelector('.node-popup .annotation-of button')`))) {
+        throw new Error('la ligne de l’annotation ne dit pas que son PDF est à la corbeille');
+      }
+      const gone = await page.evaluate(`[...document.querySelectorAll('.panel .body .dim')].map((p) => p.textContent)`);
+      console.log(`     panneaux : ${JSON.stringify(gone)}`);
+      if (gone.filter((t) => t === 'Ce nœud n’existe plus.').length !== 2) throw new Error('le pop-up du PDF et son lecteur ne disent pas que le nœud n’existe plus');
+      if (await page.evaluate(`[...document.querySelectorAll('.panel')].some((p) => /n’a pas pu s’afficher/.test(p.textContent))`)) throw new Error('un panneau a échoué');
+      if (base(`SELECT trashed FROM nodes WHERE id = '${page2}'`)[0].trashed !== 0) throw new Error('l’annotation est partie à la corbeille avec son PDF');
+      // Ctrl+Z: the PDF back, its annotation's line opens it again, its reader shows it.
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await page.until(`document.querySelector('.node-popup .annotation-of button')?.textContent === ${JSON.stringify(line)}`))) throw new Error('Ctrl+Z ne rend pas à l’annotation son PDF');
+      if (!(await page.until(`!!document.querySelector('.file-preview .pdf-page')`, 15000))) throw new Error('Ctrl+Z ne rend pas son lecteur au PDF');
+    },
+  },
 ];
 
+// `node scripts/interface.mjs <texte>`: only the scenarios whose name holds that text.
+const only = process.argv[2];
+const chosen = only ? SCENARIOS.filter((s) => s.name.includes(only)) : SCENARIOS;
 let failed = 0;
-for (const s of SCENARIOS) {
+for (const s of chosen) {
   const data = mkdtempSync(join(tmpdir(), 'cirrus-interface-'));
   const profile = mkdtempSync(join(tmpdir(), 'cirrus-interface-profil-'));
   let app = null;
@@ -417,5 +608,5 @@ for (const s of SCENARIOS) {
     rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
   }
 }
-console.log(`${SCENARIOS.length - failed} scénarios sur ${SCENARIOS.length} réussis`);
+console.log(`${chosen.length - failed} scénarios sur ${chosen.length} réussis`);
 process.exit(failed > 0 ? 1 : 0);

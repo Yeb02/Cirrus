@@ -1,14 +1,15 @@
 import {
-  type Action, connKind, connTrashed, effectiveTags, type FileRef, type Id, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId, type PlanRec,
-  type State, subjectOf, TagError, type TagValue,
+  type Action, type Anchor, connKind, connTrashed, effectiveTags, type FileRef, type Id, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId,
+  type PlanRec, type State, subjectOf, TagError, type TagValue,
 } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
+import { type AnnotationEntry, type AnnotationIndex, type AnnotationSource, annotationSource, titleChars } from '../files/annotations.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
-import { loading } from '../files/read.ts';
+import { blobSize, loading, ReadError } from '../files/read.ts';
 import {
   droppedPaths, dropRoute, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor,
 } from '../files/nodeFiles.ts';
@@ -17,6 +18,7 @@ import type { LatexRegistry, Origin } from '../latex/registry.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { LatexField } from './latex/LatexField.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
+import { AnnotationItem, EARLIER_VERSION } from './viewers/AnnotationMargin.tsx';
 
 const KIND: Record<FileKind, string> = { image: 'image', pdf: 'PDF', tex: 'LaTeX', text: 'texte', table: 'tableau', other: 'autre' };
 const DATE = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'long', timeStyle: 'short' });
@@ -184,6 +186,87 @@ function PdfThumb(props: { file: FileRef; px: number; kept: number; maxMb: numbe
 
 /** How a file of the pop-up is opened: its preview beside the pop-up, or its full screen (Panels). */
 export type OpenFile = (name: string, how: 'preview' | 'full') => void;
+/** An annotation opened from a pop-up (plan 4c, D4): the preview of `name`, a file of node `pdf`, beside it, showing `anchor`. */
+export type RevealAnnotation = (pdf: Id, name: string, anchor: Anchor) => void;
+
+/** Versions the store cannot give: none. */
+const ALL_READ: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The versions among `refs` the store cannot give — a blob missing: a base copied without it, a PC never sent it
+ * (Review Focus 4) — each with why, in French. Each is asked once per list of versions shown, by its length (blobSize:
+ * the body is not read); counted among what the views load, which the captures wait for.
+ */
+function useUnreadable(refs: readonly { name: string; hash: string }[]): ReadonlyMap<string, string> {
+  const key = refs.map((r) => `${r.hash}:${r.name}`).join('|');
+  const [out, setOut] = useState(ALL_READ);
+  useEffect(() => {
+    if (refs.length === 0) { setOut(ALL_READ); return; }
+    const stop = new AbortController();
+    void loading(Promise.all(refs.map((r) => blobSize(r, stop.signal).then(
+      () => null,
+      (e: unknown): [string, string] => [r.hash, e instanceof ReadError ? e.message : `Cette version de « ${r.name} » n’a pas pu être lue.`],
+    )))).then((found) => {
+      if (stop.signal.aborted) return;
+      const m = new Map(found.filter((x) => x !== null));
+      setOut(m.size === 0 ? ALL_READ : m);
+    });
+    return () => stop.abort();
+  }, [key]);
+  return out;
+}
+
+/** Why an annotation cannot be opened, or null: its source missing (annotationSource), or its version (useUnreadable). */
+const missing = (src: AnnotationSource, hash: string, unreadable: ReadonlyMap<string, string>): string | null =>
+  'why' in src ? src.why : unreadable.get(hash) ?? null;
+
+/**
+ * An annotation's node (plan 4c, D1): « Annotation de « <PDF> », p. <n> », a click opening its PDF there — its file's
+ * preview beside the pop-up, on its version, its passage blinking (`onReveal`). What is missing says so instead, and it
+ * does not open (Review Focus 4): the PDF's node in the trash or gone, its file no longer in it, the version missing
+ * from the store.
+ */
+function AnnotationOf(props: { s: State; anchor: Anchor; onReveal: RevealAnnotation }) {
+  const a = props.anchor, src = annotationSource(props.s, a);
+  const unreadable = useUnreadable('file' in src ? [{ name: src.file.name, hash: a.hash }] : []);
+  const why = missing(src, a.hash, unreadable);
+  const text = `Annotation de « ${props.s.nodes.get(a.pdf)?.title ?? '?'} », p. ${a.page}`;
+  return (
+    <p className="annotation-of">
+      {why === null && 'file' in src
+        ? <button title="Ouvrir le PDF à cette page" onClick={() => props.onReveal(a.pdf, src.file.name, a)}>{text}</button>
+        : <>{text}<span className="why">{why}</span></>}
+    </p>
+  );
+}
+
+/**
+ * A PDF's node's annotations (plan 4c, D4): those of its files, every version, in the order of the pages, as the
+ * reader's margin lists them (AnnotationItem). A click opens one in its file's preview, beside the pop-up, at its page,
+ * its passage blinking (`onReveal`); each is dragged out onto the graph, to be put down in the plan shown (task 3). One
+ * whose file is no longer in the node, or whose version the store cannot give, says so and does not open (Review
+ * Focus 4); it is still dragged out.
+ */
+function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; titleChars: number; onReveal: RevealAnnotation }) {
+  const sources = props.entries.map((e) => annotationSource(props.s, e.anchor));
+  const refs = new Map<string, { name: string; hash: string }>();
+  sources.forEach((src, i) => { const hash = props.entries[i].anchor.hash; if ('file' in src) refs.set(hash, { name: src.file.name, hash }); });
+  const unreadable = useUnreadable([...refs.values()]);
+  return (
+    <ol className="annotation-list">
+      {props.entries.map((e, i) => {
+        const src = sources[i], why = missing(src, e.anchor.hash, unreadable);
+        return (
+          <AnnotationItem
+            key={e.node.id} entry={e} titleChars={props.titleChars} here={false} draggable
+            note={why ?? ('file' in src && src.earlier ? EARLIER_VERSION : null)}
+            onOpen={why === null && 'file' in src ? () => props.onReveal(e.anchor.pdf, src.file.name, e.anchor) : undefined}
+          />
+        );
+      })}
+    </ol>
+  );
+}
 
 /**
  * The node's files (spec 12; plan 4a, tasks 4 to 6): name, kind, size, an image's thumbnail (thumbPx, read only once
@@ -298,14 +381,15 @@ function Files(props: {
  * keeps it, Escape gives it up); its summary compiled, edited in place with its preview under it (LatexField, plan 4b,
  * task 6: kept on leaving the field, given up by Escape), a link in it opening its node's pop-up (`onNodeLink`); its
  * tags; its metadata (history, plans, knowledge connections, identifier); its files (Files), each opened in a preview
- * or in full screen (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). `found`: the node as
- * resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses (in a toast) puts its
- * field back to the node's value.
+ * or in full screen (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). A PDF's node lists
+ * its annotations (plan 4c: `annotations`, App's index), an annotation's node names its PDF and page; either opens an
+ * annotation beside the pop-up (`onReveal`). `found`: the node as resolveTarget finds it, null once it is gone (Review
+ * Focus 5). An edit the session refuses (in a toast) puts its field back to the node's value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile;
-  registry: LatexRegistry | null; onNodeLink(node: Id): void;
+  registry: LatexRegistry | null; onNodeLink(node: Id): void; annotations: AnnotationIndex | null; onReveal: RevealAnnotation;
 }) {
   const { id, found: n, state: s } = props;
   const summary = useMemo<Origin>(() => ({ kind: 'summary', node: id }), [id]);
@@ -347,8 +431,10 @@ export function NodePopup(props: {
     const h = history === 'failed' ? { created: null, modified: null, changes: null } : history;
     const date = (ms: number | null | undefined) => (ms === undefined ? '…' : ms === null ? '—' : DATE.format(ms));
     const fresh = (ms: number | null | undefined) => (ms != null && ms >= OPENED_AT ? 'volatile' : undefined);
+    const annotations = props.annotations?.of(id) ?? [];
     return (
       <>
+        {n.anchor && <AnnotationOf s={s} anchor={n.anchor} onReveal={props.onReveal} />}
         <h4>Résumé (LaTeX)</h4>
         <LatexField
           origin={summary} value={n.summary} placeholder="Résumé, en LaTeX" rows={4} state={s} registry={props.registry} params={props.params}
@@ -373,6 +459,12 @@ export function NodePopup(props: {
           id={id} files={n.files} thumbPx={props.params.thumbPx} thumbMaxMb={props.params.thumbMaxMb} pdfDocsKept={props.params.pdfDocsKept}
           actions={props.files} onOpen={props.onOpenFile} onEdit={props.onEdit}
         />
+        {annotations.length > 0 && (
+          <>
+            <h4>Annotations</h4>
+            <Annotations s={s} entries={annotations} titleChars={titleChars(props.params.annotationTitleChars)} onReveal={props.onReveal} />
+          </>
+        )}
       </>
     );
   })();

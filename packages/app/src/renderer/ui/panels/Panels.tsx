@@ -16,8 +16,14 @@ import { clampRect, placeAt, placeBeside, type Rect } from './geometry.ts';
 /** What a floating panel shows: a node's pop-up, or a preview of one of its files (task 5), the file by its name. */
 export type PanelTarget = { kind: 'node'; node: Id } | { kind: 'file'; node: Id; name: string };
 
-/** `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. */
-export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number }
+/** An annotation a file's preview is asked to show (plan 4c, task 3): its version, its page, its passage blinking; `seq` counts the asks. */
+export interface Reveal { anchor: Anchor; seq: number }
+
+/**
+ * `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. `reveal`: a PDF's
+ * preview, the annotation it was last asked to show from a pop-up (AnnotationContext.reveal).
+ */
+export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal }
 
 /**
  * What a panel's target is now, or null when it is gone (Review Focus 5): a node absent or in the trash, a file no longer
@@ -62,13 +68,15 @@ const isFile = (p: Panel, node: Id, name: string) => p.target.kind === 'file' &&
 /**
  * A file's preview opened (plan 4a, task 5): the other loose previews close — clicking file after file shows one at a
  * time —, the pop-ups and the pinned ones stay. A file already previewed gets no second one: that one comes in front,
- * where it is; else a new loose one opens at `rect`, in front.
+ * where it is; else a new loose one opens at `rect`, in front. With `reveal` (an annotation opened from a pop-up, plan
+ * 4c), the preview shows it; without, it keeps what it was showing.
  */
-export function withFile(panels: Panel[], node: Id, name: string, rect: Rect, id: number): Panel[] {
+export function withFile(panels: Panel[], node: Id, name: string, rect: Rect, id: number, reveal?: Reveal): Panel[] {
   const z = front(panels), own = panels.find((p) => isFile(p, node, name));
   const kept = panels.filter((p) => p === own || p.pinned || p.target.kind !== 'file');
-  if (own) return kept.map((p) => (p === own ? { ...p, z } : p));
-  return [...kept, { id, target: { kind: 'file', node, name }, rect, pinned: false, z }];
+  const shown = reveal ? { reveal } : {};
+  if (own) return kept.map((p) => (p === own ? { ...p, z, ...shown } : p));
+  return [...kept, { id, target: { kind: 'file', node, name }, rect, pinned: false, z, ...shown }];
 }
 
 /** A panel clicked comes in front; already there, the same list. */
@@ -161,7 +169,8 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * The previews of .tex are compiled with the state and `registry` (plan 4b, App's: null until built), and so are the
  * pop-ups' summaries; a link to a node clicked in a panel goes to `onNodeLink`, with that panel's place (App's: it
  * opens the node's pop-up beside it, openLinked). A PDF's preview draws and lists its annotations (plan 4c, App's
- * `annotations`), and a passage selected in it is annotated by `onAnnotate`.
+ * `annotations`), and a passage selected in it is annotated by `onAnnotate`. An annotation clicked in a pop-up (a PDF's
+ * list, an annotation's own line) opens its PDF's preview beside that pop-up, showing it (withFile's `reveal`).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -197,9 +206,13 @@ export function Panels(props: {
     if (focused && host && closing.includes(Number(host.dataset.panel))) focused.blur();
     setPanels(rule);
   };
-  const openFile = (node: Id, name: string, near: Rect) => {
+  /** The asks to show an annotation, counted: the same one asked again shows again (its passage blinks once more). */
+  const reveals = useRef(0);
+  /** A file's preview beside the panel `near`; with `anchor` (an annotation opened from a pop-up), showing it. */
+  const openFile = (node: Id, name: string, near: Rect, anchor?: Anchor) => {
     const id = nextId.current++, rect = previewRect(near, paramsRef.current, bounds());
-    apply((ps) => withFile(ps, node, name, rect, id));
+    const reveal = anchor && { anchor, seq: ++reveals.current };
+    apply((ps) => withFile(ps, node, name, rect, id, reveal));
   };
   useImperativeHandle(props.ref, () => ({
     openNode: (node, client) => {
@@ -264,7 +277,7 @@ export function Panels(props: {
                 frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
                 covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
                 latex={{ state: props.state, registry: props.registry }}
-                annotations={props.annotations ? { index: props.annotations, onAnnotate: props.onAnnotate, draggable: true } : undefined}
+                annotations={props.annotations ? { index: props.annotations, onAnnotate: props.onAnnotate, draggable: true, reveal: p.reveal } : undefined}
                 onFull={() => { if (file) props.onFullScreen(node, file.name); }} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               />
             </PanelBoundary>
@@ -278,6 +291,7 @@ export function Panels(props: {
               state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
               files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
+              annotations={props.annotations} onReveal={(pdf, name, anchor) => openFile(pdf, name, p.rect, anchor)}
             />
           </PanelBoundary>
         );

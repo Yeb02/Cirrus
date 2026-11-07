@@ -1,6 +1,6 @@
 import {
   type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placeNode, removeFromPlan,
+  exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
   removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, type Vec2,
 } from '@cirrus/core';
 import {
@@ -110,8 +110,9 @@ const nodesOf = (scene: PlanScene, ids: Id[], withContent: boolean): Id[] => {
 };
 
 /**
- * « Cacher » (spec 7): out of this plan only; a node leaving its last plan goes to the trash. A group's content follows
- * when `withContent`; otherwise each member shows in its nearest ancestor present in the plan.
+ * « Cacher » (spec 7): out of this plan only; a node leaving its last plan goes to the trash, an annotation aside (it
+ * stays under its PDF: removeFromPlan). A group's content follows when `withContent`; otherwise each member shows in
+ * its nearest ancestor present in the plan.
  */
 export function hideBuild(scene: PlanScene, ids: Id[], withContent = false): Build {
   const nodes = nodesOf(scene, ids, withContent);
@@ -120,9 +121,12 @@ export function hideBuild(scene: PlanScene, ids: Id[], withContent = false): Bui
   return (st) => combine(st, nodes.length === 1 ? 'Cacher dans ce plan' : `Cacher ${nodes.length} éléments dans ce plan`, nodes.map((n) => (x: State) => removeFromPlan(x, plan, n)));
 }
 
-/** The nodes that hiding these (with their content or not) would send to the trash: this plan is their last (spec 7, I12 of the review). */
+/**
+ * The nodes that hiding these (with their content or not) would send to the trash: this plan is their last (spec 7, I12
+ * of the review), annotations aside — leaving their last plan, they stay under their PDF (removeFromPlan).
+ */
 export function lastPlanNodes(s: State, scene: PlanScene, ids: Id[], withContent: boolean): Id[] {
-  return deleteSummary(s, nodesOf(scene, ids, withContent)).last;
+  return deleteSummary(s, nodesOf(scene, ids, withContent)).last.filter((id) => s.nodes.get(id)?.anchor === undefined);
 }
 
 /**
@@ -268,6 +272,33 @@ export function importBuild(
     (x) => placeNode(x, plan, node, at.x, at.y, readableStep(zoom, p)),
     ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
   ]);
+}
+
+/** What a node dropped into a plan that holds it already is told (placeDroppedBuild); the view is framed on it. */
+export const ALREADY_HERE = 'Déjà dans ce plan.';
+
+/**
+ * A node dragged out of a list of annotations and let go at `at` (plan 4c, D4): brought into this plan as importBuild
+ * does — at the step readable at this zoom, entering the group whose envelope receives it — and, let go on a simple
+ * node, entering that node, which becomes a group groupOffsetSteps above it, as a node dropped on a node does
+ * (dropBuild; spec 8.1, 10). One action. Refused « Déjà dans ce plan. » when the node is placed here by the time it is
+ * computed; a node in the trash, by placeNode. `index`: the scene's visibility index, if at hand (dropTarget).
+ */
+export function placeDroppedBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
+  const plan = scene.plan.id, t = dropTarget(scene, at, [], zoom, p, index);
+  const host = t === null ? null : scene.items[t];
+  const label = host === null ? 'Poser un nœud dans ce plan' : `Poser un nœud dans « ${host.title} »`;
+  const imported = importBuild(scene, node, at, zoom, p, label, index)!;
+  const simple = host !== null && host.kind === 'node' ? host : null, k = readableStep(zoom, p) + p.groupOffsetSteps;
+  return (st) => {
+    if (st.placements.has(placementKey(plan, node))) throw new CommandError(ALREADY_HERE);
+    if (simple === null) return imported(st);
+    return combine(st, label, [
+      imported,
+      (x) => include(x, plan, node, simple.id),
+      ...(simple.k < k ? [(x: State) => moveNodes(x, plan, [{ node: simple.id, k }])] : []),
+    ]);
+  };
 }
 
 /** A stub put down by hand (spec 8.5): its absent phantom, at the largest step of the connection here. */

@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest';
 import { ANNOTATION_TITLE_CHARS, annotationTitle, validAnchor } from '../src/annotation.ts';
-import { type Action, CommandError, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, include, placeNode } from '../src/commands.ts';
+import {
+  type Action, CommandError, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, include, placeNode, removeFromPlan,
+} from '../src/commands.ts';
 import { UndoStack } from '../src/history.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
 import type { Anchor, Id, NodeRec } from '../src/model.ts';
@@ -121,6 +123,28 @@ test('une annotation est un nœud comme un autre : renommée, résumée, posée 
   // The PDF's node gone to the trash: the annotation stays valid (its lists say what is missing, plan 4c task 2).
   run(s, deleteEverywhere(s, pdf));
   expect(s.nodes.get(id)!.anchor!.pdf).toBe(pdf);
+  expect(checkState(s)).toEqual([]);
+});
+
+test('une annotation retirée de son dernier plan reste vivante, sans plan ; « Supprimer partout » la met à la corbeille (décision du contrôleur, tâche 3)', () => {
+  const { s, plan, pdf } = world();
+  const id = created(run(s, createAnnotation(s, anchor({ pdf }), 'Début')), 'node');
+  run(s, placeNode(s, plan, id, 0, 120, 0));
+  run(s, include(s, plan, id, pdf));
+  // « Ici seulement », from its last plan: out of it and of its group there, but alive, its anchor kept (D1: kept under its PDF).
+  const removed = run(s, removeFromPlan(s, plan, id));
+  expect(s.nodes.get(id)!.trashedAt).toBeUndefined();
+  expect(s.nodes.get(id)!.anchor).toEqual(anchor({ pdf }));
+  expect(placedIn(s, nodeRow(s, id))).toHaveLength(0);
+  expect(groupOf(s, plan, id)).toBeUndefined();
+  expect(removed.ops.some((o) => o.t === 'node')).toBe(false);
+  expect(checkState(s)).toEqual([]);
+  // A node without an anchor leaving its last plan still goes to the trash (spec 7).
+  run(s, removeFromPlan(s, plan, pdf));
+  expect(s.nodes.get(pdf)!.trashedAt).toBeDefined();
+  // « Supprimer partout »: the annotation goes to the trash, placed or not.
+  run(s, deleteEverywhere(s, id));
+  expect(s.nodes.get(id)!.trashedAt).toBeDefined();
   expect(checkState(s)).toEqual([]);
 });
 

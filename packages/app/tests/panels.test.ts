@@ -9,7 +9,7 @@ import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/ren
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
 import {
-  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withLinked, withNode, withoutLoose, withoutTopLoose,
+  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutTopLoose,
 } from '../src/renderer/ui/panels/Panels.tsx';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
@@ -165,6 +165,22 @@ test('lien vers un nœud (plan 4b, tâche 6) : son pop-up s’ouvre non épingl�
   // Its node's pop-up already open, pinned or not: no second one, it comes in front where it is.
   expect(withLinked(ps, 'c', at(900), 4).map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 1], [2, 400, 2], [3, 800, 4]]);
   expect(withLinked(ps, 'a', at(900), 4).map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 4], [2, 400, 2], [3, 800, 3]]);
+});
+
+test('une annotation ouverte depuis un pop-up (plan 4c, tâche 3) : l’aperçu de son PDF la montre (reveal) ; déjà ouvert, il passe devant et la montre', () => {
+  const at = (x: number): Rect => ({ x, y: 100, w: 380, h: 460 });
+  const a = { pdf: 'pdf', file: 'c.pdf', hash: 'a'.repeat(64), page: 2, rects: [[72, 700, 300, 712]] as [number, number, number, number][], text: 'K' };
+  const ps: Panel[] = [{ id: 1, target: { kind: 'node', node: 'pdf' }, rect: at(10), pinned: false, z: 1 }];
+  const opened = withFile(ps, 'pdf', 'c.pdf', at(400), 2, { anchor: a, seq: 1 });
+  expect(opened[1]).toEqual({ id: 2, target: { kind: 'file', node: 'pdf', name: 'c.pdf' }, rect: at(400), pinned: false, z: 2, reveal: { anchor: a, seq: 1 } });
+  // Asked again, from another annotation: the same preview, in front, where it is, showing the new one.
+  const b = { ...a, page: 5 };
+  const again = withFile(inFront(opened, 1), 'pdf', 'c.pdf', at(900), 3, { anchor: b, seq: 2 });
+  expect(again.map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 3], [2, 400, 4]]);
+  expect(again[1].reveal).toEqual({ anchor: b, seq: 2 });
+  // A file opened by its own click (no annotation): the preview keeps what it shows.
+  expect(withFile(again, 'pdf', 'c.pdf', at(900), 4)[1].reveal).toEqual({ anchor: b, seq: 2 });
+  expect(withFile([], 'pdf', 'c.pdf', at(900), 4)[0]).not.toHaveProperty('reveal');
 });
 
 test('linkedRect : à droite du panneau d’où vient le lien, à la taille d’un pop-up ; à gauche s’il n’y a pas la place', () => {
