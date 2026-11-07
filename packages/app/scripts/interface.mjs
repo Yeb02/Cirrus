@@ -70,6 +70,14 @@ async function launch(data, profile, more = {}) {
       await sleep(300);
     },
     async move(x, y) { await mouse('mouseMoved', x, y); await sleep(200); },
+    /** A left click with Ctrl held: an element selected without its pop-up (spec 9.1). */
+    async ctrlClick(x, y) {
+      await mouse('mouseMoved', x, y);
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, modifiers: 2 });
+      await sleep(30);
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, modifiers: 2 });
+      await sleep(300);
+    },
     /** The centre of the first element matching `selector` whose text matches `text`. */
     async centre(selector, text) {
       const r = await evaluate(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => ${new RegExp(text)}.test(e.textContent)); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
@@ -862,6 +870,17 @@ const SCENARIOS = [
       }
       console.log(`     ${notice.replaceAll('\n', ' / ')}`);
       console.log(`     ${places.map((p) => `${p.x.toFixed(0)},${p.y.toFixed(0)}`).join(' ; ')}`);
+      // Its notification stays (bibNoticeMs, review of task 6, I1): there after 5 s, when another one is gone; a click closes it.
+      await sleep(5500);
+      const at7 = await page.evaluate(`(() => {
+        const t = [...document.querySelectorAll('.toast.closable')].find((x) => x.textContent.startsWith('7 publications importées'));
+        if (!t) return null;
+        const b = t.getBoundingClientRect();
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      })()`);
+      if (!at7) throw new Error(`la notification de l’import n’est plus là après 5 s : ${await toastsText(page)}`);
+      await page.click(at7.x, at7.y);
+      if (!(await page.until(`![...document.querySelectorAll('.toast')].some((t) => t.textContent.startsWith('7 publications importées'))`, 2000))) throw new Error('un clic ne ferme pas la notification');
       // One action: one Ctrl+Z removes the seven; the base's book stays.
       await page.press('z', 'KeyZ', 90, 2);
       if (!(await until(() => bibNodes(base).length === 0))) throw new Error('un Ctrl+Z ne retire pas tout l’import');
@@ -889,6 +908,46 @@ const SCENARIOS = [
       await page.click(SKY.x, SKY.y);
       if (!(await until(() => bibNodes(base).length === 7, 8000))) throw new Error(`${bibNodes(base).length} publications dans la base au lieu de 7 ; ${await toastsText(page)}`);
       if (count() !== before + 7) throw new Error(`${count() - before} nœuds créés au lieu de 7`);
+      // Escape, which nothing else takes, closes its notification (review of task 6, I1).
+      if (!(await page.until(`!!document.querySelector('.toast.closable')`, 2000))) throw new Error('pas de notification de l’import');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.toast.closable')`, 2000))) throw new Error('Échap ne ferme pas la notification');
+    },
+  },
+  {
+    // Review of task 6, M4: put down, the block waits for its .bib; meanwhile nothing that puts something down begins
+    // — Ctrl+V, the background's menu —, the reason said, and the ghost stays the block's.
+    name: 'pendant l’attente d’un .bib posé, Ctrl+V et le menu du fond sont refusés, et le fantôme reste celui du bloc',
+    ...PUBLICATION,
+    async run(page, base) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count();
+      // A node copied first (Ctrl+click selects it without its pop-up): Ctrl+V has something to paste.
+      await page.ctrlClick(ON_PUBLICATION.x, ON_PUBLICATION.y);
+      await page.press('c', 'KeyC', 67, 2);
+      if (!(await page.until(`[...document.querySelectorAll('.toast')].some((t) => / copiés?\\.$/.test(t.textContent))`, 3000))) throw new Error(`rien n’est copié : ${await toastsText(page)}`);
+      const dir = mkdtempSync(join(tmpdir(), 'cirrus-bib-'));
+      try {
+        const path = join(dir, 'attente.bib');
+        writeFileSync(path, Array.from({ length: 2000 }, (_, i) => `@article{attente${i}, author = {Nom${i}, A.}, title = {Attente ${i}}, year = 2001, doi = {10.5555/attente.${i}}}`).join('\n'), 'utf8');
+        await page.move(SKY2.x, SKY2.y);
+        await page.dropFiles(SKY2, [path]);
+        if (!(await bibGhost(page, '^Importer 2.000 publications', 30000))) throw new Error(`pas de fantôme du bloc (« ${await ghostText(page)} »)`);
+        await page.move(SKY.x, SKY.y);
+        await page.click(SKY.x, SKY.y);
+        if (!(await page.until(`/^Enregistrement des fichiers \\.bib/.test(document.querySelector('.ghost')?.textContent ?? '')`, 3000))) throw new Error(`pas d’attente après le clic (« ${await ghostText(page)} »)`);
+        await page.press('v', 'KeyV', 86, 2);
+        if (!(await page.until(`[...document.querySelectorAll('.toast')].some((t) => t.textContent.startsWith('Import du .bib en cours'))`, 2000))) throw new Error(`Ctrl+V n’est pas refusé : ${await toastsText(page)}`);
+        if (!/^Enregistrement des fichiers \.bib/.test((await ghostText(page)) ?? '')) throw new Error(`le fantôme est écrasé : « ${await ghostText(page)} »`);
+        await page.click(SKY2.x, SKY2.y, 'right');
+        if (await page.evaluate(`!!document.querySelector('.context-menu')`)) throw new Error('le menu du fond s’ouvre pendant l’attente');
+        console.log(`     pendant l’attente : « ${await ghostText(page)} » ; ${(await toastsText(page)).replaceAll('\n', ' / ')}`);
+        if (!(await until(() => count() === before + 2000, 60000))) throw new Error(`${count() - before} nœuds créés au lieu de 2 000`);
+        if (!(await page.until(`!document.querySelector('.ghost')`, 5000))) throw new Error('un fantôme reste après la pose');
+        await sleep(500);
+        if (count() !== before + 2000) throw new Error(`${count() - before} nœuds au lieu de 2 000 : quelque chose a été collé`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      }
     },
   },
   {

@@ -20,6 +20,8 @@ export interface BibEntry {
   raw: Map<string, string>;
   /** The line of its « @ », from 1. */
   line: number;
+  /** The line of the entry above whose key is this one's, without case, if any: a problem says so (repeatedKeyMessage). */
+  repeats?: number;
 }
 
 /** What is wrong in a .bib, in French, at the line of the entry concerned. */
@@ -48,6 +50,16 @@ export function bibShort(s: string): string {
   if (s.length <= BIB_NAME_CHARS) return s;
   const c = s.charCodeAt(BIB_NAME_CHARS - 1);
   return `${s.slice(0, c >= 0xd800 && c <= 0xdbff ? BIB_NAME_CHARS - 1 : BIB_NAME_CHARS)}…`;
+}
+
+/** An entry as a problem names it: by its key, cut, or by its type without one. */
+const entryName = (e: BibEntry) => (e.key === '' ? `Entrée @${bibShort(e.type)}` : `Entrée « ${bibShort(e.key)} »`);
+/**
+ * What parseBibtex says, at its line, of an entry whose key an entry above has (`repeats`): the import, which sets such
+ * an entry aside as a duplicate, says it once (task 6, review M2).
+ */
+export function repeatedKeyMessage(e: BibEntry): string {
+  return `${entryName(e)} : la clé est déjà celle de l’entrée de la ligne ${e.repeats}.`;
 }
 
 /**
@@ -372,12 +384,14 @@ export function parseBibtex(text: string): BibRead {
         if (c === COMMA) p = skip(p + 1);
         else if (c !== closer) throw new Broken(`« , » ou « ${closeName} » est attendu après le champ « ${said} » (ligne ${lineOf(p)}).`);
       }
-      const named = key === '' ? `Entrée @${bibShort(type)}` : `Entrée « ${bibShort(key)} »`;
+      const named = entryName(entry);
       for (const w of warnings) problem(at, `${named} : ${w}`);
       if (key !== '') {
         const lower = key.toLowerCase(), first = keys.get(lower);
-        if (first !== undefined) problem(at, `${named} : la clé est déjà celle de l’entrée de la ligne ${first}.`);
-        else keys.set(lower, entry.line);
+        if (first !== undefined) {
+          entry.repeats = first;
+          problem(at, repeatedKeyMessage(entry));
+        } else keys.set(lower, entry.line);
       }
       entries.push(entry);
       return p;
@@ -725,10 +739,13 @@ function letters(n: number): string {
  * The keys held, compared without case as BibTeX compares them (a « Repeated entry » otherwise, review M1): kept in
  * lower case, and, for each base of the keys citeKey makes, the first suffix not known to be taken. Keys are only ever
  * added, so a suffix found taken stays so: a key made for each of a .bib's thousands of entries costs a few look-ups,
- * even when they all share a base (task 6: no author, no year, the same first word).
+ * even when they all share a base (task 6: no author, no year, the same first word). Keys `reserve`d — a .bib's own
+ * safe keys, all of them before any is made (the controller's ruling of the task 6 review, M3) — are avoided by the
+ * keys made only: an entry keeps its own, and a \cite{li2008} already written still means it.
  */
 export class CiteKeys {
   private readonly lower = new Set<string>();
+  private readonly held = new Set<string>();
   private readonly next = new Map<string, number>();
   constructor(keys: Iterable<string> = []) {
     for (const k of keys) this.add(k);
@@ -738,6 +755,13 @@ export class CiteKeys {
   }
   has(key: string): boolean {
     return this.lower.has(key.toLowerCase());
+  }
+  /** `key` is an entry's own: no key made takes it. */
+  reserve(key: string): void {
+    this.held.add(key.toLowerCase());
+  }
+  reserved(key: string): boolean {
+    return this.held.has(key.toLowerCase());
   }
   /** The first suffix of `base` that may be free (citeKey). */
   from(base: string): number {
@@ -752,8 +776,9 @@ export class CiteKeys {
 /**
  * A publication's key (D7): the entry's if it has one that safeCiteKey takes and no other node holds (`taken`, without
  * case); otherwise its first author's family name and its year (`li2008`) — without an author, its title's first word;
- * without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case.
- * `taken` as CiteKeys for many keys made one after the other (a .bib's, task 6): a Set is read whole at each call.
+ * without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case, or a
+ * key it reserves. `taken` as CiteKeys for many keys made one after the other (a .bib's, task 6): a Set is read whole
+ * at each call.
  */
 export function citeKey(entry: BibEntry, taken: ReadonlySet<string> | CiteKeys): string {
   const keys = taken instanceof CiteKeys ? taken : new CiteKeys(taken);
@@ -764,7 +789,7 @@ export function citeKey(entry: BibEntry, taken: ReadonlySet<string> | CiteKeys):
   const base = (family || firstWord || 'publication').slice(0, 60) + year;
   for (let i = keys.from(base); ; i++) {
     const key = i === 1 ? base : base + letters(i);
-    if (!keys.has(key) && safeCiteKey(key)) {
+    if (!keys.has(key) && !keys.reserved(key) && safeCiteKey(key)) {
       keys.reached(base, i);
       return key;
     }

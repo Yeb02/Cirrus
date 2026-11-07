@@ -30,7 +30,7 @@ import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
 import { backgroundNotice, carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
-import { bibImportBuild, bibNotice, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
+import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
 import { type ImportDeps, publicationBuild } from '../publications/build.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 
@@ -84,13 +84,16 @@ const fr = (n: number) => n.toLocaleString('fr-FR');
  * A .bib being imported (plan 4c, D9, task 6), from the ghost of its block to the action: what it plans, in its plan;
  * each title's lines (the block's rows); its entries' .bib stored meanwhile — `stored` so far, `refs` once all are,
  * `failed` why not —, which `stop` (Escape, another plan, a lost focus) ends; `settled` resolves once storing is over.
- * `waiting`: put down by a click, the action waits for every .bib stored (Escape no longer gives it up). The block's
- * half sizes at step 0, for its outline (they scale with the step).
+ * `put`: where a click put it down and at what zoom, the action waiting for every .bib stored — Escape no longer gives
+ * it up, another plan does, and no gesture that puts something down begins meanwhile (review of task 6, M4). The
+ * block's half sizes at step 0, for its outline (they scale with the step).
  */
 interface BibImport {
   planned: PlannedBib; plan: Id; lines: number[]; halves: { halfW: number; halfH: number };
-  stored: number; refs: FileRef[] | null; failed: string | null; stop: boolean; settled: Promise<void>; waiting: boolean;
+  stored: number; refs: FileRef[] | null; failed: string | null; stop: boolean; settled: Promise<void>; put: { at: Vec2; zoom: number } | null;
 }
+/** What a gesture begun while a .bib's import waits for its .bib is told (review of task 6, M4). */
+const BIB_WAITING = 'Import du .bib en cours : attends que ses publications soient posées.';
 /**
  * The import's marks for its measures (scripts/interface.mjs): the drop or the choice, the ghost shown, every .bib
  * stored, the click, the action applied.
@@ -112,8 +115,11 @@ export function GraphView(props: {
    */
   state: State; rev: number; action: Action | null;
   plan: Id; params: RenderParams; onFirstFrame(): void;
-  /** Edits go through the session (written, undoable); their outcome is reported (toasts). */
-  session: EditSession | null; onResult(r: Result): void;
+  /**
+   * Edits go through the session (written, undoable); their outcome is reported (toasts). `onLongNotice`: the
+   * notification of a .bib's import (plan 4c, D9), which stays bibNoticeMs unless a click or Escape closes it.
+   */
+  session: EditSession | null; onResult(r: Result): void; onLongNotice(text: string): void;
   /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
   onOpenPlan(plan: Id): void;
   /**
@@ -207,6 +213,10 @@ export function GraphView(props: {
    */
   const busy = () => gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
     || repQueue.current !== null || questionRef.current !== null || bib.current !== null;
+  /** A .bib put down, waiting for its .bib (M4): no gesture that puts something down begins, the menus do not open. */
+  const bibWaiting = () => bib.current?.put != null;
+  /** Why `what` waits: the .bib's import put down (Escape does not give it up), or a gesture in progress. */
+  const busyReason = (what: string) => (bibWaiting() ? BIB_WAITING : `Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant ${what}.`);
 
   /**
    * Gives the renderer the scene to show (plan 3c, task 6): when it follows the renderer's own by the changes gathered
@@ -281,6 +291,8 @@ export function GraphView(props: {
   panelsRef.current = { open: props.onOpenNode, away: props.onClickAway };
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
+  const onLongNoticeRef = useRef(props.onLongNotice);
+  onLongNoticeRef.current = props.onLongNotice;
   const [ready, setReady] = useState(false);
   /** Why the engine could not start (no WebGL 2, a font file absent or unreadable…): shown in place of the graph. */
   const [failure, setFailure] = useState<string | null>(null);
@@ -312,7 +324,7 @@ export function GraphView(props: {
     redraw();
     // Wheel and arrows stay active while a connection is drawn: its line follows the node; a .bib's block, its outline.
     if (placing.current?.kind === 'connect' && lastPointer.current) aimLine(lastPointer.current.x, lastPointer.current.y);
-    if (placing.current?.kind === 'bib') showBib();
+    if (placing.current?.kind === 'bib' || bibWaiting()) showBib();
   };
   const nav = (input: NavInput) => {
     const e = engine.current;
@@ -350,6 +362,8 @@ export function GraphView(props: {
 
   /** A gesture without a held button begins (spec 9.1): `text` follows the cursor, if any. */
   const startPlacing = (what: Placing, text: string | null, at: { x: number; y: number }) => {
+    // Not while a .bib put down waits for its .bib: its ghost is shown (review of task 6, M4).
+    if (bibWaiting()) { notify(BIB_WAITING); return; }
     placing.current = what;
     setGhost(text === null ? null : { x: at.x, y: at.y, text });
     gestures.current.start(MODE[what.kind]);
@@ -502,19 +516,20 @@ export function GraphView(props: {
   const bibLabel = (b: BibImport) => {
     const n = b.planned.items.length, what = `Importer ${n === 1 ? 'une publication' : `${fr(n)} publications`}`;
     if (b.refs !== null) return what;
-    return b.waiting ? `Enregistrement des fichiers .bib : ${fr(b.stored)} / ${fr(n)}…` : `${what} · fichiers .bib : ${fr(b.stored)} / ${fr(n)}`;
+    return b.put ? `Enregistrement des fichiers .bib : ${fr(b.stored)} / ${fr(n)}…` : `${what} · fichiers .bib : ${fr(b.stored)} / ${fr(n)}`;
   };
   /**
    * The ghost of the .bib's block (D9, the paste's ghost of plan 3b): its label, and its outline as the block would be
-   * put down at the zoom shown — at the readable step, so about the same size on screen at any zoom. At `at`, or where
-   * it was.
+   * put down at the zoom shown — at the readable step, so about the same size on screen at any zoom —, at `at` or where
+   * it was. Put down and waiting for its .bib: where it was put down, at the step of then, whatever the view does.
    */
   const showBib = (at?: { x: number; y: number }) => {
     const b = bib.current, e = engine.current;
     if (!b || !e) return;
-    const p = paramsRef.current, zoom = e.renderer.camera.zoom, s = p.factor ** readableStep(zoom, p);
-    const box = { w: 2 * b.halves.halfW * s * zoom, h: 2 * b.halves.halfH * s * zoom };
-    setGhost((g) => ({ x: at?.x ?? g?.x ?? 0, y: at?.y ?? g?.y ?? 0, text: bibLabel(b), box }));
+    const p = paramsRef.current, cam = e.renderer.camera, s = p.factor ** readableStep(b.put?.zoom ?? cam.zoom, p);
+    const box = { w: 2 * b.halves.halfW * s * cam.zoom, h: 2 * b.halves.halfH * s * cam.zoom };
+    const there = b.put ? worldToScreen(cam, b.put.at.x, b.put.at.y) : at;
+    setGhost((g) => ({ x: there?.x ?? g?.x ?? 0, y: there?.y ?? g?.y ?? 0, text: bibLabel(b), box }));
   };
   /** The import given up (Escape, another plan, a lost focus, a refusal): its .bib no longer stored; what is stored stays. */
   const dropBib = () => {
@@ -537,41 +552,44 @@ export function GraphView(props: {
     const text = bibText(file);
     if ('refused' in text) { notify(text.refused); return; }
     const p = paramsRef.current, planned = planBib(stateRef.current, file.name, text.text, p.publicationMaxAuthors);
-    if (planned.items.length === 0) { notify(bibNotice(planned, 0, p.bibNoticeLines)); return; }
+    if (planned.items.length === 0) { onLongNoticeRef.current(bibNotice(planned, 0, p.bibNoticeLines)); return; }
     const measure = scenes.current.measure && scenes.current.key === sceneParamsKey(p) ? scenes.current.measure : measureLines(e.font, p);
     const lines = planned.items.map((x) => measure(x.plan.title));
     const b: BibImport = {
       planned, plan, lines, halves: blockHalves(bibBlock(lines.length, 0, p, lines), 0, p, lines),
-      stored: 0, refs: null, failed: null, stop: false, settled: Promise.resolve(), waiting: false,
+      stored: 0, refs: null, failed: null, stop: false, settled: Promise.resolve(), put: null,
     };
     bib.current = b;
+    // Only the block's ghost is redrawn: no other gesture begins while it follows the cursor or waits (M4).
+    const shown = () => bib.current === b && (placing.current?.kind === 'bib' || b.put !== null);
     b.settled = storeBibs(planned.items.map((x) => x.plan.bib!), (batch) => window.cirrus.storeTexts(batch), (n) => {
       b.stored = n;
-      if (bib.current === b) showBib();
+      if (shown()) showBib();
     }, () => b.stop).then((refs) => {
       b.refs = refs;
       if (refs) bibMark('stored');
-      if (bib.current === b && !b.waiting) showBib();
+      if (shown() && b.put === null) showBib();
     }, (err: unknown) => {
       console.error('Enregistrement des fichiers .bib :', err);
-      b.failed = 'Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : rien n’est importé.';
+      b.failed = bibStoreFailure(err);
       // Still following the cursor: the gesture is given up, said.
-      if (bib.current === b && !b.waiting) { feed({ t: 'cancel' }); notify(b.failed); }
+      if (bib.current === b && b.put === null) { feed({ t: 'cancel' }); notify(b.failed); }
     });
     startPlacing({ kind: 'bib' }, bibLabel(b), at);
     showBib(at);
     bibMark('ghost');
   };
   /**
-   * The block put down at `at` (D9), at the zoom of the click, once its .bib are all stored (the ghost says so while
-   * they are not): one action, « Importer <n> publications », then the notification of the import (bibNotice). Its plan
-   * no longer shown by then, or the store failed: nothing is made, said.
+   * The block put down at `at` (D9), at the zoom of the click, once its .bib are all stored (the ghost stays there and
+   * says so while they are not): one action, « Importer <n> publications », then the notification of the import
+   * (bibNotice), which stays bibNoticeMs. Another plan shown meanwhile gives it up (the scene's effect); the store
+   * failed: nothing is made, said.
    */
   const placeBib = (at: Vec2, zoom: number) => {
     const b = bib.current;
     if (!b) return;
     bibMark('click');
-    b.waiting = true;
+    b.put = { at, zoom };
     if (b.refs === null) showBib();
     void b.settled.then(async () => {
       if (bib.current !== b) return;
@@ -583,14 +601,14 @@ export function GraphView(props: {
       const p = paramsRef.current, refs = b.refs;
       const r = await edit(bibImportBuild(b.planned.items.map((x, i) => ({ plan: x.plan, file: refs[i] })), sc, at, zoom, p, b.lines, indexOf(sc)));
       bibMark('placed');
-      if (r?.ok) notify(bibNotice(b.planned, b.planned.items.length, p.bibNoticeLines));
+      if (r?.ok) onLongNoticeRef.current(bibNotice(b.planned, b.planned.items.length, p.bibNoticeLines));
     });
   };
   /** A .bib dropped on the graph's background at (sx, sy) (D9): read by the main process, then its block follows the cursor. */
   const dropBibFile = async (path: string, at: { x: number; y: number }) => {
     const plan = sceneRef.current?.plan.id;
     if (!plan) return;
-    if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’importer un fichier .bib.'); return; }
+    if (busy()) { notify(busyReason('d’importer un fichier .bib')); return; }
     bibMark('drop');
     let file: BibFile;
     try {
@@ -1001,6 +1019,12 @@ export function GraphView(props: {
       feed({ t: 'cancel' });
       setSelection(emptySelection());
       setPopup(null);
+      // A .bib put down and waiting for its .bib: given up, its ghost gone with its plan (review of task 6, M4).
+      if (bibWaiting()) {
+        dropBib();
+        setGhost(null);
+        notify('Le plan de l’import n’est plus affiché : rien n’est importé.');
+      }
     }
     sceneRef.current = scene;
     showScene(e.renderer, scene);
@@ -1079,7 +1103,7 @@ export function GraphView(props: {
   const dropNodeAt = (sx: number, sy: number, node: Id) => {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
-    if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant de poser ce nœud.'); return; }
+    if (busy()) { notify(busyReason('de poser ce nœud')); return; }
     const p = paramsRef.current, cam = e.renderer.camera, at = screenToWorld(cam, sx, sy), index = indexOf(sc);
     const here = sc.byId.get(node);
     if (here !== undefined) {
@@ -1130,6 +1154,8 @@ export function GraphView(props: {
         break;
       }
       case 'context': {
+        // No menu while a .bib put down waits for its .bib: its choices put something down (review of task 6, M4).
+        if (bibWaiting()) { notify(BIB_WAITING); break; }
         // A right click outside the selection lets it go (spec 9.1), then opens the menu of what is under it.
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
@@ -1156,8 +1182,9 @@ export function GraphView(props: {
         setRect(null);
         break;
       case 'dragStart': {
-        // A stub dragged gets a place of its own: an absent phantom (spec 8.5).
+        // A stub dragged gets a place of its own: an absent phantom (spec 8.5); not while a .bib's ghost waits (M4).
         if (intent.hit.kind === 'stub') {
+          if (bibWaiting()) { notify(BIB_WAITING); break; }
           stubDrag.current = { connection: intent.hit.connection, node: intent.hit.node, title: intent.hit.title };
           break;
         }
@@ -1354,6 +1381,8 @@ export function GraphView(props: {
     root.current?.focus({ preventScroll: true });
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
+    // A menu left open while a .bib put down waits for its .bib: nothing it offers begins (review of task 6, M4).
+    if (bibWaiting()) { notify(BIB_WAITING); return; }
     const p = paramsRef.current, sel = selectionRef.current;
     // The menu may have stayed open across a rebuild: what it was opened on is found again by id (I9 of the review).
     const clicked = hit.kind === 'item' ? sc.byId.get(hit.id) ?? -1 : -1;
@@ -1375,7 +1404,7 @@ export function GraphView(props: {
       }
       case 'importBib': {
         // The system's dialog, by the main process (D9): the .bib chosen follows the cursor from the menu's point.
-        if (busy()) { notify('Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’importer un fichier .bib.'); break; }
+        if (busy()) { notify(busyReason('d’importer un fichier .bib')); break; }
         const plan = sc.plan.id;
         bibMark('drop');
         window.cirrus.pickBib().then((file) => startBib(file, at, plan), (err: unknown) => {
@@ -1551,7 +1580,7 @@ export function GraphView(props: {
   useEffect(() => {
     props.session?.setGuard(() => {
       settleWheel();
-      return busy() ? 'Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant d’annuler ou de rétablir.' : null;
+      return busy() ? busyReason('d’annuler ou de rétablir') : null;
     });
   }, [props.session]);
   useEffect(() => {

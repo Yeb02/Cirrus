@@ -1,9 +1,11 @@
 import {
-  type BibProblem, bibFields, bibIdentifiers, bibShort, combine, CommandError, createNode, type FileRef, type Id, include, parseBibtex, type State, type Vec2,
+  type BibProblem, bibFields, bibIdentifiers, bibShort, combine, CommandError, createNode, type FileRef, type Id, include, parseBibtex, repeatedKeyMessage,
+  safeCiteKey, type State, type Vec2,
 } from '@cirrus/core';
 import { bibBlock, type PlanScene, type RenderParams, type SceneIndex } from '@cirrus/view';
 import { type Build, groupAt, readableStep } from '../actions.ts';
 import { decodeText } from '../files/decode.ts';
+import { messageOf } from '../session.ts';
 import { type PlannedPublication, planPublication, PublicationIndex, type PublicationInput } from './build.ts';
 
 /**
@@ -41,23 +43,43 @@ export interface PlannedBib {
 /**
  * The publications of `text` (D7, D9), planned one after the other against the base `s` and the file's entries above:
  * each one planned is added to the index (PublicationIndex.add), so that one file's duplicates follow the base's rule —
- * by its own key, never the one made for it; two entries of unsafe keys are compared by their identifiers, title and
- * year only (the controller's ruling). At most `maxAuthors` tags `auteur` each (publicationMaxAuthors).
+ * by its own key, without case, never the one made for it; two entries of unsafe keys are compared by their
+ * identifiers, title and year only (the controller's ruling). Every own safe key of the file is reserved first, taken
+ * by no key made, never a mark: an entry keeps its own, and a \cite of it already written still means it (the
+ * controller's ruling of the review, M3). An entry set aside as a duplicate whose key repeats one above is said once,
+ * as the duplicate (review M2). At most `maxAuthors` tags `auteur` each (publicationMaxAuthors).
  */
 export function planBib(s: State, name: string, text: string, maxAuthors: number): PlannedBib {
   const read = parseBibtex(text), index = PublicationIndex.of(s);
+  for (const e of read.entries) if (e.key !== '' && safeCiteKey(e.key)) index.keys.reserve(e.key);
   const out: PlannedBib = { name, items: [], duplicates: [], problems: read.problems, omitted: read.omitted, stopped: read.stopped };
+  /** The parser's problems of a repeated key, of the entries set aside as duplicates: said once, as the duplicate. */
+  const twice = new Set<string>();
   for (const e of read.entries) {
     const input: PublicationInput = { fields: bibFields(e), entry: e, ...bibIdentifiers(e) };
     const plan = planPublication(index, input, maxAuthors);
     if ('refused' in plan) {
       out.duplicates.push({ line: e.line, title: input.fields.title || e.key || 'Sans titre', why: plan.refused });
+      if (e.repeats !== undefined) twice.add(`${e.line}|${repeatedKeyMessage(e)}`);
       continue;
     }
     out.items.push({ plan, line: e.line });
     index.add(plan, e.line);
   }
+  if (twice.size > 0) {
+    // Those the parser did not list were counted: one fewer each, and its line that counts them gone with the last.
+    const counted = read.omitted > 0 ? read.problems[read.problems.length - 1 - (read.stopped ? 1 : 0)] : null;
+    const kept = out.problems.filter((p) => !twice.delete(`${p.line}|${p.message}`));
+    out.omitted = Math.max(0, out.omitted - twice.size);
+    out.problems = out.omitted === 0 && counted !== null ? kept.filter((p) => p !== counted) : kept;
+  }
   return out;
+}
+
+/** What the notification says when the entries' .bib could not be stored: the store's reason too (review M6). */
+export function bibStoreFailure(err: unknown): string {
+  const why = messageOf(err).replace(/[.\s]+$/, '');
+  return `Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : ${why}. Rien n’est importé.`;
 }
 
 /**

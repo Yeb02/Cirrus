@@ -30,7 +30,7 @@ import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { Tabs } from './ui/Tabs.tsx';
-import { type Toast, Toasts } from './ui/Toasts.tsx';
+import { type Toast, toastClicked, Toasts, toastMsFor, toastsEscaped } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
 
 const TABS_KEY = 'cirrus.tabs';
@@ -124,11 +124,20 @@ export function App() {
   /** The steps made in the full screen open (its annotations): the only ones its Ctrl+Z and Ctrl+Y undo and redo. */
   const fullSteps = useRef(new Set<Id>());
 
-  const toast = (text: string) => {
+  /**
+   * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
+   * Escape that nothing took closes it sooner (review of task 6, I1).
+   */
+  const toast = (text: string, closable = false) => {
     const id = Math.random();
-    setToasts((t) => [...t, { id, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), paramsRef.current.toastMs);
+    setToasts((t) => [...t, closable ? { id, text, closable } : { id, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), toastMsFor(closable, paramsRef.current));
   };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) setToasts(toastsEscaped); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   /** Reports a refused edit, or names the plan an undone step changed if it is not the one on screen (spec 6.4). */
   const report = (r: Result, verb?: string) => {
     if (!r.ok) { toast(r.message); return; }
@@ -451,7 +460,7 @@ export function App() {
         <GraphBoundary plan={active}>
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
-            onResult={(r) => report(r)} onOpenPlan={openPlan}
+            onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
             onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} ref={graph}
           />
@@ -467,7 +476,9 @@ export function App() {
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
         />
-        <Toasts toasts={toasts}><LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} /></Toasts>
+        <Toasts toasts={toasts} onClose={(id) => setToasts((t) => toastClicked(t, id))}>
+          <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />
+        </Toasts>
       </div>
       {fullNow?.file && (
         // A full screen that fails says so over the window, which stays (PanelBoundary); closed, it is tried again next time.

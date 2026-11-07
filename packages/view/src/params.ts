@@ -192,10 +192,11 @@ export interface RenderParams {
   /**
    * A .bib's publications are put down in a block (D9, task 6) whose boxes stand this far apart, in pixels at the
    * readable step (bibBlock); its notification names at most this many duplicates, and as many problems, then counts
-   * the others.
+   * the others, and stays this long, unless a click on it or Escape closes it sooner (review of task 6, I1).
    */
   bibBlockGapPx: number;
   bibNoticeLines: number;
+  bibNoticeMs: number;
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
@@ -387,6 +388,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   publicationPdfPages: 2,
   bibBlockGapPx: 24,
   bibNoticeLines: 5,
+  bibNoticeMs: 20_000,
   popupWidthPx: 380,
   popupHeightPx: 460,
   previewWidthPx: 560,
@@ -587,6 +589,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('publicationPdfPages', 'Pages d’un PDF déposé où chercher son DOI ou son identifiant arXiv', A, 'Publications', 1, 20, 1),
   num('bibBlockGapPx', 'Écart entre les boîtes du bloc d’un .bib importé (px au cran lisible)', A, 'Publications', 0, 400, 1),
   num('bibNoticeLines', 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', A, 'Publications', 1, 100, 1),
+  num('bibNoticeMs', 'Durée d’affichage de la notification d’un .bib importé, qu’un clic ou Échap ferme (ms)', A, 'Publications', 2000, 600_000, 500),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),

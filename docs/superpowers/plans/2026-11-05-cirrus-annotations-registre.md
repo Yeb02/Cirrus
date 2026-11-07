@@ -957,3 +957,57 @@ Toutes trois fois au moins, sur ce PC, la machine chargée par le travail de l�
   - « un .bib déposé sur un nœud en devient un fichier ; sur le dialogue d’import, il est refusé » : le livre de la base gagne `bibliographie.bib` ; le dialogue dit « « bibliographie.bib » n’est pas un PDF. » ; aucun fantôme ni aucun nœud ;
   - « un .bib de 2 000 entrées » : les mesures plus haut, six imports suivis chacun d’un Ctrl+Z.
 - **Captures** : une suite neuve de 24 images, sur le code final. Contre `reference-3c`, 11 sur 11 à 0 pixel ; contre `plan4a`, 8 sur 8 ; contre `plan4b`, 5 sur 5. Aucune image n’est refaite : le fantôme du bloc et la notification de plusieurs lignes ne sont dans aucune capture.
+
+### Revue, ronde 1
+
+La revue (`task-6-review.md`) a demandé I1 et sept Minors, M1 à M7. M8 à M12 sont différés au ledger.
+
+- Ruling (contrôleur, I1) : **la notification d’un import de `.bib` reste `bibNoticeMs`** (20 000 ms, de 2 000 à 600 000, réglage avancé de « Publications »).
+  - Un clic sur elle, ou un Échap que rien d’autre ne prend, la ferme plus tôt.
+  - Elle seule prend les clics (`.toast.closable`) : les autres notifications gardent `pointer-events: none` et `toastMs`.
+  - La notification « rien d’importable » la suit aussi, puisqu’elle a ses listes.
+  - Un même Échap peut fermer à la fois un panneau flottant et cette notification : les deux écoutent l’Échap que rien n’a pris. C’est accepté.
+  - Coût si faux : une notification de 20 s.
+- Ruling (contrôleur, M1) : **les marques de clé se comparent sans la casse** (`mark` et `duplicate`), comme BibTeX. La règle de contradiction des identifiants ne change pas.
+- Ruling (contrôleur, M2) : **une même clé deux fois dans un fichier n’est dite qu’une fois.**
+  - L’entrée porte `repeats` (la ligne de la première), et `repeatedKeyMessage(entry)` est l’unique source du message de l’analyseur.
+  - `planBib` retire ce problème pour une entrée écartée comme doublon. S’il n’était pas listé, il ôte un au décompte `omitted`, et la ligne « Et N autres problèmes. » de l’analyseur quand ce décompte tombe à 0.
+  - Une clé répétée que des identifiants contredisent (deux publications) garde le problème de l’analyseur, puisque la seconde reçoit une clé fabriquée.
+- Ruling (contrôleur, M3) : **les clés propres sûres de tout le fichier sont réservées d’abord** (`CiteKeys.reserve`) : une clé fabriquée les évite, et l’entrée dont c’est la clé propre la garde. Elles ne sont jamais des marques.
+  - Un `\cite{li2008}` existant désigne ainsi toujours l’entrée de clé propre `li2008`.
+  - **Le test `He_2016` / `he2016` est adapté** : la première entrée reçoit `he2016b` (au lieu de `he2016`), la seconde garde sa clé propre `he2016` (au lieu de `he2016b`), sans être un doublon. Les marques restent `He_2016` et `he2016`.
+  - Coût si faux : une clé fabriquée qui saute la clé propre d’une entrée écartée plus bas comme doublon (`foo2008b` au lieu de `foo2008`).
+- Ruling (contrôleur, M4) : **pendant l’attente qui suit le clic, rien qui pose quelque chose ne commence.**
+  - La forme : un prédicat `bibWaiting()`, sur le modèle de `gestures.busy`. Il est vérifié dans `startPlacing` (Ctrl+V, une amorce, un fantôme absent, une répercussion), à l’ouverture des menus, dans `pick` (un menu resté ouvert) et au glisser d’une amorce.
+  - La raison est dite : « Import du .bib en cours : attends que ses publications soient posées. ».
+  - Les refus « Un geste est en cours… (Échap) » disent cette raison pendant l’attente (`busyReason`) : Ctrl+Z, un nœud déposé, un autre `.bib`.
+  - Seul le fantôme du bloc est redessiné.
+  - Pendant l’attente, le fantôme reste au point du clic dans le monde, à l’échelle de son cran, si la vue bouge.
+  - Un autre plan affiché pendant l’attente abandonne l’import tout de suite, efface le fantôme, et le dit.
+- Ruling (contrôleur, M5) : **`storeBytesAsync` renomme de nouveau un fichier temporaire tenu** (EPERM, EBUSY, EACCES, tant que la destination manque) :
+  - trois essais au plus, avec une pause de 30 ms fois l’essai (`RENAME_TRIES`, `RENAME_PAUSE_MS`, des bornes fixes du magasin) ;
+  - un temporaire qu’on ne peut retirer (`rm`) ne masque plus le blob présent : c’est `existsSync(dest)` qui décide.
+- Ruling (contrôleur, M6) : **la raison donnée par le magasin est dite** (`messageOf`) :
+  - `bibStoreFailure(err)` pour le `.bib` : « Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : <raison>. Rien n’est importé. » ;
+  - l’import par identifiant de la tâche 5 ajoute la raison après le sien.
+- Ruling (contrôleur, M7) : **l’import par identifiant revérifie au calcul une clé prise entre-temps** (sans la casse), et **refuse** comme `bibImportBuild` : « La clé « he2016 » a été prise entre-temps. Rien n’est importé : recommence l’import. ».
+  - Pourquoi refuser plutôt que refaire `citeKey` : le `.bib` du nœud est déjà au magasin sous cette clé, qu’il porte dans son texte. Une autre clé demanderait un autre `.bib`, écrit avant l’action, ce que l’action pure ne peut pas faire.
+  - Coût si faux : un import à refaire, dans un cas rare.
+- **Vérifications** :
+  - tests vus rouges :
+    - `bibNoticeMs: expected undefined to be 20000` ;
+    - `toastMsFor` absent ;
+    - `reserved.reserve is not a function` ;
+    - `repeats` absent (`expected [ undefined, undefined ] to deeply equal [ undefined, 1 ]`) ;
+    - `Smith2020` puis `smith2020b` planifiés ;
+    - le problème de clé répétée dit en plus du doublon, puis la ligne « Et N autres » restée (`expected [ +0, 201 ] to deeply equal [ +0, 200 ]`) ;
+    - `li2008b`, `li2008c`, `li2008d` au lieu de `li2008d`, `li2008b`, `li2008c` ;
+    - `he2016` puis `he2016b` au lieu de `he2016b` puis `he2016` ;
+    - `Li2008` contre `li2008` planifié au lieu d’être refusé ;
+    - le renommage sans nouvel essai (`EPERM: operation not permitted, rename`, `expected 1 to be 3`) ;
+    - `bibStoreFailure` absent, puis le message de la tâche 5 sans la raison ;
+    - `publicationBuild` sans refus de la clé prise (`expected function to throw an error, but it didn't`) ;
+  - scénarios vus rouges, les deux corrections désactivées le temps d’un essai : « la notification de l’import n’est plus là après 5 s » ; « Ctrl+V n’est pas refusé » ;
+  - suites, chaque paquet seul, `--maxWorkers=1` : `core` 132 (14 fichiers), `store` 23 (4), `view` 251 (31), `app` 419 (40). Tous passés. `tsc --noEmit -p .` sans erreur dans `core`, `store`, `view` et `app` ;
+  - scénarios d’interface : 22 sur 22, dont un nouveau. « pendant l’attente d’un .bib posé… » : 2 000 entrées, un clic aussitôt ; Ctrl+V est refusé avec la raison, et le fantôme dit toujours « Enregistrement des fichiers .bib : 600 / 2 000… » ; le menu du fond ne s’ouvre pas ; rien n’est collé. Le scénario du dépôt sur le fond vérifie aussi que la notification est encore là après 5,5 s, puis qu’un clic la ferme ; celui du menu, qu’Échap la ferme. Les mesures de 2 000 entrées restent du même ordre (dépôt → fantôme 100 à 138 ms, clic → action 208 à 240 ms après l’enregistrement) ;
+  - captures : non refaites. Le rendu des scènes de référence n’a pas changé : seule une notification qu’un clic ferme prend une classe nouvelle, et aucune capture n’en montre.

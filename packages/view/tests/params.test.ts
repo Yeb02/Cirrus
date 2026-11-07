@@ -190,6 +190,8 @@ test('un .bib importé : l’écart entre les boîtes de son bloc et les lignes 
   const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
     ['bibBlockGapPx', 24, 'Écart entre les boîtes du bloc d’un .bib importé (px au cran lisible)', 0, 400, 1],
     ['bibNoticeLines', 5, 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', 1, 100, 1],
+    // The review of task 6, I1: its lists are read; a click on it or Escape closes it sooner.
+    ['bibNoticeMs', 20_000, 'Durée d’affichage de la notification d’un .bib importé, qu’un clic ou Échap ferme (ms)', 2000, 600_000, 500],
   ];
   for (const [key, value, label, min, max, step] of specs) {
     expect(DEFAULT_PARAMS[key], key).toBe(value);

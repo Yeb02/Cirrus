@@ -149,9 +149,20 @@ test('doublons (tâche 6, règle du contrôleur) : seule la clé propre d’une 
   expect(p.key).toBe('he2016');
   // Its marks: its own key, He_2016, and not the one made for it.
   expect(p.marks.keys).toEqual(['He_2016']);
-  // A node takes he2016 meanwhile (the user's own key, without an identifier): the import is no duplicate of it.
-  setTags(ids.nodes.occam, [tag('clé_bibtex', 'he2016')]);
-  expect(() => publicationBuild(p, [], sc, SKY, 1, P)(s)).not.toThrow();
+  // A node takes he2016 meanwhile (the user's own key, without an identifier): the import is no duplicate of it — its
+  // marks hold He_2016 only —, but its key is taken: refused as such, as a .bib's import is (review of task 6, M7).
+  setTags(ids.nodes.occam, [tag('clé_bibtex', 'HE2016')]);
+  expect(() => publicationBuild(p, [], sc, SKY, 1, P)(s)).toThrow(new CommandError('La clé « he2016 » a été prise entre-temps. Rien n’est importé : recommence l’import.'));
+});
+
+test('doublons (revue de la tâche 6, M1) : une clé se compare sans la casse, comme BibTeX ; des identifiants qui se contredisent la démentent toujours', () => {
+  // The test base's book holds li2008, without an identifier: an entry Li2008 of another title is a duplicate of it.
+  const other = parseBibtex('@book{Li2008, title = {Un autre livre}, author = {Li, Ming}, year = 1999, doi = {10.5555/autre}}').entries[0];
+  const input = { fields: { title: 'Un autre livre', authors: ['Ming Li'], year: '1999' }, entry: other, doi: '10.5555/autre' };
+  expect(planPublication(PublicationIndex.of(s), input, 50)).toEqual({ refused: `Déjà dans la base (même clé BibTeX) : « ${LI} ».` });
+  // Both sides with a DOI, two DOIs: another publication, its key made.
+  setTags(ids.nodes.publication, [tag('doi', '10.1007/978-0-387-49820-1')]);
+  expect(planned(planPublication(PublicationIndex.of(s), input, 50)).key).toBe('li1999');
 });
 
 test('doublons (re-revue N2) : un DOI de la base écrit avec le point de la phrase est ce DOI, et non un veto', async () => {
@@ -280,8 +291,11 @@ test('importByIdentifier : un rejet de l’IPC ou du magasin devient un message 
   const r = await importByIdentifier('arXiv:1706.03762', null, rejected.d);
   expect(r).toEqual({ kind: 'failed', message: 'L’import de la publication a échoué : le processus principal n’a pas répondu.' });
   expect(logged).toHaveLength(1);
-  const store = deps({ storeText: () => Promise.reject(new Error('EACCES: permission denied')) });
-  expect(await importByIdentifier('arXiv:1706.03762', null, store.d)).toEqual({ kind: 'failed', message: 'Le fichier .bib de la publication n’a pas pu être enregistré dans la base.' });
+  // The store's reason, as the main process said it, is said too (review of task 6, M6).
+  const store = deps({ storeText: () => Promise.reject(new Error('Error invoking remote method \'cirrus:files:store-text\': Error: Le texte fait plus de 200 Mo : il n’est pas enregistré.')) });
+  expect(await importByIdentifier('arXiv:1706.03762', null, store.d)).toEqual({
+    kind: 'failed', message: 'Le fichier .bib de la publication n’a pas pu être enregistré dans la base : Le texte fait plus de 200 Mo : il n’est pas enregistré.',
+  });
   expect(store.calls.put).toEqual([]);
   const garbled = deps({ fetch: async () => ARXIV({ bibtex: '@@@ pas du BibTeX' }) });
   expect(await importByIdentifier('arXiv:1706.03762', null, garbled.d)).toEqual({ kind: 'failed', message: 'Le BibTeX reçu est illisible : la publication n’est pas importée.' });

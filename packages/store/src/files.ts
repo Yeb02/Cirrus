@@ -84,7 +84,9 @@ export function storeBytes(storeDir: string, name: string, bytes: Uint8Array): F
  * storeBytes without holding the process (plan 4c, task 6: a .bib's thousands of entries, a file each): the same
  * temporary file synced then renamed into place, nothing written when the same content is stored already, by the file
  * system's thread pool, so that several run at once. Two of the same content at once both end on that one blob: a
- * rename that finds it there already drops its temporary.
+ * rename that finds it there already drops its temporary. A temporary the antivirus holds a moment after it is closed
+ * (EPERM, EBUSY, EACCES) is renamed again, RENAME_TRIES times at most, a short pause between (as graceful-fs does;
+ * review of task 6, M5); a temporary that cannot be removed never hides a blob that is there.
  */
 export async function storeBytesAsync(storeDir: string, name: string, bytes: Uint8Array): Promise<FileRef> {
   const ref: FileRef = { name, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
@@ -104,11 +106,25 @@ export async function storeBytesAsync(storeDir: string, name: string, bytes: Uin
   }
   await out.close();
   await mkdir(join(filesDir, ref.hash.slice(0, 2)), { recursive: true });
-  try {
-    await rename(tmp, dest);
-  } catch (e) {
-    await rm(tmp, { force: true });
-    if (!existsSync(dest)) throw e;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(tmp, dest);
+      return ref;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (attempt < RENAME_TRIES && HELD.has(code ?? '') && !existsSync(dest)) {
+        await new Promise((r) => setTimeout(r, RENAME_PAUSE_MS * attempt));
+        continue;
+      }
+      await rm(tmp, { force: true }).catch(() => {});
+      if (existsSync(dest)) return ref;
+      throw e;
+    }
   }
-  return ref;
 }
+
+/** The errors of a file another program holds a moment (the antivirus scanning it): its rename is tried again. */
+const HELD = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/** A temporary's renames at most, and the pause before the next one, times the attempt (fixed bounds of the store). */
+const RENAME_TRIES = 3;
+const RENAME_PAUSE_MS = 30;

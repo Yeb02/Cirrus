@@ -10,7 +10,7 @@ import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { bibBlock, buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene, type SceneItem } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
-import { BIB_STORE_BATCH, bibImportBuild, bibNotice, bibText, planBib, type PlannedBib, storeBibs } from '../src/renderer/publications/bib.ts';
+import { BIB_STORE_BATCH, bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../src/renderer/publications/bib.ts';
 import { readableStep } from '../src/renderer/actions.ts';
 
 const BIB_NAME = 'bibliographie.bib';
@@ -78,9 +78,36 @@ test('planBib : les doublons à l’intérieur du fichier — même DOI, même c
   ]);
   // Two unsafe keys: their author-and-year keys, one after the other.
   expect(b.items.slice(3).map((x) => x.plan.key)).toEqual(['sept2007', 'huit2008']);
+  // The key set aside with its entry is said once, as a duplicate (review M2); the unsafe one kept, by the parser.
+  expect(b.problems).toEqual([{ line: 8, message: 'Entrée « DBLP:x/1 » : la clé est déjà celle de l’entrée de la ligne 7.' }]);
+  // One said once even past the problems the parser lists: its count goes down.
+  const many = planBib(s, 'g.bib', [...Array.from({ length: 300 }, (_, i) => `@misc{b${i} title}`), '@misc{k1, title = {A}}', '@misc{K1, title = {B}}'].join('\n'), 50);
+  expect(many.duplicates.map((d) => d.line)).toEqual([302]);
+  expect(many.omitted).toBe(300 - BIB_MAX_PROBLEMS);
+  // The only one past the list: no « Et N autres problèmes. » counted as a problem any more.
+  const one = planBib(s, 'g.bib', [...Array.from({ length: BIB_MAX_PROBLEMS }, (_, i) => `@misc{b${i} title}`), '@misc{k1, title = {A}}', '@misc{K1, title = {B}}'].join('\n'), 50);
+  expect([one.omitted, one.problems.length]).toEqual([0, BIB_MAX_PROBLEMS]);
+  expect(bibNotice(one, 1, 2).split('\n').at(-1)).toBe(`– et ${(BIB_MAX_PROBLEMS - 2).toLocaleString('fr-FR')} autres.`);
 });
 
-test('planBib (règle du contrôleur) : la première entrée He_2016, contredite par un nœud de la base, reçoit he2016 ; une seconde de clé propre he2016, sans identifiant, n’est pas un doublon d’elle', () => {
+test('planBib (revue M1, M2) : deux clés qui ne diffèrent que par la casse sont un doublon, comme pour BibTeX, et dit une fois', () => {
+  const b = planBib(s, 'f.bib', '@misc{Smith2020, title = {Un}, author = {Smith, A.}, year = 2020}\n@misc{smith2020, title = {Deux}, author = {Smith, B.}, year = 2020}', 50);
+  expect(b.items.map((x) => x.plan.key)).toEqual(['Smith2020']);
+  expect(b.duplicates).toEqual([{ line: 2, title: 'Deux', why: 'Déjà plus haut dans le fichier, ligne 1 (même clé BibTeX) : « Un ».' }]);
+  expect(b.problems).toEqual([]);
+});
+
+test('planBib (règle du contrôleur, revue M3) : les clés propres sûres du fichier sont réservées avant toute clé fabriquée — une entrée garde la sienne, un \\cite existant la désigne', () => {
+  const b = planBib(s, 'f.bib', '@misc{DBLP:x/1, title = {A}, author = {Li, M.}, year = 2008}\n@misc{li2008b, title = {B}, author = {Li, M.}, year = 2008}\n@misc{li2008c, title = {C}, author = {Li, M.}, year = 2008}', 50);
+  // li2008 is the base's book's; li2008b and li2008c are the next entries' own: the first gets li2008d.
+  expect(b.items.map((x) => x.plan.key)).toEqual(['li2008d', 'li2008b', 'li2008c']);
+  // Reserved, never a mark: the entry made li2008d is no duplicate of the one whose own key it would have been.
+  const c = planBib(s, 'f.bib', '@misc{DBLP:x/1, title = {A}, author = {Vitányi, P.}, year = 2009}\n@misc{vitanyi2009, title = {B}, author = {Vitányi, P.}, year = 2009}', 50);
+  expect(c.items.map((x) => x.plan.key)).toEqual(['vitanyi2009b', 'vitanyi2009']);
+  expect(c.duplicates).toEqual([]);
+});
+
+test('planBib (règle du contrôleur ; revue M3) : la première entrée He_2016, contredite par un nœud de la base, reçoit he2016b — he2016 étant la clé propre de la seconde, réservée — et la seconde, sans identifiant, garde he2016 sans être un doublon', () => {
   run(editNode(s, ids.nodes.monde, { title: 'Deep Residual Learning for Image Recognition', tags: [tag('clé_bibtex', 'He_2016'), tag('doi', '10.1109/CVPR.2016.90'), tag('date_de_publication', '2016')] }));
   const text = [
     '@inproceedings{He_2016, title={Identity Mappings in Deep Residual Networks}, author={He, Kaiming}, year={2016}, doi={10.1007/978-3-319-46493-0_38}}',
@@ -88,7 +115,15 @@ test('planBib (règle du contrôleur) : la première entrée He_2016, contredite
   ].join('\n');
   const b = planBib(s, 'he.bib', text, 50);
   expect(b.duplicates).toEqual([]);
-  expect(b.items.map((x) => x.plan.key)).toEqual(['he2016', 'he2016b']);
+  expect(b.items.map((x) => x.plan.key)).toEqual(['he2016b', 'he2016']);
+  // The marks: each entry's own key only.
+  expect(b.items.map((x) => x.plan.marks.keys)).toEqual([['He_2016'], ['he2016']]);
+});
+
+test('bibStoreFailure (revue M6) : la raison du magasin, telle que le principal l’a dite, est dans la notification', () => {
+  expect(bibStoreFailure(new Error('Error invoking remote method \'cirrus:files:store-texts\': Error: Les textes font plus de 200 Mo ensemble : ils ne sont pas enregistrés.')))
+    .toBe('Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : Les textes font plus de 200 Mo ensemble : ils ne sont pas enregistrés. Rien n’est importé.');
+  expect(bibStoreFailure('ENOSPC')).toBe('Les fichiers .bib des publications n’ont pas pu être enregistrés dans la base : ENOSPC. Rien n’est importé.');
 });
 
 test('bibImportBuild : une seule action « Importer 7 publications », le bloc centré sous le curseur au cran lisible, chaque nœud avec ses tags et son <clé>.bib ; un seul Ctrl+Z retire tout', () => {

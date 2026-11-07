@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import {
   BIB_MAX_BYTES, BIB_MAX_CHARS, BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, BIB_NAME_CHARS, BIB_WORK_PER_CHAR, BIB_WORK_SLACK, bibAuthors, type BibEntry, bibFields,
-  bibIdentifiers, bibNames, bibShort, bibtexEntry, CiteKeys, citeKey, cleanArxiv, cleanDoi, latexToUnicode, normalizedTitle, parseBibtex, safeCiteKey,
+  bibIdentifiers, bibNames, bibShort, bibtexEntry, CiteKeys, citeKey, cleanArxiv, cleanDoi, latexToUnicode, normalizedTitle, parseBibtex, repeatedKeyMessage,
+  safeCiteKey,
 } from '../src/bibtex.ts';
 
 const REAL = readFileSync(new URL('./data/reel-50.bib', import.meta.url), 'utf8');
@@ -146,6 +147,9 @@ test('parseBibtex : accolades imbriquées, entrée entre parenthèses, sans clé
     { line: 1, message: 'Entrée « k » : le champ « title » est en double ; le premier est gardé.' },
     { line: 2, message: 'Entrée « K » : la clé est déjà celle de l’entrée de la ligne 1.' },
   ]);
+  // The entry knows it (`repeats`), and the message said of it (task 6, revue M2: the import says it once).
+  expect(twice.entries.map((e) => e.repeats)).toEqual([undefined, 1]);
+  expect(repeatedKeyMessage(twice.entries[1])).toBe(twice.problems[1].message);
   // Neither @comment nor @preamble are entries; an @ in a word (an address) starts none.
   expect(parseBibtex('Écrire à auteur@exemple.fr\n@comment(x {y})\n@preamble{"\\def\\x{1}"}\n@misc{v}').entries.map((e) => e.key)).toEqual(['v']);
   // Windows line ends: the lines counted the same.
@@ -396,6 +400,12 @@ test('citeKey et CiteKeys (tâche 6) : les mêmes clés qu’avec un Set ; pour 
   keys.add('vaswani2017d');
   expect(citeKey(datacite, keys)).toBe('vaswani2017e');
   expect(citeKey(entry('@book{li2008, author = {Li, Ming}, year = 2008}'), keys)).toBe('li2008b');
+  // A reserved key (a .bib's own keys, revue M3) is avoided by the keys made, never by the entry whose own key it is.
+  const reserved = new CiteKeys();
+  reserved.reserve('LI2008');
+  expect(reserved.has('li2008')).toBe(false);
+  expect(citeKey(entry('@misc{DBLP:x/1, author = {Li, M.}, year = 2008}'), reserved)).toBe('li2008b');
+  expect(citeKey(entry('@misc{li2008, author = {Li, M.}, year = 2008}'), reserved)).toBe('li2008');
   // 50 000 entries, all of the same base (no author, no year, the same first word), or each of its own: linear.
   for (const make of [(i: number) => `@misc{, title = {The ${i}}}`, (i: number) => `@misc{k${i}, author = {Nom${i}, A.}, year = 2000}`]) {
     const read = parseBibtex(Array.from({ length: BIB_MAX_ENTRIES }, (_, i) => make(i)).join('\n'));

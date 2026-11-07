@@ -113,6 +113,8 @@ button, input, select { font: inherit; color: var(--ink); }
 }
 /* A notification of several lines (a .bib imported, plan 4c): its lines kept, no wider than the window. */
 .toast.lines { white-space: pre-line; max-width: min(880px, calc(100vw - 48px)); }
+/* One that a click closes (a .bib imported, review of task 6, I1): it takes the clicks; the others let them through. */
+.toast.closable { pointer-events: auto; cursor: pointer; }
 /* LaTeX's notice (task 7), above the toasts and over the full screens: its buttons take the clicks. */
 .toast.latex-notice { pointer-events: auto; display: flex; align-items: center; gap: 10px; max-width: 760px; }
 .latex-notice button { flex: none; padding: 3px 12px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }

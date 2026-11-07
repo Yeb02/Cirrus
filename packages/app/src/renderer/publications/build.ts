@@ -7,7 +7,7 @@ import { cslToFields } from '../../main/publications/csl.ts';
 import type { PublicationResult } from '../../main/publications/fetch.ts';
 import { parseIdentifier, type PublicationId } from '../../main/publications/identifier.ts';
 import { newNodeBuild } from '../actions.ts';
-import type { Result } from '../session.ts';
+import { messageOf, type Result } from '../session.ts';
 
 /**
  * A publication's node (plan 4c, D7), from an import: by its identifier (the main process's answer, publicationFetch),
@@ -132,15 +132,17 @@ export class PublicationIndex {
       if (list) list.push(holder);
       else map.set(v, [holder]);
     };
-    for (const k of m.keys) hold(this.key, k);
+    // Keys without case, as BibTeX compares them (review of task 6, M1).
+    for (const k of m.keys) hold(this.key, k.toLowerCase());
     if (m.titleYear !== null) hold(this.titleYear, m.titleYear);
   }
 
   /**
    * Why these marks are a publication already there, in French, naming it; null when they are none's. The same DOI or
-   * arXiv identifier, then the same key, then the same title and year; but a key, or a title and year, is another
-   * publication's when the identifiers contradict it — both sides have a DOI and they differ, or both an arXiv
-   * identifier and they differ (the controller's ruling of the review, I2, M2). A DOI and an arXiv identifier do not.
+   * arXiv identifier, then the same key (without case, review of task 6, M1), then the same title and year; but a key,
+   * or a title and year, is another publication's when the identifiers contradict it — both sides have a DOI and they
+   * differ, or both an arXiv identifier and they differ (the controller's ruling of the review, I2, M2). A DOI and an
+   * arXiv identifier do not.
    */
   duplicate(m: Marks): string | null {
     for (const d of m.dois) {
@@ -154,7 +156,7 @@ export class PublicationIndex {
     const differ = (mine: string[], theirs: string[]) => mine.length > 0 && theirs.length > 0 && !theirs.some((x) => mine.includes(x));
     const agrees = (h: Holder) => !differ(m.dois, h.dois) && !differ(m.arxivs, h.arxivs);
     for (const k of m.keys) {
-      const h = this.key.get(k)?.find(agrees);
+      const h = this.key.get(k.toLowerCase())?.find(agrees);
       if (h) return already('même clé BibTeX', h);
     }
     const h = m.titleYear === null ? undefined : this.titleYear.get(m.titleYear)?.find(agrees);
@@ -221,8 +223,11 @@ export function publicationBuild(
 ): (s: State) => Action {
   const make = newNodeBuild(scene, { title: plan.title, tags: plan.tags, files }, at, zoom, p, `Importer « ${plan.title} »`, index);
   return (st) => {
-    const refused = PublicationIndex.of(st).duplicate(plan.marks);
+    const now = PublicationIndex.of(st), refused = now.duplicate(plan.marks);
     if (refused) throw new CommandError(refused);
+    // Its key taken meanwhile (without case), by a node of another identity: refused, as a .bib's import is — its .bib,
+    // already stored under that key, cannot take another one here (review of task 6, M7).
+    if (plan.key !== null && now.keys.has(plan.key)) throw new CommandError(`La clé « ${plan.key} » a été prise entre-temps. Rien n’est importé : recommence l’import.`);
     return make(st);
   };
 }
@@ -289,7 +294,7 @@ async function putDown(plan: PlannedPublication, files: FileRef[], deps: ImportD
  * title and year), the .bib stored, and the node put down, `dropped` among its files (arXiv's PDF then not asked for).
  * The dialog closed at any step, what comes back is dropped. Every failure is said in French: the main process's own
  * messages, or, for a rejection of the IPC (an answer Electron could not clone) or of the store, a message of ours,
- * the cause to `log`.
+ * the cause to `log` — the store's own reason said after ours (review of task 6, M6).
  */
 export async function importByIdentifier(text: string, dropped: FileRef | null, deps: ImportDeps): Promise<ImportOutcome> {
   const id = parseIdentifier(text);
@@ -315,7 +320,8 @@ export async function importByIdentifier(text: string, dropped: FileRef | null, 
       bib = await deps.storeText(plan.bib.name, plan.bib.text);
     } catch (e) {
       deps.log?.(`Enregistrement de « ${plan.bib.name} » :`, e);
-      return deps.open() ? { kind: 'failed', message: 'Le fichier .bib de la publication n’a pas pu être enregistré dans la base.' } : { kind: 'dropped' };
+      // The store's reason, in French as the main process says it (review of task 6, M6).
+      return deps.open() ? { kind: 'failed', message: `Le fichier .bib de la publication n’a pas pu être enregistré dans la base : ${messageOf(e)}` } : { kind: 'dropped' };
     }
     if (!deps.open()) return { kind: 'dropped' };
   }
