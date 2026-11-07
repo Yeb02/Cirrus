@@ -76,11 +76,64 @@ const line = (x: number, y: number, text: string, size = 12, bold = false): PdfL
 const area = (l: PdfLine, from = 0, to = l.text.length): Rect =>
   [l.x + from * l.size * 0.5, l.y - l.size * 0.25, l.x + to * l.size * 0.5, l.y + l.size * 0.9];
 
+/** Helvetica's widths in thousandths of its size (its AFM, as pdf.js lays it out): ASCII from the space, in order. */
+const HELVETICA_ASCII = [
+  278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556,
+  556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
+  667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556,
+  556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
+];
+/** And the others of French text in WinAnsiEncoding that the chapter's lines may hold. */
+const HELVETICA_OTHERS: Record<string, number> = {
+  à: 556, á: 556, â: 556, ç: 500, é: 556, è: 556, ê: 556, î: 278, ô: 556, ù: 556, û: 556, É: 667, '’': 222, '«': 556, '»': 556, '—': 1000,
+};
+
+/** The width of `text` in Helvetica (not bold), in thousandths of its size. */
+function helveticaUnits(text: string): number {
+  let w = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    const u = c >= 0x20 && c < 0x7f ? HELVETICA_ASCII[c - 0x20] : HELVETICA_OTHERS[ch];
+    if (u === undefined) throw new Error(`Largeur Helvetica inconnue : « ${ch} »`);
+    w += u;
+  }
+  return w;
+}
+
+/** The area of a line's characters [from, to), from Helvetica's widths: where they are drawn (summed in thousandths, exact). */
+function textArea(l: PdfLine, from: number, to: number): Rect {
+  const x = (k: number) => (1000 * l.x + helveticaUnits(l.text.slice(0, k)) * l.size) / 1000;
+  return [x(from), l.y - l.size * 0.25, x(to), l.y + l.size * 0.9];
+}
+
+/**
+ * A passage of a page as a selection gives it (plan 4c, D3): from the first `from` of its lines to the end of the first
+ * `to` after it, its lines joined by a line break, and a rectangle per line in the page's coordinates. Regular lines only.
+ */
+export function passage(page: PdfPageSpec, from: string, to: string): { text: string; rects: Rect[] } {
+  const lines = page.lines, first = lines.findIndex((l) => l.text.includes(from));
+  if (first < 0) throw new Error(`« ${from} » n’est pas sur la page.`);
+  const start = lines[first].text.indexOf(from), parts: string[] = [], rects: Rect[] = [];
+  for (let i = first; i < lines.length; i++) {
+    const l = lines[i], a = i === first ? start : 0, at = l.text.indexOf(to, a), b = at < 0 ? l.text.length : at + to.length;
+    parts.push(l.text.slice(a, b));
+    rects.push(textArea(l, a, b));
+    if (at >= 0) return { text: parts.join('\n'), rects };
+  }
+  throw new Error(`« ${to} » ne suit pas « ${from} » sur la page.`);
+}
+
 /**
  * The test base's chapter in three A4 pages (« Li_Vitányi_chapitre_1.pdf », publication node): a summary whose
  * entries lead to pages 2 and 3, a web address and a mail address on page 1, a way back to it from the other two.
+ * `earlier`: the version the base had first, re-imported since (plan 4c, D2), page 1's paragraph worded otherwise.
  */
-export function chapterPdf(): Uint8Array {
+export function chapterPdf(opts: { earlier?: boolean } = {}): Uint8Array {
+  return writePdf(chapterPages(opts));
+}
+
+/** The pages of chapterPdf, for the passages its annotations highlight (passage). */
+export function chapterPages({ earlier = false }: { earlier?: boolean } = {}): PdfPageSpec[] {
   const W = 595, H = 842;
   const toPage2 = line(90, 668, '1.1  Notations et définitions . . . . . . . . . . . . . . . page 2');
   const toPage3 = line(90, 648, '1.2  Complexité de Kolmogorov . . . . . . . . . . . . . . page 3');
@@ -89,7 +142,7 @@ export function chapterPdf(): Uint8Array {
   const back = (y: number) => line(72, y, '« Retour au sommaire »');
   const back2 = back(560), back3 = back(540);
   const footer = (n: number) => line(W / 2 - 3, 40, String(n), 10);
-  return writePdf([
+  return [
     {
       width: W, height: H,
       lines: [
@@ -100,7 +153,7 @@ export function chapterPdf(): Uint8Array {
         toPage2, toPage3,
         line(72, 600, 'Ce chapitre fixe les notations du livre : chaînes binaires, longueur |x|, codes'),
         line(72, 584, 'préfixes et machines de Turing universelles. La complexité de Kolmogorov d’une'),
-        line(72, 568, 'chaîne est la longueur du plus court programme qui l’écrit, à une constante près.'),
+        line(72, 568, earlier ? 'chaîne est la taille du plus petit programme qui l’engendre.' : 'chaîne est la longueur du plus court programme qui l’écrit, à une constante près.'),
         web, mail, footer(1),
       ],
       links: [
@@ -136,5 +189,5 @@ export function chapterPdf(): Uint8Array {
       ],
       links: [{ rect: area(back3), page: 0 }],
     },
-  ]);
+  ];
 }

@@ -1,3 +1,4 @@
+import { validAnchor } from './annotation.ts';
 import type { ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
 import { dataOf, emptyState, type Indices, layoutKey, reindexRest, type State } from './state.ts';
 import { type ConnTable, EMPTY_TAGS, INCLUSION, KINDS, NO_RECORD, type Pool, type Rows, SOURCE, TARGET } from './tables.ts';
@@ -491,6 +492,8 @@ export function decodeState(buf: ArrayBuffer): State {
     } else if (state === IRREGULAR) {
       rec = JSON.parse(str(nodeRecs[o + 1])) as NodeRec;
       if (!isObject(rec) || rec.id !== nodeIds[r]) throw corrupt('nœud');
+      // An annotation's anchor (plan 4c, D1) goes this way: the state holds none out of its bounds (checkRecord).
+      if (rec.anchor !== undefined && !validAnchor(rec.anchor)) throw corrupt('ancre d’annotation');
       rec.id = nodeIds[r];
     } else throw corrupt('nœud');
     recs.push(rec);

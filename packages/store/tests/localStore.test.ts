@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, applyOps, canonical, type ConnectionLayout, connect, createNode, createPlan, DEFAULT_PREAMBLE, editNode, emptyState, encodeState, type Id,
-  type NodeRec, OpConflictError, type PhantomRec, preambleText, removeFromPlan, setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot,
+  type Action, type Anchor, applyOps, canonical, type ConnectionLayout, connect, createAnnotation, createNode, createPlan, DEFAULT_PREAMBLE, editNode,
+  emptyState, encodeState, type Id, type NodeRec, OpConflictError, type PhantomRec, preambleText, removeFromPlan, setPreamble, SNAPSHOT_VERSION, type State,
+  type TagKeyDef, toSnapshot,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
 
@@ -155,6 +156,29 @@ test('un enregistrement que l’état refuserait, sans tags, une connexion comme
     expect(tables()).toBe(before);
   }
   store.close();
+});
+
+test('un nœud d’annotation (plan 4c) s’écrit et se relit avec son ancre ; une ancre invalide est refusée avant toute écriture', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const plan = withPlan(store, s);
+  const pdfNode = createNode(s, { plan, title: 'Chapitre 1', x: 0, y: 0, k: 0 });
+  write(store, s, pdfNode);
+  const anchor: Anchor = { pdf: afterId(pdfNode, 'node'), file: 'chapitre_1.pdf', hash: 'ab'.repeat(32), page: 2, rects: [[72, 711, 413.5, 724.8], [72, 695, 190, 708.8]], text: 'Un code est préfixe\nsi aucun de ses mots' };
+  const a = createAnnotation(s, anchor, 'Un code est préfixe si aucun de ses mots');
+  write(store, s, a);
+  const id = afterId(a, 'node');
+  store.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
+  expect(loaded.nodes.get(id)!.anchor).toEqual(anchor);
+  same(loaded, s);
+  expect(again.historyOf(id).map((r) => r.label)).toEqual(['Annoter « Un code est préfixe si aucun de ses mots », p. 2']);
+  const n = loaded.nodes.get(id)!, seq = again.lastSeq(), tables = () => canonical(sorted(again.loadState())), before = tables();
+  for (const bad of [{ ...anchor, page: 0 }, { ...anchor, rects: [] }, { ...anchor, hash: 'AB'.repeat(32) }]) {
+    expect(() => again.commit({ id: 'b', label: 'b', ops: [{ t: 'node', before: n, after: { ...n, anchor: bad } }] }), JSON.stringify(bad)).toThrow(/invalid node anchor/);
+    expect(again.lastSeq()).toBe(seq);
+    expect(tables()).toBe(before);
+  }
+  again.close();
 });
 
 test('un enregistrement de connexion que l’état refuserait (genre, rôle, corbeille) est refusé avant toute écriture', () => {

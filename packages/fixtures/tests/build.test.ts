@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ancestors, canonical, checkState, CITE_KEY_TAG, groupOf, LABEL_TAG, placementKey, type State } from '@cirrus/core';
+import {
+  ancestors, ANNOTATION_TITLE_CHARS, annotationTitle, canonical, checkState, CITE_KEY_TAG, groupOf, LABEL_TAG, placementKey, type State, validAnchor,
+} from '@cirrus/core';
 import { filePath, LocalStore } from '@cirrus/store';
 import { buildFixture } from '../src/build.ts';
 import { chapterPdf } from '../src/pdf.ts';
@@ -33,8 +36,8 @@ test('chaque fonctionnalité est présente', () => {
   const roles = (id: string) => s.connections.get(id)!.members.map((m) => m.role).sort().join(',');
   const placedIn = (node: string) => [...s.placements.values()].filter((p) => p.node === node).map((p) => p.plan);
 
-  // Plans, by type.
-  expect([...s.plans.values()].map((p) => p.type).sort()).toEqual(['document', 'lobby', 'plan']);
+  // Plans, by type: « Thèse » and « Lecture » (plan 4c) are ordinary plans.
+  expect([...s.plans.values()].map((p) => p.type).sort()).toEqual(['document', 'lobby', 'plan', 'plan']);
 
   // Tag registry.
   for (const key of ['statut_epistémique', 'pertinence', 'nature', 'provenance', 'auteur', 'date_de_publication']) expect(s.tagKeys.has(key)).toBe(true);
@@ -192,6 +195,59 @@ test('le matériau LaTeX (plan 4b) : clé BibTeX, label de titre, .tex et image 
   const keys = [...s.nodes.values()].flatMap((n) => n.tags.filter((t) => t.key === CITE_KEY_TAG).map((t) => t.value));
   expect([...tex.matchAll(/\\cite\{([^}]*)\}/g)].map((m) => m[1])).toEqual(keys);
   store.close();
+});
+
+test('les annotations de PDF (plan 4c) : pages 1 et 2 du chapitre, une sur sa version d’avant la réimportation ; la publication groupe la première dans « Lecture »', () => {
+  const store = LocalStore.open(dir, { pc: 'fixture' });
+  const ids = buildFixture(store, dir);
+  const s = store.loadState(), labels = store.changesSince(0).map((r) => r.label);
+  store.close();
+  const pub = s.nodes.get(ids.nodes.publication)!, chapter = pub.files.find((f) => f.name === 'Li_Vitányi_chapitre_1.pdf')!;
+  const [page1, page2, earlier] = (['annotationPage1', 'annotationPage2', 'annotationEarlier'] as const).map((k) => s.nodes.get(ids.nodes[k])!);
+  for (const n of [page1, page2, earlier]) {
+    expect(validAnchor(n.anchor), n.title).toBe(true);
+    expect(n.anchor).toMatchObject({ pdf: pub.id, file: 'Li_Vitányi_chapitre_1.pdf' });
+    expect(n.title).toBe(annotationTitle(n.anchor!.text, ANNOTATION_TITLE_CHARS));
+    expect(n.trashedAt).toBeUndefined();
+  }
+  // The passages, as a selection gives them: lines joined by a line break, one rectangle per line, inside the page.
+  expect([page1, page2, earlier].map((n) => [n.anchor!.page, n.anchor!.text])).toEqual([
+    [1, 'La complexité de Kolmogorov d’une\nchaîne est la longueur du plus court programme qui l’écrit, à une constante près.'],
+    [2, 'Un code est préfixe si aucun de ses mots n’est le début\nd’un autre : il se lit sans séparateur.'],
+    [1, 'La complexité de Kolmogorov d’une\nchaîne est la taille du plus petit programme qui l’engendre.'],
+  ]);
+  expect(earlier.title).toBe('La complexité de Kolmogorov d’une chaîne est la taille du plus petit programme q…');
+  for (const n of [page1, page2, earlier]) {
+    const r = n.anchor!.rects;
+    expect(r).toHaveLength(2);
+    for (const [x0, y0, x1, y1] of r) expect(0 < x0 && x0 < x1 && x1 < 595 && 0 < y0 && y0 < y1 && y1 < 842, JSON.stringify(r)).toBe(true);
+    // A selection from the middle of a line to the middle of the next: the second line from its start, above none of the first.
+    expect(r[0][0]).toBeGreaterThan(72);
+    expect(r[1][0]).toBe(72);
+    expect(r[1][3]).toBeLessThan(r[0][1]);
+  }
+  // Two on the chapter as it is; one on its first version, other bytes, kept in the store under their hash (D2).
+  expect([page1.anchor!.hash, page2.anchor!.hash]).toEqual([chapter.hash, chapter.hash]);
+  const old = readFileSync(filePath(dir, { name: chapter.name, hash: earlier.anchor!.hash, size: 0 }));
+  expect(earlier.anchor!.hash).not.toBe(chapter.hash);
+  expect(createHash('sha256').update(old).digest('hex')).toBe(earlier.anchor!.hash);
+  expect(Buffer.from(chapterPdf({ earlier: true })).equals(old)).toBe(true);
+  // Re-imported by the fixture as the app does (plan 4a): the file replaced in its place, after the first annotation.
+  expect(pub.files.map((f) => f.name)).toEqual(['Li_Vitányi_extrait.pdf', 'Li_Vitányi_chapitre_1.pdf']);
+  const at = (label: string) => labels.indexOf(label);
+  expect(at('Remplacer « Li_Vitányi_chapitre_1.pdf »')).toBeGreaterThan(at(`Annoter « ${earlier.title} », p. 1`));
+  expect(at(`Annoter « ${page1.title} », p. 1`)).toBeGreaterThan(at('Remplacer « Li_Vitányi_chapitre_1.pdf »'));
+  // Page 1's in « Lecture », in the publication's node, a group there only; the other two in no plan.
+  const placed = (node: string) => [...s.placements.values()].filter((p) => p.node === node).map((p) => p.plan).sort();
+  expect(s.plans.get(ids.plans.lecture)).toMatchObject({ name: 'Lecture', type: 'plan' });
+  expect(placed(page1.id)).toEqual([ids.plans.lecture]);
+  expect([placed(page2.id), placed(earlier.id)]).toEqual([[], []]);
+  expect(placed(pub.id)).toEqual([ids.plans.lobby, ids.plans.lecture].sort());
+  expect(groupOf(s, ids.plans.lecture, page1.id)).toBe(pub.id);
+  expect([...s.nodes.keys()].filter((n) => groupOf(s, ids.plans.lobby, n) === pub.id)).toEqual([]);
+  // A publication's identifiers (D7): text tags of a node, one value.
+  const text = { type: 'text', scope: 'node', multi: false, required: false };
+  expect([s.tagKeys.get('doi'), s.tagKeys.get('arxiv')]).toEqual([{ key: 'doi', ...text }, { key: 'arxiv', ...text }]);
 });
 
 test('réouverture identique', () => {

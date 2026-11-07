@@ -1,3 +1,4 @@
+import { validAnchor } from './annotation.ts';
 import { BranchSet, connectionAt, ConnectionsFacade, MapFacade, PlacementsFacade, placementAt, RecordFacade } from './facades.ts';
 import { DEFAULT_PREAMBLE } from './latex.ts';
 import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
@@ -527,12 +528,14 @@ const isTagList = (v: unknown): boolean => Array.isArray(v) && v.every(isPlainOb
 
 /**
  * What the tables and the indices read of a node record, checked before anything is written: a string identifier, its
- * tags (objects) and files as arrays (the tag index and reindex read them).
+ * tags (objects) and files as arrays (the tag index and reindex read them); an annotation's anchor within its bounds
+ * (validAnchor), as the snapshot's decoder wants it, so that a base never holds one its snapshot would refuse.
  */
 function checkNode(n: NodeRec): void {
   if (!isPlainObject(n) || typeof n.id !== 'string') throw new Error('invalid node record');
   if (!isTagList(n.tags)) throw new Error(`invalid node tags: ${n.id}`);
   if (!Array.isArray(n.files)) throw new Error(`invalid node files: ${n.id}`);
+  if (n.anchor !== undefined && !validAnchor(n.anchor)) throw new Error(`invalid node anchor: ${n.id}`);
 }
 
 /**

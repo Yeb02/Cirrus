@@ -1,5 +1,6 @@
 export * from './ids.ts';
 export * from './model.ts';
+export * from './annotation.ts';
 export * from './registry.ts';
 export * from './ops.ts';
 // The storage stays inside the core (tables.ts, facades.ts, StateData): readers get the coding constants, the

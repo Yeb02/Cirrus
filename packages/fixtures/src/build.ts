@@ -1,18 +1,22 @@
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, applyOps, CITE_KEY_TAG, connect, createNode, createPlan, editNode, type Id, include, LABEL_TAG, type Member, movePhantom, placeNode,
-  removeFromPlan, splitArm, type TagKeyDef, type TagValue, UndoStack, uuidv7,
+  type Action, ANNOTATION_TITLE_CHARS, annotationTitle, applyOps, CITE_KEY_TAG, combine, connect, createAnnotation, createNode, createPlan, editNode,
+  type FileRef, type Id, include, LABEL_TAG, type Member, movePhantom, placeNode, removeFromPlan, splitArm, type TagKeyDef, type TagValue, UndoStack,
+  uuidv7,
 } from '@cirrus/core';
-import { importFile, type LocalStore } from '@cirrus/store';
+import { importFile, type LocalStore, storeBytes } from '@cirrus/store';
+import { chapterPages, chapterPdf, passage, type PdfPageSpec } from './pdf.ts';
 
 const ASSETS = fileURLToPath(new URL('../assets/', import.meta.url));
+const CHAPTER = 'Li_Vitányi_chapitre_1.pdf';
 
 /** The key objects, by name, for the tests of later plans. */
 export interface FixtureIds {
-  plans: { lobby: Id; these: Id; article: Id };
+  plans: { lobby: Id; these: Id; article: Id; lecture: Id };
   nodes: Record<
     | 'mdl' | 'solomonoff' | 'universalite' | 'monde' | 'kolmogorov' | 'compression' | 'occam' | 'entropie' | 'biais' | 'generalisation'
-    | 'groupeTheorie' | 'groupeComplexite' | 'groupeInduction' | 'groupeML' | 'theseOnly' | 'docRoot' | 'publication' | 'trashed',
+    | 'groupeTheorie' | 'groupeComplexite' | 'groupeInduction' | 'groupeML' | 'theseOnly' | 'docRoot' | 'publication' | 'trashed'
+    | 'annotationPage1' | 'annotationPage2' | 'annotationEarlier',
     Id
   >;
   connections: Record<'mdlSolomonoff' | 'twoToOne' | 'twoToTwo' | 'associates' | 'split', Id>;
@@ -39,6 +43,9 @@ const TAG_KEYS: TagKeyDef[] = [
   { key: 'provenance', type: 'text', scope: 'node', multi: false, required: false },
   { key: 'auteur', type: 'text', scope: 'node', multi: true, required: false },
   { key: 'date_de_publication', type: 'date', scope: 'node', multi: false, required: false },
+  // Plan 4c, D7: a publication's identifiers.
+  { key: 'doi', type: 'text', scope: 'node', multi: false, required: false },
+  { key: 'arxiv', type: 'text', scope: 'node', multi: false, required: false },
   // Plan 4b, D7: a publication's key for \cite, a node's title's label for \ref.
   { key: CITE_KEY_TAG, type: 'text', scope: 'node', multi: false, required: false },
   { key: LABEL_TAG, type: 'text', scope: 'node', multi: false, required: false },
@@ -117,8 +124,10 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   const publication = node(lobby, 'An Introduction to Kolmogorov Complexity and Its Applications', -420, -300, {
     tags: [kv('auteur', 'Ming Li'), kv('auteur', 'Paul Vitányi'), kv('date_de_publication', '2008'), kv(CITE_KEY_TAG, 'li2008')],
   });
-  // A one-page PDF, and three pages with links written by scripts/make-pdf.ts (plan 4a, task 6), in one action.
-  attach(publication, 'Li_Vitányi_extrait.pdf', 'Li_Vitányi_chapitre_1.pdf');
+  // A one-page PDF, and three pages with links written by scripts/make-pdf.ts (plan 4a, task 6), in one action. The
+  // chapter is first the version before (plan 4c, D2): it is annotated, then re-imported, at the end.
+  const earlierChapter = storeBytes(storeDir, CHAPTER, chapterPdf({ earlier: true }));
+  run(editNode(s, publication, { files: [importFile(storeDir, ASSETS + 'Li_Vitányi_extrait.pdf'), earlierChapter] }));
 
   for (const [n, g] of [
     [groupeComplexite, groupeTheorie], [groupeInduction, groupeComplexite],
@@ -201,11 +210,31 @@ export function buildFixture(store: LocalStore, storeDir: string): FixtureIds {
   // captures give the history (one action a minute, in order) stay those of the actions before.
   attach(kolmogorov, 'complexité.tex', 'schéma_compression.png');
 
+  // Plan 4c: the chapter annotated, after everything else (the history's times, as above). Once in its version before
+  // (D2); then re-imported as the app does (plan 4a: the file replaced in its place, the old blob kept in the store);
+  // then on its pages 1 and 2. Page 1's goes into a new plan « Lecture », in the publication's node, a group there; the
+  // other two are in no plan, as an annotation is made (spec 12 [C]).
+  const annotate = (ref: FileRef, pages: PdfPageSpec[], page: number, from: string, to: string): Id => {
+    const { text, rects } = passage(pages[page - 1], from, to);
+    return created(createAnnotation(s, { pdf: publication, file: ref.name, hash: ref.hash, page, rects, text }, annotationTitle(text, ANNOTATION_TITLE_CHARS)), 'node');
+  };
+  const annotationEarlier = annotate(earlierChapter, chapterPages({ earlier: true }), 1, 'La complexité de Kolmogorov', 'qui l’engendre.');
+  const chapter = importFile(storeDir, ASSETS + CHAPTER);
+  run(combine(s, `Remplacer « ${CHAPTER} »`, [(x) => editNode(x, publication, { files: x.nodes.get(publication)!.files.map((f) => (f.name === CHAPTER ? chapter : f)) })]));
+  const pages = chapterPages();
+  const annotationPage1 = annotate(chapter, pages, 1, 'La complexité de Kolmogorov', 'constante près.');
+  const annotationPage2 = annotate(chapter, pages, 2, 'Un code est préfixe', 'sans séparateur.');
+  const lecture = created(createPlan(s, 'Lecture', 'plan'), 'plan');
+  run(placeNode(s, lecture, publication, 0, 0, 1));
+  run(placeNode(s, lecture, annotationPage1, 0, 0, 0));
+  run(include(s, lecture, annotationPage1, publication));
+
   return {
-    plans: { lobby, these, article },
+    plans: { lobby, these, article, lecture },
     nodes: {
       mdl, solomonoff, universalite, monde, kolmogorov, compression, occam, entropie, biais, generalisation,
       groupeTheorie, groupeComplexite, groupeInduction, groupeML, theseOnly, docRoot, publication, trashed,
+      annotationPage1, annotationPage2, annotationEarlier,
     },
     connections: { mdlSolomonoff, twoToOne, twoToTwo, associates, split },
     phantoms: { node: phantomOf('node'), center: phantomOf('center') },

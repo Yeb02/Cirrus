@@ -132,6 +132,8 @@ function oddities(): { s: State; o: oracle.State } {
   run({ t: 'node', before: null, after: { ...node('n3'), extra: { libre: true } } as NodeRec });
   run({ t: 'node', before: null, after: node('n4', { tags: [{ key: 'bizarre', value: 'x', note: 1 } as never] }) });
   run({ t: 'node', before: null, after: node('n5', { title: '' }) });
+  // An annotation (plan 4c, D1): irregular, its anchor through the JSON path.
+  run({ t: 'node', before: null, after: node('a1', { title: 'Annoter « é »', anchor: { pdf: 'n2', file: 'a é.pdf', hash: 'f0'.repeat(32), page: 3, rects: [[72.5, 581, 300, 594.8], [-1e-7, 0, 1e6, 2]], text: 'nul\0 « é » \uD800' } }) });
   run({ t: 'tagKey', before: null, after: { key: 'rang', type: 'enum', scope: 'both', multi: false, required: false, enumValues: [{ name: 'un', rank: 1 }] } });
   run({ t: 'connection', before: null, after: conn('c1', ['n1', 'n2'], { title: 'titre', relation: 'relation\0nulle', tags: [{ key: 'mot' }, { key: 'n', value: -0 }] }) });
   run({ t: 'connection', before: null, after: conn('c2', ['n2', 'n1', 'n3'], { kind: 'inclusion', trashedAt: 99 }) });
@@ -172,6 +174,22 @@ test('aller-retour exact des cas limites : textes (\\0, surrogat seul, marque d�
   expect(d.nodes.get('n1')!.summary).toBe('nul\0dedans');
   expect(d.nodes.get('n2')!.title).toBe('surrogat \uD800 seul');
   expect(d.nodes.has('﻿bom')).toBe(true);
+  expect(d.nodes.get('a1')!.anchor).toEqual(s.nodes.get('a1')!.anchor);
+});
+
+test('une ancre invalide dans l’instantané le fait refuser (SnapshotError) : retour aux tables, jamais un nœud faux dans l’état', () => {
+  const tamper: [string, unknown][] = [
+    ['page 0', { page: 0 }], ['501 rectangles', { rects: Array(501).fill([0, 0, 1, 1]) }], ['un rectangle de trois nombres', { rects: [[0, 0, 1]] }],
+    ['empreinte courte', { hash: 'f0' }], ['texte trop long', { text: 'x'.repeat(20_001) }], ['sans PDF', { pdf: undefined }],
+  ];
+  for (const [what, extra] of [...tamper, ['ancre nulle', null] as [string, unknown]]) {
+    const { s } = oddities();
+    expect(() => decodeState(encodeState(s)), what).not.toThrow();
+    // Written into the table as it is, past the state's own check (checkRecord): only a damaged snapshot can carry it.
+    const N = dataOf(s).tables.nodes, r = N.rows.get('a1'), rec = N.recs[r]!;
+    N.recs[r] = { ...rec, anchor: extra === null ? null : { ...rec.anchor!, ...(extra as object) } } as NodeRec;
+    expect(() => decodeState(encodeState(s)), what).toThrow(SnapshotError);
+  }
 });
 
 test('un état vide fait l’aller-retour', () => {

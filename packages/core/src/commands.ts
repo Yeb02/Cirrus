@@ -1,6 +1,7 @@
+import { validAnchor } from './annotation.ts';
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
-import type { BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
+import type { Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
 import {
@@ -246,6 +247,24 @@ export function createNode(s: State, a: { plan: Id; title: string; x: number; y:
     d.node(id, { id, title: a.title, summary: a.summary ?? '', tags, files: [] });
     d.placement(a.plan, id, { plan: a.plan, node: id, x: a.x, y: a.y, k: a.k });
     return d.finish(`Créer « ${a.title} »`);
+  });
+}
+
+/**
+ * A PDF annotation (plan 4c, D1): a node that keeps its own copy of `a`, placed in no plan — nothing is placed for the
+ * user (spec 12 [C]): it is listed in the PDF's reader and pop-up, and dropped into a plan from there. `title`: the
+ * start of the passage (annotationTitle). Refused when the anchor is out of its bounds, or the PDF's node is gone or in
+ * the trash. Once made, it is a node like any other: renamed, summarised, placed, grouped.
+ */
+export function createAnnotation(s: State, a: Anchor, title: string): Action {
+  if (!validAnchor(a)) throw new CommandError('Ce passage ne peut pas être annoté.');
+  const pdf = need(s.nodes.get(a.pdf), 'Le PDF à annoter n’existe pas.');
+  if (pdf.trashedAt !== undefined) throw new CommandError('Le PDF à annoter est à la corbeille.');
+  const anchor: Anchor = { pdf: a.pdf, file: a.file, hash: a.hash, page: a.page, rects: a.rects.map(([x0, y0, x1, y1]): Anchor['rects'][number] => [x0, y0, x1, y1]), text: a.text };
+  return transact(s, (d) => {
+    const id = uuidv7();
+    d.node(id, { id, title, summary: '', tags: [], files: [], anchor });
+    return d.finish(`Annoter « ${title} », p. ${a.page}`);
   });
 }
 

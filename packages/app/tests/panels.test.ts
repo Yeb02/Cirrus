@@ -242,9 +242,10 @@ test('withTag et withoutTag : une clé non multiple remplace sa valeur, une clé
 
 test('suggestions de tags : les clés du registre pour un nœud, puis les valeurs de l’énumération', () => {
   const defs = store.loadState().tagKeys;
-  const keys = (text: string) => tagSuggestions(text, defs, 'node', 8).map((t) => t.key);
-  // The connections' keys (parallèle, partie…) are not offered to a node; the LaTeX ones (plan 4b) are.
-  expect(keys('')).toEqual(['statut_epistémique', 'pertinence', 'nature', 'provenance', 'auteur', 'date_de_publication', 'clé_bibtex', 'label']);
+  const keys = (text: string) => tagSuggestions(text, defs, 'node', 10).map((t) => t.key);
+  // The connections' keys (parallèle, partie…) are not offered to a node; a publication's identifiers (plan 4c) and the
+  // LaTeX ones (plan 4b) are.
+  expect(keys('')).toEqual(['statut_epistémique', 'pertinence', 'nature', 'provenance', 'auteur', 'date_de_publication', 'doi', 'arxiv', 'clé_bibtex', 'label']);
   // Those that begin with the text first, without case or accents.
   expect(keys('P')).toEqual(['pertinence', 'provenance', 'statut_epistémique', 'date_de_publication']);
   expect(keys('epis')).toEqual(['statut_epistémique']);

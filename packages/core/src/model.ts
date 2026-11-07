@@ -14,7 +14,15 @@ export interface TagValue { key: string; value?: string | number }
 /** name: the original file name (accents included); hash: SHA-256 of the copy kept by the app. */
 export interface FileRef { name: string; hash: string; size: number }
 
-export interface NodeRec { id: Id; title: string; summary: string; tags: TagValue[]; files: FileRef[]; trashedAt?: number }
+/**
+ * What an annotation is about (plan 4c, D1 and D2): the PDF's node; the file's name and the hash of the version
+ * annotated, which stays in the store; the page, from 1; the passage's rectangles [x0, y0, x1, y1], one per line, in
+ * the page's PDF coordinates (points, y upwards, as a link's /Rect); the text highlighted. Bounds: validAnchor.
+ */
+export interface Anchor { pdf: Id; file: string; hash: string; page: number; rects: [number, number, number, number][]; text: string }
+
+/** anchor: an annotation's (plan 4c, D1); otherwise a node like any other. */
+export interface NodeRec { id: Id; title: string; summary: string; tags: TagValue[]; files: FileRef[]; trashedAt?: number; anchor?: Anchor }
 
 export interface Member { node: Id; role: Role }
 
