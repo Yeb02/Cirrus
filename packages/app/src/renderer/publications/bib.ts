@@ -43,10 +43,11 @@ export interface PlannedBib {
 /**
  * The publications of `text` (D7, D9), planned one after the other against the base `s` and the file's entries above:
  * each one planned is added to the index (PublicationIndex.add), so that one file's duplicates follow the base's rule —
- * by its own key, without case, never the one made for it; two entries of unsafe keys are compared by their
- * identifiers, title and year only (the controller's ruling). Every own safe key of the file is reserved first, taken
- * by no key made, never a mark: an entry keeps its own, and a \cite of it already written still means it (the
- * controller's ruling of the review, M3). An entry set aside as a duplicate whose key repeats one above is said once,
+ * by its own key, without case, never the one made for it; two entries of unsafe keys (addresses) are compared by their
+ * identifiers, title and year — their first authors aside — only (the controller's ruling; final review, R2). Every own
+ * safe key of the file, DBLP's included (final review, R1), is reserved first, taken by no key made, never a mark: an
+ * entry keeps its own, and a \cite of it already written still means it (the controller's ruling of the review, M3).
+ * An entry set aside as a duplicate whose key repeats one above is said once,
  * as the duplicate (review M2). At most `maxAuthors` tags `auteur` each (publicationMaxAuthors).
  */
 export function planBib(s: State, name: string, text: string, maxAuthors: number): PlannedBib {

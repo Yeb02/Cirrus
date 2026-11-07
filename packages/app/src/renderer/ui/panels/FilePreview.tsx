@@ -18,7 +18,8 @@ const ExpandIcon = () => (
  * their place by content), its view here is left, its place kept, and comes back where the full screen leaves it.
  * A .tex shows its compiled PDF (plan 4b, task 5: `latex`, App's state and registry); a link to a node clicked in a
  * PDF goes to `onNodeLink` (task 6). A PDF is read with its annotations (plan 4c: `annotations`), whose margin's can be
- * dragged out onto the graph.
+ * dragged out onto the graph. An annotation asked of it from a pop-up is shown once (final review, I1): back from the
+ * full screen, or for a new version, the view opens where it was left.
  */
 export function FilePreview(props: {
   frame: Frame; node: Id; found: FileRef | null; gone: string; covered: boolean; params: RenderParams; views: ViewStates; latex: LatexContext;

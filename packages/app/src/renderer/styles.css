@@ -276,8 +276,9 @@ button, input, select { font: inherit; color: var(--ink); }
 .node-popup .add-files { margin-top: 6px; padding: 2px 0; border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
 /* Files dragged over a pop-up that takes them. */
 .panel.dropping { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 12px 32px rgba(2, 6, 16, 0.6); }
-/* A file's menu, at the click in window pixels: out of the body it is opened in, which scrolls and clips. */
-.panel .context-menu { position: fixed; }
+/* A file's menu, at the click in window pixels: out of the body it is opened in, which scrolls and clips; an
+   annotation's line's too, in a panel or in the full screen (final review, I2). */
+.panel .context-menu, .full-screen .context-menu { position: fixed; }
 .capture .volatile { visibility: hidden; }
 /* An editor's cursor blinks: a capture never draws it (plan 4b, task 8). */
 .capture * { caret-color: transparent !important; }

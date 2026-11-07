@@ -40,7 +40,11 @@ const created = (a: Action) => a.ops.filter((o) => o.t === 'node' && o.before ==
 test('planBib : le .bib de la base de test — sept publications, le livre de la base écarté par sa clé et nommé, l’entrée abîmée dite par sa ligne', () => {
   const b = planBib(s, BIB_NAME, BIB, P.publicationMaxAuthors);
   expect(b.name).toBe(BIB_NAME);
-  expect(b.items.map((x) => x.plan.key)).toEqual(['shannon1948', 'kolmogorov1965', 'solomonoff1964', 'rissanen1978', 'grunwald2007', 'vaswani2017attention', 'hutter2005']);
+  // DBLP's key kept (final review, R1 revised), its file named without « : » nor « / ».
+  expect(b.items.map((x) => x.plan.key)).toEqual(['shannon1948', 'DBLP:journals/ppi/Kolmogorov65', 'solomonoff1964', 'rissanen1978', 'grunwald2007', 'vaswani2017attention', 'hutter2005']);
+  expect(b.items[1].plan.bib!.name).toBe('DBLP_journals_ppi_Kolmogorov65.bib');
+  expect(b.items[1].plan.tags).toContainEqual(tag(CITE_KEY_TAG, 'DBLP:journals/ppi/Kolmogorov65'));
+  expect(b.items[1].plan.bib!.text.startsWith('@article{DBLP:journals/ppi/Kolmogorov65,\n')).toBe(true);
   expect(b.items.map((x) => x.line)).toEqual(['@article{shannon1948', '@article{DBLP', '@article{solomonoff', '@article{rissanen', '@book{grunwald', '@misc{vaswani', '@book{hutter'].map((l) => lineOf(BIB, l)));
   const shannon = b.items[0].plan;
   expect(shannon.title).toBe('A Mathematical Theory of Communication');
@@ -66,8 +70,8 @@ test('planBib : les doublons à l’intérieur du fichier — même DOI, même c
     '@article{cle2003, title = {Quatrième}, year = 2004}',
     '@misc{t5, title = {Le Même Titre}, year = 2005}',
     '@misc{t6, title = {le même titre !}, year = 2005}',
-    '@misc{DBLP:x/1, title = {Sept}, year = 2007}',
-    '@misc{DBLP:x/1, title = {Huit}, year = 2008}',
+    '@misc{https://example.org/x/1, title = {Sept}, year = 2007}',
+    '@misc{https://example.org/x/1, title = {Huit}, year = 2008}',
   ].join('\n');
   const b = planBib(s, 'f.bib', text, 50);
   expect(b.items.map((x) => x.plan.title)).toEqual(['Premier', 'Troisième', 'Le Même Titre', 'Sept', 'Huit']);
@@ -76,10 +80,15 @@ test('planBib : les doublons à l’intérieur du fichier — même DOI, même c
     { line: 4, title: 'Quatrième', why: 'Déjà plus haut dans le fichier, ligne 3 (même clé BibTeX) : « Troisième ».' },
     { line: 6, title: 'le même titre !', why: 'Déjà plus haut dans le fichier, ligne 5 (même titre et même année) : « Le Même Titre ».' },
   ]);
-  // Two unsafe keys: their author-and-year keys, one after the other.
+  // Two unsafe keys (addresses, final review R1): their author-and-year keys, one after the other.
   expect(b.items.slice(3).map((x) => x.plan.key)).toEqual(['sept2007', 'huit2008']);
   // The key set aside with its entry is said once, as a duplicate (review M2); the unsafe one kept, by the parser.
-  expect(b.problems).toEqual([{ line: 8, message: 'Entrée « DBLP:x/1 » : la clé est déjà celle de l’entrée de la ligne 7.' }]);
+  expect(b.problems).toEqual([{ line: 8, message: 'Entrée « https://example.org/x/1 » : la clé est déjà celle de l’entrée de la ligne 7.' }]);
+  // Two DBLP keys alike are safe since the final review (R1): the second a duplicate by its key, said once.
+  const dblp = planBib(s, 'f.bib', '@misc{DBLP:x/1, title = {Sept}, year = 2007}\n@misc{DBLP:x/1, title = {Huit}, year = 2008}', 50);
+  expect(dblp.items.map((x) => [x.plan.key, x.plan.bib!.name])).toEqual([['DBLP:x/1', 'DBLP_x_1.bib']]);
+  expect(dblp.duplicates).toEqual([{ line: 2, title: 'Huit', why: 'Déjà plus haut dans le fichier, ligne 1 (même clé BibTeX) : « Sept ».' }]);
+  expect(dblp.problems).toEqual([]);
   // One said once even past the problems the parser lists: its count goes down.
   const many = planBib(s, 'g.bib', [...Array.from({ length: 300 }, (_, i) => `@misc{b${i} title}`), '@misc{k1, title = {A}}', '@misc{K1, title = {B}}'].join('\n'), 50);
   expect(many.duplicates.map((d) => d.line)).toEqual([302]);
@@ -98,11 +107,11 @@ test('planBib (revue M1, M2) : deux clés qui ne diffèrent que par la casse son
 });
 
 test('planBib (règle du contrôleur, revue M3) : les clés propres sûres du fichier sont réservées avant toute clé fabriquée — une entrée garde la sienne, un \\cite existant la désigne', () => {
-  const b = planBib(s, 'f.bib', '@misc{DBLP:x/1, title = {A}, author = {Li, M.}, year = 2008}\n@misc{li2008b, title = {B}, author = {Li, M.}, year = 2008}\n@misc{li2008c, title = {C}, author = {Li, M.}, year = 2008}', 50);
+  const b = planBib(s, 'f.bib', '@misc{https://example.org/x/1, title = {A}, author = {Li, M.}, year = 2008}\n@misc{li2008b, title = {B}, author = {Li, M.}, year = 2008}\n@misc{li2008c, title = {C}, author = {Li, M.}, year = 2008}', 50);
   // li2008 is the base's book's; li2008b and li2008c are the next entries' own: the first gets li2008d.
   expect(b.items.map((x) => x.plan.key)).toEqual(['li2008d', 'li2008b', 'li2008c']);
   // Reserved, never a mark: the entry made li2008d is no duplicate of the one whose own key it would have been.
-  const c = planBib(s, 'f.bib', '@misc{DBLP:x/1, title = {A}, author = {Vitányi, P.}, year = 2009}\n@misc{vitanyi2009, title = {B}, author = {Vitányi, P.}, year = 2009}', 50);
+  const c = planBib(s, 'f.bib', '@misc{https://example.org/x/1, title = {A}, author = {Vitányi, P.}, year = 2009}\n@misc{vitanyi2009, title = {B}, author = {Vitányi, P.}, year = 2009}', 50);
   expect(c.items.map((x) => x.plan.key)).toEqual(['vitanyi2009b', 'vitanyi2009']);
   expect(c.duplicates).toEqual([]);
 });
@@ -160,9 +169,12 @@ test('bibImportBuild : sous le curseur dans l’enveloppe d’un groupe, tout le
   expect(() => bibImportBuild(items, sc, SKY, 0.25, P)!(s)).toThrow(/^Déjà dans la base \(même DOI\) : « A Mathematical Theory of Communication »\. Rien n’est importé/);
   expect(s.nodes.size).toBe(count);
   run(invertAction(a));
-  // A key made for the block, taken meanwhile by a node with another identity: refused too.
+  // A key made for the block (an address's entry: DBLP's is kept since the final review, R1), taken meanwhile by a node
+  // with another identity: refused too.
+  const made = itemsOf(planBib(s, 'k.bib', '@article{https://example.org/k, author = {Kolmogorov, A. N.}, title = {Three approaches}, year = 1965}', 50));
+  expect(made.map((x) => x.plan.key)).toEqual(['kolmogorov1965']);
   run(editNode(s, ids.nodes.occam, { tags: [tag('clé_bibtex', 'KOLMOGOROV1965'), tag('doi', '10.9999/autre')] }));
-  expect(() => bibImportBuild(items, sc, SKY, 0.25, P)!(s)).toThrow('La clé « kolmogorov1965 » a été prise entre-temps. Rien n’est importé : recommence l’import du fichier.');
+  expect(() => bibImportBuild(made, sc, SKY, 0.25, P)!(s)).toThrow('La clé « kolmogorov1965 » a été prise entre-temps. Rien n’est importé : recommence l’import du fichier.');
 });
 
 test('bibNotice : les publications posées, les doublons écartés en nommant le nœud existant, les entrées abîmées par leur ligne', () => {

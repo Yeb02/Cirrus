@@ -21,7 +21,8 @@ export interface Reveal { anchor: Anchor; seq: number }
 
 /**
  * `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. `reveal`: a PDF's
- * preview, the annotation it was last asked to show from a pop-up (AnnotationContext.reveal).
+ * preview, the annotation it is asked to show from a pop-up (AnnotationContext.reveal), until its view has shown it
+ * (withoutReveal, final review I1).
  */
 export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal }
 
@@ -77,6 +78,18 @@ export function withFile(panels: Panel[], node: Id, name: string, rect: Rect, id
   const shown = reveal ? { reveal } : {};
   if (own) return kept.map((p) => (p === own ? { ...p, z, ...shown } : p));
   return [...kept, { id, target: { kind: 'file', node, name }, rect, pinned: false, z, ...shown }];
+}
+
+/**
+ * A preview has shown the annotation `seq` asked of it (final review, I1): its panel lets it go, so that its view,
+ * mounted again — its file back from the full screen, a new version of it —, opens where it was left instead of
+ * showing it again. A newer ask, made meanwhile, stays; nothing to let go, the same list.
+ */
+export function withoutReveal(panels: Panel[], id: number, seq: number): Panel[] {
+  const p = panels.find((x) => x.id === id);
+  if (p?.reveal?.seq !== seq) return panels;
+  const { reveal: _, ...rest } = p;
+  return panels.map((x) => (x === p ? rest : x));
 }
 
 /** A panel clicked comes in front; already there, the same list. */
@@ -170,7 +183,9 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * pop-ups' summaries; a link to a node clicked in a panel goes to `onNodeLink`, with that panel's place (App's: it
  * opens the node's pop-up beside it, openLinked). A PDF's preview draws and lists its annotations (plan 4c, App's
  * `annotations`), and a passage selected in it is annotated by `onAnnotate`. An annotation clicked in a pop-up (a PDF's
- * list, an annotation's own line) opens its PDF's preview beside that pop-up, showing it (withFile's `reveal`).
+ * list, an annotation's own line) opens its PDF's preview beside that pop-up, showing it (withFile's `reveal`) once
+ * (withoutReveal, final review I1). An annotation's line, in a preview's margin or a pop-up's list, has its menu (final
+ * review, I2): its node's pop-up beside that panel (`onNodeLink`, as a link), its deletion (`onDeleteAnnotation`).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -179,6 +194,7 @@ export function Panels(props: {
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
   onNodeLink(node: Id, near: Rect): void; covered?: boolean; annotations: AnnotationIndex | null; onAnnotate(a: Anchor): boolean;
+  onDeleteAnnotation(node: Id): void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -277,7 +293,11 @@ export function Panels(props: {
                 frame={frame} node={node} found={file} gone={resolveTarget(props.state, { kind: 'node', node }) ? FILE_GONE : NODE_GONE}
                 covered={file !== null && file.hash === props.fullHash} params={props.params} views={props.views}
                 latex={{ state: props.state, registry: props.registry }}
-                annotations={props.annotations ? { index: props.annotations, onAnnotate: props.onAnnotate, draggable: true, reveal: p.reveal } : undefined}
+                annotations={props.annotations ? {
+                  index: props.annotations, onAnnotate: props.onAnnotate, draggable: true, reveal: p.reveal,
+                  onRevealed: (seq) => setPanels((ps) => withoutReveal(ps, p.id, seq)),
+                  onDelete: props.onDeleteAnnotation, onOpenNode: (id) => props.onNodeLink(id, p.rect),
+                } : undefined}
                 onFull={() => { if (file) props.onFullScreen(node, file.name); }} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               />
             </PanelBoundary>
@@ -292,6 +312,7 @@ export function Panels(props: {
               files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
               annotations={props.annotations} onReveal={(pdf, name, anchor) => openFile(pdf, name, p.rect, anchor)}
+              onDeleteAnnotation={props.onDeleteAnnotation}
             />
           </PanelBoundary>
         );

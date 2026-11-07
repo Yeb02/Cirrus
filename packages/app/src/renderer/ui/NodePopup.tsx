@@ -18,7 +18,7 @@ import type { LatexRegistry, Origin } from '../latex/registry.ts';
 import { ContextMenu } from './ContextMenu.tsx';
 import { LatexField } from './latex/LatexField.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
-import { AnnotationItem, EARLIER_VERSION } from './viewers/AnnotationMargin.tsx';
+import { type AnnotationActions, AnnotationItem, EARLIER_VERSION, useAnnotationMenu } from './viewers/AnnotationMargin.tsx';
 
 const KIND: Record<FileKind, string> = { image: 'image', pdf: 'PDF', tex: 'LaTeX', text: 'texte', table: 'tableau', other: 'autre' };
 const DATE = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'long', timeStyle: 'short' });
@@ -245,26 +245,31 @@ function AnnotationOf(props: { s: State; anchor: Anchor; onReveal: RevealAnnotat
  * reader's margin lists them (AnnotationItem). A click opens one in its file's preview, beside the pop-up, at its page,
  * its passage blinking (`onReveal`); each is dragged out onto the graph, to be put down in the plan shown (task 3). One
  * whose file is no longer in the node, or whose version the store cannot give, says so and does not open (Review
- * Focus 4); it is still dragged out.
+ * Focus 4); it is still dragged out. A right click opens its menu (`actions`, final review I2): its node's pop-up
+ * beside this one, its deletion everywhere.
  */
-function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; titleChars: number; onReveal: RevealAnnotation }) {
+function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; titleChars: number; onReveal: RevealAnnotation; actions: AnnotationActions }) {
   const sources = props.entries.map((e) => annotationSource(props.s, e.anchor));
   const refs = new Map<string, { name: string; hash: string }>();
   sources.forEach((src, i) => { const hash = props.entries[i].anchor.hash; if ('file' in src) refs.set(hash, { name: src.file.name, hash }); });
   const unreadable = useUnreadable([...refs.values()]);
+  const { onMenu, menu } = useAnnotationMenu(props.actions);
   return (
-    <ol className="annotation-list">
-      {props.entries.map((e, i) => {
-        const src = sources[i], why = missing(src, e.anchor.hash, unreadable);
-        return (
-          <AnnotationItem
-            key={e.node.id} entry={e} titleChars={props.titleChars} here={false} draggable
-            note={why ?? ('file' in src && src.earlier ? EARLIER_VERSION : null)}
-            onOpen={why === null && 'file' in src ? () => props.onReveal(e.anchor.pdf, src.file.name, e.anchor) : undefined}
-          />
-        );
-      })}
-    </ol>
+    <>
+      <ol className="annotation-list">
+        {props.entries.map((e, i) => {
+          const src = sources[i], why = missing(src, e.anchor.hash, unreadable);
+          return (
+            <AnnotationItem
+              key={e.node.id} entry={e} titleChars={props.titleChars} here={false} draggable
+              note={why ?? ('file' in src && src.earlier ? EARLIER_VERSION : null)}
+              onOpen={why === null && 'file' in src ? () => props.onReveal(e.anchor.pdf, src.file.name, e.anchor) : undefined} onMenu={onMenu}
+            />
+          );
+        })}
+      </ol>
+      {menu}
+    </>
   );
 }
 
@@ -383,15 +388,24 @@ function Files(props: {
  * tags; its metadata (history, plans, knowledge connections, identifier); its files (Files), each opened in a preview
  * or in full screen (`onOpenFile`), which files dropped anywhere on the pop-up join (importInto). A PDF's node lists
  * its annotations (plan 4c: `annotations`, App's index), an annotation's node names its PDF and page; either opens an
- * annotation beside the pop-up (`onReveal`). `found`: the node as resolveTarget finds it, null once it is gone (Review
- * Focus 5). An edit the session refuses (in a toast) puts its field back to the node's value.
+ * annotation beside the pop-up (`onReveal`). A line of its annotations has its menu (final review, I2): the
+ * annotation's pop-up beside this one (`onNodeLink`, as a link), its deletion everywhere (`onDeleteAnnotation`).
+ * `found`: the node as resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses (in
+ * a toast) puts its field back to the node's value.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile;
   registry: LatexRegistry | null; onNodeLink(node: Id): void; annotations: AnnotationIndex | null; onReveal: RevealAnnotation;
+  onDeleteAnnotation(node: Id): void;
 }) {
   const { id, found: n, state: s } = props;
+  const latestProps = useRef(props);
+  latestProps.current = props;
+  const annotationActions = useMemo<AnnotationActions>(() => ({
+    onOpenNode: (node) => latestProps.current.onNodeLink(node),
+    onDelete: (node) => latestProps.current.onDeleteAnnotation(node),
+  }), []);
   const summary = useMemo<Origin>(() => ({ kind: 'summary', node: id }), [id]);
   const history = useHistory(id, props.rev, props.action);
   // The last title seen stays in the header once the node is gone; a refused edit reads the node as it is by then.
@@ -462,7 +476,9 @@ export function NodePopup(props: {
         {annotations.length > 0 && (
           <>
             <h4>Annotations</h4>
-            <Annotations s={s} entries={annotations} titleChars={titleChars(props.params.annotationTitleChars)} onReveal={props.onReveal} />
+            <Annotations
+              s={s} entries={annotations} titleChars={titleChars(props.params.annotationTitleChars)} onReveal={props.onReveal} actions={annotationActions}
+            />
           </>
         )}
       </>

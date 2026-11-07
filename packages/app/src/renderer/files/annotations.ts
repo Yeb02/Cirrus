@@ -148,6 +148,22 @@ export function annotationSource(s: State, a: Anchor): AnnotationSource {
   return named ? { file: named, earlier: true } : { why: `« ${a.file} » n’est plus dans « ${pdf.title} ».` };
 }
 
+/** What the menu of an annotation's line does: open its node's pop-up, or delete it everywhere. */
+export type AnnotationAction = 'node' | 'delete';
+
+/**
+ * The menu of an annotation's line (final review, I2: right click, in a reader's margin or a PDF's pop-up), as the
+ * file's menu is (fileMenu): « Ouvrir sa fiche » — its node's pop-up, to rename it, write its summary, tag it —, not
+ * in the modal full screen (`canOpenNode` false); then its deletion everywhere, « Supprimer partout » when it is in a
+ * plan, which it leaves too (its line names it), « Supprimer » otherwise.
+ */
+export function annotationMenu(entry: AnnotationEntry, canOpenNode: boolean): { action: AnnotationAction; label: string }[] {
+  return [
+    ...(canOpenNode ? [{ action: 'node' as const, label: 'Ouvrir sa fiche' }] : []),
+    { action: 'delete', label: entry.plans.length > 0 ? 'Supprimer partout' : 'Supprimer' },
+  ];
+}
+
 // The geometry (D3; Review Focus 3).
 
 /**

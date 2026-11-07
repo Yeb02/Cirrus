@@ -4,7 +4,7 @@ import {
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import { type Build, preambleBuild } from './actions.ts';
+import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
@@ -412,6 +412,17 @@ export function App() {
     return true;
   };
   /**
+   * An annotation deleted by its line's menu (final review, I2), in a reader's margin or a PDF's pop-up: everywhere,
+   * one action (deleteAnnotationBuild). Made in the full screen, the step is its own: its Ctrl+Z and Ctrl+Y undo and
+   * redo it there, as an annotation made there.
+   */
+  const deleteAnnotation = (node: Id, inFull: boolean) => {
+    void session.current!.run(deleteAnnotationBuild(node)!).then((r) => {
+      if (r.ok && inFull) fullSteps.current.add(r.action.id);
+      report(r);
+    });
+  };
+  /**
    * Files imported into a node (plan 4a, D6): copied into the store by the main process (`imported`), then added through
    * the session as one action; what came of it in toasts — the refused files (`refused`: already here, not on the disk)
    * in one, then what the drop did or why not.
@@ -475,6 +486,7 @@ export function App() {
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
+          onDeleteAnnotation={(node) => deleteAnnotation(node, false)}
         />
         <Toasts toasts={toasts} onClose={(id) => setToasts((t) => toastClicked(t, id))}>
           <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />
@@ -488,7 +500,7 @@ export function App() {
           <FullScreen
             node={fullNow.node} file={fullNow.file} params={params} views={views} onClose={() => setFull(null)} onSystem={files.openWithSystem}
             nodeTitle={(id) => { const n = resolveTarget(state, { kind: 'node', node: id })?.node; return n ? n.title || 'Sans titre' : null; }}
-            annotations={annotations} onAnnotate={(a) => annotate(a, true)}
+            annotations={annotations} onAnnotate={(a) => annotate(a, true)} onDeleteAnnotation={(node) => deleteAnnotation(node, true)}
             tex={{
               state, registry, workbench,
               onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),

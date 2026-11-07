@@ -2,13 +2,14 @@
 // (packages/app/scripts/mesures-annotations.mjs): node scripts/add-reading.ts <dossier>
 // The PDF, 25 pages of 40 lines, is the file of two new nodes of the lobby: « Lecture de mesure (50 annotations) »
 // at (−700, −300), two passages of each page annotated on it, one action each, as the app makes them; « Lecture de
-// mesure (sans annotation) » at (−700, −140), the same file, none. Never on the user's base: the folder must hold a
-// test base already.
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+// mesure (sans annotation) » at (−700, −140), the same file, none. Never on the user's base (final review, M6): the
+// folder must hold a test base, made by make-fixture.ts, outside %APPDATA%\@cirrus\app\base (testBaseRefusal); its
+// lock is taken as the app takes it, so that no Cirrus has it open meanwhile.
+import { resolve } from 'node:path';
 import { type Action, ANNOTATION_TITLE_CHARS, annotationTitle, applyOps, createAnnotation, createNode, type Id } from '@cirrus/core';
-import { LocalStore, storeBytes } from '@cirrus/store';
+import { LocalStore, lockBase, storeBytes } from '@cirrus/store';
 import { passage, type PdfLine, type PdfPageSpec, writePdf } from '../src/pdf.ts';
+import { FIXTURE_PC, testBaseRefusal } from '../src/testBase.ts';
 
 const target = process.argv[2];
 if (!target) {
@@ -16,8 +17,14 @@ if (!target) {
   process.exit(1);
 }
 const dir = resolve(process.env.INIT_CWD ?? process.cwd(), target);
-if (!existsSync(join(dir, 'cirrus.db'))) {
-  console.error(`${dir} ne contient pas de base de test (make-fixture.ts d’abord).`);
+const refusal = testBaseRefusal(dir);
+if (refusal !== null) {
+  console.error(refusal);
+  process.exit(1);
+}
+const lock = lockBase(dir);
+if (!lock) {
+  console.error(`${dir} est ouverte par Cirrus (une fenêtre, une capture, le banc) : ferme-la d’abord.`);
   process.exit(1);
 }
 
@@ -49,7 +56,7 @@ const pages: PdfPageSpec[] = Array.from({ length: PAGES }, (_, p) => {
   return { width: 595, height: 842, lines };
 });
 
-const store = LocalStore.open(dir, { pc: 'fixture' });
+const store = LocalStore.open(dir, { pc: FIXTURE_PC });
 try {
   const s = store.loadState();
   const run = (a: Action): Action => { store.commit(a); applyOps(s, a.ops); return a; };
@@ -70,4 +77,5 @@ try {
   console.log(`Ajouté à ${dir} : « lecture_de_mesure.pdf » (${PAGES} pages, ${ref.size} octets), 50 annotations, ${rects} rectangles.`);
 } finally {
   store.close();
+  lock.release();
 }

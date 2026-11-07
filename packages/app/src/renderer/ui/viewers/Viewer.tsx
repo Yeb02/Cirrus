@@ -9,7 +9,7 @@ import { buildRequest } from '../../latex/request.ts';
 import { knownLabels } from '../../latex/scheduler.ts';
 import { useCompiled } from '../../latex/useCompiled.ts';
 import { errorText } from '../latex/CompileLog.tsx';
-import { AnnotationMargin } from './AnnotationMargin.tsx';
+import { type AnnotationActions, AnnotationMargin } from './AnnotationMargin.tsx';
 import { Banner, Message, Notice, readFailure, type ViewProps } from './common.tsx';
 import { ImageViewer } from './ImageViewer.tsx';
 import type { Annotate, Goto } from './PdfViewer.tsx';
@@ -70,6 +70,15 @@ export interface AnnotationContext {
   draggable: boolean;
   /** An annotation to show, opened elsewhere (a pop-up's list, task 3): its version, its page, its passage blinking. */
   reveal?: { anchor: Anchor; seq: number };
+  /**
+   * The view has shown `reveal` (final review, I1): its panel lets it go, so that the view mounted again — its file
+   * back from the full screen, a new version of it — does not show it again.
+   */
+  onRevealed?(seq: number): void;
+  /** A margin's line deleted by its menu (final review, I2): everywhere, one action. */
+  onDelete(node: Id): void;
+  /** Its node's pop-up opened by its menu, beside the panel (« Ouvrir sa fiche »): a preview's, not the modal full screen's. */
+  onOpenNode?(node: Id): void;
 }
 
 function ViewOf(props: ViewProps & { node: Id; latex?: LatexContext; onNodeLink?(node: Id): void; annotations?: AnnotationContext }) {
@@ -98,6 +107,8 @@ type Version = { hash: string; ref?: FileRef; message?: string };
  * annotation opened from the margin, or from elsewhere (`reveal`), shows its page, its passage blinking; one of an
  * earlier version shows that version (its blob, which the store keeps), under a banner that leads back to the current
  * one. A version missing from the store says so in the reader's place. Annotating an earlier version annotates it.
+ * `reveal` is shown once, then said shown (`onRevealed`, final review I1): mounted again, the view opens where it was
+ * left. A margin's line has its menu (final review, I2): its node's pop-up, its deletion.
  */
 function AnnotatedPdf(props: ViewProps & { node: Id; annotations: AnnotationContext; onNodeLink?(node: Id): void }) {
   const { file, params, views, node } = props, ctx = props.annotations;
@@ -133,7 +144,19 @@ function AnnotatedPdf(props: ViewProps & { node: Id; annotations: AnnotationCont
     ));
   }, [file.hash, file.name]);
   const onOpen = useCallback((e: AnnotationEntry) => open(e.anchor), [open]);
-  useEffect(() => { if (ctx.reveal) open(ctx.reveal.anchor); }, [ctx.reveal?.seq]);
+  // Shown once (final review, I1): said shown at once, its panel lets it go — the view mounted again, back from the full
+  // screen or for a new version, is given nothing to show and opens where it was left.
+  useEffect(() => {
+    const r = ctx.reveal;
+    if (!r) return;
+    open(r.anchor);
+    ctxRef.current.onRevealed?.(r.seq);
+  }, [ctx.reveal?.seq]);
+  const canOpenNode = ctx.onOpenNode !== undefined;
+  const actions = useMemo<AnnotationActions>(() => ({
+    onDelete: (id) => ctxRef.current.onDelete(id),
+    ...(canOpenNode ? { onOpenNode: (id: Id) => ctxRef.current.onOpenNode?.(id) } : {}),
+  }), [canOpenNode]);
   const toggle = useCallback(() => {
     const f = !foldedRef.current;
     setFolded(f);
@@ -160,7 +183,7 @@ function AnnotatedPdf(props: ViewProps & { node: Id; annotations: AnnotationCont
         {list.length > 0 && (
           <AnnotationMargin
             entries={list} current={file.hash} shown={shownHash} folded={folded} widthPx={params.annotationMarginPx}
-            titleChars={titleChars(params.annotationTitleChars)} draggable={ctx.draggable} onToggle={toggle} onOpen={onOpen}
+            titleChars={titleChars(params.annotationTitleChars)} draggable={ctx.draggable} onToggle={toggle} onOpen={onOpen} actions={actions}
           />
         )}
       </div>

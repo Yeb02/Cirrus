@@ -141,6 +141,22 @@ export function deleteBuild(scene: PlanScene, ids: Id[], everywhere: boolean, wi
   return (st) => combine(st, label, nodes.map((node) => (x: State) => (everywhere ? deleteEverywhere(x, node) : removeFromPlan(x, plan, node))));
 }
 
+/**
+ * An annotation deleted from its line's menu (final review, I2: in a reader's margin or a PDF's pop-up, where one in
+ * no plan is otherwise out of reach): everywhere (deleteEverywhere) — out of its plans and groups, to the trash —, one
+ * action, one Ctrl+Z. Refused when it is computed if the node is no annotation, is gone, or is in the trash already (a
+ * line shown a moment too long).
+ */
+export function deleteAnnotationBuild(node: Id): Build {
+  return (st) => {
+    const n = st.nodes.get(node);
+    if (!n) throw new CommandError('Cette annotation n’existe plus.');
+    if (n.anchor === undefined) throw new CommandError('Ce nœud n’est pas une annotation.');
+    if (n.trashedAt !== undefined) throw new CommandError('Cette annotation est déjà supprimée.');
+    return deleteEverywhere(st, node);
+  };
+}
+
 /** A connection's deletion (spec 7): « ici seulement » hides its branches and phantoms in this plan, « partout » trashes it. */
 export function deleteConnectionBuild(plan: Id, connection: Id, everywhere: boolean): Build {
   if (everywhere) return (st) => deleteConnection(st, connection);

@@ -8,6 +8,7 @@ import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { bibFileName } from '@cirrus/core';
 import { appDir, launch, sleep } from './cdp.mjs';
 
 // Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
@@ -129,7 +130,8 @@ const BIB_TITLES = [
   'Modeling by shortest data description', 'The Minimum Description Length Principle', ATTENTION,
   'Universal Artificial Intelligence: Sequential Decisions Based on Algorithmic Probability',
 ];
-const BIB_KEYS = ['shannon1948', 'kolmogorov1965', 'solomonoff1964', 'rissanen1978', 'grunwald2007', 'vaswani2017attention', 'hutter2005'];
+// DBLP's key kept (final review, R1 revised), its file named without « : » nor « / ».
+const BIB_KEYS = ['shannon1948', 'DBLP:journals/ppi/Kolmogorov65', 'solomonoff1964', 'rissanen1978', 'grunwald2007', 'vaswani2017attention', 'hutter2005'];
 /** The live nodes of the test .bib's publications. */
 const bibNodes = (base) => BIB_TITLES.flatMap((t) => titledIn(base, t));
 const ghostText = (page) => page.evaluate(`document.querySelector('.ghost')?.textContent ?? null`);
@@ -483,6 +485,124 @@ const SCENARIOS = [
     },
   },
   {
+    // Final review of plan 4c, I1: an annotation opened from the pop-up shows once. Its preview, left for its full
+    // screen and back (⤢, another page, Escape), stays where the full screen leaves it, nothing blinking again. On the
+    // way, the pop-up's line has its menu (I2), which Escape closes alone.
+    name: '(revue finale, I1) ouvrir une annotation depuis le pop-up, ⤢, changer de page, Échap : l’aperçu garde la page du plein écran, sans rejouer l’annotation',
+    env: PUBLICATION.env, settings: { popupHeightPx: 720 },
+    async run(page) {
+      const row = await popupRow(page, 2);
+      await page.click(row.x, row.y, 'right');
+      if (!(await page.until(`!!document.querySelector('.node-popup .context-menu')`))) throw new Error('le clic droit n’ouvre pas le menu de la ligne du pop-up');
+      const items = await page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      if (JSON.stringify(items) !== '["Ouvrir sa fiche","Supprimer"]') throw new Error(`menu du pop-up : ${JSON.stringify(items)}`);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.context-menu') && !!document.querySelector('.node-popup')`))) throw new Error('Échap ne ferme pas le menu seul');
+      await page.click(row.x, row.y);
+      const preview = (what) => page.evaluate(`document.querySelector('.file-preview .pdf-tools .page input')?.value === '${what}'`);
+      if (!(await page.until(`!!document.querySelector('.file-preview .pdf-page[data-page="2"] .annotation-layer .flash') && document.querySelector('.file-preview .pdf-tools .page input')?.value === '2'`, 15000))) {
+        throw new Error('l’annotation ne s’ouvre pas dans l’aperçu, à sa page, le passage clignotant');
+      }
+      const expand = await page.centre('.file-preview .expand', '');
+      await page.click(expand.x, expand.y);
+      if (!(await page.until(`!!document.querySelector('.full-screen .pdf-page .textLayer span')`, 15000))) throw new Error('le plein écran ne montre pas le chapitre');
+      // Page 1, typed in its field; Escape lets the field go, the next one leaves the full screen.
+      const field = await page.centre('.full-screen .pdf-tools .page input', '');
+      await page.click(field.x, field.y);
+      await page.type('1');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`document.querySelector('.full-screen .pdf-tools .page input')?.value === '1'`))) throw new Error('le plein écran ne va pas à la page 1');
+      for (let i = 0; i < 3 && (await page.evaluate(`!!document.querySelector('.full-screen')`)); i++) {
+        await page.press('Escape', 'Escape', 27);
+        await sleep(300);
+      }
+      if (await page.evaluate(`!!document.querySelector('.full-screen')`)) throw new Error('Échap ne ferme pas le plein écran');
+      if (!(await page.until(`!!document.querySelector('.file-preview .pdf-page[data-page="1"] .textLayer span')`, 15000))) throw new Error('l’aperçu ne revient pas, à la page 1');
+      // Two seconds: still page 1, nothing blinking.
+      for (const end = Date.now() + 2000; Date.now() < end; await sleep(100)) {
+        const flash = await page.evaluate(`!!document.querySelector('.file-preview .annotation-layer .flash')`);
+        if (!(await preview('1')) || flash) {
+          const now = await page.evaluate(`document.querySelector('.file-preview .pdf-tools .page input')?.value`);
+          throw new Error(`l’aperçu revient à la page ${now}${flash ? ', le passage clignotant' : ''}, et non à la page 1 que le plein écran a laissée`);
+        }
+      }
+    },
+  },
+  {
+    // Final review of plan 4c, I2: an annotation in no plan, deleted from the reader's margin by its line's menu (a
+    // real right click): its highlight and its line go; Ctrl+Z gives them back. « Ouvrir sa fiche » opens its pop-up.
+    name: '(revue finale, I2) supprimer une annotation hors plan par le menu de sa ligne dans la marge : son surlignage disparaît ; Ctrl+Z la rend',
+    ...PUBLICATION,
+    async run(page, base) {
+      const { page2 } = idsOf(base);
+      const trashed = () => base(`SELECT trashed FROM nodes WHERE id = '${page2}'`)[0].trashed;
+      await openChapter(page);
+      // Page 2 in view, by its field: its highlight drawn.
+      const field = await page.centre('.file-preview .pdf-tools .page input', '');
+      await page.click(field.x, field.y);
+      await page.type('2');
+      await page.press('Enter', 'Enter', 13);
+      const marks = '.file-preview .pdf-page[data-page="2"] .annotation-layer .mark';
+      if (!(await page.until(`document.querySelectorAll('${marks}').length > 0`, 10000))) throw new Error('le surlignage de la page 2 n’est pas dessiné');
+      const drawn = await page.evaluate(`document.querySelectorAll('${marks}').length`);
+      const menuOf = async () => {
+        const row = await page.centre('.file-preview .annotation-margin li', 'p\\. 2');
+        await page.click(row.x, row.y, 'right');
+        if (!(await page.until(`!!document.querySelector('.file-preview .context-menu')`))) throw new Error('le clic droit n’ouvre pas le menu de la ligne');
+        return page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      };
+      const items = await menuOf();
+      if (JSON.stringify(items) !== '["Ouvrir sa fiche","Supprimer"]') throw new Error(`menu de la marge : ${JSON.stringify(items)}`);
+      // « Ouvrir sa fiche »: the annotation's pop-up, beside the preview; Escape closes it.
+      const card = await page.centre('.context-menu button', '^Ouvrir sa fiche$');
+      await page.click(card.x, card.y);
+      const line = `Annotation de « ${LI} », p. 2`;
+      if (!(await page.until(`document.querySelector('.node-popup .annotation-of button')?.textContent === ${JSON.stringify(line)}`))) throw new Error('« Ouvrir sa fiche » n’ouvre pas le pop-up de l’annotation');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.node-popup .annotation-of') && !!document.querySelector('.file-preview')`))) throw new Error('Échap ne ferme pas le pop-up de l’annotation seul');
+      await menuOf();
+      const remove = await page.centre('.context-menu button', '^Supprimer$');
+      await page.click(remove.x, remove.y);
+      if (!(await until(() => trashed() === 1))) throw new Error('l’annotation n’est pas à la corbeille');
+      if (!(await page.until(`document.querySelectorAll('${marks}').length === 0 && ![...document.querySelectorAll('.file-preview .annotation-margin li')].some((li) => /p\\. 2/.test(li.textContent))`))) {
+        throw new Error('son surlignage ou sa ligne reste');
+      }
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => trashed() === 0))) throw new Error('Ctrl+Z ne rend pas l’annotation');
+      if (!(await page.until(`document.querySelectorAll('${marks}').length === ${drawn} && [...document.querySelectorAll('.file-preview .annotation-margin li')].some((li) => /p\\. 2/.test(li.textContent))`))) {
+        throw new Error('Ctrl+Z ne rend pas son surlignage et sa ligne');
+      }
+    },
+  },
+  {
+    // I2 in full screen, modal: the line's menu offers « Supprimer » only; that step is the full screen's own, which
+    // its Ctrl+Z undoes and its Ctrl+Y redoes.
+    name: '(revue finale, I2) en plein écran, le menu d’une ligne d’annotation n’offre que « Supprimer » ; Ctrl+Z et Ctrl+Y défont et refont ce pas',
+    ...PUBLICATION,
+    async run(page, base) {
+      const { page2 } = idsOf(base);
+      const trashed = () => base(`SELECT trashed FROM nodes WHERE id = '${page2}'`)[0].trashed;
+      await openChapter(page);
+      const expand = await page.centre('.file-preview .expand', '');
+      await page.click(expand.x, expand.y);
+      if (!(await page.until(`document.querySelectorAll('.full-screen .annotation-margin li').length === 3`, 15000))) throw new Error('le plein écran ne montre pas la marge');
+      const row = await page.centre('.full-screen .annotation-margin li', 'p\\. 2');
+      await page.click(row.x, row.y, 'right');
+      if (!(await page.until(`!!document.querySelector('.full-screen .context-menu')`))) throw new Error('le clic droit n’ouvre pas le menu en plein écran');
+      const items = await page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      if (JSON.stringify(items) !== '["Supprimer"]') throw new Error(`menu du plein écran : ${JSON.stringify(items)}`);
+      const remove = await page.centre('.full-screen .context-menu button', '^Supprimer$');
+      await page.click(remove.x, remove.y);
+      if (!(await until(() => trashed() === 1))) throw new Error('l’annotation n’est pas à la corbeille');
+      if (!(await page.until(`document.querySelectorAll('.full-screen .annotation-margin li').length === 2`))) throw new Error('sa ligne reste dans la marge');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => trashed() === 0))) throw new Error('Ctrl+Z en plein écran ne rend pas l’annotation supprimée');
+      await page.press('y', 'KeyY', 89, 2);
+      if (!(await until(() => trashed() === 1))) throw new Error('Ctrl+Y en plein écran ne la supprime pas de nouveau');
+      if (!(await page.evaluate(`!!document.querySelector('.full-screen')`))) throw new Error('le plein écran s’est fermé');
+    },
+  },
+  {
     // Plan 4c, task 4: a publication's import through the bridge, on the recorded answers (CIRRUS_PUBLICATIONS_REPLAY),
     // never the network: the arXiv article's metadata, its PDF in the test base's store; the refusals in French, whatever
     // the page sends; nothing created (task 5 builds the nodes).
@@ -693,7 +813,7 @@ const SCENARIOS = [
       if (JSON.stringify(tagsOf(nodes[0])) !== JSON.stringify(shannon)) throw new Error(`tags inattendus : ${JSON.stringify(tagsOf(nodes[0]))}`);
       if (!tagsOf(nodes[5]).includes('arxiv: 1706.03762') || !tagsOf(nodes[4]).includes('auteur: Peter D. Grünwald')) throw new Error(`tags inattendus : ${JSON.stringify(nodes.map(tagsOf))}`);
       nodes.forEach((n, i) => {
-        if (JSON.stringify(n.files.map((f) => f.name)) !== JSON.stringify([`${BIB_KEYS[i]}.bib`])) throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
+        if (JSON.stringify(n.files.map((f) => f.name)) !== JSON.stringify([bibFileName(BIB_KEYS[i])])) throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
         const bib = blob(data, n.files[0].hash).toString('utf8');
         if (!bib.startsWith(`@`) || !bib.includes(`{${BIB_KEYS[i]},\n`) || !tagsOf(n).includes(`clé_bibtex: ${BIB_KEYS[i]}`)) throw new Error(`.bib inattendu : ${bib.slice(0, 80)}`);
       });

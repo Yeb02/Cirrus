@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, applyOps, CITE_KEY_TAG, CommandError, editNode, type FileRef, groupOf, invertAction, parseBibtex, placementKey, type State, type TagValue,
+  type Action, applyOps, bibFields, bibIdentifiers, CITE_KEY_TAG, CommandError, editNode, type FileRef, groupOf, invertAction, parseBibtex, placementKey, type State,
+  type TagValue,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
@@ -11,6 +12,8 @@ import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene, type Sc
 import { beforeEach, expect, test } from 'vitest';
 import { importPublication, type PublicationDeps, type PublicationResult } from '../src/main/publications/fetch.ts';
 import { replayFetch } from '../src/main/publications/replay.ts';
+import { checkFileName } from '../src/renderer/files/merge.ts';
+import { planBib } from '../src/renderer/publications/bib.ts';
 import { findIdentifier } from '../src/renderer/publications/identify.ts';
 import {
   createFromPdf, type ImportDeps, importByIdentifier, planPublication, type PlannedPublication, publicationBuild, PublicationIndex, type PublicationInput, publicationOf,
@@ -163,6 +166,74 @@ test('doublons (revue de la tâche 6, M1) : une clé se compare sans la casse, c
   // Both sides with a DOI, two DOIs: another publication, its key made.
   setTags(ids.nodes.publication, [tag('doi', '10.1007/978-0-387-49820-1')]);
   expect(planned(planPublication(PublicationIndex.of(s), input, 50)).key).toBe('li1999');
+});
+
+/** An import from a .bib's entry, as planBib makes it. */
+const fromEntry = (text: string): PublicationInput => {
+  const e = parseBibtex(text).entries[0];
+  return { fields: bibFields(e), entry: e, ...bibIdentifiers(e) };
+};
+
+test('la clé (revue finale, R1 révisé) : celle de DBLP, ou « Auteur:Année », gardée telle quelle dans clé_bibtex et dans l’entrée écrite ; seul le nom du fichier est nettoyé ; l’adresse de DataCite reste écartée', () => {
+  const index = () => PublicationIndex.of(s);
+  const REAL = readFileSync(fileURLToPath(new URL('../../core/tests/data/reel-50.bib', import.meta.url)), 'utf8');
+  const dblp = parseBibtex(REAL).entries.find((e) => e.key === 'DBLP:conf/nips/VaswaniSPUJGKP17')!;
+  const p = planned(planPublication(index(), { fields: bibFields(dblp), entry: dblp, ...bibIdentifiers(dblp) }, 50));
+  expect(p.key).toBe('DBLP:conf/nips/VaswaniSPUJGKP17');
+  expect(p.tags).toContainEqual(tag(CITE_KEY_TAG, 'DBLP:conf/nips/VaswaniSPUJGKP17'));
+  expect(p.marks.keys).toEqual(['DBLP:conf/nips/VaswaniSPUJGKP17']);
+  expect(p.bib!.name).toBe('DBLP_conf_nips_VaswaniSPUJGKP17.bib');
+  expect(checkFileName(p.bib!.name, [])).toBeNull();
+  expect(p.bib!.text.startsWith('@inproceedings{DBLP:conf/nips/VaswaniSPUJGKP17,\n')).toBe(true);
+  // The entry written, read again: its key and its fields.
+  const back = parseBibtex(p.bib!.text);
+  expect(back.problems).toEqual([]);
+  expect(back.entries[0].key).toBe('DBLP:conf/nips/VaswaniSPUJGKP17');
+  expect(back.entries[0].fields).toEqual(dblp.fields);
+  // « Author:Year », written by hand.
+  const hinton = planned(planPublication(index(), fromEntry('@article{Hinton:2006, title = {A fast learning algorithm for deep belief nets}, author = {Hinton, Geoffrey E.}, year = 2006}'), 50));
+  expect([hinton.key, hinton.bib!.name]).toEqual(['Hinton:2006', 'Hinton_2006.bib']);
+  expect(hinton.bib!.text.startsWith('@article{Hinton:2006,\n')).toBe(true);
+  // A key Windows reserves as a name: the key kept, its file named otherwise.
+  const con = planned(planPublication(index(), fromEntry('@misc{con, title = {Un titre}, year = 2001}'), 50));
+  expect([con.key, con.bib!.name, checkFileName(con.bib!.name, [])]).toEqual(['con', 'con_.bib', null]);
+  // A key held by a node (without case) is a duplicate of it, as any key.
+  setTags(ids.nodes.mdl, [tag(CITE_KEY_TAG, 'hinton:2006')]);
+  expect(planPublication(index(), fromEntry('@article{Hinton:2006, title = {Autre}, author = {Hinton, G.}, year = 2006}'), 50))
+    .toEqual({ refused: `Déjà dans la base (même clé BibTeX) : « ${s.nodes.get(ids.nodes.mdl)!.title} ».` });
+  // DataCite's key, an address: set aside for its first author and year (as arXiv's import above), never a mark.
+  const datacite = planned(planPublication(index(), fromEntry('@misc{https://doi.org/10.48550/arxiv.1503.02531, title = {Distilling the Knowledge in a Neural Network}, author = {Hinton, Geoffrey and Vinyals, Oriol}, year = {2015}}'), 50));
+  expect([datacite.key, datacite.bib!.name, datacite.marks.keys]).toEqual(['hinton2015', 'hinton2015.bib', []]);
+});
+
+test('doublons (revue finale, R2 révisé) : un même titre et une même année ne sont pas un doublon quand les deux premiers auteurs ont des noms de famille différents ; un côté sans auteur, ou le même nom écrit autrement, en reste un', () => {
+  const index = () => PublicationIndex.of(s);
+  // Two chapters « Introduction », 2020, of Smith and of Doe, without a DOI: both planned, from one file or against the base.
+  const smith = '@incollection{smith2020, title = {Introduction}, author = {Smith, John}, year = 2020}';
+  const doe = '@incollection{doe2020, title = {Introduction}, author = {Doe, Jane and Smith, John}, year = 2020}';
+  const both = planBib(s, 'f.bib', `${smith}\n${doe}`, 50);
+  expect(both.items.map((x) => x.plan.key)).toEqual(['smith2020', 'doe2020']);
+  expect(both.duplicates).toEqual([]);
+  run(editNode(s, ids.nodes.monde, { title: 'Introduction', tags: [tag('auteur', 'John Smith'), tag('date_de_publication', '2020')] }));
+  expect('refused' in planPublication(index(), fromEntry(doe), 50)).toBe(false);
+  // The same first author, written otherwise (case, accents, « Nom, Prénom »): a duplicate.
+  for (const author of ['Smith, J.', 'SMITH, John', 'J. Smith']) {
+    expect(planPublication(index(), fromEntry(`@incollection{x, title = {Introduction}, author = {${author}}, year = 2020}`), 50), author)
+      .toEqual({ refused: 'Déjà dans la base (même titre et même année) : « Introduction ».' });
+  }
+  // One side without an author: a duplicate, either way.
+  expect(planPublication(index(), fromEntry('@incollection{x, title = {Introduction}, year = 2020}'), 50)).toEqual({ refused: 'Déjà dans la base (même titre et même année) : « Introduction ».' });
+  run(editNode(s, ids.nodes.monde, { tags: [tag('date_de_publication', '2020')] }));
+  expect(planPublication(index(), fromEntry(doe), 50)).toEqual({ refused: 'Déjà dans la base (même titre et même année) : « Introduction ».' });
+  // The node's first tag `auteur` counts, not the others: Smith is Doe's second author.
+  run(editNode(s, ids.nodes.monde, { tags: [tag('auteur', 'Jane Doe'), tag('auteur', 'Paul Vitányi'), tag('date_de_publication', '2020')] }));
+  expect('refused' in planPublication(index(), fromEntry(smith), 50)).toBe(false);
+  expect('refused' in planPublication(index(), fromEntry(doe), 50)).toBe(true);
+  // The test base's book of Li and Vitányi (« Ming Li ») stays a duplicate of Crossref's (« Ming Li »), and of a .bib's
+  // entry « Li, M. » with an accent left out.
+  expect(planPublication(index(), inputOf(BOOK()), 50)).toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${LI} ».` });
+  expect(planPublication(index(), fromEntry(`@book{autre, title = {${LI}}, author = {LI, M. and Vitanyi, P.}, year = 2008}`), 50))
+    .toEqual({ refused: `Déjà dans la base (même titre et même année) : « ${LI} ».` });
 });
 
 test('doublons (re-revue N2) : un DOI de la base écrit avec le point de la phrase est ce DOI, et non un veto', async () => {

@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import {
   BIB_MAX_BYTES, BIB_MAX_CHARS, BIB_MAX_ENTRIES, BIB_MAX_PROBLEMS, BIB_MAX_VALUE_CHARS, BIB_NAME_CHARS, BIB_WORK_PER_CHAR, BIB_WORK_SLACK, bibAuthors, type BibEntry, bibFields,
-  bibIdentifiers, bibNames, bibShort, bibtexEntry, CiteKeys, citeKey, cleanArxiv, cleanDoi, latexToUnicode, normalizedTitle, parseBibtex, repeatedKeyMessage,
-  safeCiteKey,
+  bibFileName, bibIdentifiers, bibNames, bibShort, bibtexEntry, CiteKeys, citeKey, cleanArxiv, cleanDoi, familyName, latexToUnicode, normalizedTitle,
+  parseBibtex, repeatedKeyMessage, safeCiteKey,
 } from '../src/bibtex.ts';
 
 const REAL = readFileSync(new URL('./data/reel-50.bib', import.meta.url), 'utf8');
@@ -376,15 +376,34 @@ test('citeKey : la clé de l’entrée si elle est sûre, sinon nom du premier a
   // The entry's own key, taken: a generated one; taken whatever its case, as BibTeX compares keys (revue M1).
   expect(citeKey(entry('@book{li2008, author = {Li, Ming}, year = 2008}'), taken)).toBe('li2008b');
   expect(citeKey(entry('@misc{LI2008, author = {Li, M.}, year = 2008}'), new Set(['li2008']))).toBe('li2008b');
-  expect(citeKey(entry('@book{DBLP:books/li2008, author = {Vit{\\\'a}nyi, Paul}, year = 2008}'), new Set())).toBe('vitanyi2008');
+  expect(citeKey(entry('@book{DBLP:books/li2008, author = {Vit{\\\'a}nyi, Paul}, year = 2008}'), new Set(['dblp:books/LI2008']))).toBe('vitanyi2008');
   expect(citeKey(entry('@book{x, author = {von Neumann, John and Morgenstern, Oskar}, year = 1944}'), new Set(['x']))).toBe('neumann1944');
   expect(citeKey(entry('@misc{, author = {{OpenAI}}, date = {2023-03-15}}'), new Set())).toBe('openai2023');
   // Without an author, the title's first word; without either, « publication »; without a year, nothing after.
   expect(citeKey(entry('@misc{, title = {{\\"U}ber formal unentscheidbare S{\\"a}tze}}'), new Set())).toBe('uber');
   expect(citeKey(entry('@misc{}'), new Set())).toBe('publication');
-  // A key Windows reserves as a file name is not given.
-  expect(citeKey(entry('@misc{, author = {Con, A.}}'), new Set())).toBe('conb');
-  expect(citeKey(entry('@misc{aux, author = {Aux, A.}}'), new Set())).toBe('auxb');
+  // A name Windows reserves is the file's affair only (bibFileName, final review R1): the key keeps it, made or own.
+  expect(citeKey(entry('@misc{, author = {Con, A.}}'), new Set())).toBe('con');
+  expect(citeKey(entry('@misc{aux, author = {Aux, A.}}'), new Set())).toBe('aux');
+});
+
+test('citeKey (revue finale, R1 révisé) : la clé propre que BibTeX et LaTeX lisent est gardée — DBLP, « Auteur:Année » — ; une adresse est remplacée ; l’entrée réécrite sous elle se relit telle quelle', () => {
+  const { entries } = parseBibtex(REAL);
+  const dblp = byKey(entries, 'DBLP:conf/nips/VaswaniSPUJGKP17'), kolmogorov = byKey(entries, 'Kolmogorov:1965');
+  expect(citeKey(dblp, new Set())).toBe('DBLP:conf/nips/VaswaniSPUJGKP17');
+  expect(citeKey(kolmogorov, new Set())).toBe('Kolmogorov:1965');
+  expect(citeKey(entry('@article{Hinton:2006, author = {Hinton, Geoffrey E.}, year = 2006}'), new Set())).toBe('Hinton:2006');
+  // DataCite's key, an address: refused, its first author and year instead.
+  expect(citeKey(byKey(entries, 'https://doi.org/10.48550/arxiv.1503.02531'), new Set())).toBe('hinton2015');
+  // Taken (without case): made, as any own key.
+  expect(citeKey(dblp, new Set(['dblp:conf/nips/vaswanispujgkp17']))).toBe('vaswani2017');
+  // Written under its key and read again: the same key, the same fields.
+  for (const e of [dblp, kolmogorov]) {
+    const back = parseBibtex(bibtexEntry(e, citeKey(e, new Set())));
+    expect(back.problems).toEqual([]);
+    expect(back.entries[0].key).toBe(e.key);
+    expect(back.entries[0].fields).toEqual(e.fields);
+  }
 });
 
 test('citeKey et CiteKeys (tâche 6) : les mêmes clés qu’avec un Set ; pour des milliers d’entrées, une clé coûte une recherche, même quand toutes ont la même base', () => {
@@ -404,7 +423,7 @@ test('citeKey et CiteKeys (tâche 6) : les mêmes clés qu’avec un Set ; pour 
   const reserved = new CiteKeys();
   reserved.reserve('LI2008');
   expect(reserved.has('li2008')).toBe(false);
-  expect(citeKey(entry('@misc{DBLP:x/1, author = {Li, M.}, year = 2008}'), reserved)).toBe('li2008b');
+  expect(citeKey(entry('@misc{https://example.org/x1, author = {Li, M.}, year = 2008}'), reserved)).toBe('li2008b');
   expect(citeKey(entry('@misc{li2008, author = {Li, M.}, year = 2008}'), reserved)).toBe('li2008');
   // 50 000 entries, all of the same base (no author, no year, the same first word), or each of its own: linear.
   for (const make of [(i: number) => `@misc{, title = {The ${i}}}`, (i: number) => `@misc{k${i}, author = {Nom${i}, A.}, year = 2000}`]) {
@@ -421,11 +440,39 @@ test('citeKey et CiteKeys (tâche 6) : les mêmes clés qu’avec un Set ; pour 
   }
 });
 
-test('safeCiteKey : un nom de fichier « <clé>.bib » et une clé de \\cite', () => {
-  for (const k of ['li2008', 'Li_2008', 'smith-2020', 'smith.2020', 'a+b', 'x1']) expect(safeCiteKey(k), k).toBe(true);
-  for (const k of ['', 'https://doi.org/10.1/x', 'DBLP:conf/nips/X', 'a b', 'a,b', 'a{b}', 'a%b', 'a#b', 'a\\b', 'é2008', 'con', 'AUX', 'nul.x', 'com1', '-a', '.a', 'x'.repeat(201)]) {
-    expect(safeCiteKey(k), k).toBe(false);
-  }
+test('safeCiteKey (revue finale, R1 révisé) : une clé que BibTeX et LaTeX lisent — ASCII imprimable, sans blanc ni \\ { } % # , ~ " \' ( ) =, sans « :// » ni « ^^ », 200 au plus', () => {
+  const kept = [
+    'li2008', 'Li_2008', 'smith-2020', 'smith.2020', 'a+b', 'x1', 'DBLP:conf/nips/VaswaniSPUJGKP17', 'Hinton:2006', 'DBLP:journals/ppi/Kolmogorov65',
+    'con', 'AUX', 'nul.x', 'com1', '-a', '.a', 'a@b', 'a;b', 'a!b?', 'a<b>|c*', 'x'.repeat(200),
+  ];
+  for (const k of kept) expect(safeCiteKey(k), k).toBe(true);
+  const refused = [
+    '', 'https://doi.org/10.1/x', 'http://x', 'doi://y', 'a b', 'a\tb', 'a\nb', 'a,b', 'a{b', 'a}b', 'a%b', 'a#b', 'a\\b', 'a~b', 'a"b', 'a\'b', 'a(b', 'a)b',
+    'a=b', 'é2008', 'Gödel1931', 'a\u007fb', 'a b', 'a^^7bb', 'x'.repeat(201),
+  ];
+  for (const k of refused) expect(safeCiteKey(k), k).toBe(false);
+});
+
+test('familyName (revue finale, R2 révisé) : le nom de famille d’un auteur « Prénom Nom » (ou « Nom, Prénom »), sans casse, accents ni ponctuation, comme bibNames le lit', () => {
+  const cases: [string, string | null][] = [
+    ['Ming Li', 'li'], ['Li, Ming', 'li'], ['M. Li', 'li'], ['LI, M.', 'li'], ['Paul Vitányi', 'vitanyi'], ['Paul Vitanyi', 'vitanyi'],
+    ['Laurens van der Maaten', 'maaten'], ['van der Maaten, Laurens', 'maaten'], ['John von Neumann', 'neumann'],
+    ['Martin Luther King Jr.', 'king'], ['King, Jr., Martin Luther', 'king'], ['Cathy O’Neil', 'oneil'], ['Cathy O\'Neil', 'oneil'],
+    ['Jean-Pierre Dupont', 'dupont'], ['A. Smith-Jones', 'smithjones'], ['OpenAI', 'openai'], ['Łukasz Kaiser', 'kaiser'], ['Kurt Gödel', 'godel'],
+    ['', null], ['  ', null], ['---', null],
+  ];
+  for (const [name, family] of cases) expect(familyName(name), name).toBe(family);
+});
+
+test('bibFileName (revue finale, R1 révisé) : le nom de « <clé>.bib », seul nettoyé — < > : " / \\ | ? * deviennent _, un nom réservé de Windows évité', () => {
+  expect(bibFileName('DBLP:conf/nips/VaswaniSPUJGKP17')).toBe('DBLP_conf_nips_VaswaniSPUJGKP17.bib');
+  expect(bibFileName('Hinton:2006')).toBe('Hinton_2006.bib');
+  expect(bibFileName('li2008')).toBe('li2008.bib');
+  expect(bibFileName('a<b>c|d?e*f')).toBe('a_b_c_d_e_f.bib');
+  // A name Windows reserves before its first dot: « _ » after it, whatever its case.
+  expect(['con', 'AUX', 'nul.x', 'com1', 'LPT9', 'prn'].map(bibFileName)).toEqual(['con_.bib', 'AUX_.bib', 'nul_.x.bib', 'com1_.bib', 'LPT9_.bib', 'prn_.bib']);
+  // Not reserved: kept.
+  expect(['console', 'com0', 'auxiliaire.x', 'nul_'].map(bibFileName)).toEqual(['console.bib', 'com0.bib', 'auxiliaire.x.bib', 'nul_.bib']);
 });
 
 test('bibIdentifiers : le DOI et l’identifiant arXiv d’une entrée, sous toutes leurs formes', () => {

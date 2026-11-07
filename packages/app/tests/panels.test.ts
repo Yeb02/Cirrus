@@ -9,7 +9,8 @@ import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/ren
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
 import {
-  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutTopLoose,
+  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutReveal,
+  withoutTopLoose,
 } from '../src/renderer/ui/panels/Panels.tsx';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
@@ -181,6 +182,29 @@ test('une annotation ouverte depuis un pop-up (plan 4c, tâche 3) : l’aperçu 
   // A file opened by its own click (no annotation): the preview keeps what it shows.
   expect(withFile(again, 'pdf', 'c.pdf', at(900), 4)[1].reveal).toEqual({ anchor: b, seq: 2 });
   expect(withFile([], 'pdf', 'c.pdf', at(900), 4)[0]).not.toHaveProperty('reveal');
+});
+
+test('revue finale, I1 : l’annotation demandée est montrée une fois — l’aperçu dit l’avoir montrée, et remonté (retour du plein écran, version nouvelle), il n’a plus rien à rejouer', () => {
+  const at = (x: number): Rect => ({ x, y: 100, w: 380, h: 460 });
+  const a = { pdf: 'pdf', file: 'c.pdf', hash: 'a'.repeat(64), page: 2, rects: [[72, 700, 300, 712]] as [number, number, number, number][], text: 'K' };
+  const b = { ...a, page: 5 };
+  const ps: Panel[] = [{ id: 1, target: { kind: 'node', node: 'pdf' }, rect: at(10), pinned: false, z: 1 }];
+  const opened = withFile(ps, 'pdf', 'c.pdf', at(400), 2, { anchor: a, seq: 1 });
+  // Shown by the preview's view (AnnotatedPdf), which says so (onRevealed): the panel holds it no longer, so the view
+  // mounted again — its file back from the full screen, a new version of it — is given nothing to show.
+  const shown = withoutReveal(opened, 2, 1);
+  expect(shown[1]).toEqual({ id: 2, target: { kind: 'file', node: 'pdf', name: 'c.pdf' }, rect: at(400), pinned: false, z: 2 });
+  expect(shown[1].reveal).toBeUndefined();
+  expect(shown[0]).toBe(opened[0]);
+  // Said twice, or of another panel: the same list.
+  expect(withoutReveal(shown, 2, 1)).toBe(shown);
+  expect(withoutReveal(opened, 1, 1)).toBe(opened);
+  // Another annotation asked before the first is said shown: kept, the older ask does not take it away.
+  const newer = withFile(opened, 'pdf', 'c.pdf', at(400), 3, { anchor: b, seq: 2 });
+  expect(withoutReveal(newer, 2, 1)).toBe(newer);
+  expect(withoutReveal(newer, 2, 2)[1].reveal).toBeUndefined();
+  // The same annotation asked again once shown: shown again (a new ask).
+  expect(withFile(shown, 'pdf', 'c.pdf', at(400), 4, { anchor: a, seq: 3 })[1].reveal).toEqual({ anchor: a, seq: 3 });
 });
 
 test('linkedRect : à droite du panneau d’où vient le lien, à la taille d’un pop-up ; à gauche s’il n’y a pas la place', () => {

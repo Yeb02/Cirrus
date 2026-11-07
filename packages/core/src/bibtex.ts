@@ -619,6 +619,21 @@ export function bibAuthors(field: string): string[] {
   return bibNames(field).map((x) => [x.first, x.von, x.last, x.jr].filter((s) => s !== '').join(' ')).filter((s) => s !== '');
 }
 
+/** A suffix written after the family name, « Prénom Nom Jr. » (bibAuthors writes it there): it is no family name. */
+const NAME_SUFFIX = /[\s,]+(?:jr|sr|ii|iii|iv)\.?$/i;
+
+/**
+ * The family name of an author as compared for duplicates (final review, R2 revised): « Prénom Nom », as the tags
+ * `auteur` hold it, or « Nom, Prénom », split as BibTeX splits it (bibNames: its particles and a suffix « Jr. » are no
+ * part of it), then without case, accents, punctuation nor blanks (normalizedTitle): « Vitányi » and « VITANYI » are
+ * the same. Null when there is none.
+ */
+export function familyName(author: string): string | null {
+  const last = bibNames(author.trim().replace(NAME_SUFFIX, ''))[0]?.last ?? '';
+  const n = normalizedTitle(last).replaceAll(' ', '');
+  return n === '' ? null : n;
+}
+
 /** The first four digits in a row of a text (a year, a date's year), or null. */
 export function yearIn(s: string): string | null {
   return /(?<!\d)\d{4}(?!\d)/.exec(s)?.[0] ?? null;
@@ -711,15 +726,33 @@ export function normalizedTitle(s: string): string {
 
 /** What Windows reserves as a file's name, before its first dot (as files/merge.ts refuses it). */
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
-const SAFE_KEY = /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/;
+/** The longest key kept (a fixed bound: a key is a word of \cite, 200 like a label, safeLabel). */
+const MAX_KEY_CHARS = 200;
+/** Printable ASCII but a blank or what BibTeX or LaTeX read otherwise in a key: \ { } % # , ~ " ' ( ) =. */
+const SAFE_KEY = /^[!$&*+\-./0-9:;<>?@A-Z[\]^_`a-z|]+$/;
 
 /**
- * Whether `key` can be a publication's key (the controller's ruling): the name of its file « <key>.bib » and a key of
- * \cite, both — ASCII letters, digits, « _ . + - », 200 at most, not a name Windows reserves. An address (DataCite's
- * keys), a colon or a slash (DBLP's) is refused: a file cannot be named so, and French babel makes « : » active.
+ * Whether an entry's own key is kept (final review, R1 revised: a .bib imported « servira à charger la bibliographie
+ * actuelle », whose \cite already name its keys): one that BibTeX and LaTeX both read — printable ASCII, 200 at most,
+ * without a blank nor \ { } % # , ~ " ' ( ) =, without « :// » (an address: DataCite's keys) nor « ^^ » (which TeX
+ * reads as a character's code: the compilations never inject it). DBLP's (`DBLP:conf/nips/…`) and « Author:Year » are
+ * kept; only the name of their file is cleaned (bibFileName).
  */
 export function safeCiteKey(key: string): boolean {
-  return key.length <= 200 && SAFE_KEY.test(key) && !RESERVED.test(key) && safeLabel(key);
+  return key.length > 0 && key.length <= MAX_KEY_CHARS && SAFE_KEY.test(key) && !key.includes('://') && !key.includes('^^') && safeLabel(key);
+}
+
+/** What a file's name cannot hold on Windows (as files/merge.ts refuses it). */
+const UNSAFE_FILE_CHARS = /[<>:"/\\|?*]/g;
+
+/**
+ * The name of a publication's entry as a file of its node (D7; final review, R1 revised): « <key>.bib », each of
+ * < > : " / \ | ? * made « _ » (DBLP_conf_nips_VaswaniSPUJGKP17.bib), and « _ » after a name Windows reserves
+ * (con_.bib). Only the file's name: the key itself stays in the tag `clé_bibtex` and in the entry. A node holds one .bib.
+ */
+export function bibFileName(key: string): string {
+  const name = `${key.replace(UNSAFE_FILE_CHARS, '_')}.bib`;
+  return name.replace(RESERVED, '$1_$2');
 }
 
 const LATIN = new Map(Object.entries({ ø: 'o', æ: 'ae', œ: 'oe', ß: 'ss', ł: 'l', đ: 'd', ð: 'd', þ: 'th', ı: 'i', ŋ: 'n', ȷ: 'j' }));
@@ -740,8 +773,9 @@ function letters(n: number): string {
  * lower case, and, for each base of the keys citeKey makes, the first suffix not known to be taken. Keys are only ever
  * added, so a suffix found taken stays so: a key made for each of a .bib's thousands of entries costs a few look-ups,
  * even when they all share a base (task 6: no author, no year, the same first word). Keys `reserve`d — a .bib's own
- * safe keys, all of them before any is made (the controller's ruling of the task 6 review, M3) — are avoided by the
- * keys made only: an entry keeps its own, and a \cite{li2008} already written still means it.
+ * safe keys, all of them before any is made (the controller's ruling of the task 6 review, M3), DBLP's included since
+ * the final review (R1) — are avoided by the keys made only: an entry keeps its own, and a \cite{li2008} already
+ * written still means it.
  */
 export class CiteKeys {
   private readonly lower = new Set<string>();
@@ -774,11 +808,12 @@ export class CiteKeys {
 }
 
 /**
- * A publication's key (D7): the entry's if it has one that safeCiteKey takes and no other node holds (`taken`, without
- * case); otherwise its first author's family name and its year (`li2008`) — without an author, its title's first word;
- * without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case, or a
- * key it reserves. `taken` as CiteKeys for many keys made one after the other (a .bib's, task 6): a Set is read whole
- * at each call.
+ * A publication's key (D7): the entry's if it has one that safeCiteKey takes (BibTeX and LaTeX read it: DBLP's and
+ * « Author:Year » kept, final review R1) and no other node holds (`taken`, without case); otherwise one made of ASCII
+ * letters and digits, its first author's family name and its year (`li2008`) — without an author, its title's first
+ * word; without either, « publication » —, followed by b, c… z, aa… while a key of `taken` is the same, without case,
+ * or a key it reserves. `taken` as CiteKeys for many keys made one after the other (a .bib's, task 6): a Set is read
+ * whole at each call. Its file's name is bibFileName's.
  */
 export function citeKey(entry: BibEntry, taken: ReadonlySet<string> | CiteKeys): string {
   const keys = taken instanceof CiteKeys ? taken : new CiteKeys(taken);

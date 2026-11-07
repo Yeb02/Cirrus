@@ -81,11 +81,12 @@ export function useModal(root: RefObject<HTMLElement | null>, close: RefObject<(
  * « Lien vers « titre » : ferme le plein écran pour l’ouvrir. » for toastMs (`nodeTitle`: the node's title, null when it
  * is gone, which it says too).
  * A PDF is read and annotated here with its annotations (plan 4c, D4: `annotations`, `onAnnotate`); they are not
- * dragged out of its margin, the full screen being modal.
+ * dragged out of its margin, the full screen being modal. A margin's line has its menu (final review, I2), which offers
+ * its deletion only (`onDeleteAnnotation`): no pop-up opens over a modal.
  */
 export function FullScreen(props: {
   node: NodeRec; file: FileRef; params: RenderParams; views: ViewStates; onClose(): void; onSystem(file: FileRef): void; tex?: TexContext;
-  nodeTitle(node: Id): string | null; annotations?: AnnotationIndex | null; onAnnotate?(a: Anchor): boolean;
+  nodeTitle(node: Id): string | null; annotations?: AnnotationIndex | null; onAnnotate?(a: Anchor): boolean; onDeleteAnnotation?(node: Id): void;
 }) {
   const { node, file, tex } = props;
   const root = useRef<HTMLDivElement>(null);
@@ -93,6 +94,7 @@ export function FullScreen(props: {
   const latest = useRef(props);
   latest.current = props;
   const annotate = useCallback((a: Anchor) => latest.current.onAnnotate?.(a) ?? false, []);
+  const deleteAnnotation = useCallback((id: Id) => latest.current.onDeleteAnnotation?.(id), []);
   const noticeTimer = useRef<number | undefined>(undefined);
   const onNodeLink = useCallback((id: Id) => {
     const title = latest.current.nodeTitle(id);
@@ -124,7 +126,7 @@ export function FullScreen(props: {
         ? (
           <Viewer
             key={file.hash} file={file} node={node.id} mode="full" params={props.params} views={props.views} onNodeLink={onNodeLink}
-            annotations={props.annotations && props.onAnnotate ? { index: props.annotations, onAnnotate: annotate, draggable: false } : undefined}
+            annotations={props.annotations && props.onAnnotate ? { index: props.annotations, onAnnotate: annotate, draggable: false, onDelete: deleteAnnotation } : undefined}
           />
         )
         : !tex.registry ? <Notice text="Lecture…" />

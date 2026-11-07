@@ -2,15 +2,17 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type Action, type Anchor, ANCHOR_MAX_RECTS, ANCHOR_MAX_TEXT, applyOps, createAnnotation, deleteEverywhere, editNode, type FileRef, invertAction, moveNodes,
-  placeNode, removeFromPlan, type State,
+  type Action, type Anchor, ANCHOR_MAX_RECTS, ANCHOR_MAX_TEXT, applyOps, CommandError, createAnnotation, deleteEverywhere, editNode, type FileRef, groupOf,
+  invertAction, moveNodes, placementOf, placeNode, removeFromPlan, type State,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { getDocument, type PageViewport, type PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { afterAll, beforeAll, expect, test } from 'vitest';
+import { deleteAnnotationBuild } from '../src/renderer/actions.ts';
 import {
-  anchorRefusal, AnnotationIndex, annotationSource, type DOMRectLike, mergeLines, ofFile, type PageHit, pdfRects, rectsOnScreen, selectionToAnchor, titleChars,
+  anchorRefusal, AnnotationIndex, annotationMenu, annotationSource, type DOMRectLike, mergeLines, ofFile, type PageHit, pdfRects, rectsOnScreen, selectionToAnchor,
+  titleChars,
 } from '../src/renderer/files/annotations.ts';
 
 /** CSS pixels per point (pdf.ts's, which loads pdf.js's browser build): zoom 1 shows a page at its real size. */
@@ -235,6 +237,43 @@ test('index : une annotation à la corbeille ou annulée n’y est plus ; le PDF
   expect(AnnotationIndex.build(s).of(ids.nodes.publication).map((e) => e.node.id)).not.toContain(ids.nodes.annotationPage2);
   run(s, deleteEverywhere(s, ids.nodes.publication));
   expect(AnnotationIndex.build(s).of(ids.nodes.publication)).toHaveLength(2);
+});
+
+test('revue finale, I2 : le menu d’une ligne d’annotation — « Ouvrir sa fiche » et « Supprimer » dans l’aperçu et le pop-up, « Supprimer » seul en plein écran ; « Supprimer partout » quand elle est dans un plan', () => {
+  const s = store.loadState(), all = AnnotationIndex.build(s).of(ids.nodes.publication);
+  const page1 = all.find((e) => e.node.id === ids.nodes.annotationPage1)!, page2 = all.find((e) => e.node.id === ids.nodes.annotationPage2)!;
+  expect(annotationMenu(page2, true)).toEqual([{ action: 'node', label: 'Ouvrir sa fiche' }, { action: 'delete', label: 'Supprimer' }]);
+  expect(annotationMenu(page2, false)).toEqual([{ action: 'delete', label: 'Supprimer' }]);
+  // In « Lecture »: its deletion takes it out of that plan too, which its label says.
+  expect(annotationMenu(page1, true)).toEqual([{ action: 'node', label: 'Ouvrir sa fiche' }, { action: 'delete', label: 'Supprimer partout' }]);
+  expect(annotationMenu(page1, false)).toEqual([{ action: 'delete', label: 'Supprimer partout' }]);
+});
+
+test('revue finale, I2 : une annotation supprimée depuis sa ligne — partout, une action, qu’un Ctrl+Z défait ; hors plan, ou posée dans un plan et dans le groupe de son PDF', () => {
+  const s = store.loadState(), pdf = ids.nodes.publication, lecture = ids.plans.lecture;
+  const listed = () => AnnotationIndex.build(s).of(pdf).map((e) => e.node.id);
+  const page1 = ids.nodes.annotationPage1, page2 = ids.nodes.annotationPage2;
+  // In no plan (page 2's): to the trash, out of the lists; undone, back.
+  const a = deleteAnnotationBuild(page2)!(s);
+  expect(a.label).toBe(`Supprimer « ${s.nodes.get(page2)!.title} » partout`);
+  run(s, a);
+  expect(s.nodes.get(page2)!.trashedAt).toBeDefined();
+  expect(listed()).not.toContain(page2);
+  run(s, invertAction(a));
+  expect(s.nodes.get(page2)!.trashedAt).toBeUndefined();
+  expect(listed()).toContain(page2);
+  // In « Lecture », inside its PDF's group (page 1's): out of the plan and of the group as well; undone, back in both.
+  expect([placementOf(s, lecture, page1) !== undefined, groupOf(s, lecture, page1)]).toEqual([true, pdf]);
+  const b = deleteAnnotationBuild(page1)!(s);
+  run(s, b);
+  expect([placementOf(s, lecture, page1), groupOf(s, lecture, page1), listed().includes(page1)]).toEqual([undefined, undefined, false]);
+  run(s, invertAction(b));
+  expect([placementOf(s, lecture, page1) !== undefined, groupOf(s, lecture, page1), listed().includes(page1)]).toEqual([true, pdf, true]);
+  // Not an annotation, gone, or in the trash already (a line shown a moment too long): refused, nothing done.
+  expect(() => deleteAnnotationBuild(ids.nodes.mdl)!(s)).toThrow(new CommandError('Ce nœud n’est pas une annotation.'));
+  expect(() => deleteAnnotationBuild('jamais-vu')!(s)).toThrow(new CommandError('Cette annotation n’existe plus.'));
+  run(s, deleteEverywhere(s, page2));
+  expect(() => deleteAnnotationBuild(page2)!(s)).toThrow(new CommandError('Cette annotation est déjà supprimée.'));
 });
 
 test('index : une reconstruction après une modification ne relit que ce qui a changé', () => {

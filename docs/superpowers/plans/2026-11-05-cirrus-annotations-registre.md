@@ -1196,3 +1196,136 @@ Toutes dans l'app construite, trois passes chacune, sur ce PC (Ryzen 7 7435HS, 1
   - l'image qui suit la pose de 2 000 publications vient environ 370 ms après l'action : la scène se refait avec 2 000 nœuds de plus. C'est l'ordre de la tâche 6 ;
   - une pose sur six a pris 561 ms jusqu'à l'action, au lieu d'environ 230 ms, sans cause établie ;
   - l'ouverture à froid d'un PDF reste dominée par le chargement de pdf.js, avec ou sans annotations : environ 0,34 s pour la première page.
+
+## Revue finale : les corrections
+
+La revue de tout le plan (`e4d957f..b2c5657`) a demandé deux Important, I1 et I2. Le contrôleur y a ajouté M5 et M6, passés Important, et deux Rulings révisés, R1 et R2. Les autres Minors (M1 à M4, le plein écran d'une version précédente, la paire préprint et actes) restent différés au ledger.
+
+### Fait
+
+- **I1, l'annotation demandée depuis un pop-up est montrée une seule fois.**
+  - L'aperçu la consommait à chaque montage (`useEffect` sur `reveal.seq`, qui tourne aussi au montage). Or l'aperçu se démonte pendant que son fichier est en plein écran, et se remonte au retour ou à une version nouvelle (`key={f.hash}`).
+  - Désormais, `AnnotatedPdf` la montre puis le dit (`AnnotationContext.onRevealed(seq)`). Le panneau la lâche alors (`withoutReveal`, dans `Panels.tsx`). Une demande plus récente, faite entre-temps, reste.
+  - Monté de nouveau, l'aperçu n'a donc plus rien à rejouer : il s'ouvre où le plein écran l'a laissé, sans clignoter, et ne rouvre pas une version précédente quittée par « Revenir à la version actuelle ».
+- **I2, un menu sur une ligne d'annotation.**
+  - Un clic droit sur une ligne, dans la marge du lecteur (`AnnotationMargin`) ou dans la section « Annotations » du pop-up (`NodePopup`), ouvre son menu. Les deux listes partagent `useAnnotationMenu`, sur l'idiome du menu d'un fichier (`ContextMenu`). Les items viennent de `annotationMenu` (`files/annotations.ts`), une fonction pure, comme `fileMenu`.
+  - « Ouvrir sa fiche » ouvre le pop-up de l'annotation à côté du panneau. Le chemin est celui d'un lien : `onNodeLink`, puis `Panels.openLinked`.
+  - « Supprimer » appelle `deleteAnnotationBuild` (`actions.ts`), qui fait `deleteEverywhere` : une action, un Ctrl+Z. Le libellé devient « Supprimer partout » quand l'annotation figure dans un plan.
+  - Dans le plein écran, le menu n'offre que « Supprimer ». Ce pas entre dans `fullSteps`, comme une annotation faite là : son Ctrl+Z et son Ctrl+Y le défont et le refont.
+  - Le menu est en position fixe dans le plein écran comme dans un panneau (`styles.css`).
+- **R1 révisé, la clé propre gardée quand BibTeX et LaTeX la lisent.**
+  - `safeCiteKey` (`core/src/bibtex.ts`) accepte l'ASCII imprimable, sans blanc ni `\ { } % # , ~ " ' ( ) =`, sans `://` ni `^^`, 200 caractères au plus. Elle ne regarde plus les noms réservés de Windows.
+  - Le nom du fichier vient de `bibFileName(key)`, une fonction nouvelle :
+    - `< > : " / \ | ? *` y deviennent `_` ;
+    - un nom réservé de Windows reçoit `_` après le mot réservé : `con_.bib`, `nul_.x.bib`.
+  - `planPublication` (`publications/build.ts`) écrit l'entrée sous la clé gardée, dans le fichier que nomme `bibFileName`. `planBib` réserve désormais aussi les clés de DBLP. Les documentations de `citeKey` et de `CiteKeys` le disent.
+  - Les clés `DBLP:conf/nips/VaswaniSPUJGKP17`, `Hinton:2006` et `DBLP:journals/ppi/Kolmogorov65` (la base de test) sont gardées. L'adresse de DataCite reste remplacée, par `hinton2015` ou `vaswani2017`.
+- **R2 révisé, le premier auteur dans la règle du titre et de l'année.**
+  - `familyName(author)` (`core/src/bibtex.ts`) donne le nom de famille d'un auteur, sans casse, accents, ponctuation ni blancs :
+    - il accepte « Prénom Nom » et « Nom, Prénom », lus par `bibNames`, sans les particules ;
+    - un « Jr. », « Sr. », « II », « III » ou « IV » final est d'abord retiré.
+  - Les marques (`Marks`, `Holder`) portent `author` :
+    - pour un nœud, son premier tag `auteur` ;
+    - pour un import, son premier auteur « Prénom Nom », celui que son nœud portera.
+  - `PublicationIndex.duplicate` refuse une correspondance par titre et année quand les deux côtés ont un premier auteur et que leurs noms diffèrent. C'est la règle de contradiction des identifiants (`agrees`). La correspondance par clé ne change pas.
+- **M5, une ligne de spec.** La spec 6.5 gagne « Références d'un fichier » : les empreintes des ancres sont des références de fichiers, que la synchronisation (plan 5), le serveur et « Poids de l'historique » (6.3) comptent comme telles. La 5.2 y renvoie, en une phrase.
+- **M6, la garde de `add-reading.ts`.**
+  - `fixtures/src/testBase.ts`, nouveau :
+    - `userBaseDir(env)` donne `%APPDATA%\@cirrus\app\base` ;
+    - `isUserBase(dir, env)` compare sans la casse et suit les liens ;
+    - `testBaseRefusal(dir, env)` refuse la base de l'utilisateur, un dossier sans base, et une base dont le journal ne commence pas par une ligne signée `FIXTURE_PC` (« fixture »). Il lit le journal en lecture seule.
+  - `add-reading.ts` refuse ce que `testBaseRefusal` refuse, puis prend le verrou de la base (`lockBase`), qu'il rend à la fin.
+  - `lockBase` passe de `app/src/main/lock.ts` à `@cirrus/store` (`store/src/lock.ts`). `app/src/main/lock.ts` le réexporte.
+  - `make-fixture.ts` signe par `FIXTURE_PC`, et refuse la place de la base de l'utilisateur.
+- **La spec** (`2026-11-02-cirrus-design.md`) :
+  - 5.2 : l'empreinte d'une ancre est une référence de fichier ;
+  - 5.4 : seul le nom du `<clé>.bib` est nettoyé ;
+  - 6.5 : « Références d'un fichier » (M5) ;
+  - 7 : « Supprimer » dans le menu d'une ligne met une annotation à la corbeille, même hors de tout plan ;
+  - 12 : « La clé BibTeX » et « Les doublons » réécrits (R1, R2), « Ouvrir une annotation » une seule fois (I1), « Le menu d'une ligne » (I2).
+- **La base de test** : le commentaire de `fixtures/assets/bibliographie.bib` dit la clé de DBLP gardée, au même nombre de lignes. Les numéros de ligne des entrées ne changent pas.
+- **`interface.mjs`** :
+  - la clé de DBLP de la base de test, dans `BIB_KEYS`, et son fichier par `bibFileName` (importé de `@cirrus/core`) ;
+  - trois scénarios nouveaux, marqués « (revue finale) ».
+
+### Décisions
+
+- Ruling (I1) : **le panneau lâche l'annotation une fois montrée** (`onRevealed`, puis `withoutReveal`).
+  - Options :
+    - garder le dernier `seq` traité hors du composant, dans `views` sous `reveal:<hash>` ;
+    - le rappel qui retire `reveal` du panneau (choix).
+  - Pourquoi : `views` est gardé par PC dans `localStorage`, et le compteur des demandes (`reveals`) repart de 0 à chaque lancement. Un `seq` gardé d'une session pourrait masquer la première demande de la suivante. Le panneau, lui, dit seul ce qui reste à montrer.
+  - Coût si faux : une fonction pure de `Panels.tsx` et un rappel.
+- Ruling (I2) : **pas de dialogue avant « Supprimer »**.
+  - Pourquoi : la question du graphe sert à choisir entre « ici » et « partout », et une ligne n'a pas d'« ici ». Il n'existe aucun avertissement propre à « partout ». Le menu est déjà le choix explicite, et Ctrl+Z le défait.
+  - Ce qui le remplace : le libellé « Supprimer partout » quand l'annotation figure dans un plan, qu'elle quitte aussi. Sa ligne nomme ces plans juste à côté.
+  - Coût si faux : un `AskDialog` à ouvrir dans la marge et dans le plein écran.
+- Ruling (I2) : **en plein écran, une annotation posée dans un plan se supprime aussi.** Ce pas change le graphe caché, mais c'est un pas de ce plein écran : son Ctrl+Z le défait là.
+  - La règle de la revue de la tâche 5 ne vise que Ctrl+Z sur les pas faits avant le plein écran.
+  - Coût si faux : n'offrir « Supprimer » qu'aux annotations hors plan, en plein écran.
+- Ruling (I2) : **`deleteAnnotationBuild` refuse, au calcul, un nœud absent, sans ancre, ou déjà à la corbeille.** Les refus disent « Cette annotation n'existe plus. », « Ce nœud n'est pas une annotation. » et « Cette annotation est déjà supprimée. » : une ligne restée affichée un instant de trop ne refait pas une action.
+- Ruling (I2) : **« Ouvrir sa fiche » passe par `onNodeLink`**, le chemin d'un lien. Le pop-up s'ouvre à côté du panneau, ou passe devant s'il est ouvert, et un nœud absent se dit (« Ce nœud n'existe plus. »).
+- Ruling (R1) : **`^^` est refusé aussi**, en plus des conditions du Ruling. TeX le lit comme un code de caractère, et le pilote ne l'injecte jamais (`injectable`, `main/latex/driver.ts`) : une telle clé ne se compilerait dans aucun résumé.
+  - Coût si faux : une clé de plus fabriquée, dans un cas qu'aucune bibliographie réelle ne présente.
+- Ruling (R1) : **la clé seule n'évite plus les noms réservés de Windows.** Une clé `aux` reste `aux`, et `@misc{, author = {Con, A.}}` donne `con` au lieu de `conb`. Seul le fichier les évite : `aux_.bib`, `con_.bib`.
+  - Coût si faux : nul pour LaTeX, que ces noms ne gênent pas.
+- Ruling (R1) : **les tests où `DBLP:x/1` tenait le rôle d'une clé non sûre prennent une adresse** (`https://example.org/x/1`).
+  - Ce sont, dans `bibImport.test.ts`, les doublons dans le fichier, la réserve des clés propres et la clé fabriquée prise entre-temps ; dans `bibtex.test.ts`, la réserve de `CiteKeys`.
+  - Leur sens ne change pas. Un cas nouveau vérifie que deux `DBLP:x/1` sont désormais un doublon par la clé, dit une fois.
+- Ruling (R2) : **le nom de famille se lit des deux côtés sur « Prénom Nom », avec la même fonction.**
+  - Options :
+    - le dernier mot ;
+    - `bibNames` sur l'entrée, pour l'import ;
+    - `familyName` sur « Prénom Nom » des deux côtés (choix).
+  - Pourquoi : un nœud n'a que son tag « Prénom Nom ». Un nom entre accolades, `{Groupe de travail}`, relu depuis son tag, donnerait un autre nom de famille que l'entrée elle-même. `bibNames` fait mieux que le dernier mot : il lit « Nom, Prénom » et les particules, et un « Jr. » final est retiré.
+  - Coût si faux : deux nœuds pour une même œuvre quand un seul côté écrit « Jr. » sans virgule devant un nom qui n'est pas le dernier mot, ce qui est rare.
+- Ruling (R2) : **le nom de famille ne se calcule que pour une marque de titre et d'année.** Un nœud sans année n'en a pas besoin, et `PublicationIndex.of` ne lit pas les auteurs de toute la base pour rien.
+- Ruling (M5) : **la ligne va à la 6.5**, la section des fichiers, que la synchronisation et le serveur liront. La 5.2 y renvoie en une phrase.
+- Ruling (M6) : **la marque d'une base de test est la signature de son journal.** La première ligne doit être signée « fixture » (`FIXTURE_PC`).
+  - Options :
+    - un fichier marqueur écrit par `make-fixture.ts`, qu'une copie de dossier emporterait ;
+    - le contenu de la base de test (le plan « Lecture », les tags `doi` et `arxiv`), que la vraie base peut avoir ;
+    - la signature du journal (choix).
+  - Pourquoi : `make-fixture.ts` signe « fixture », et l'app signe par l'identifiant de `pc.json`, un uuidv7, jamais ce mot. Elle se lit en lecture seule, sans rien écrire.
+  - Le chemin `%APPDATA%\@cirrus\app\base` est refusé avant toute lecture, même s'il contient une base de test copiée là.
+  - Sans `APPDATA` (un autre système), la marque seule protège.
+  - Coût si faux : un script refusé sur une base de test d'un autre genre, ce qu'aucun script ne fait.
+- Ruling (M6) : **`lockBase` passe dans `@cirrus/store`.** Le paquet `fixtures` ne peut pas importer `app`, qui dépend de lui. Le magasin tient déjà le dossier de la base, et `app/src/main/lock.ts` réexporte.
+  - Coût si faux : un fichier à déplacer de nouveau.
+- Ruling (M6) : **`make-fixture.ts` refuse aussi la place de la base de l'utilisateur.** Sinon, l'app ouvrirait une base de test comme si c'était la sienne.
+  - Coût : trois lignes.
+
+### Vérifications
+
+- **Tests vus rouges**, chacun avant sa correction :
+  - I1 :
+    - `withoutReveal is not a function` ;
+    - le scénario « (revue finale, I1) », la correction de `Panels` absente : « l'aperçu revient à la page 2, le passage clignotant, et non à la page 1 que le plein écran a laissée ».
+  - I2 :
+    - `annotationMenu is not a function` et `deleteAnnotationBuild is not a function` ;
+    - les deux scénarios « (revue finale, I2) » : « le clic droit n'ouvre pas le menu de la ligne », et de même en plein écran.
+  - R1 :
+    - `expected 'conb' to be 'con'` ;
+    - `expected 'vaswani2017' to be 'DBLP:conf/nips/VaswaniSPUJGKP17'` ;
+    - `DBLP:conf/nips/VaswaniSPUJGKP17: expected false to be true` ;
+    - `bibFileName is not a function` ;
+    - côté app, `expected 'DBLP:conf/nips/VaswaniSPUJGKP17.bib' to be 'DBLP_conf_nips_VaswaniSPUJGKP17.bib'`, et de même pour `DBLP:journals/ppi/Kolmogorov65` et `DBLP:x/1`.
+  - R2 :
+    - `familyName is not a function` ;
+    - `expected [ 'smith2020' ] to deeply equal [ 'smith2020', 'doe2020' ]`.
+  - M6 : `Cannot find module '../src/testBase.ts'`. Puis, contre les deux scripts d'origine remisés le temps d'un essai, `expected +0 to be 1` deux fois : `add-reading.ts` écrivait dans la fausse base de l'utilisateur, et `make-fixture.ts` en bâtissait une à sa place.
+- **Suites**, chaque paquet seul, `--maxWorkers=1`, toutes passées, 902 en tout :
+  - `core` 135 (14 fichiers) ;
+  - `store` 23 (4) ;
+  - `fixtures` 16 (5) ;
+  - `view` 251 (31) ;
+  - `app` 424 (40) ;
+  - `bench/latex` 7 (1) ;
+  - `bench/rendu` 46 (7).
+- **`tsc --noEmit -p .`** : sans erreur dans les sept paquets.
+- **Les tests ne touchent jamais la vraie base.** Ceux de M6 miment sa place sous un `%APPDATA%` temporaire, passé à la garde et au processus du script.
+- **Scénarios d'interface** (`npm run interface`) : 25 sur 25, dont trois nouveaux, par de vrais clics :
+  - « (revue finale, I1) » : le menu de la ligne du pop-up, qu'Échap ferme seul ; un clic sur la ligne « p. 2 » ouvre l'aperçu à la page 2, le passage clignotant. Puis ⤢, la page 1 tapée dans le plein écran, Échap : l'aperçu revient à la page 1, et reste deux secondes sans clignoter ;
+  - « (revue finale, I2) » dans la marge : la page 2 en vue, son surlignage dessiné. Le menu de la ligne offre « Ouvrir sa fiche » et « Supprimer ». « Ouvrir sa fiche » ouvre le pop-up de l'annotation, qu'Échap ferme seul. « Supprimer » met l'annotation à la corbeille, et son surlignage et sa ligne partent. Ctrl+Z les rend ;
+  - « (revue finale, I2) » en plein écran : le menu n'offre que « Supprimer ». Ctrl+Z rend l'annotation, Ctrl+Y la supprime de nouveau, et le plein écran reste ouvert.
+- **Captures** : une suite neuve de 29 images, sur le code final, dans le scratchpad. Contre `reference-3c` : 11 sur 11 à 0 pixel ; contre `plan4a` : 8 sur 8 ; contre `plan4b` : 5 sur 5 ; contre `plan4c` : 5 sur 5. Aucune image « à regarder », aucune référence refaite. Le commentaire changé de `bibliographie.bib` ne change pas `bloc-bib`.

@@ -1,6 +1,6 @@
 import {
-  type Action, type BibEntry, type BibFields, bibFields, bibIdentifiers, bibShort, bibtexEntry, CITE_KEY_TAG, CiteKeys, citeKey, cleanArxiv, cleanDoi, CommandError, type FileRef,
-  type NodeRec, normalizedTitle, parseBibtex, safeCiteKey, type State, type TagValue, type Vec2, yearIn,
+  type Action, type BibEntry, type BibFields, bibFields, bibFileName, bibIdentifiers, bibShort, bibtexEntry, CITE_KEY_TAG, CiteKeys, citeKey, cleanArxiv, cleanDoi,
+  CommandError, familyName, type FileRef, type NodeRec, normalizedTitle, parseBibtex, safeCiteKey, type State, type TagValue, type Vec2, yearIn,
 } from '@cirrus/core';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
 import { cslToFields } from '../../main/publications/csl.ts';
@@ -12,9 +12,10 @@ import { messageOf, type Result } from '../session.ts';
 /**
  * A publication's node (plan 4c, D7), from an import: by its identifier (the main process's answer, publicationFetch),
  * from a PDF dropped without one (D8), from a .bib's entry (task 6). Its title, a tag `auteur` per author (« Prénom
- * Nom »), `date_de_publication`, `clé_bibtex`, `doi` or `arxiv`; its folder holds its PDF and its entry, « <key>.bib ».
- * A publication already in the base is not made again: by its DOI, its arXiv identifier, its entry's key, or its title
- * and year (the controller's ruling), the notification naming the node there.
+ * Nom »), `date_de_publication`, `clé_bibtex`, `doi` or `arxiv`; its folder holds its PDF and its entry, « <key>.bib »
+ * (bibFileName). A publication already in the base is not made again: by its DOI, its arXiv identifier, its entry's
+ * key, or its title and year unless their first authors differ (the controller's ruling; final review, R2), the
+ * notification naming the node there.
  */
 
 export const AUTHOR_TAG = 'auteur';
@@ -34,8 +35,11 @@ export interface PublicationInput {
 
 /** A publication's identifiers, as compared: its DOIs and its arXiv identifiers (without version), in lower case. */
 interface Ids { dois: string[]; arxivs: string[] }
-/** What makes a duplicate (D7 and the controller's rulings): its identifiers, its keys as written, its title normalised with its year. */
-interface Marks extends Ids { keys: string[]; titleYear: string | null }
+/**
+ * What makes a duplicate (D7 and the controller's rulings): its identifiers, its keys as written, its title normalised
+ * with its year; `author`, its first author's family name (familyName), which may contradict a match by title and year.
+ */
+interface Marks extends Ids { keys: string[]; titleYear: string | null; author: string | null }
 function titleYear(title: string, year: string | null): string | null {
   if (year === null) return null;
   const t = normalizedTitle(title);
@@ -65,27 +69,34 @@ function addId(ids: Ids, v: string): void {
   if (!list.includes(value.toLowerCase())) list.push(value.toLowerCase());
 }
 
-/** A node's marks, from its tags: every value of `doi` and `arxiv` (review M3), every `clé_bibtex`. */
+/**
+ * A node's marks, from its tags: every value of `doi` and `arxiv` (review M3), every `clé_bibtex`; its first tag
+ * `auteur`, « Prénom Nom », for its family name, read only when a year makes a title-and-year mark.
+ */
 function marksOf(n: NodeRec): Marks {
-  const m: Marks = { dois: [], arxivs: [], keys: [], titleYear: null };
-  let year: string | null = null;
+  const m: Marks = { dois: [], arxivs: [], keys: [], titleYear: null, author: null };
+  let year: string | null = null, first: string | null = null;
   for (const t of n.tags) {
     if (t.value === undefined) continue;
     const v = String(t.value);
     if (t.key === DOI_TAG || t.key === ARXIV_TAG) addId(m, v);
     else if (t.key === CITE_KEY_TAG && v.trim() !== '') m.keys.push(v.trim());
     else if (t.key === DATE_TAG && year === null) year = yearIn(v);
+    else if (t.key === AUTHOR_TAG && first === null) first = v;
   }
   m.titleYear = titleYear(n.title, year);
+  if (m.titleYear !== null && first !== null) m.author = familyName(first);
   return m;
 }
 
 /**
  * An import's marks: its identifiers, its entry's own key (the file's or the server's, whether it is kept or not; one
- * made by citeKey is only taken, never a mark: the controller's ruling of task 6), its title and year.
+ * made by citeKey is only taken, never a mark: the controller's ruling of task 6), its title and year, its first
+ * author's family name — read from its « Prénom Nom », as its node's first tag `auteur` will hold it.
  */
 function marksOfInput(p: PublicationInput, key: string | null): Marks {
-  const m: Marks = { dois: [], arxivs: [], keys: key === null ? [] : [key], titleYear: titleYear(p.fields.title, p.fields.year) };
+  const at = titleYear(p.fields.title, p.fields.year), first = p.fields.authors[0];
+  const m: Marks = { dois: [], arxivs: [], keys: key === null ? [] : [key], titleYear: at, author: at !== null && first !== undefined ? familyName(first) : null };
   if (p.doi !== undefined) addId(m, p.doi);
   if (p.arxiv !== undefined) addId(m, p.arxiv);
   return m;
@@ -94,9 +105,10 @@ function marksOfInput(p: PublicationInput, key: string | null): Marks {
 const shown = (title: string) => (title === '' ? 'Sans titre' : title);
 /**
  * A publication there, or an entry of the same file above (task 6): its title, its line in the file if it is one, and
- * its identifiers, which may contradict a match by key or by title and year.
+ * its identifiers, which may contradict a match by key or by title and year; its first author's family name, which may
+ * contradict a match by title and year (final review, R2).
  */
-interface Holder extends Ids { title: string; line?: number }
+interface Holder extends Ids { title: string; line?: number; author: string | null }
 /** Why an import is a duplicate, the publication there named (its title cut, bibShort: it may come from a file). */
 const already = (why: string, h: Holder) => (h.line === undefined
   ? `Déjà dans la base (${why}) : « ${bibShort(h.title)} ».`
@@ -124,7 +136,7 @@ export class PublicationIndex {
   }
 
   private mark(m: Marks, title: string, line?: number): void {
-    const holder: Holder = { title, dois: m.dois, arxivs: m.arxivs, ...(line !== undefined ? { line } : {}) };
+    const holder: Holder = { title, dois: m.dois, arxivs: m.arxivs, author: m.author, ...(line !== undefined ? { line } : {}) };
     for (const d of m.dois) if (!this.doi.has(d)) this.doi.set(d, holder);
     for (const a of m.arxivs) if (!this.arxiv.has(a)) this.arxiv.set(a, holder);
     const hold = (map: Map<string, Holder[]>, v: string) => {
@@ -142,7 +154,8 @@ export class PublicationIndex {
    * arXiv identifier, then the same key (without case, review of task 6, M1), then the same title and year; but a key,
    * or a title and year, is another publication's when the identifiers contradict it — both sides have a DOI and they
    * differ, or both an arXiv identifier and they differ (the controller's ruling of the review, I2, M2). A DOI and an
-   * arXiv identifier do not.
+   * arXiv identifier do not. A title and year is another publication's too when both sides have a first author and
+   * their family names differ (final review, R2: two chapters « Introduction » of 2020, of Smith and of Doe).
    */
   duplicate(m: Marks): string | null {
     for (const d of m.dois) {
@@ -159,7 +172,8 @@ export class PublicationIndex {
       const h = this.key.get(k.toLowerCase())?.find(agrees);
       if (h) return already('même clé BibTeX', h);
     }
-    const h = m.titleYear === null ? undefined : this.titleYear.get(m.titleYear)?.find(agrees);
+    const sameWork = (h: Holder) => agrees(h) && (m.author === null || h.author === null || m.author === h.author);
+    const h = m.titleYear === null ? undefined : this.titleYear.get(m.titleYear)?.find(sameWork);
     return h ? already('même titre et même année', h) : null;
   }
 
@@ -188,10 +202,11 @@ export interface PlannedPublication {
 
 /**
  * The plan of an import (D7), or why it is refused (a duplicate, the node there named): the key is the entry's if
- * safeCiteKey takes it and no node holds it (one holding it with a contradicting identifier is no duplicate, and the
- * key is then made: He_2016 taken gives he2016), otherwise its first author and year (citeKey); at most `maxAuthors` tags
- * `auteur` (publicationMaxAuthors), the .bib keeping them all; a node without a title takes its key. An import without
- * an entry (a PDF without identifier, D8) has no key nor .bib.
+ * safeCiteKey takes it — BibTeX and LaTeX read it, DBLP's kept (final review, R1) — and no node holds it (one holding
+ * it with a contradicting identifier is no duplicate, and the key is then made: He_2016 taken gives he2016), otherwise
+ * its first author and year (citeKey); its .bib is written under that key, in a file named by bibFileName
+ * (DBLP_conf_nips_….bib); at most `maxAuthors` tags `auteur` (publicationMaxAuthors), the .bib keeping them all; a node
+ * without a title takes its key. An import without an entry (a PDF without identifier, D8) has no key nor .bib.
  */
 export function planPublication(index: PublicationIndex, p: PublicationInput, maxAuthors: number): PlannedPublication | { refused: string } {
   const own = p.entry !== null && p.entry.key !== '' && safeCiteKey(p.entry.key) ? p.entry.key : null;
@@ -207,7 +222,7 @@ export function planPublication(index: PublicationIndex, p: PublicationInput, ma
     title: p.fields.title.trim() || key || 'Sans titre',
     tags,
     key,
-    bib: key !== null && p.entry !== null ? { name: `${key}.bib`, text: bibtexEntry(p.entry, key) } : null,
+    bib: key !== null && p.entry !== null ? { name: bibFileName(key), text: bibtexEntry(p.entry, key) } : null,
     marks: marksOfInput(p, own),
   };
 }
@@ -276,7 +291,7 @@ export type ImportOutcome =
 
 /** The marks of an identifier typed, before the network: the identifier alone. */
 function marksOfId(id: PublicationId): Marks {
-  const m: Marks = { dois: [], arxivs: [], keys: [], titleYear: null };
+  const m: Marks = { dois: [], arxivs: [], keys: [], titleYear: null, author: null };
   addId(m, 'doi' in id ? `doi:${id.doi}` : `arXiv:${id.arxiv}`);
   return m;
 }
