@@ -7,7 +7,7 @@ const keysOf = (tree: ReturnType<typeof settingsTree>) => tree.flatMap((r) => r.
 test('sans recherche : chaque réglage une fois, sous sa rubrique et son groupe, les principaux à part des avancés', () => {
   const tree = settingsTree('');
   expect(keysOf(tree).sort()).toEqual(PARAM_SPECS.map((s) => s.key).sort());
-  expect(tree.map((r) => r.title)).toEqual(['Apparence', 'Navigation', 'Fenêtres', 'Fichiers', 'LaTeX', 'Performances et base']);
+  expect(tree.map((r) => r.title)).toEqual(['Apparence', 'Navigation', 'Fenêtres', 'Fichiers', 'LaTeX', 'Performances et base', 'Serveur']);
   const latex = tree.find((r) => r.title === 'LaTeX')!;
   expect(latex.groups.map((g) => g.name)).toEqual(['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation']);
   expect(latex.groups[0].main.map((s) => s.key)).toEqual(['latexSnippetWidthCm']);

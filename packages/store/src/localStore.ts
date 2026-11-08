@@ -354,6 +354,15 @@ export class LocalStore {
     return units;
   }
 
+  /**
+   * How many writes pendingUnits would give (a write: a run of consecutive pending lines of one identifier), counted on
+   * the pending lines' index without reading their operations: the sync client's status (plan 5a, task 3).
+   */
+  pendingCount(): number {
+    const sql = `SELECT COUNT(*) AS n FROM (SELECT unit, LAG(unit) OVER (ORDER BY local_seq) AS previous FROM changes WHERE ${PENDING}) WHERE previous IS NULL OR previous != unit`;
+    return (this.q(sql).get() as { n: number }).n;
+  }
+
   /** The server's number of the last line received (0: none yet): where its stream resumes. */
   lastServerSeq(): number {
     const row = this.q("SELECT value FROM meta WHERE key = 'last_server_seq'").get() as { value: string } | undefined;

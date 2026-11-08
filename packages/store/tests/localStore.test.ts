@@ -380,6 +380,8 @@ test('commit : l’identifiant de l’écriture, son heure et son PC donnés ; p
   // A reading stopped early leaves nothing in progress: the next write goes through.
   store.commit(createPlan(s, 'Autre', 'plan'), { unit: 'u5' });
   expect(store.pendingUnits().map((u) => u.unit).at(-1)).toBe('u5');
+  // Counted without reading their operations (the client's status, plan 5a task 3).
+  expect(store.pendingCount()).toBe(5);
   store.close();
 });
 
@@ -415,6 +417,7 @@ test('applyReconciliation : accusés numérotés en place, inverses, reçues et 
   same(replayed(store), store.loadState());
   expect(store.lastServerSeq()).toBe(4);
   expect(store.pendingUnits()).toEqual(wire(r.rebased));
+  expect(store.pendingCount()).toBe(1);
   expect(store.changesSince(0).map((x) => [x.kind, x.serverSeq, x.superseded, x.unit, x.pc])).toEqual([
     ['local', 1, false, u0.unit, 'pc-a'], ['local', 2, false, u1.unit, 'pc-a'], ['local', 3, false, u1.unit, 'pc-a'],
     ['local', null, true, u2.unit, 'pc-a'],
@@ -430,6 +433,7 @@ test('applyReconciliation : accusés numérotés en place, inverses, reçues et 
   expect(ack.acked).toEqual([u2.unit]);
   store.applyReconciliation(ack);
   expect(store.pendingUnits()).toEqual([]);
+  expect(store.pendingCount()).toBe(0);
   expect(store.lastServerSeq()).toBe(5);
   same(store.loadState(), server);
   same(replayed(store), server);

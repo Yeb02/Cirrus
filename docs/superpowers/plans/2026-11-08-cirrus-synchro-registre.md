@@ -211,3 +211,112 @@ Décisions du contrôleur avant la tâche 1 (journal du contrôleur, `.superpowe
   - Coût si faux : nul.
 - Ruling: **le message de D10, quand plusieurs versions diffèrent**, les cite toutes : « (protocole 1, ici 2 ; schéma 4, ici 5) ». Un en-tête absent s'écrit « ? ».
   - Coût si faux : un texte.
+
+## Tâche 3 : le client de synchro du principal
+
+### Fait
+
+- **`packages/app/src/main/sync/`**, nouveau :
+  - `client.ts` : `SyncClient`, `SyncDeps`, `SyncParams` et `SyncStatus` ;
+  - `events.ts` : `readEvents`, la lecture d'un flux SSE ;
+  - `config.ts` : `ServerConfig`, `SecretStore`, `fileSecrets` (`serveur.json`, le jeton chiffré par un `TokenCipher`), `serverUrl` et `pair` ;
+  - `downloads.ts` : `Downloads`, `filesToSend`, `filesToFetch`, `isPdf` et `hasBlob`.
+- **Tests :** `packages/app/tests/support/virtualPc.ts` (`Lab`, `VirtualPc`, `Net`) et `packages/app/tests/sync.test.ts`. L'app prend `@cirrus/server` en dépendance de développement.
+- **Cœur :** `MAX_BODY_BYTES`, `MAX_UNITS_PER_REQUEST` et `MAX_HASHES_PER_REQUEST` passent dans `sync.ts` ; le `bounds.ts` du serveur les réexporte.
+- **Magasin :** `LocalStore.pendingCount()`.
+- **Réglages :** le groupe « Synchronisation », dans la nouvelle rubrique « Serveur » (R3).
+
+### Mesures
+
+Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur dans un seul processus, sur cette machine, avec les réglages par défaut (sauf la reconnexion).
+
+- **Une action sur A, vue sur B :** 76 ms en médiane, 79 ms au plus, sur 20 renommages faits l'un après l'autre. La fenêtre de réception, `syncReceiveBatchMs` (50 ms), en prend la plus grande part ; le plan demande moins d'une seconde.
+- **500 créations de nœuds faites d'un coup sur A** (1 000 lignes) : B les a toutes reçues et écrites en 1,2 s. A les a envoyées en 31 requêtes `/units`, par lots de 50 ; B les a réconciliées en 27 ou 28 lots.
+- **`sync.test.ts`** (18 tests, dont trois PC à la fois, un serveur arrêté puis relancé, des flux coupés ou retenus) : 5 s. Lancé 15 fois de suite, il passe chaque fois.
+
+### Décisions
+
+- Ruling: **un état « refusé » dit s'il vient d'une divergence** : `{ state: 'refused', message, diverged: true }`. C'est le cas quand une écriture reçue ne s'applique pas ici (`SyncDivergedError` levée par `reconcile`). C'est aussi le cas quand le serveur déclare « en retard » une écriture de ce PC alors que le PC avait déjà reçu tout ce que le serveur avait (règle suivante).
+  - Options :
+    - un état `diverged` à part : l'union du plan changerait pour ses consommateurs ;
+    - un drapeau sur `refused` (choix) : la pastille dit « Serveur : <raison> » dans les deux cas, et la tâche 4 sait qu'elle doit relire l'état de la base.
+  - Le client s'arrête alors, sans réessayer, jusqu'au prochain `start()`.
+  - Coût si faux : un champ.
+- Ruling: **« en retard » au numéro `n`, alors que la base avait déjà reçu jusqu'à `n` quand l'écriture a été lue : refus pour divergence, pas un nouvel essai.**
+  - Le serveur n'a rien que le PC n'ait pas. Renvoyer l'écriture donnerait la même réponse, sans fin.
+  - Seule la première réponse non acceptée d'une requête compte. Celles qui la suivent sont « en retard » par la règle du serveur, pas par leurs « avant ».
+  - Options :
+    - réessayer à intervalles croissants : une boucle toutes les 30 s, sous une pastille « Hors ligne » qui mentirait ;
+    - refuser (choix).
+  - Coût si faux : un PC s'arrête sur une anomalie qu'un nouvel essai aurait levée ; `start()` réessaie.
+- Ruling: **les bornes qu'un PC doit respecter sont au cœur.** `MAX_BODY_BYTES`, `MAX_UNITS_PER_REQUEST` et `MAX_HASHES_PER_REQUEST` sont dans `sync.ts`, et le `bounds.ts` du serveur les réexporte, comme `MAX_OPS_PER_UNIT`. Le client :
+  - coupe `/files/missing` en paquets de `MAX_HASHES_PER_REQUEST` ;
+  - envoie au plus `MAX_UNITS_PER_REQUEST` écritures par requête, la borne haute de `syncBatchUnits` ;
+  - n'envoie jamais un corps de plus de `MAX_BODY_BYTES` : il coupe le lot en deux. Une écriture seule trop grosse est écartée comme le serveur l'aurait refusée (« Écriture trop grosse pour le serveur : 67108864 octets au plus. »), avec sa notification.
+  - Pourquoi : le serveur répond 413 sur la longueur annoncée, sans lire le corps. Le client pourrait voir une connexion coupée au lieu du 413, et réessayer sans fin.
+  - Options :
+    - recopier les valeurs dans le client : elles divergeraient un jour ;
+    - en faire des réglages : ce ne sont pas des choix de l'utilisateur.
+  - Coût si faux : trois réexportations. Une écriture de plus de 64 Mio est perdue au lieu de bloquer tout l'envoi : il en faudrait une de plus de 100 000 nœuds environ.
+- Ruling: **refusé ou hors ligne** :
+  - toute réponse 4xx donne « refusé », sans nouvel essai : 401 pour le jeton, 403, 409 pour le format ou des données remplacées, 400 ;
+  - toute réponse ou trame illisible aussi : un JSON invalide, une écriture mal formée, un trou dans les numéros du flux ;
+  - une erreur du réseau, une réponse 5xx et un flux que le serveur ferme donnent « hors ligne », puis un nouvel essai ;
+  - un `PUT /files` refusé n'arrête pas la synchro : 400 quand le fichier local ne correspond plus à son empreinte, 413 au-delà de 1 Gio. Le fichier est laissé, et le serveur refuse l'écriture (« Fichier manquant au serveur. »), écartée avec sa notification.
+  - Coût si faux : un 4xx passager arrête la synchro jusqu'au prochain `start()`.
+- Ruling: **la reconnexion** :
+  - le premier essai après `start()` montre « connecting ». Les suivants restent « offline » jusqu'à ce que l'un réussisse : la pastille ne clignote pas ;
+  - le premier nouvel essai part après `syncRetryMinMs`, puis l'attente double, jusqu'à `syncRetryMaxMs`. Elle repart du plus court dès qu'un flux s'ouvre. Pas d'aléa : un serveur ne sert que quelques PC ;
+  - un `syncRetryMinMs` au-dessus de `syncRetryMaxMs` est lu comme `syncRetryMaxMs` ;
+  - `start()`, hors ligne ou refusé, réessaie tout de suite (le clic sur la pastille), sans remettre l'attente à zéro.
+  - Coût si faux : le libellé d'un état.
+- Ruling: **`behind` compte des numéros du serveur** (des lignes), pas des écritures : le dernier numéro donné par `/hello`, moins `last_server_seq`.
+  - Coût si faux : une unité d'affichage.
+- Ruling: **`pending` compte les écritures pas encore accusées**, y compris celles que le serveur a acceptées et dont l'accusé n'est pas revenu. `LocalStore.pendingCount()` les compte comme `pendingUnits` les groupe, sur l'index des lignes en attente, sans lire leurs opérations.
+  - Coût si faux : une méthode.
+- Ruling: **l'envoi** :
+  - une requête à la fois par connexion, et seulement quand aucune réconciliation n'est en cours : le client n'envoie pas ce qui va être réécrit ;
+  - une écriture acceptée n'est pas renvoyée tant que son accusé n'est pas revenu (le client la garde par identifiant, avec son numéro) : les lots se suivent sans attendre les accusés ;
+  - après « en retard (n) », il attend que la base ait écrit jusqu'à `n` ; après « refusée », que la réconciliation ait écarté l'écriture ;
+  - il démarre dès que le flux est ouvert, sans attendre le rattrapage : au pire, une réponse « en retard » de plus.
+  - Coût si faux : nul.
+- Ruling: **la réception** :
+  - la première écriture reçue ouvre une fenêtre de `syncReceiveBatchMs`. À sa fin, tout ce qui est arrivé part en un lot ;
+  - les réconciliations s'enchaînent une à une, quelle que soit la connexion ;
+  - au départ, un lot perd les écritures que `last_server_seq` couvre déjà (une connexion précédente les a écrites), et la première qui reste doit le suivre exactement ;
+  - à la coupure, les écritures reçues mais pas encore passées sont oubliées : elles reviennent depuis `last_server_seq`.
+  - Coût si faux : la mémoire d'un gros rattrapage, qui s'accumule pendant qu'une réconciliation tourne (voir le rapport de la tâche 3).
+- Ruling: **un `reconcile` qui échoue autrement que par `SyncDivergedError`** compte comme une connexion coupée : hors ligne, puis un nouvel essai. La base n'a rien écrit, `last_server_seq` n'a pas bougé, et les écritures reviennent.
+  - La tâche 4 doit relire l'état de l'interface quand l'écriture de la réconciliation a échoué. Le PC virtuel le fait.
+  - Coût si faux : un essai de plus.
+- Ruling: **les fichiers** :
+  - **l'envoi :** les empreintes qu'un lot ajoute par rapport à l'« avant », comme `Canon.missingFile`. Elles sont demandées à `/files/missing`, puis les fichiers manquants partent un à un, avant la requête du lot.
+    - Chacun part une fois par session du client : le serveur n'efface jamais un fichier.
+    - Le corps est lu du disque au fil de l'envoi (`fs.openAsBlob`), jamais chargé en entier ;
+  - **la réception :** seulement les fichiers qu'une écriture reçue ajoute par rapport à l'« avant ». Un PDF se reconnaît à l'extension `.pdf`, sans tenir compte de la casse ;
+  - **la taille :** au plus ce que le serveur annonce (`Content-Length`, qu'il envoie toujours), puis l'empreinte est vérifiée (`receiveBlob`). Une réponse sans longueur est refusée ;
+  - **un téléchargement coupé par le réseau** est repris à la connexion suivante. Un fichier absent du serveur, ou aux octets faux, ne l'est pas ;
+  - **`fetchBlob`** part tout de suite, hors de la limite `syncDownloads` (un lecteur attend), ou rejoint le téléchargement en cours du même fichier.
+  - Coût si faux : un fichier absent jusqu'à son ouverture, que `cirrus-file:` ira chercher (tâche 4).
+- Ruling: **l'horloge** :
+  - l'écart est l'heure du serveur moins le milieu de l'échange `/hello`, arrondi à la milliseconde. Il est mesuré à chaque `/hello` ;
+  - il est gardé en mémoire, et vaut 0 avant le premier `/hello` du processus : une écriture faite hors ligne avant toute connexion garde l'heure du PC ;
+  - l'avertissement part au-delà de `syncClockSkewWarnMs`. N est l'écart en minutes, arrondi, au moins 1, avec « minute » au singulier pour 1. Le texte est celui du plan, apostrophe droite comprise : « L'horloge de ce PC diffère de celle du serveur de N minutes : règle-la. ».
+  - Coût si faux : les écritures hors ligne d'un PC décalé, avant sa première connexion, gardent leur décalage. La tâche 4 peut garder le dernier écart.
+- Ruling: **`serveur.json`** contient `{ url, name, token }`, où `token` est le base64 de ce que rend le chiffrement (`safeStorage` dans l'app). Il s'écrit dans un fichier temporaire, ensuite renommé.
+  - Absent ou illisible, il ne donne aucun serveur, avec un avertissement s'il est illisible. `write(null)` l'efface.
+  - `pair` est dans `config.ts`. `serverUrl` n'accepte qu'une origine `http` ou `https`, sans chemin, et retire la barre finale.
+  - Coût si faux : un format de fichier.
+- Ruling: **le groupe « Synchronisation »** est dans la rubrique « Serveur », la dernière de `PARAM_RUBRICS`. Ses réglages sont tous avancés. Ce sont les six que lit le client :
+  - `syncBatchUnits`, de 1 à 100 (`MAX_UNITS_PER_REQUEST`) ;
+  - `syncDownloads`, de 1 à 16 ;
+  - `syncRetryMinMs`, de 100 à 60 000 ;
+  - `syncRetryMaxMs`, de 1 000 à 600 000 ;
+  - `syncClockSkewWarnMs`, de 10 000 à 3 600 000 ;
+  - `syncReceiveBatchMs`, de 0 à 1 000.
+  - La tâche 4 ajoute `syncConnectTimeoutMs` et `syncSuspendFlushMs`.
+  - Coût si faux : des bornes.
+- Ruling: **`flush(ms)`** rend la main quand le serveur a accepté toutes les écritures en attente, sans attendre leurs accusés, ou après `ms`. Sans connexion ouverte, il rend la main tout de suite.
+  - Coût si faux : nul.
+- Ruling: **le PC virtuel des tests** ne crée pas de lobby. Il écrit chaque action dans la base, puis dans l'état. Si l'écriture d'une réconciliation échoue, il relit l'état et les écritures en attente depuis la base, comme le fera la tâche 4.
+  - Coût si faux : nul.

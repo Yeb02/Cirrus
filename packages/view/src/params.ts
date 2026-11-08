@@ -1,4 +1,4 @@
-import { ANNOTATION_TITLE_CHARS } from '@cirrus/core';
+import { ANNOTATION_TITLE_CHARS, MAX_UNITS_PER_REQUEST } from '@cirrus/core';
 import { hexToRgb } from './color.ts';
 
 export type Rgb = [number, number, number];
@@ -240,6 +240,18 @@ export interface RenderParams {
   /** The LaTeX editor's suggestions of labels and keys: how many are drawn at most, and how long after a key they are asked. */
   latexSuggestionsMax: number;
   latexSuggestionDelayMs: number;
+  // Synchronisation (plan 5a): the main process's client of the server (task 3)
+  /** The pending writes sent in one request at most (the server takes MAX_UNITS_PER_REQUEST); */
+  syncBatchUnits: number;
+  /** the files of received records downloaded at once (not the PDFs, read on demand); */
+  syncDownloads: number;
+  /** a lost server tried again after this long, then twice as long each time, up to syncRetryMaxMs; */
+  syncRetryMinMs: number;
+  syncRetryMaxMs: number;
+  /** a PC whose clock differs from the server's by more than this is told to set it (D4); */
+  syncClockSkewWarnMs: number;
+  /** the writes received are reconciled in batches gathered for this long at most (R3). */
+  syncReceiveBatchMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -411,6 +423,12 @@ export const DEFAULT_PARAMS: RenderParams = {
   texSaveIdleMs: 10_000,
   latexSuggestionsMax: 100,
   latexSuggestionDelayMs: 100,
+  syncBatchUnits: 50,
+  syncDownloads: 4,
+  syncRetryMinMs: 1000,
+  syncRetryMaxMs: 30_000,
+  syncClockSkewWarnMs: 120_000,
+  syncReceiveBatchMs: 50,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -612,6 +630,12 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'Éditeur LaTeX', 1000, 600_000, 500),
   num('latexSuggestionsMax', 'Suggestions de labels et de clés montrées dans l’éditeur LaTeX', A, 'Éditeur LaTeX', 10, 1000, 10),
   num('latexSuggestionDelayMs', 'Délai avant les suggestions de l’éditeur LaTeX (ms)', A, 'Éditeur LaTeX', 0, 1000, 10),
+  num('syncBatchUnits', 'Écritures envoyées au serveur par requête', A, 'Synchronisation', 1, MAX_UNITS_PER_REQUEST, 1),
+  num('syncDownloads', 'Fichiers téléchargés du serveur à la fois', A, 'Synchronisation', 1, 16, 1),
+  num('syncRetryMinMs', 'Premier délai avant de réessayer de joindre le serveur (ms)', A, 'Synchronisation', 100, 60_000, 100),
+  num('syncRetryMaxMs', 'Délai maximal entre deux essais de joindre le serveur (ms)', A, 'Synchronisation', 1000, 600_000, 1000),
+  num('syncClockSkewWarnMs', 'Écart d’horloge avec le serveur au-delà duquel avertir (ms)', A, 'Synchronisation', 10_000, 3_600_000, 1000),
+  num('syncReceiveBatchMs', 'Durée maximale d’un lot d’actions reçues avant de l’appliquer (ms)', A, 'Synchronisation', 0, 1000, 5),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
@@ -655,6 +679,7 @@ export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
   { title: 'Performances et base', groups: ['Rendu', 'Base'] },
+  { title: 'Serveur', groups: ['Synchronisation'] },
 ];
 
 const SPEC_BY_KEY = new Map(PARAM_SPECS.map((s) => [s.key, s]));

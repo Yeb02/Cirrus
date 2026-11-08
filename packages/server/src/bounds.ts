@@ -1,16 +1,14 @@
 // The server's bounds (plan 5a, Global Constraints): named constants, not settings — the server serves every PC.
 
-/** The largest body of a request with writes (POST /units), and of the other JSON requests of a paired PC. */
-export const MAX_BODY_BYTES = 64 * 2 ** 20;
+/**
+ * The core's, which a PC's client respects too (task 3): the largest body of a request with writes (POST /units), and
+ * of the other JSON requests of a paired PC; the most writes in one POST /units; the most hashes in one POST
+ * /files/missing; the most operations in one write (parseUnit applies it).
+ */
+export { MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_OPS_PER_UNIT, MAX_UNITS_PER_REQUEST } from '@cirrus/core';
 
 /** The largest body of POST /pair, the only route without a token: a code, an identifier and a name. */
 export const MAX_PAIR_BODY_BYTES = 4096;
-
-/** The most writes in one POST /units. */
-export const MAX_UNITS_PER_REQUEST = 100;
-
-/** The most operations in one write: the core's (parseUnit applies it). */
-export { MAX_OPS_PER_UNIT } from '@cirrus/core';
 
 /** The largest file a PC sends (PUT /files/<hash>). */
 export const MAX_FILE_BYTES = 2 ** 30;
@@ -20,9 +18,6 @@ export const MAX_SEED_BYTES = 2 * 2 ** 30;
 
 /** The most lines in one page of the journal (GET /journal), and in one page an event stream reads to catch up. */
 export const MAX_JOURNAL_PAGE = 10_000;
-
-/** The most hashes in one POST /files/missing. */
-export const MAX_HASHES_PER_REQUEST = 10_000;
 
 /** The longest name of a paired PC: the one `jumeler` gives, and the one the PC gives of itself. */
 export const MAX_PC_NAME_CHARS = 100;

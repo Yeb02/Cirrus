@@ -54,6 +54,15 @@ export const SYNC_PROTOCOL_VERSION = 1;
 export const MAX_LABEL_CHARS = 500;
 export const MAX_OPS_PER_UNIT = 200_000;
 
+/**
+ * The bounds of the requests a PC sends that the PC must respect too (task 3: its client cuts its batches to them), the
+ * server refusing more (its bounds.ts re-exports them): the largest body of POST /units, and of its other JSON requests;
+ * the most writes in one POST /units; the most hashes in one POST /files/missing.
+ */
+export const MAX_BODY_BYTES = 64 * 2 ** 20;
+export const MAX_UNITS_PER_REQUEST = 100;
+export const MAX_HASHES_PER_REQUEST = 10_000;
+
 /** A received operation that does not apply to this PC's state: it no longer follows the server's. */
 export class SyncDivergedError extends Error {}
 

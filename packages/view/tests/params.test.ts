@@ -34,7 +34,7 @@ test('les fiches ont un libellé français et une section', () => {
 test('chaque groupe de réglages est dans une rubrique, et une seule ; aucune rubrique n’est vide', () => {
   const groups = [...new Set(PARAM_SPECS.map((s) => s.group))].sort();
   expect(PARAM_RUBRICS.flatMap((r) => r.groups).sort()).toEqual(groups);
-  expect(PARAM_RUBRICS.map((r) => r.title)).toEqual(['Apparence', 'Navigation', 'Fenêtres', 'Fichiers', 'LaTeX', 'Performances et base']);
+  expect(PARAM_RUBRICS.map((r) => r.title)).toEqual(['Apparence', 'Navigation', 'Fenêtres', 'Fichiers', 'LaTeX', 'Performances et base', 'Serveur']);
   for (const r of PARAM_RUBRICS) expect(r.groups.length, r.title).toBeGreaterThan(0);
 });
 
@@ -301,4 +301,22 @@ test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la 
   expect(p.textFade[0]).toBeLessThan(p.textFade[1]); // an interval stays ordered
   expect(p.starSpacingPx[0]).toBeGreaterThan(0);
   expect(p.gridSpacingPx[0]).toBeLessThan(p.gridSpacingPx[1]);
+});
+
+test('synchronisation : écritures par requête, téléchargements, reconnexion, horloge, lots reçus ; groupe « Synchronisation » de la rubrique « Serveur » (plan 5a, tâche 3)', () => {
+  const S = 'Synchronisation';
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['syncBatchUnits', 50, 'Écritures envoyées au serveur par requête', 1, 100, 1],
+    ['syncDownloads', 4, 'Fichiers téléchargés du serveur à la fois', 1, 16, 1],
+    ['syncRetryMinMs', 1000, 'Premier délai avant de réessayer de joindre le serveur (ms)', 100, 60_000, 100],
+    ['syncRetryMaxMs', 30_000, 'Délai maximal entre deux essais de joindre le serveur (ms)', 1000, 600_000, 1000],
+    ['syncClockSkewWarnMs', 120_000, 'Écart d’horloge avec le serveur au-delà duquel avertir (ms)', 10_000, 3_600_000, 1000],
+    ['syncReceiveBatchMs', 50, 'Durée maximale d’un lot d’actions reçues avant de l’appliquer (ms)', 0, 1000, 5],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
+  }
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
+  expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1 })).toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100 });
 });
