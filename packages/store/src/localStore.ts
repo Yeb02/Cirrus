@@ -205,11 +205,16 @@ export class LocalStore {
     this.pc = pc;
   }
 
-  static open(dir: string, opts: { pc: string }): LocalStore {
+  /**
+   * `durable`, for the server's base (plan 5a, task 2): each transaction synced to the disk before it returns, so that
+   * a power cut never takes back a write the server numbered and relayed; a PC's base keeps NORMAL (a crash of the app
+   * loses nothing, a power cut its last actions at most).
+   */
+  static open(dir: string, opts: { pc: string; durable?: boolean }): LocalStore {
     mkdirSync(dir, { recursive: true });
     const db = new DatabaseSync(join(dir, 'cirrus.db'));
     try {
-      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+      db.exec(`PRAGMA journal_mode = WAL; PRAGMA synchronous = ${opts.durable ? 'FULL' : 'NORMAL'};`);
       migrate(db);
     } catch (e) {
       // Not a base, or one that cannot be migrated: the file is not left open (the main process quits on this).
@@ -229,12 +234,58 @@ export class LocalStore {
    * state checks it (checkRecord) and its "before" against the row it replaces, then its "after" written and its journal
    * line added. The first that fails throws (OpConflictError for a "before" that no longer matches) and nothing is
    * written (ROLLBACK). `opts`: the write's identifier (the interface's, plan 5a; uuidv7() otherwise), its time (now),
-   * its PC (this one; the server writes each PC's own, task 2). Returns the journal number of the action's last line.
+   * its PC (this one; the server writes each PC's own, task 2); `numbered`, for the server's base only (task 2): each
+   * line takes its journal number as its server number, so that none is pending there and the journal it serves
+   * carries its numbers. Returns the journal number of the action's last line.
    */
-  commit(a: Action, opts: { at?: number; unit?: Id; pc?: string } = {}): number {
+  commit(a: Action, opts: { at?: number; unit?: Id; pc?: string; numbered?: boolean } = {}): number {
     const lines: Lines = { unit: opts.unit ?? uuidv7(), action: a.id, label: a.label, at: opts.at ?? Date.now(), pc: opts.pc ?? this.pc, kind: 'local', serverSeq: null };
-    const seq = this.transaction(() => this.write(a.ops, lines));
+    const seq = this.transaction(() => {
+      if (!opts.numbered) return this.write(a.ops, lines);
+      const first = this.lastSeq() + 1, last = this.write(a.ops, { ...lines, serverSeq: first });
+      // The journal only grows: its next line is its last one's plus one, which the numbers above took for granted.
+      if (last >= 0 && last !== first + a.ops.length - 1) throw new Error(`Journal du serveur : la ligne ${last} n’est pas la ${first + a.ops.length - 1}.`);
+      return last;
+    });
     return seq < 0 ? this.lastSeq() : seq;
+  }
+
+  /**
+   * A write the server numbered, found by its identifier (plan 5a, D5: the server knows a write it accepted already):
+   * its number, its last line's, and its PC; null when no numbered line has this identifier.
+   */
+  numberedUnit(unit: Id): { seq: number; pc: string } | null {
+    const row = this.q('SELECT MAX(server_seq) AS seq, pc FROM changes WHERE unit = ? AND server_seq IS NOT NULL').get(unit) as { seq: number | null; pc: string | null };
+    return row.seq === null ? null : { seq: row.seq, pc: row.pc as string };
+  }
+
+  /**
+   * The numbered writes after the server's number `after`, in order, each whole: a run of consecutive lines of one
+   * write, numbered by its last line. At least `minLines` lines unless the journal ends first, then up to the end of the
+   * write under way: the pages of the server's event stream (plan 5a, task 2). RangeError when `after` falls inside a
+   * write.
+   */
+  unitsAfter(after: number, minLines: number): RemoteUnit[] {
+    const rows = this.q('SELECT server_seq, unit, action_id, label, at, pc, op FROM changes WHERE server_seq >= ? ORDER BY server_seq').iterate(after) as Iterable<ChangeDbRow & { server_seq: number }>;
+    const out: RemoteUnit[] = [];
+    let lines = 0, previous: string | null = null;
+    for (const r of rows) {
+      // Line `after` itself: the write it ends must not go on.
+      if (r.server_seq === after) { previous = r.unit; continue; }
+      const last = out.at(-1);
+      const goesOn = last ? last.unit === r.unit && last.seq === r.server_seq - 1 : previous === r.unit && r.server_seq === after + 1;
+      if (goesOn && !last) throw new RangeError(`Le numéro ${after} tombe au milieu d’une écriture.`);
+      if (!goesOn && lines >= minLines) break;
+      const op = JSON.parse(r.op) as Op;
+      if (last && goesOn) {
+        last.ops.push(op);
+        last.seq = r.server_seq;
+      } else {
+        out.push({ unit: r.unit, action: r.action_id, label: r.label, at: r.at, pc: r.pc, ops: [op], seq: r.server_seq });
+      }
+      lines++;
+    }
+    return out;
   }
 
   /**
@@ -340,8 +391,9 @@ export class LocalStore {
     return (this.q('SELECT COALESCE(MAX(local_seq), 0) AS seq FROM changes').get() as { seq: number }).seq;
   }
 
-  changesSince(localSeq: number): ChangeRow[] {
-    return (this.q('SELECT * FROM changes WHERE local_seq > ? ORDER BY local_seq').all(localSeq) as unknown as ChangeDbRow[]).map(toRow);
+  /** The journal's lines after `localSeq`, in order; `limit` of them at most (a page of the server's journal, plan 5a). */
+  changesSince(localSeq: number, limit = -1): ChangeRow[] {
+    return (this.q('SELECT * FROM changes WHERE local_seq > ? ORDER BY local_seq LIMIT ?').all(localSeq, limit) as unknown as ChangeDbRow[]).map(toRow);
   }
 
   /**

@@ -177,6 +177,17 @@ function preambleRec(v: unknown, at: string): Fields {
   return p;
 }
 
+/**
+ * A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite
+ * (« . » and « .. » among them). The compiler links the node's files under such names only (plan 4b, D4); a file added
+ * to a node from elsewhere must have one (parseOp, plan 5a).
+ */
+export function plainName(name: string): boolean {
+  if (name === '' || /[<>:"/\\|?*]|[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) return false;
+  for (let i = 0; i < name.length; i++) if (name.charCodeAt(i) < 32) return false;
+  return true;
+}
+
 /** Per record type: its check, and the fields that name it (an operation's "before" and "after" are the same record). */
 const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: string) => Fields; identity: readonly string[] }> = {
   node: { check: nodeRec, identity: ['id'] },
@@ -193,7 +204,9 @@ const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: stri
  * An operation received from elsewhere (another PC through the server, plan 5a), checked whole before anything reads
  * it: its type; every field of each record, of the right type, finite numbers, identifiers of 1 to MAX_ID_CHARS
  * characters, known enumerations, no field the model does not have; a "before" and an "after" of the same record, not
- * both absent. Returns it as given; throws SyncFormatError, in French, otherwise.
+ * both absent; a plain name (plainName) for each file name the "after" adds to a node — one the "before" has already
+ * is not judged again, the "before" being the record as it is. Returns it as given; throws SyncFormatError, in French,
+ * otherwise.
  */
 export function parseOp(x: unknown): Op {
   const t = fields(x, 'l’opération', ['t'], ['before', 'after', 'key']).t;
@@ -213,5 +226,11 @@ export function parseOp(x: unknown): Op {
   if (op.before === undefined || op.after === undefined) bad(`${type} : « before » et « after » sont requis, null pour un enregistrement absent`);
   if (!before && !after) bad(`${type} : ni « before » ni « after »`);
   if (before && after && identity.some((k) => before[k] !== after[k])) bad(`${type} : « before » et « after » ne sont pas le même enregistrement`);
+  if (type === 'node' && after) {
+    const had = new Set((before?.files as { name: string }[] | undefined)?.map((f) => f.name));
+    (after.files as { name: string }[]).forEach((f, i) => {
+      if (!had.has(f.name) && !plainName(f.name)) bad(`node.after.files[${i}].name n’est pas un nom de fichier simple`);
+    });
+  }
   return x as Op;
 }

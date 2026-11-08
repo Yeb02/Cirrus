@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
-import type { FileRef } from '@cirrus/core';
+import { type FileRef, plainName } from '@cirrus/core';
 import { type ChangeRow, filePath, importFile, storeBytes, storeBytesAsync } from '@cirrus/store';
 import { checkFileName } from '../renderer/files/merge.ts';
 
@@ -250,15 +250,8 @@ export function isRunnable(name: string): boolean {
 /** The code of the error openableCopy throws for a refused name or hash. */
 const REFUSED_NAME = 'CIRRUS_REFUSED_NAME';
 
-/**
- * A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite
- * (« . » and « .. » among them). The compiler links the node's files under such names only (plan 4b, D4).
- */
-export function plainName(name: string): boolean {
-  if (name === '' || /[<>:"/\\|?*]|[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) return false;
-  for (let i = 0; i < name.length; i++) if (name.charCodeAt(i) < 32) return false;
-  return true;
-}
+/** The rule of a plain file name, the core's since plan 5a: the server refuses a file added under another name (parseOp). */
+export { plainName };
 
 /**
  * The Mark-of-the-Web of the Internet zone (I2 of the review): the store keeps no file's origin, so every copy is

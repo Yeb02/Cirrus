@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { filePath, importFile, storeBytes, storeBytesAsync } from '../src/files.ts';
+import { BlobError, filePath, importFile, receiveBlob, storeBytes, storeBytesAsync } from '../src/files.ts';
 
 let dir: string;
 let storeDir: string;
@@ -84,4 +84,23 @@ test('storeBytesAsync : les mêmes empreinte, taille et blob que storeBytes ; pl
   await new Promise((r) => setTimeout(r, 30));
   await storeBytesAsync(storeDir, 'encore.bib', bytes);
   expect(statSync(filePath(storeDir, ref)).mtimeMs).toBe(before);
+});
+
+test('receiveBlob (plan 5a) : des octets reçus gardés sous leur empreinte vérifiée ; faux ou trop gros, rien n’est gardé', async () => {
+  const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
+  async function* chunks(...parts: string[]) { for (const p of parts) yield new TextEncoder().encode(p); }
+  const bytes = new TextEncoder().encode('un PDF, en trois morceaux');
+  expect(await receiveBlob(storeDir, sha(bytes), chunks('un PDF,', ' en trois', ' morceaux'), 100)).toEqual({ size: bytes.length });
+  expect(new Uint8Array(readFileSync(filePath(storeDir, { name: '', hash: sha(bytes), size: 0 })))).toEqual(bytes);
+  // Again: the same blob, nothing written.
+  expect(await receiveBlob(storeDir, sha(bytes), chunks('un PDF, en trois morceaux'), 100)).toEqual({ size: bytes.length });
+  // Bytes that are not those of the hash, more bytes than allowed: refused, no blob, no temporary.
+  const other = sha(new TextEncoder().encode('attendu'));
+  await expect(receiveBlob(storeDir, other, chunks('reçu'), 100)).rejects.toThrow(BlobError);
+  await expect(receiveBlob(storeDir, other, chunks('reçu'), 100)).rejects.toMatchObject({ tooBig: false });
+  await expect(receiveBlob(storeDir, other, chunks('attendu', 'x'), 7)).rejects.toMatchObject({ tooBig: true });
+  // Not a hash: refused before anything is created.
+  await expect(receiveBlob(storeDir, '../../x', chunks('x'), 100)).rejects.toThrow(BlobError);
+  expect(blobs()).toHaveLength(1);
+  expect(readdirSync(join(storeDir, 'files'), { recursive: true }).filter((n) => String(n).includes('.import-'))).toEqual([]);
 });

@@ -105,11 +105,22 @@ export async function storeBytesAsync(storeDir: string, name: string, bytes: Uin
     throw e;
   }
   await out.close();
-  await mkdir(join(filesDir, ref.hash.slice(0, 2)), { recursive: true });
+  await placeAsync(storeDir, ref.hash, tmp);
+  return ref;
+}
+
+/**
+ * The temporary `tmp`, written and synced, renamed into place as the blob of `hash`, without holding the process: a
+ * rename that finds the blob there already drops its temporary; one the antivirus holds a moment is tried again (see
+ * storeBytesAsync).
+ */
+async function placeAsync(storeDir: string, hash: string, tmp: string): Promise<void> {
+  const dest = join(storeDir, 'files', hash.slice(0, 2), hash);
+  await mkdir(join(storeDir, 'files', hash.slice(0, 2)), { recursive: true });
   for (let attempt = 1; ; attempt++) {
     try {
       await rename(tmp, dest);
-      return ref;
+      return;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (attempt < RENAME_TRIES && HELD.has(code ?? '') && !existsSync(dest)) {
@@ -117,10 +128,57 @@ export async function storeBytesAsync(storeDir: string, name: string, bytes: Uin
         continue;
       }
       await rm(tmp, { force: true }).catch(() => {});
-      if (existsSync(dest)) return ref;
+      if (existsSync(dest)) return;
       throw e;
     }
   }
+}
+
+/** A hash as the store names its blobs: 64 lower-case hexadecimal digits. */
+const HASH = /^[0-9a-f]{64}$/;
+
+/** Bytes received that the store refuses (receiveBlob): more than allowed (`tooBig`), or not those of their hash. */
+export class BlobError extends Error {
+  readonly tooBig: boolean;
+
+  constructor(message: string, tooBig: boolean) {
+    super(message);
+    this.tooBig = tooBig;
+  }
+}
+
+/**
+ * Bytes received from elsewhere (plan 5a: a file a PC sends to the server, one a PC downloads), kept as the blob of
+ * `hash` only once checked: streamed into a temporary while hashed, `maxBytes` at most, then synced and renamed into
+ * place, as storeBytesAsync does. A hash that is not one, more bytes than `maxBytes`, bytes of another hash: BlobError,
+ * in French, and nothing is kept, the temporary removed. A blob already there is kept as it is. Returns the size.
+ */
+export async function receiveBlob(storeDir: string, hash: string, source: AsyncIterable<Uint8Array>, maxBytes: number): Promise<{ size: number }> {
+  if (!HASH.test(hash)) throw new BlobError('Empreinte mal formée : 64 chiffres hexadécimaux en minuscules attendus.', false);
+  const filesDir = join(storeDir, 'files');
+  await mkdir(filesDir, { recursive: true });
+  const tmp = join(filesDir, `.import-${randomBytes(8).toString('hex')}`);
+  const out = await open(tmp, 'w');
+  const digest = createHash('sha256');
+  let size = 0;
+  try {
+    for await (const chunk of source) {
+      size += chunk.length;
+      if (size > maxBytes) throw new BlobError(`Fichier trop gros : au plus ${maxBytes} octets.`, true);
+      digest.update(chunk);
+      for (let at = 0; at < chunk.length; ) at += (await out.write(chunk, at, chunk.length - at)).bytesWritten;
+    }
+    if (digest.digest('hex') !== hash) throw new BlobError('Les octets reçus ne correspondent pas à leur empreinte : rien n’est gardé.', false);
+    await out.sync();
+  } catch (e) {
+    await out.close();
+    await rm(tmp, { force: true });
+    throw e;
+  }
+  await out.close();
+  if (existsSync(join(filesDir, hash.slice(0, 2), hash))) await rm(tmp, { force: true });
+  else await placeAsync(storeDir, hash, tmp);
+  return { size };
 }
 
 /** The errors of a file another program holds a moment (the antivirus scanning it): its rename is tried again. */

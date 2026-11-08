@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { NodeRec } from '../src/model.ts';
-import { flowOf, invertOp, MAX_ID_CHARS, type Op, parseOp, SyncFormatError } from '../src/ops.ts';
+import { flowOf, invertOp, MAX_ID_CHARS, type Op, parseOp, plainName, SyncFormatError } from '../src/ops.ts';
 import { applyOp, emptyState, OpConflictError } from '../src/state.ts';
 import { MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, parseRemoteUnit, parseUnit, type Unit } from '../src/sync.ts';
 
@@ -108,4 +108,24 @@ test('parseUnit : la forme d’une écriture, son libellé borné, son nombre d�
   // A received unit carries its number at the server: its last line's, at least as many as its operations.
   expect(parseRemoteUnit(JSON.parse(JSON.stringify({ ...unit, seq: 7 })))).toEqual({ ...unit, seq: 7 });
   for (const seq of [0, -1, 1.5, Number.NaN, '7', undefined]) expect(() => parseRemoteUnit({ ...unit, seq, ops: [EVERY_OP[0], EVERY_OP[1]] }), String(seq)).toThrow(SyncFormatError);
+});
+
+test('plainName : un fichier simple d’un dossier, sans séparateur, flux, nom réservé ni fin que Windows réécrirait', () => {
+  for (const name of ['note.tex', 'Rapport final (v2).pdf', 'nom (conflit du 2026-11-08 14h32).tex', '.gitignore', 'données.csv']) expect(plainName(name), name).toBe(true);
+  for (const name of ['', 'a/b', 'a\\b', '..', '.', 'x.', 'x ', 'note.tex:flux', 'con', 'COM1.txt', 'lpt9', 'a\u0001b', 'a?b', 'a*b', 'a<b', 'a|b', 'a"b']) expect(plainName(name), name).toBe(false);
+});
+
+test('parseOp : un fichier ajouté à un nœud doit avoir un nom simple ; un nom déjà là (un « avant ») n’est pas rejugé', () => {
+  const ref = (name: string) => ({ name, hash: H('c'), size: 3 });
+  for (const name of ['..\\..\\evil.txt', '../x', 'con.txt', 'x.']) {
+    expect(() => parseOp({ t: 'node', before: null, after: { ...node, files: [ref(name)] } }), name).toThrow(/nom de fichier simple/);
+    expect(() => parseOp({ t: 'node', before: node, after: { ...node, files: [...node.files, ref(name)] } }), name).toThrow(/nom de fichier simple/);
+  }
+  // Renamed to a name that is not a plain one: added too.
+  expect(() => parseOp({ t: 'node', before: node, after: { ...node, files: [{ ...node.files[0], name: 'a:b' }] } })).toThrow(/nom de fichier simple/);
+  // Already the record's: kept as it is, or removed.
+  const legacy = { ...node, files: [ref('ancien:nom')] };
+  expect(parseOp({ t: 'node', before: legacy, after: { ...legacy, title: 'Renommé' } })).toBeDefined();
+  expect(parseOp({ t: 'node', before: legacy, after: { ...legacy, files: [] } })).toBeDefined();
+  expect(parseOp({ t: 'node', before: legacy, after: null })).toBeDefined();
 });

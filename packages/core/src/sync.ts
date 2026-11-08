@@ -41,6 +41,15 @@ export interface Reconciliation {
   notices: string[];
 }
 
+/**
+ * The server's answer to one write sent (POST /units, plan 5a): accepted with the number of its last line; stale, with
+ * the number to have received before sending it again (one of its "before" no longer holds there); refused, why.
+ */
+export type UnitResult = { accepted: number } | { stale: number } | { refused: string };
+
+/** The version of the protocol between a PC and its server (D10): /hello refuses another. */
+export const SYNC_PROTOCOL_VERSION = 1;
+
 /** A write's longest label, and its most operations (a server bound, Global Constraints: packages/server/src/bounds.ts). */
 export const MAX_LABEL_CHARS = 500;
 export const MAX_OPS_PER_UNIT = 200_000;

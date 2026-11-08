@@ -463,3 +463,53 @@ test('applyReconciliation : tout ou rien — un « avant » périmé, un trou da
 });
 
 type Op = Action['ops'][number];
+
+test('commit numéroté (le serveur, plan 5a) : chaque ligne prend son numéro du journal comme numéro du serveur, rien n’est en attente', () => {
+  const store = LocalStore.open(dir, { pc: 'serveur' }), s = emptyState();
+  const plan = createPlan(s, 'P', 'plan');
+  applyOps(s, plan.ops);
+  expect(store.commit(plan, { at: 5, unit: 'u1', pc: 'pc-a', numbered: true })).toBe(1);
+  const node = createNode(s, { plan: afterId(plan, 'plan'), title: 'X', x: 0, y: 0, k: 0 });
+  applyOps(s, node.ops);
+  expect(store.commit(node, { at: 6, unit: 'u2', pc: 'pc-b', numbered: true })).toBe(3);
+  expect(store.changesSince(0).map((r) => [r.localSeq, r.serverSeq, r.unit, r.pc, r.at, r.kind])).toEqual([
+    [1, 1, 'u1', 'pc-a', 5, 'local'], [2, 2, 'u2', 'pc-b', 6, 'local'], [3, 3, 'u2', 'pc-b', 6, 'local'],
+  ]);
+  expect(store.pendingUnits()).toEqual([]);
+  // A write of the server, found again by its identifier: its number (its last line's) and its PC.
+  expect(store.numberedUnit('u2')).toEqual({ seq: 3, pc: 'pc-b' });
+  expect(store.numberedUnit('inconnue')).toBeNull();
+  // A pending line (a PC's) is not one of the server's.
+  const edit = editNode(s, afterId(node, 'node'), { title: 'Y' });
+  store.commit(edit, { unit: 'u3' });
+  expect(store.numberedUnit('u3')).toBeNull();
+  // The journal by pages.
+  expect(store.changesSince(1, 1).map((r) => r.localSeq)).toEqual([2]);
+  expect(store.changesSince(0).map((r) => r.localSeq)).toEqual([1, 2, 3, 4]);
+  store.close();
+});
+
+test('unitsAfter : les écritures numérotées après un numéro, entières, par pages ; un numéro au milieu d’une écriture est refusé', () => {
+  const store = LocalStore.open(dir, { pc: 'serveur' }), s = emptyState();
+  const plan = createPlan(s, 'P', 'plan');
+  applyOps(s, plan.ops);
+  store.commit(plan, { at: 1, unit: 'u1', pc: 'pc-a', numbered: true });
+  const P = afterId(plan, 'plan');
+  const nodes: Action[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = createNode(s, { plan: P, title: `n${i}`, x: i, y: 0, k: 0 });
+    applyOps(s, a.ops);
+    store.commit(a, { at: 2 + i, unit: `n${i}`, pc: 'pc-b', numbered: true });
+    nodes.push(a);
+  }
+  // Lines: 1 (u1), 2-3 (n0), 4-5 (n1), 6-7 (n2), 8-9 (n3).
+  const all = store.unitsAfter(0, 1000);
+  expect(all.map((u) => [u.unit, u.seq, u.ops.length])).toEqual([['u1', 1, 1], ['n0', 3, 2], ['n1', 5, 2], ['n2', 7, 2], ['n3', 9, 2]]);
+  expect(all[1]).toEqual({ unit: 'n0', action: nodes[0].id, label: nodes[0].label, at: 2, pc: 'pc-b', ops: nodes[0].ops, seq: 3 });
+  // At least `minLines` lines, then up to the end of the write: never half of one.
+  expect(store.unitsAfter(1, 3).map((u) => u.seq)).toEqual([3, 5]);
+  expect(store.unitsAfter(3, 1).map((u) => u.seq)).toEqual([5]);
+  expect(store.unitsAfter(9, 10)).toEqual([]);
+  expect(() => store.unitsAfter(2, 10)).toThrow(RangeError);
+  store.close();
+});

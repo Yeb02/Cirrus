@@ -128,3 +128,86 @@ Décisions du contrôleur avant la tâche 1 (journal du contrôleur, `.superpowe
   - Le client de la simulation envoie, comme celui de la tâche 3, tout ce qui attend dès que rien n'est en vol, 50 écritures au plus.
   - Avec des envois de 4 écritures et trois actions par envoi, les files d'attente montaient à 140 écritures, et la simulation prenait 10 s.
   - Coût si faux : nul.
+
+## Tâche 2 : le serveur
+
+### Fait
+
+- **`packages/server`**, nouveau paquet `@cirrus/server` (`npm run serveur -w packages/server`) :
+  - `bounds.ts` : les bornes du plan, plus `MAX_PAIR_BODY_BYTES` (4 Kio), `MAX_HASHES_PER_REQUEST` (10 000), `MAX_PC_NAME_CHARS` (100) et `SERVER_SNAPSHOT_UNITS` (500, R2) ;
+  - `tokens.ts` : `serveur.db` (les PC jumelés, les codes en attente), le jumelage et les jetons ;
+  - `canon.ts` : la base de référence, son état en mémoire, et `Canon.accept` dans l'ordre de la tâche ;
+  - `events.ts` : les flux d'événements ;
+  - `server.ts` : HTTP et les routes ; `main.ts` : la ligne de commande (`jumeler`, `pcs`, `revoquer`) ; `index.ts` exporte aussi `Tokens`, pour les tests des PC (tâche 3).
+- **Cœur :** `plainName` (venu de l'app, qui le réexporte) et son contrôle dans `parseOp` ; `SYNC_PROTOCOL_VERSION` (1) et le type `UnitResult` dans `sync.ts`.
+- **Magasin :**
+  - `commit(a, { numbered: true })`, `numberedUnit(unit)`, `unitsAfter(after, minLines)`, `changesSince(after, limit)` ;
+  - `LocalStore.open(dir, { pc, durable: true })` ;
+  - `receiveBlob(storeDir, hash, source, maxBytes)` et `BlobError` (`files.ts`), que la tâche 3 pourra reprendre pour ses téléchargements.
+
+### Mesures
+
+- **Une écriture acceptée** (HTTP, `parseUnit`, `applyOps`, `addedViolation`, `commit` synchronisé sur le disque, relais) : 496 écritures en 5 requêtes en 0,35 s environ, soit 0,7 ms chacune, sur cette machine.
+- **`commit` seul**, 1 000 modifications d'un nœud (script jetable) : 0,6 ms avec `synchronous = FULL`, 0,17 ms avec `NORMAL`.
+
+### Décisions
+
+- Ruling: **les lignes du serveur sont numérotées par `commit(a, { numbered: true })`** : `server_seq` = `local_seq` de chaque ligne, `kind 'local'`, avec le PC, l'heure et les identifiants reçus (R1, R6). Dans la transaction, `commit` vérifie que les numéros pris (le dernier + 1) sont ceux que SQLite a donnés : le journal ne fait que grandir.
+  - Rien n'est donc en attente au serveur, et les pages de `GET /journal` portent leurs numéros.
+  - Options : prendre `local_seq` pour numéro sans écrire `server_seq` (le journal servi à un PC, D7, n'aurait pas ses numéros) ; un champ `serverSeq` libre à `commit` (le serveur calculerait un numéro que le journal donne déjà).
+  - Coût si faux : une option de `commit`.
+- Ruling: **la base du serveur est synchronisée sur le disque à chaque écriture** (`durable`, `synchronous = FULL`), comme `serveur.db`. Avec `NORMAL`, une coupure de courant pourrait reprendre des écritures déjà numérotées et relayées : le serveur redonnerait leurs numéros à d'autres, et tous les PC divergeraient. Les PC gardent `NORMAL`.
+  - Coût : 0,45 ms de plus par écriture acceptée (mesures ci-dessus), soit 0,45 s pour 1 000 écritures en attente.
+  - Coût si faux : ce temps.
+- Ruling: **la règle des noms de fichiers est au cœur** (`plainName`, dans `ops.ts`) ; l'app la réexporte de `main/files.ts`, sans changer son comportement. `parseOp` refuse un fichier que l'« après » d'une opération de nœud ajoute (un nom absent de l'« avant ») sous un nom qui n'est pas simple : « Opération mal formée : node.after.files[i].name n’est pas un nom de fichier simple. ».
+  - Un nom déjà dans l'« avant » n'est pas rejugé : l'« avant » doit être l'enregistrement tel qu'il est, au serveur comme au PC.
+  - Options : rejuger tous les noms (un nœud portant un nom ancien ne pourrait plus être modifié par la synchro) ; un contrôle au serveur seul (le PC ne vérifierait pas ce qu'il reçoit).
+  - Coût si faux : une écriture qui ajoute un nom non simple est écartée. L'app n'en fait pas : `checkFileName` a la même règle.
+- Ruling: **les essais faux du jumelage comptent contre chaque code en attente** (une colonne `failures` par code) : chaque `/pair` au code faux l'incrémente pour tous, et un code qui atteint `PAIRING_TRIES` est brûlé. Un corps mal formé (400) n'essaie aucun code et ne compte pas.
+  - Les codes sont gardés hachés : un essai faux ne peut pas être imputé à un code. Avec un seul code en attente, le cas courant, c'est exactement « 5 essais faux ». Un code créé après des essais faux part de zéro.
+  - Options : un compteur global (un nouveau code hériterait d'essais qui ne le visaient pas).
+  - Coût si faux : un programme de la machine (le serveur n'écoute que sur elle) peut brûler les codes en attente ; il ne peut pas en deviner un (80 bits).
+- Ruling: **le format du code** : 16 caractères de la base 32 de Crockford (80 bits), affichés en quatre groupes (`ABCD-EFGH-JKMN-PQRS`). À la saisie, la casse, les tirets et les espaces ne comptent pas, O vaut 0, I et L valent 1. Le code est haché par SHA-256 : avec 5 essais et 10 minutes, un hachage lent n'apporterait rien.
+  - Coût si faux : un format d'affichage.
+- Ruling: **le nom d'un PC au serveur est celui de `jumeler`**, unique sans tenir compte de la casse : c'est celui que `revoquer` prend. Le `name` du corps de `/pair` est gardé comme le nom de sa machine, que `pcs` montre.
+  - `jumeler` refuse un nom déjà jumelé (« revoque-le d’abord ») ; un nouveau code pour un nom en attente remplace l'ancien.
+  - Un PC déjà jumelé (même identifiant) qui se jumelle de nouveau prend le nom du code et un nouveau jeton, et l'ancien ne vaut plus rien : le cas d'un PC dissocié, ou qui a perdu son `serveur.json`.
+  - Coût si faux : une colonne de `serveur.db`.
+- Ruling: **`revoquer` efface la ligne du PC** : son jeton est refusé dès la requête suivante (`serveur.db` est relu à chaque requête, sans cache), et son flux ouvert est fermé au ping suivant (`SSE_PING_MS`).
+  - Coût si faux : un flux ouvert reçoit encore jusqu'à 15 s d'écritures après sa révocation.
+- Ruling: **les gardes contre un navigateur**, en plus de l'absence d'en-têtes CORS :
+  - l'en-tête `Host` doit nommer cette machine (`127.0.0.1`, `localhost` ou `[::1]`), sinon 403 : une page qui ferait pointer son domaine sur 127.0.0.1 (DNS rebinding) n'obtient rien ;
+  - chaque corps JSON exige `Content-Type: application/json` (415 sinon) : une page d'un autre site ne peut pas en envoyer sans requête préalable, et `OPTIONS` répond 405 ;
+  - `/pair`, seule route sans jeton, lit 4 Kio au plus.
+  - Au plan 9, la liste des noms admis prendra celui du serveur loué.
+  - Coût si faux : quelques lignes ; un client qui enverrait un autre `Content-Type` serait refusé.
+- Ruling: **une requête dont une écriture est signée d'un autre PC est refusée entière (403), avant toute acceptation.** `Canon.accept` refuse aussi une telle écriture (étape 2).
+  - Options : un 403 au milieu de la boucle, après l'acceptation des écritures qui le précèdent (la requête serait en partie écrite).
+  - Coût si faux : nul.
+- Ruling: **un identifiant d'écriture connu, mais d'un autre PC, est refusé** (« Cet identifiant d’écriture est déjà celui d’une écriture d’un autre PC. »), plutôt qu'accepté avec le numéro de l'autre.
+  - Coût si faux : nul (les identifiants sont des uuidv7).
+- Ruling: **`applyOps` qui échoue autrement que sur un « avant »** (`OpConflictError`) donne un refus, avec son message, et non une erreur 500 : l'écriture ne pourra jamais s'appliquer, et le PC l'écarte. Un `commit` qui échoue après l'application à l'état (les tables ne suivraient plus l'état) remet l'état et répond 500.
+  - Coût si faux : une erreur du serveur présentée comme un refus.
+- Ruling: **`empty` (`/hello`) se lit dans l'état en mémoire**, au sens de D7 : ni nœud, ni connexion, ni placement, aucun plan qu'un lobby. La tâche 5 pourra le remplacer par `LocalStore.isEmpty`.
+  - La base du serveur ne crée pas de lobby : le premier arrive d'un PC, par une écriture ou par l'envoi de sa base. Deux PC vides jumelés l'un après l'autre apporteraient chacun le leur : c'est à la tâche 5 de le régler (D7).
+  - Coût si faux : la définition de « vide ».
+- Ruling: **le flux** :
+  - chaque écriture est un événement `id: <seq>`, `event: unit`, `data: <RemoteUnit>` (une ligne de JSON) ; la reprise suit `Last-Event-ID`, sinon `?after=`, sinon 0 ;
+  - un numéro au milieu d'une écriture répond 400 ; un numéro au-delà du dernier répond 409 (« ses données ont été remplacées ou restaurées ») ;
+  - une écriture du serveur est une suite de lignes consécutives du même identifiant (`unitsAfter`) ;
+  - un flux rattrape le journal par pages de `MAX_JOURNAL_PAGE` lignes, puis passe au direct. Un flux dont le tampon est plein repasse par le journal une fois vidé : un PC lent n'entasse rien dans la mémoire du serveur. Le passage au direct se fait dans le même pas synchrone que la lecture d'une page vide, et chaque écriture est dans la base avant d'être relayée : ni trou ni doublon ;
+  - le relais sérialise une écriture une fois pour tous les flux en direct ;
+  - `event: settings` (tâche 6) n'est pas encore émis.
+  - Coût si faux : le format d'un événement.
+- Ruling: **`GET /snapshot` encode l'état en mémoire** au moment de la requête, et `Cirrus-Seq` dit le numéro qu'il couvre, le dernier. Il ne rend pas l'instantané gardé, qui peut avoir jusqu'à 499 écritures de retard.
+  - Coût si faux : un encodage de l'état par requête, rare (D7).
+- Ruling: **l'instantané du serveur** s'écrit toutes les `SERVER_SNAPSHOT_UNITS` écritures acceptées depuis le dernier, et à l'arrêt s'il ne couvre pas la fin du journal. Au démarrage, un instantané inutilisable est effacé, sinon un plus récent ne le remplacerait jamais (`writeSnapshot` ne garde que le plus récent), et l'état est relu des tables.
+  - Coût si faux : nul.
+- Ruling: **un seul serveur par dossier de données**, par le verrou de sa base (`lockBase`) : deux serveurs tiendraient deux états en mémoire, et donneraient deux fois les mêmes numéros.
+  - Coût si faux : nul.
+- Ruling: **`GET /journal`** rend `{ rows: ChangeRow[] }`, avec `after` à 0 et `limit` à `MAX_JOURNAL_PAGE` par défaut ; un `limit` plus grand est ramené à `MAX_JOURNAL_PAGE`.
+  - Coût si faux : un format de réponse.
+- Ruling: **la ligne de commande** : un `--data` relatif part du dossier où `npm run` a été lancé (`INIT_CWD`), pas de `packages/server`. Sans `LOCALAPPDATA` ni `--data`, elle refuse plutôt que de deviner un dossier.
+  - Coût si faux : nul.
+- Ruling: **le message de D10, quand plusieurs versions diffèrent**, les cite toutes : « (protocole 1, ici 2 ; schéma 4, ici 5) ». Un en-tête absent s'écrit « ? ».
+  - Coût si faux : un texte.

@@ -1,0 +1,14 @@
+{
+  "name": "@cirrus/server",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "serveur": "node src/main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cirrus/core": "*",
+    "@cirrus/store": "*"
+  }
+}
