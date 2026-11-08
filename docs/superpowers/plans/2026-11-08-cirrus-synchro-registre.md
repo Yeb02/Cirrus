@@ -477,3 +477,100 @@ Décision du contrôleur : R14 (l'ouverture par l'application du système est un
   - Une version ancienne suit la même règle. Sans serveur, rien ne change (« le fichier manque dans la base »).
   - Coût si faux : nul.
 
+## Tâche 5 : le premier jumelage — envoyer sa base, ou prendre celle du serveur
+
+### Fait
+
+- **Le serveur :**
+  - `seed.ts`, nouveau : `Seeds`, l'envoi d'une base à un serveur vide (R16). L'instantané (`POST /seed`, `Cirrus-Seq` : la ligne qu'il couvre) va dans un fichier temporaire au fil de sa réception, borné à `MAX_SEED_BYTES` ; le journal par pages (`POST /seed/journal`) va dans une base de travail ; `POST /seed/done` vérifie le tout et le donne au canon. Le tout sous `<données>/seed/<essai>/`, effacé une fois pris, abandonné, ou au démarrage du serveur ;
+  - `Canon.fresh()` (aucune écriture et un état vide) et `Canon.seed()` (journal et état en une transaction) ; `Hub.endStreams()` ; `Tokens.revokeToken()` ;
+  - `POST /unpair` (R15) : un PC révoque son propre jeton, et lui seul ; un envoi de base qu'il menait est abandonné ;
+  - `/hello` dit aussi `nodes`, les nœuds du serveur (l'offre « Prendre la base du serveur (n nœuds) »).
+- **Le cœur :** `MAX_JOURNAL_PAGE` et `MAX_SEED_BYTES` passent dans `sync.ts`, bornes du protocole que le PC respecte aussi ; `bounds.ts` les réexporte, comme `MAX_BODY_BYTES`.
+- **Le magasin :**
+  - `LocalStore.importJournal(rows)`, `importState(s, seq)` (en bloc, par `insertState`, tiré de `bulk.ts` et partagé avec `writeBenchBase`), `numberSeeded(last)`, `atomically(fn)` (transactions emboîtées), `nodeCount()` ;
+  - `parseChangeRow(x, localSeq)` : une ligne de journal reçue d'ailleurs, vérifiée entière (`parseOp` pour son opération), par le serveur qui reçoit une base comme par le PC qui prend la sienne ;
+  - `storedHashes(dir)` : tous les fichiers du magasin.
+- **L'app :**
+  - `main/sync/firstSync.ts`, nouveau : l'offre de D7 (`firstSyncOffer`, `offerMessage`), `seedBase`, `adoptBase`, `swapStaged` (l'échange au démarrage), `revokeSelf` (R15) ;
+  - `main/sync/host.ts` : `pair` rend l'offre ; `first(choix)` y répond ; `info()` la redonne tant qu'elle attend ; « Dissocier ce PC » révoque le jeton ; la fermeture interrompt un envoi en cours ;
+  - `main/index.ts` : l'échange de la base prise, avant l'ouverture ; `relaunch` (`app.relaunch()` puis `app.quit()`) et `secretsAt` injectés ;
+  - `wire.ts`, `preload`, `env.d.ts` : `cirrus:sync:first` (`syncFirst`) ;
+  - l'interface : `SyncSession.first`, et le bloc « Serveur » montre l'offre à la place du formulaire (`offerAction`, style `.server-offer`).
+- **Tests :** `packages/server/tests/seed.test.ts` (7), `packages/app/tests/firstSync.test.ts` (6), des ajouts à `localStore.test.ts` (3), `syncSession.test.ts` (1) et `syncHost.test.ts` (deux tests réécrits : la base pleine et le serveur plein ne sont plus refusés).
+- **Scénario de l'interface** (le 27e) : la base de test entière, jumelée par le bloc « Serveur » à un serveur local vide : l'offre et ses nombres, l'envoi, les lignes numérotées, la pastille « À jour ». Aucun scénario ne prend la base du serveur : il relancerait l'app (couvert dans vitest, relance injectée, et l'échange au démarrage).
+- **Mesures :** `packages/app/scripts/mesures-synchro.mjs` (`node --expose-gc scripts/mesures-synchro.mjs [<base>]`, ou `… journal <lignes>`).
+
+### Mesures
+
+Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référence du banc (`%TEMP%\cirrus-bench-1-50000-500000`, générateur 2 : 50 000 nœuds, 549 189 connexions avec les inclusions, 1 177 133 branches, 44 618 fantômes ; jamais la base de l'utilisateur). Le serveur, le PC qui envoie et celui qui prend tournent chacun dans son processus, l'un après l'autre (le serveur pendant les deux) : aucun processus ne tient deux grands états. Mémoire : `process.memoryUsage().rss`, après un ramasse-miettes forcé, et son pic relevé toutes les 20 ms. Node 26.13, cette machine.
+
+- **Envoyer la base de référence** (`seed`) : **20,5 s**, dont `POST /seed` (l'instantané, 58 Mo) 0,19 s et `POST /seed/done` **20,3 s**. Son journal est vide (une base construite en bloc) : `done` décode l'instantané, le vérifie et l'écrit. Pic du PC qui envoie : 369 Mo (il envoie son instantané rangé, sans construire d'état).
+- **Prendre la base de référence** (`adopt`) : **21,6 s**, dont `GET /snapshot` 0,73 s. Pic du PC qui prend : 575 Mo.
+- **Où va le temps** (même instantané, script jetable) : `decodeState` 0,27 s, `checkState` 0,37 s, `encodeState` 0,54 s ; l'écriture en bloc des tables, **18,8 s** dans la base d'un PC (WAL, `synchronous = NORMAL`), dont les connexions 3,9 s, les 1,18 million de branches 7,0 s et la validation 5,5 s (le WAL). Avec un cache de 256 Mo : 14,9 s ; sans WAL ni synchronisation : 11,9 s. Voir la décision « l'écriture en bloc n'est pas accélérée ».
+- **Le serveur, mémoire :** vide, 74 Mo ; juste après l'envoi, **492 Mo** (pic 580 Mo pendant `done`) ; redémarré, sa base chargée de son instantané en **0,39 s**, **293 Mo** ; après avoir servi une prise de sa base, 399 Mo (pic 513 Mo : l'instantané encodé pour `GET /snapshot`). Le CX23 a 4 Go.
+- **Le journal par pages** (une base de 20 000 lignes, un nœud renommé 20 000 fois) : envoi 0,9 s (deux pages, 0,22 s ; `done` 0,35 s) ; prise 0,57 s (deux pages de `GET /journal`, 0,19 s). Soit 10 µs environ par ligne, dans chaque sens : la sérialisation de chaque ligne par `GET /journal` (relevée à la tâche 2) ne pèse pas.
+- **La taille des bases :** 586 Mo pour la base de référence, autant au serveur et dans la base prise.
+- **`downloads.json` réécrit à chaque lot d'un long rattrapage** (tâche 3, minor reporté) : `Downloads.want` de 10 fichiers par lot reconcilié, aucun téléchargement ne finissant (le réseau les retient), donc une liste qui grandit.
+  - 1 000 lots (10 000 fichiers en attente à la fin) : 4,1 s en tout ; un lot coûte 3,3 ms à 2 000 en attente, 4,4 ms à 10 000 ; le fichier fait 654 Kio.
+  - 5 000 lots (50 000 en attente) : 43 s en tout ; 5,5 ms par lot à 10 000, 12,6 ms à 50 000 ; 3,2 Mo.
+  - Soit 0,25 µs par fichier en attente et par lot : quadratique, mais négligeable tant que les téléchargements suivent (4 à la fois, `syncDownloads`) et que la liste reste courte. Il ne pèserait qu'au rattrapage d'une très grande base dont aucun fichier ne descend. Rien n'est changé.
+
+### Décisions
+
+- Ruling: **un serveur « tient une base » dès qu'il a une écriture, ou que son état n'est pas vide** (`Canon.fresh()` : aucune écriture et un état vide au sens de D7). Seul un serveur qui n'en tient aucune reçoit une base (R16), ou le lobby d'un PC vide comme première écriture (R7).
+  - Pourquoi : une base construite en bloc, comme celle du banc, a un journal vide. Envoyée, elle laisse au serveur un journal vide ; à la lettre de R16 (« journal vide »), ce serveur paraîtrait encore vide, recevrait une seconde base ou un second lobby.
+  - Le PC lit de même `/hello` : `lastSeq > 0` ou `empty` faux.
+  - Options : le journal seul (le défaut ci-dessus) ; une marque dans `serveur.db` (une table de plus pour ce que l'état dit déjà).
+  - Coût si faux : nul.
+- Ruling: **la base d'un PC est « vide » quand elle ne tient rien (`isEmpty`) et n'a jamais rien reçu d'un serveur** (`lastServerSeq() = 0`). Une base qui a déjà été jumelée compte donc comme pleine : elle s'envoie, ses lignes renumérotées par le nouveau serveur (`numberSeeded` efface les anciens numéros).
+  - Options : la refuser, comme la tâche 4 (rien ne permettait alors de la renuméroter).
+  - Coût si faux : nul.
+- Ruling: **l'instantané envoyé est celui que la base garde, avec la ligne qu'il couvre ; le serveur rejoue sur lui les lignes suivantes**, chaque « avant » vérifié. Sans instantané de ce format, le principal construit l'état de ses tables (`loadState`, `encodeState`). Les deux se lisent d'un seul tenant, avec la dernière ligne du journal : une écriture faite pendant l'envoi reste en attente, et part une fois la synchro démarrée.
+  - Options : toujours l'état des tables (plusieurs secondes et un second état dans le principal à 50 000 nœuds) ; l'état de l'interface (le principal ne peut pas le lui demander au milieu du jumelage).
+  - Coût si faux : un instantané qui ne suivrait pas les tables. Le serveur le refuse alors, si son journal ne s'applique pas sur lui.
+- Ruling: **ce que `done` vérifie** : l'instantané décodé (sa structure, sa somme de contrôle, ses index), les lignes après lui rejouées, et aucune règle du graphe enfreinte (`checkState` entier, 0,37 s à 50 000 nœuds). Chaque ligne du journal passe `parseChangeRow`, donc `parseOp`, à son arrivée. Un refus de `done` abandonne l'envoi : le PC recommence.
+  - Options : ne vérifier que l'instantané (un PC jumelé n'est pas un inconnu, mais « toute entrée est vérifiée ») ; refuser toute ligne d'un autre PC.
+  - Coût si faux : une ligne ancienne que `parseOp` refuserait bloquerait l'envoi de sa base. Le message nomme la ligne (« Ligne n du journal de ce PC : … »).
+- Ruling: **les lignes envoyées gardent leur PC, leur genre et leur marque « remplacée »**, et le serveur les numérote lui-même (server_seq = local_seq, R6). Les lignes de la base de test sont signées `fixture` : les refuser bloquerait toute base faite par `make-fixture.ts`, ou copiée d'un autre PC.
+  - Coût si faux : un historique qui nomme un PC jamais jumelé.
+- Ruling: **un PC plein et un serveur qui ne tient qu'un lobby, celui d'un autre PC, reçoivent le refus entre deux bases pleines** ; seul le remplacement est proposé. Un envoi ne va qu'à un serveur qui ne tient rien (R16) : le lobby d'un autre PC est déjà une écriture, que d'autres PC suivent peut-être.
+  - Coût si faux : pour envoyer une base pleine après qu'un PC vide s'est jumelé, il faut un serveur neuf (un autre dossier de données).
+- Ruling: **l'offre et son jeton restent dans la mémoire du principal jusqu'à la réponse** ; rien n'est écrit, rien ne démarre (R8). `info()` la redonne au bloc (un panneau fermé puis rouvert, une page rechargée). Un nouveau jumelage abandonne l'offre précédente et révoque son jeton. Quitter l'abandonne sans le révoquer : on ne fait pas attendre la fermeture sur le réseau.
+  - Options : écrire `serveur.json` aussitôt (une base jumelée dont la première synchro n'est pas réglée, contre R8).
+  - Coût si faux : un PC orphelin dans `pcs`, comme après un arrêt brutal pendant un envoi (accepté : `revoquer` le retire).
+- Ruling: **les fichiers d'abord, tous ceux du magasin** (les anciennes versions comprises), puis l'instantané, le journal, `done`, dans l'ordre de la consigne. Un envoi refusé ensuite laisse ses fichiers au serveur : ils sont désignés par leur empreinte, inoffensifs, et un fichier du magasin n'est jamais effacé. `done` ne vérifie pas que chaque fichier nommé par l'état est là : une base dont le magasin a perdu un fichier s'envoie quand même, et ce fichier reste absent partout (« pas encore téléchargé »).
+  - Options : refuser l'envoi (une base dont un fichier est perdu ne s'enverrait jamais).
+  - Coût si faux : un fichier absent, que l'on voit comme tel.
+- Ruling: **la prise : les fichiers actuels des nœuds, ceux de la corbeille compris, sauf les PDF**. Un fichier que l'ancienne base a déjà est lié dans la nouvelle (un lien en dur ; copié s'il ne se peut pas : un fichier du magasin ne change jamais). Les autres sont téléchargés et vérifiés. Un fichier que le serveur n'a pas est laissé : son nœud le dira à l'ouverture. Les anciennes versions et les PDF viennent à l'ouverture (D6).
+  - La base prise reçoit `pc.json` (l'identifiant de ce PC, celui du jeton, R17), `settings.json` (copié : les réglages de ce PC restent les siens jusqu'à la tâche 6) et `serveur.json` (le jeton chiffré, par `secretsAt`). Sa marque, `complete.json`, s'écrit en dernier, synchronisée sur le disque.
+  - Coût si faux : nul.
+- Ruling: **l'échange au démarrage** (R17) :
+  - le verrou est pris, puis lâché le temps des renommages (son fichier est dans le dossier), puis repris ;
+  - le nom de l'ancienne base est `<dossier>-avant-jumelage-AAAA-MM-JJ`, en heure locale, puis « (2) », « (3) »… s'il est pris. La base de l'utilisateur s'appelle `base` : c'est le nom de la spec ;
+  - l'ancienne base perd `downloads.json` et `serveur.json` ;
+  - un dossier sans `cirrus.db` (un arrêt entre les deux renommages) est effacé, pas gardé ;
+  - un renommage refusé un moment (l'antivirus) est retenté 5 fois, 100 ms × l'essai, des bornes fixes comme celles du magasin. S'il échoue encore, l'ancienne base est remise à sa place si elle l'avait quittée, elle s'ouvre, et l'échange attend le démarrage suivant ;
+  - sans base prise, un seul `stat`.
+  - Coût si faux : un renommage au démarrage.
+- Ruling: **ni l'envoi ni la prise n'ont de délai** : ce sont des opérations sur toute la base, voulues par l'utilisateur, et un instantané de 2 Gio n'a pas de borne raisonnable. Quitter les interrompt (un `AbortController`). Les requêtes du jumelage restent bornées par `syncConnectTimeoutMs`. Aucun réglage nouveau.
+  - Coût si faux : un serveur qui se fige au milieu d'un envoi laisse le bloc sur « Envoi de la base… » jusqu'à la fermeture.
+- Ruling: **`done` est synchrone au serveur** (décodage, rejeu, vérification, écriture en une transaction) : les autres requêtes attendent, 20 s à 50 000 nœuds. Un serveur qui ne tient aucune base ne sert encore aucun PC synchronisé. Les flux ouverts sont fermés après `done` : ils reprennent par le journal.
+  - Coût si faux : 20 s d'attente pour un PC qui se jumellerait au même moment.
+- Ruling: **l'écriture en bloc n'est pas accélérée.** Elle fait 18,8 s des 20 s de l'envoi comme de la prise, à 50 000 nœuds et 1,18 million de branches.
+  - Options mesurées ou estimées : un cache SQLite de 256 Mo pendant l'import (−20 %, mesuré) ; la base prise écrite sans WAL ni synchronisation, comme celle du banc (−37 %, mesuré ; une marque protège déjà une base prise incomplète) ; les branches en `WITHOUT ROWID`, une migration de schéma (un arbre au lieu de deux) ; les insertions triées par clé.
+  - Pourquoi pas maintenant : une opération faite une fois par PC, sur une base dix fois plus grande que la vraie (plan 3c clos), et chaque option ajoute une API ou une migration.
+  - Coût si faux : 20 s une fois par PC à cette taille. Les options ci-dessus restent ouvertes si la vraie base grossit.
+- Ruling: **un refus après `/pair` révoque le jeton** (R15) : un `/hello` refusé ou illisible, une offre annulée, un envoi ou une prise qui échoue. La consigne de la tâche 4, « révoque-le avant de le jumeler de nouveau », disparaît. Le serveur arrêté au milieu, la révocation échoue, ce qui est seulement signalé : le PC reste inscrit jusqu'à `revoquer`.
+  - Coût si faux : nul.
+- Ruling: **« Dissocier ce PC » efface d'abord `serveur.json`, puis révoque le jeton au mieux** (`syncConnectTimeoutMs`), puis efface `downloads.json`. Hors ligne, le PC est dissocié quand même.
+  - Coût si faux : un PC orphelin dans `pcs` quand on dissocie hors ligne.
+- Ruling: **pendant une prise, l'ancienne base reste utilisable** : les actions faites entre le clic et la relance y restent, et partent avec elle sous `…-avant-jumelage-…`.
+  - Options : retenir les actions sous le voile pendant la prise (le voile appartient à la synchro, qui ne tourne pas encore).
+  - Coût si faux : une action faite pendant le téléchargement, qu'on retrouve dans l'ancienne base.
+- Ruling: **le bloc « Serveur » montre l'offre à la place du formulaire** : son explication, le nom sous lequel la base de ce PC sera gardée, le bouton et « Annuler ». Les boutons sont ceux de la consigne : « Envoyer la base de ce PC au serveur (n nœuds, m fichiers) », « Prendre la base du serveur (n nœuds) » ; pour le refus entre deux bases pleines, « Remplacer la base de ce PC par celle du serveur (n nœuds) ». Le singulier sous 2 (« 1 nœud », « 0 nœud »).
+  - Coût si faux : des mots.
+- Ruling: **`m fichiers` compte les fichiers du magasin** (`files/`), puisque c'est ce qu'envoie l'envoi, anciennes versions comprises, et non les fichiers que nomment les nœuds.
+  - Coût si faux : un nombre.
+- Ruling: **un arrêt brutal pendant un envoi** laisse le PC inscrit au serveur (`pcs`) sans `serveur.json` : un orphelin, accepté. L'envoi partiel reste invisible ; il est effacé au démarrage suivant du serveur, ou au prochain envoi. Au jumelage suivant, le serveur est encore vide, et le PC envoie de nouveau.
+  - Coût si faux : une ligne de trop dans `pcs`.
