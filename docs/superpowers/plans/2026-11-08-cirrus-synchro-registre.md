@@ -621,3 +621,58 @@ Décisions du contrôleur : R19 (`done` ne refuse pas ce que la base du PC porta
     - l'ancienne base est remise en réessayant ;
     - sans base à sa place, le démarrage s'arrête ;
     - une base qui attend est dite à l'ouverture et dans le bloc.
+
+## Tâche 6 : les réglages partagés
+
+Décisions du contrôleur pour cette tâche : R23 (tous les réglages sont partagés ; le serveur fait autorité ; au premier jumelage, un envoi de base ou deux bases vides envoient les réglages du PC, une prise prend ceux du serveur ; ensuite, la dernière valeur de chaque réglage attend dans `settings-pending.json` ; l'ordre de la fusion du cœur) et R24 (le serveur vérifie la forme, le PC les bornes).
+
+### Fait
+
+- **Le cœur :** `newer` et `Stamp` (`merge.ts`) sont exportés : la même comparaison décide entre deux écritures et entre deux changements d'un réglage, au serveur comme au PC. `sync.ts` gagne `MAX_SETTINGS_PER_REQUEST` (500, que le client respecte aussi), `SettingChange` (`{ value, at }`) et `SettingRow` (`{ value, at, pc }`).
+- **La vue :** `settingValue(clé, valeur)`, une valeur bornée comme `withOverrides` lit un fichier de réglages (qui s'en sert désormais), ou `undefined` pour une clé qui n'est pas un réglage ou une valeur d'un autre genre.
+- **Le serveur :**
+  - `serveur.db` v2 : la table `settings (key, value, at, pc)`, la valeur en JSON, `NULL` pour un retour au défaut ;
+  - `Tokens.settings()` et `Tokens.putSettings()` (une transaction : chaque changement gardé s'il est plus récent, par `newer`) ;
+  - `settings.ts`, nouveau : `parseSettingChanges` (R24), `SettingsError` (400) ;
+  - `GET /settings` et `POST /settings` (la réponse : chaque réglage envoyé tel que le serveur le garde) ; `Hub.publishSettings` (`event: settings`, sans `id`) ;
+  - `bounds.ts` : `MAX_SETTING_KEY_CHARS` (64), `MAX_SETTING_VALUE_BYTES` (64 Kio), `MAX_SETTINGS_PER_REQUEST` réexporté du cœur ; le corps borné par `MAX_BODY_BYTES`, comme toute requête JSON d'un PC jumelé.
+- **L'app :**
+  - `main/settings.ts` : `SharedSettings` (`local`, `pending`, `receive`, `acknowledge`, `pairedAt`, `adopt`, `upgrade`, `unpaired`) et `parseSettingRows` ; `settings-pending.json` ;
+  - `main/sync/client.ts` : les réglages du serveur lus en entier à chaque connexion, une fois le flux ouvert ; l'événement `settings` ; l'envoi des réglages en attente en tête de la boucle d'envoi ;
+  - `main/sync/host.ts` : `setSettings` (ce que `cirrus:settings:set` appelle), les réglages datés de l'heure du jumelage (deux bases vides, ou après un envoi de base), effacés de l'attente à la dissociation ; `HostWindow.settings` ;
+  - `main/sync/firstSync.ts` : la prise écrit les réglages du serveur dans la base prise, et ne copie plus ceux du PC ;
+  - `main/index.ts`, `wire.ts`, `preload`, `env.d.ts` : `cirrus:settings:set` reçoit les seuls réglages changés ; `cirrus:settings:changed` (`onSettingsChanged`) porte un lot reçu ;
+  - l'interface : `renderer/settingChanges.ts` (`localChanges`, `applyReceived`, `keepUnsaved`), et `App.tsx` n'écrit que ce qui a changé ici et applique chaque lot reçu en un rendu.
+- **Tests :** `packages/server/tests/settings.test.ts` (2), `packages/app/tests/sharedSettings.test.ts` (11) ; `EventReader.next` et `settings` (support du serveur), `Lab.settings` et `Lab.putSettings`, `AppPc.settingsTold`.
+- **Scénario de l'interface** (le 26e, « jumeler une base neuve… ») : un réglage changé par un autre PC arrive dans `settings.json` et dans le bandeau (le champ montre la valeur reçue) ; un réglage tapé dans le bandeau arrive au serveur, puis rien n'attend ; après « Dissocier ce PC », `settings-pending.json` n'est plus là et les réglages de ce PC restent.
+
+### Décisions
+
+- Ruling: **l'interface n'envoie que les réglages changés chez elle** (`cirrus:settings:set` reçoit `{ clé: valeur }`, `null` pour un retour au défaut), et non plus tous ceux qui diffèrent des défauts.
+  - Pourquoi : le principal écrit un lot reçu dans `settings.json` pendant que l'interface peut envoyer les siens. Envoyés en entier, ils porteraient l'ancienne valeur d'un réglage reçu un instant plus tôt, que le principal prendrait pour un changement local, plus récent : il effacerait le changement de l'autre PC, partout.
+  - Sans serveur, le fichier écrit est le même, et il y a autant d'appels ou moins (aucun quand rien n'a changé).
+  - Coût si faux : nul.
+- Ruling: **l'heure d'un changement local suit ce que ce PC a vu** : `max(maintenant + écart, heure du dernier changement connu de ce réglage + 1)`, le dernier connu étant le sien en attente ou celui reçu du serveur.
+  - Pourquoi : un réglage n'a pas d'« avant » comme une écriture ; seule l'heure décide. Un changement que l'utilisateur fait après en avoir vu un autre doit passer après lui, même si l'horloge de l'autre PC avance un peu. Deux changements du même PC dans la même milliseconde se suivent aussi.
+  - Coût si faux : un changement daté d'une milliseconde de plus.
+- Ruling: **le PC lit les réglages du serveur en entier (`GET /settings`) une fois son flux ouvert, et les applique avant tout ce que le flux apporte.** Un réglage changé entre les deux arrive par les deux ; l'heure de chaque réglage reçu, gardée en mémoire pour la connexion, empêche de l'appliquer deux fois ou d'appliquer un plus ancien.
+  - Options : le lire avant d'ouvrir le flux (un changement fait entre les deux serait perdu jusqu'à la connexion suivante) ; une marque des réglages dans `/hello` (une requête de moins quand rien n'a changé, mais un second numéro à tenir).
+  - Coût : une requête par connexion, quelques Kio.
+- Ruling: **un réglage reçu s'applique selon R24** : une clé qui n'est pas un réglage est ignorée sans bruit (un PC plus récent peut en avoir de nouveaux) ; une valeur hors bornes est ramenée dans ses bornes (`settingValue`, comme `withOverrides`) ; une valeur d'un autre genre (un texte pour un nombre) est ignorée, celle de ce PC gardée, et dite dans la console. Un réglage ramené à son défaut quitte `settings.json`.
+  - Coût si faux : un réglage qui diffère entre deux versions de Cirrus.
+- Ruling: **un retour au défaut est gardé au serveur avec son heure** (`value` `NULL`), et rendu par `GET /settings` : un changement plus ancien ne peut pas faire revenir la valeur.
+  - Coût : une ligne par réglage remis au défaut.
+- Ruling: **l'événement `settings` va à tous les flux ouverts**, ceux qui rattrapent compris (ses trames sont entières), sans `id` : les numéros du flux sont ceux des écritures.
+- Ruling: **les réglages en attente partent en tête de la boucle d'envoi**, avant les écritures et quoi qu'elles attendent, avec son attente croissante entre deux essais : ni délai ni réglage nouveaux. `flush` (avant la veille) les envoie aussi.
+  - Des réglages refusés par le serveur (400, 413 : ils le seraient encore) sont abandonnés et dits dans la console ; une autre erreur coupe la connexion, et ils repartent à la suivante.
+  - Un événement `settings` illisible est ignoré (dit) : un réglage ne vaut pas d'arrêter les écritures. Une réponse illisible à `GET` ou `POST /settings` arrête le client, comme une réponse illisible à `/units`.
+  - Les réglages en attente ne comptent pas dans la pastille (« Envoi de n actions… »).
+- Ruling: **« l'heure du jumelage » (R23) est l'heure du serveur que donne le `/hello` du jumelage.** Pour un envoi de base, elle est gardée avec l'offre, et c'est elle qui date les réglages une fois l'envoi fait. `settings-pending.json` est écrit juste avant `serveur.json` : un arrêt entre les deux le laisse sans serveur, et le jumelage suivant le récrit.
+- Ruling: **la prise écrit les réglages du serveur dans la base prise** (`GET /settings` pendant `adoptBase`), avec un `settings-pending.json` vide : l'app redémarre sur eux, sans passer par les défauts sous le voile, et n'envoie rien des siens.
+- Ruling: **une base jumelée avant cette tâche envoie ses réglages au premier démarrage, au lieu de les perdre.** Une fois les réglages partagés, `settings-pending.json` existe toujours tant qu'un serveur est jumelé (écrit avant `serveur.json`, vide quand tout est envoyé). Un serveur jumelé sans ce fichier est donc une base jumelée aux tâches 4 ou 5 : son serveur n'a aucun de ses réglages, et à la lettre de R23 (« une clé absente du serveur vaut le défaut »), elle les perdrait tous. Ils sont envoyés, comme au premier jumelage, datés de l'horloge du PC (l'écart avec le serveur n'est pas encore connu).
+  - Coût : un `stat` au démarrage, seulement avec un serveur jumelé.
+  - Coût si faux : les réglages d'une base jumelée avant la tâche 6 remplacent ceux du serveur, s'il en avait.
+- Ruling: **un lot reçu avant que l'interface ait lu ses réglages** (une page rechargée pendant que le principal synchronise) est appliqué sur eux quand elle les lit.
+- Ruling: **le serveur ne borne que chaque requête, pas le nombre de réglages qu'il garde** : un PC jumelé est l'un de ceux de l'utilisateur, il en garde moins de 200, et un PC hostile ferait grossir son journal de toute façon.
+  - Coût si faux : `serveur.db` grossit à la demande d'un PC jumelé, que `revoquer` arrête.
+- Ruling: **`latexPackages` reçu s'installe au démarrage suivant**, comme le dit D1 du plan 4b (« installés sur chaque PC à son démarrage »), pas aussitôt.

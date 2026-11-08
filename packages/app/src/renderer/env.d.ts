@@ -17,7 +17,16 @@ export interface CirrusBridge {
   /** Keeps a snapshot of the state covering the journal up to `seq`, if later than the base's. */
   saveSnapshot(data: ArrayBuffer, seq: number): Promise<void>;
   getSettings(): Promise<Record<string, unknown>>;
-  setSettings(overrides: Record<string, unknown>): Promise<void>;
+  /**
+   * The settings changed here since the last call, only those: key: value, null back to the default (plan 5a, task 6:
+   * with a server paired, each is shared with it).
+   */
+  setSettings(changes: Record<string, unknown>): Promise<void>;
+  /**
+   * Shared settings received from the server that changed here (task 6), as one batch: key: value (bounded as a
+   * settings file is read), null back to the default. Returns the unsubscription.
+   */
+  onSettingsChanged(fn: (changes: Record<string, unknown>) => void): () => void;
   /**
    * Writes an edit to the local base as the write `unit` (its identifier, uuidv7, plan 5a); resolves with the journal
    * number of its last line and its time (this PC's clock corrected by the server's, D4), rejects with the reason.

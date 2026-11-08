@@ -18,6 +18,7 @@ export const appWindows: HostWindow = {
   incoming: (m: SyncIncoming) => send('cirrus:sync:incoming', m),
   status: (s: SyncStatus) => { send('cirrus:sync:status', s); },
   veil: () => { send('cirrus:sync:veil'); },
+  settings: (changes: Record<string, unknown>) => { send('cirrus:settings:changed', changes); },
 };
 
 function send(channel: string, ...args: unknown[]): boolean {

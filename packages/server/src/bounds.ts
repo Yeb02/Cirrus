@@ -34,3 +34,18 @@ export const PAIRING_TRIES = 5;
 
 /** The writes accepted between two snapshots of the server's state (it writes one at its stop too). */
 export const SERVER_SNAPSHOT_UNITS = 500;
+
+/**
+ * The shared settings (task 6, R24). The server does not know the PCs' settings (each PC bounds what it receives, by
+ * withOverrides); it checks only their form, before anything is written:
+ * - the most settings in one POST /settings, the core's (the PC's client cuts its changes to it);
+ * - a setting's key: a plain identifier, a letter then letters, digits or `_`, MAX_SETTING_KEY_CHARS at most (the
+ *   longest of today's is 22);
+ * - a setting's value: its JSON, MAX_SETTING_VALUE_BYTES at most (the longest of today's, a list of LaTeX packages,
+ *   holds a few hundred bytes);
+ * - its time: a finite number.
+ * The body itself is bounded by MAX_BODY_BYTES, as every JSON request of a paired PC.
+ */
+export { MAX_SETTINGS_PER_REQUEST } from '@cirrus/core';
+export const MAX_SETTING_KEY_CHARS = 64;
+export const MAX_SETTING_VALUE_BYTES = 64 * 1024;

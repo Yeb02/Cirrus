@@ -1,10 +1,11 @@
 import type { ServerResponse } from 'node:http';
-import type { RemoteUnit } from '@cirrus/core';
+import type { RemoteUnit, SettingRow } from '@cirrus/core';
 import { MAX_JOURNAL_PAGE, SSE_PING_MS } from './bounds.ts';
 
 // The event streams (plan 5a, D2): GET /events pushes each write accepted, numbered, to every paired PC listening,
 // from where it resumes (Last-Event-ID). One frame per write, its number as its id: `id: <seq>`, `event: unit`,
-// `data: <RemoteUnit as JSON>`. A comment (« : ping ») every SSE_PING_MS keeps the connection alive.
+// `data: <RemoteUnit as JSON>`. The shared settings a request changed (task 6): `event: settings`, `data: { [key]: row }`,
+// without an id (the numbers are the writes'). A comment (« : ping ») every SSE_PING_MS keeps the connection alive.
 
 /** A write's frame: its number as its id, the write as one line of JSON (JSON.stringify writes no line break). */
 const unitFrame = (u: RemoteUnit): string => `id: ${u.seq}\nevent: unit\ndata: ${JSON.stringify(u)}\n\n`;
@@ -80,6 +81,16 @@ export class Hub {
       st.cursor = u.seq;
       this.write(st, frame);
     }
+  }
+
+  /**
+   * Shared settings just changed (task 6): to every open stream, a stream catching up included — its frames are whole,
+   * and a PC reads the server's settings once its stream is open (GET /settings), so that none falls in between.
+   */
+  publishSettings(rows: Record<string, SettingRow>): void {
+    if (this.streams.size === 0) return;
+    const frame = `event: settings\ndata: ${JSON.stringify(rows)}\n\n`;
+    for (const st of this.streams) if (!st.closed) this.write(st, frame);
   }
 
   /** Every stream ended (the server stops). */

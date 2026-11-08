@@ -166,6 +166,21 @@ async function localServer() {
       try { return db.prepare('SELECT op FROM changes ORDER BY local_seq').all().map((r) => JSON.parse(r.op)); } finally { db.close(); }
     },
     hasBlob: (hash) => existsSync(join(dir, 'base', 'files', hash.slice(0, 2), hash)),
+    /** Another PC paired with it (« Observateur »): its shared settings read and changed (task 6). */
+    async observer() {
+      const code = Tokens.open(dir);
+      let token;
+      try {
+        const body = JSON.stringify({ code: code.createCode('Observateur', Date.now()).code, pc: 'observateur', name: 'Observateur' });
+        token = (await (await fetch(`${server.url}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).json()).token;
+      } finally {
+        code.close();
+      }
+      const call = async (method, body) => (await fetch(`${server.url}/settings`, {
+        method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body && JSON.stringify(body),
+      })).json();
+      return { settings: () => call('GET'), put: (changes) => call('POST', { changes }) };
+    },
     async close() {
       await server.close();
       rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
@@ -1032,6 +1047,29 @@ const SCENARIOS = [
         }
         const first = server.journal();
         if (first.length !== 1 || first[0].t !== 'plan' || first[0].after?.type !== 'lobby') throw new Error(`le journal du serveur : ${JSON.stringify(first.map((op) => op.t))}`);
+        // Task 6, the shared settings: one changed on another PC reaches settings.json and the page (cirrus:settings:changed);
+        // one typed here reaches the server.
+        const observer = await server.observer();
+        await observer.put({ toastMs: { value: 9000, at: Date.now() + 60_000 } });
+        const local = () => { try { return JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8')); } catch { return {}; } };
+        if (!(await until(() => local().toastMs === 9000, 8000))) throw new Error(`le réglage reçu n’est pas dans settings.json : ${JSON.stringify(local())}`);
+        const search = await page.centre('.settings input.search', '');
+        await page.click(search.x, search.y);
+        await page.type('Durée d’affichage des notifications');
+        const toastField = `[...document.querySelectorAll('.settings .param')].find((p) => p.querySelector('.label')?.textContent.startsWith('Durée d’affichage des notifications'))?.querySelector('input.num')`;
+        if (!(await page.until(`${toastField}?.value === '9000'`, 8000))) throw new Error(`la page montre ${await page.evaluate(`${toastField}?.value`)} au lieu du réglage reçu`);
+        const toastAt = await page.evaluate(`(() => { const b = ${toastField}.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+        await page.click(toastAt.x, toastAt.y);
+        await page.press('a', 'KeyA', 65, 2);
+        await page.type('7000');
+        // Sent, then nothing waits in settings-pending.json.
+        const waiting = () => { try { return Object.keys(JSON.parse(readFileSync(join(data, 'settings-pending.json'), 'utf8'))).length; } catch { return 0; } };
+        let shared = null;
+        for (const end = Date.now() + 8000; Date.now() < end && (shared?.toastMs?.value !== 7000 || waiting() > 0); await sleep(100)) shared = await observer.settings();
+        if (shared?.toastMs?.value !== 7000 || waiting() > 0) throw new Error(`le réglage changé ici n’arrive pas au serveur : ${JSON.stringify(shared)}, ${waiting()} en attente`);
+        await page.click(search.x, search.y);
+        await page.press('a', 'KeyA', 65, 2);
+        await page.press('Backspace', 'Backspace', 8);
         // A node by the menu of the background, as the first scenario does it.
         const settingsClose = await page.centre('.settings .close', '×');
         await page.click(settingsClose.x, settingsClose.y);
@@ -1060,6 +1098,8 @@ const SCENARIOS = [
         await page.click(unpair.x, unpair.y);
         if (!(await page.until(`!document.querySelector('.tabs .sync-chip') && document.querySelectorAll('.server-block input').length === 3`, 8000))) throw new Error('toujours jumelé après « Dissocier ce PC »');
         if (existsSync(join(data, 'serveur.json'))) throw new Error('serveur.json reste après la dissociation');
+        if (existsSync(join(data, 'settings-pending.json'))) throw new Error('settings-pending.json reste après la dissociation');
+        if (local().toastMs !== 7000) throw new Error(`les réglages de ce PC ne restent pas après la dissociation : ${JSON.stringify(local())}`);
         const lines = server.journal().length;
         const field = await page.centre('.settings input.search', '');
         await page.click(field.x, field.y);

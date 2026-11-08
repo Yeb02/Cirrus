@@ -39,6 +39,8 @@ export class AppPc {
   /** What the session gave the interface of the server (App's state for the block « Serveur »), in order. */
   readonly servers: ServerInfo[] = [];
   readonly incoming: SyncIncoming[] = [];
+  /** The shared settings received, each batch as the window was told it (cirrus:settings:changed, task 6). */
+  readonly settingsTold: Record<string, unknown>[] = [];
   veils = 0;
   /** The app's relaunches asked for (a base taken from the server, D7): the test restarts it itself. */
   relaunched = 0;
@@ -73,6 +75,7 @@ export class AppPc {
         this.veils++;
         later(() => { for (const fn of this.listeners.veil) fn(); });
       },
+      settings: (changes) => { this.settingsTold.push(clone(changes)); },
     };
     this.host = new SyncHost({
       fetch: this.net.fetch, store: this.store, dir: this.dir, pc: pcId(this.dir), secrets: fileSecrets(this.dir, XOR), secretsAt: (d) => fileSecrets(d, XOR),

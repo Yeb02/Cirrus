@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { type Action, type Id, MAX_ID_CHARS, type Op, type Reconciliation, type RemoteUnit, SyncDivergedError, type Unit } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
+import { SharedSettings } from '../settings.ts';
 import { FORMAT, SyncClient, type SyncStatus } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
@@ -14,7 +15,7 @@ import {
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,
 // stopped and started again at wake, stopped at quit, never two of these at once —; the reconciliation's round trip
 // through the interface, which holds the state; the pairing, its first sync (task 5, D7: firstSync.ts), and the
-// unpairing; each local write's time.
+// unpairing; each local write's time; the settings changed in Réglages, shared with a server paired (task 6, D9).
 
 /** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */
 export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }
@@ -60,6 +61,8 @@ export interface HostWindow {
   status(s: SyncStatus): void;
   /** The veil « Synchronisation… » (D8): waking up. */
   veil(): void;
+  /** Shared settings received that changed here (cirrus:settings:changed, task 6): key: value, null back to the default; one batch. */
+  settings(changes: Record<string, unknown>): void;
 }
 
 export interface HostDeps {
@@ -117,6 +120,8 @@ export function watchWindow(win: WatchedWindow, host: { detach(): void }): void 
 export class SyncHost {
   /** The sync client of the server paired now; a new one at each unpairing (its files known there, its downloads, its clock). */
   client: SyncClient;
+  /** This PC's settings: settings.json, and with a server paired their changes waiting for it (task 6). */
+  readonly settings: SharedSettings;
   private readonly deps: HostDeps;
   private config: ServerConfig | null;
   private last: SyncStatus = { state: 'off' };
@@ -132,7 +137,7 @@ export class SyncHost {
    * A pairing done (/pair, /hello) that awaits the user's answer to D7's offer (`first`): its server and token, in
    * memory only — nothing is written, nothing starts, until the base's first sync is settled (R8).
    */
-  private offered: { config: ServerConfig; offer: FirstSyncOffer } | null = null;
+  private offered: { config: ServerConfig; offer: FirstSyncOffer; at: number } | null = null;
   /** The first sync under way (seed, adopt): aborted if the app quits meanwhile. */
   private firstSync: AbortController | null = null;
   /** The first sync under way, for the block (info): its server, and what it does (review of task 5, Minor 3). */
@@ -146,13 +151,16 @@ export class SyncHost {
   constructor(deps: HostDeps) {
     this.deps = deps;
     this.config = deps.secrets.read();
+    this.settings = new SharedSettings(deps.dir, deps.pc, (changes) => deps.window.settings(changes));
+    // A base paired before the settings were shared sends its own, rather than losing them (SharedSettings.upgrade).
+    if (this.config) this.settings.upgrade(deps.now());
     this.client = this.newClient();
   }
 
   private newClient(): SyncClient {
     const { deps } = this;
     return new SyncClient({
-      fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params,
+      fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params, settings: this.settings,
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       status: (s) => {
         this.last = s;
@@ -249,6 +257,17 @@ export class SyncHost {
     const seq = this.deps.store.commit(action, { at, unit });
     this.client.kick();
     return { seq, at };
+  }
+
+  /**
+   * Settings changed in Réglages (cirrus:settings:set, task 6): only those changed, key: value, null back to the
+   * default. Written to settings.json; with a server paired, each waits too, at this PC's time corrected by the
+   * server's (D4), and the client is told. Without one, nothing else happens (plan 4c).
+   */
+  setSettings(changes: unknown): void {
+    const paired = this.config !== null;
+    this.settings.local(changes, paired ? this.deps.now() + this.client.clockOffset() : null);
+    if (paired) this.client.kick();
   }
 
   /**
@@ -394,18 +413,33 @@ export class SyncHost {
     } catch (e) {
       return refuse(`Serveur injoignable (${config.url}) : ${messageOf(e)}.`);
     }
-    if (!isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq) || !Number.isSafeInteger(hello.nodes)) {
+    if (
+      !isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq) || !Number.isSafeInteger(hello.nodes)
+      || typeof hello.serverTime !== 'number' || !Number.isFinite(hello.serverTime)
+    ) {
       return refuse('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
     }
     const server = { lastSeq: hello.lastSeq as number, empty: hello.empty, nodes: hello.nodes as number };
     const offer = firstSyncOffer(this.deps.store, this.deps.dir, server, new Date(this.deps.now()));
+    // The pairing's time, the server's: this PC's settings are stamped with it when they are sent (R23).
+    const at = Math.round(hello.serverTime);
     if (offer) {
-      this.offered = { config, offer };
+      this.offered = { config, offer, at };
       return { ok: false, message: offerMessage(offer), offer };
     }
+    this.joined(config, at);
+    return { ok: true };
+  }
+
+  /**
+   * Paired, the first sync settled (R8): this PC's settings wait, stamped at the pairing's time (R23: two empty bases,
+   * or this PC's sent), written before serveur.json — a stop between the two leaves them waiting for no server, and the
+   * next pairing writes them again —, then the server kept.
+   */
+  private joined(config: ServerConfig, at: number): void {
+    this.settings.pairedAt(at);
     this.deps.secrets.write(config);
     this.config = config;
-    return { ok: true };
   }
 
   /** An offer left unanswered given up: its token revoked, at best (R15). */
@@ -441,7 +475,7 @@ export class SyncHost {
     const offered = this.offered;
     if (!offered) return no('Aucun jumelage n’attend de réponse.');
     this.offered = null;
-    const { config, offer } = offered, { deps } = this;
+    const { config, offer, at } = offered, { deps } = this;
     const revoke = () => revokeSelf(deps.fetch, config, deps.params().syncConnectTimeoutMs);
     if (choice === 'cancel') {
       await revoke();
@@ -461,8 +495,7 @@ export class SyncHost {
           if (!this.closed) await revoke();
           return no(`Base non envoyée : ${sentence(messageOf(e))} ${UNTOUCHED}`);
         }
-        deps.secrets.write(config);
-        this.config = config;
+        this.joined(config, at);
         return { ok: true };
       }
       try {
@@ -497,6 +530,12 @@ export class SyncHost {
         rmSync(join(this.deps.dir, DOWNLOADS_FILE), { force: true });
       } catch (e) {
         console.warn(`Liste des téléchargements non effacée (${DOWNLOADS_FILE}) : ${messageOf(e)}`);
+      }
+      // The settings stay this PC's; none waits for a server any more (task 6).
+      try {
+        this.settings.unpaired();
+      } catch (e) {
+        console.warn(`Réglages en attente non effacés : ${messageOf(e)}`);
       }
       // The next server starts from nothing known: its files, its clock.
       this.client = this.newClient();

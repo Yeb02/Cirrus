@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type Action, applyOps, canonical, decodeState, type Id, reconcile, type RemoteUnit, SNAPSHOT_VERSION, type State, SYNC_PROTOCOL_VERSION, toSnapshot, type Unit,
-  type UnitResult, uuidv7,
+  type Action, applyOps, canonical, decodeState, type Id, reconcile, type RemoteUnit, type SettingRow, SNAPSHOT_VERSION, type State, SYNC_PROTOCOL_VERSION, toSnapshot,
+  type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type RunningServer, startServer, Tokens } from '@cirrus/server';
 import { type ChangeRow, LocalStore, SCHEMA_VERSION } from '@cirrus/store';
@@ -338,6 +338,22 @@ export class Lab {
     const res = await this.get('/snapshot');
     if (res.status !== 200) throw new Error(`GET /snapshot : ${res.status}`);
     return decodeState(await res.arrayBuffer());
+  }
+
+  /** The server's shared settings (GET /settings, task 6). */
+  async settings(): Promise<Record<string, SettingRow>> {
+    const res = await this.get('/settings');
+    if (res.status !== 200) throw new Error(`GET /settings : ${res.status}`);
+    return (await res.json()) as Record<string, SettingRow>;
+  }
+
+  /** Changes the server's shared settings as a PC of the lab (« observateur ») would: what the server kept, by key. */
+  async putSettings(changes: Record<string, { value: unknown; at: number }>): Promise<Record<string, SettingRow>> {
+    const res = await fetch(`${this.url}/settings`, {
+      method: 'POST', headers: { Authorization: `Bearer ${this.observer.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ changes }),
+    });
+    if (res.status !== 200) throw new Error(`POST /settings : ${res.status} ${await res.text()}`);
+    return ((await res.json()) as { settings: Record<string, SettingRow> }).settings;
   }
 
   /** The server's journal (GET /journal), whole. */

@@ -23,7 +23,9 @@ contextBridge.exposeInMainWorld('cirrus', {
   load: (fromTables: boolean) => ipcRenderer.invoke('cirrus:load', fromTables === true),
   saveSnapshot: (data: ArrayBuffer, seq: number) => ipcRenderer.invoke('cirrus:snapshot:save', data, seq),
   getSettings: () => ipcRenderer.invoke('cirrus:settings:get'),
-  setSettings: (overrides: Record<string, unknown>) => ipcRenderer.invoke('cirrus:settings:set', overrides),
+  setSettings: (changes: Record<string, unknown>) => ipcRenderer.invoke('cirrus:settings:set', changes),
+  // The shared settings received from the server (plan 5a, task 6), one batch per message.
+  onSettingsChanged: (fn: (changes: unknown) => void) => on('cirrus:settings:changed', fn),
   ready: () => ipcRenderer.send('cirrus:ready'),
   benchMemory: () => ipcRenderer.invoke('cirrus:bench:memory'),
   benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),

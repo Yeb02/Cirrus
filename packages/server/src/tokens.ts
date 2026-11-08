@@ -2,13 +2,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { MAX_ID_CHARS } from '@cirrus/core';
+import { MAX_ID_CHARS, newer, type SettingRow } from '@cirrus/core';
 import { MAX_PC_NAME_CHARS, PAIRING_TRIES, PAIRING_TTL_MS } from './bounds.ts';
+import type { StoredChange } from './settings.ts';
 
 // Pairing and tokens (plan 5a, D3): `jumeler` makes a one-time code, a PC trades it for a token of 256 bits. The
-// server's own file, serveur.db, keeps only their SHA-256 hashes: neither a code nor a token is ever on its disk.
+// server's own file, serveur.db, keeps only their SHA-256 hashes: neither a code nor a token is ever on its disk. It
+// keeps the shared settings too (task 6, D9).
 
-/** The server's own file, next to its base: the paired PCs, the pending codes (and the shared settings, task 6). */
+/** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings. */
 export const SERVER_DB = 'serveur.db';
 
 /** How long a write of serveur.db waits for another (the command line writes it while the server runs). */
@@ -19,6 +21,9 @@ const MIGRATIONS: string[] = [
   /* v1: the paired PCs, each by its token's hash; the pending codes, by their hash, with the wrong tries made since. */ `
   CREATE TABLE pcs (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, machine TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, paired_at INTEGER NOT NULL);
   CREATE TABLE codes (code_hash TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, expires_at INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0);
+  `,
+  /* v2 (task 6): the shared settings, each its last change: its value's JSON (NULL: back to the default), its time, its PC. */ `
+  CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, at REAL NOT NULL, pc TEXT NOT NULL);
   `,
 ];
 
@@ -210,10 +215,45 @@ export class Tokens {
     return Number(this.q('DELETE FROM pcs WHERE token_hash = ?').run(tokenHash).changes) > 0;
   }
 
+  /** GET /settings (task 6): every shared setting the server keeps, a reset to the default included (value null). */
+  settings(): Record<string, SettingRow> {
+    const out: Record<string, SettingRow> = {};
+    for (const r of this.q('SELECT key, value, at, pc FROM settings').all() as unknown as SettingsRow[]) out[r.key] = rowOf(r);
+    return out;
+  }
+
+  /**
+   * POST /settings (task 6, D9, R23): each change of PC `pc` kept if it is more recent than the setting's last one, by
+   * the core's merge order (`newer`: its time, then the PC's identifier), in one transaction. `rows`: the setting as the
+   * server keeps it now, for every key sent; `changed`: those this request changed, for the event streams. A change
+   * sent again (its answer lost) changes nothing.
+   */
+  putSettings(changes: Map<string, StoredChange>, pc: string): { rows: Record<string, SettingRow>; changed: Record<string, SettingRow> } {
+    return this.transaction(() => {
+      const rows: Record<string, SettingRow> = {}, changed: Record<string, SettingRow> = {};
+      for (const [key, c] of changes) {
+        const before = this.q('SELECT key, value, at, pc FROM settings WHERE key = ?').get(key) as unknown as SettingsRow | undefined;
+        if (before && !newer({ at: c.at, pc }, before)) {
+          rows[key] = rowOf(before);
+          continue;
+        }
+        this.q('INSERT INTO settings (key, value, at, pc) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, at = excluded.at, pc = excluded.pc')
+          .run(key, c.json, c.at, pc);
+        rows[key] = changed[key] = rowOf({ key, value: c.json, at: c.at, pc });
+      }
+      return { rows, changed };
+    });
+  }
+
   close(): void {
     this.db.close();
   }
 }
+
+/** A row of the table `settings`. */
+interface SettingsRow { key: string; value: string | null; at: number; pc: string }
+/** A setting as the protocol gives it: its value read back from the JSON kept (which the server wrote itself). */
+const rowOf = (r: SettingsRow): SettingRow => ({ value: r.value === null ? null : JSON.parse(r.value), at: r.at, pc: r.pc });
 
 /** Brings serveur.db to the last version, in one transaction that a second process opening it at the same time waits for. */
 function migrate(db: DatabaseSync): void {

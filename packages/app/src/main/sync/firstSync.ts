@@ -5,6 +5,7 @@ import {
   SyncFormatError, truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, storedHashes } from '@cirrus/store';
+import { parseSettingRows, SharedSettings } from '../settings.ts';
 import { SERVER_FILE, type SecretStore, type ServerConfig } from './config.ts';
 import { chunks, DOWNLOADS_FILE, hasBlob, isPdf } from './downloads.ts';
 
@@ -265,8 +266,8 @@ export interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; confi
  * snapshot (GET /snapshot, MAX_SEED_BYTES at most) and the line it covers; its journal up to that line, by pages
  * (MAX_JOURNAL_PAGE), each line checked; its state written whole; then the files of its nodes but the PDFs — this
  * base's own copy when it has one, downloaded and checked otherwise (one the server lacks too is left: opened later,
- * it says so) —; this PC's identifier, its settings, the server and its token. Its mark last: complete. Any failure
- * removes the staged base and throws, in French.
+ * it says so) —; the server's settings (R23: this PC's are not kept, nor sent), this PC's identifier, the server and
+ * its token. Its mark last: complete. Any failure removes the staged base and throws, in French.
  */
 export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
   const staged = stagedDir(o.dir);
@@ -316,9 +317,10 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
       if (!res.body || !Number.isSafeInteger(length) || length < 0) throw new Error(`Réponse du serveur illisible à /files/${hash}.`);
       await receiveBlob(staged, hash, chunks(res.body), length);
     }
+    // The server's settings, not this PC's (task 6, R23): bounded as the app reads them, and nothing of this PC's sent.
+    new SharedSettings(staged, o.pc, () => {}).adopt(parseSettingRows(await json('/settings')));
     // On the disk before the mark (review, Minor 1): a power cut never leaves a complete base without its PC or its server.
     writeSynced(join(staged, 'pc.json'), JSON.stringify({ id: o.pc }));
-    if (existsSync(join(o.dir, 'settings.json'))) copyFileSync(join(o.dir, 'settings.json'), join(staged, 'settings.json'));
     o.secrets.write(o.config);
     writeSynced(join(staged, READY_FILE), JSON.stringify({ server: o.config.url, seq: last }));
     return { last };

@@ -1,7 +1,7 @@
 import {
   type Action, type Anchor, annotationTitle, createAnnotation, type FileRef, type Id, type LatexStatus, type NodeRec, preambleText, type State,
 } from '@cirrus/core';
-import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
+import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import type { FirstSyncChoice, ServerInfo } from '../main/sync/host.ts';
@@ -17,6 +17,7 @@ import { LatexRegistry } from './latex/registry.ts';
 import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { quitInOrder, typedFields } from './quit.ts';
+import { applyReceived, keepUnsaved, localChanges } from './settingChanges.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -91,8 +92,13 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const readySent = useRef(false);
-  /** The settings just read are not written back. */
-  const loadedParams = useRef<RenderParams | null>(null);
+  /**
+   * The settings as last read, written or received (task 6): what differs from them was changed here, and only that is
+   * written; the settings just read are not written back.
+   */
+  const savedParams = useRef<RenderParams | null>(null);
+  /** Shared settings received before the settings were read (task 6): applied once they are. */
+  const earlySettings = useRef<Record<string, unknown>[]>([]);
   const session = useRef<EditSession | null>(null);
   const saver = useRef<SnapshotSaver | null>(null);
   const activeRef = useRef<Id | null>(null);
@@ -236,8 +242,9 @@ export function App() {
           if (wanted.type !== 'lobby' && !open.includes(wanted.id)) open = [...open, wanted.id];
           current = wanted.id;
         }
-        const p = withOverrides(settings);
-        loadedParams.current = p;
+        // Batches received while the settings were read (a page reloaded, its main process syncing on): applied over them.
+        const p = earlySettings.current.splice(0).reduce(applyReceived, withOverrides(settings));
+        savedParams.current = p;
         session.current = new EditSession(s, (a, unit) => window.cirrus.commit(a, unit), (st, action, rev) => {
           setShown({ state: st, rev, action });
           saver.current?.applied();
@@ -266,12 +273,30 @@ export function App() {
 
   useEffect(() => { if (state) saveTabs(tabs); }, [tabs, state]);
 
-  // Settings are written a moment after the last change (spec 19: outside the history and undo).
+  // Settings are written a moment after the last change (spec 19: outside the history and undo): only those changed
+  // here, never one received meanwhile (with a server paired, each written one is shared: task 6).
   useEffect(() => {
-    if (!state || params === loadedParams.current) return;
-    const timer = setTimeout(() => { void window.cirrus.setSettings(diffFromDefaults(params)); }, params.settingsSaveDelayMs);
+    if (!state || !savedParams.current || params === savedParams.current) return;
+    const timer = setTimeout(() => {
+      const changes = localChanges(savedParams.current!, params);
+      savedParams.current = params;
+      if (Object.keys(changes).length > 0) void window.cirrus.setSettings(changes);
+    }, params.settingsSaveDelayMs);
     return () => clearTimeout(timer);
   }, [params, state]);
+
+  // Shared settings received from the server (task 6, D9), one batch at a time: applied at once, in one render; a setting
+  // changed here and not yet written keeps its value, which is written next.
+  useEffect(() => window.cirrus.onSettingsChanged((changes) => {
+    const before = savedParams.current;
+    if (!before) {
+      earlySettings.current.push(changes);
+      return;
+    }
+    const after = applyReceived(before, changes);
+    savedParams.current = after;
+    setParams((p) => keepUnsaved(p, before, after, Object.keys(changes)));
+  }), []);
 
   // LaTeX (plan 4b, D2): pdfLaTeX prepared with the preamble once the state is loaded, and again when it changes. Not
   // for the bench, which measures the graph.

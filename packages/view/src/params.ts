@@ -731,13 +731,22 @@ export function diffFromDefaults(p: RenderParams): Partial<RenderParams> {
   return out as Partial<RenderParams>;
 }
 
+/**
+ * One setting's value as a settings file is read: brought inside its bounds; undefined for a key that is no setting, or
+ * a value of another kind (a shared setting received from another PC, plan 5a task 6, goes through it too).
+ */
+export function settingValue(key: string, v: unknown): unknown {
+  const spec = SPEC_BY_KEY.get(key as keyof RenderParams);
+  return spec && valid(spec, v) ? bounded(spec, v) : undefined;
+}
+
 /** The defaults with every known, well-typed override applied: a corrupt settings file degrades key by key. */
 export function withOverrides(overrides: unknown): RenderParams {
   const out: Record<string, unknown> = { ...DEFAULT_PARAMS };
   if (overrides === null || typeof overrides !== 'object') return out as unknown as RenderParams;
   for (const [key, v] of Object.entries(overrides)) {
-    const spec = SPEC_BY_KEY.get(key as keyof RenderParams);
-    if (spec && valid(spec, v)) out[key] = bounded(spec, v);
+    const value = settingValue(key, v);
+    if (value !== undefined) out[key] = value;
   }
   return out as unknown as RenderParams;
 }

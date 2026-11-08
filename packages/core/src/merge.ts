@@ -11,9 +11,12 @@ import type { RemoteUnit, Unit } from './sync.ts';
 export const fileNameKey = (name: string): string => name.normalize('NFC').toLocaleLowerCase('fr');
 
 /** When a change was made, and by which PC. */
-interface Stamp { at: number; pc: string }
-/** The more recent change wins; at the same time, the greater PC identifier. A change with no stamp never wins. */
-const newer = (a: Stamp | undefined, b: Stamp): boolean => a !== undefined && (a.at > b.at || (a.at === b.at && a.pc > b.pc));
+export interface Stamp { at: number; pc: string }
+/**
+ * The more recent change wins; at the same time, the greater PC identifier. A change with no stamp never wins. The
+ * shared settings (task 6, R23) are decided by the same order, at the server and at each PC.
+ */
+export const newer = (a: Stamp | undefined, b: Stamp): boolean => a !== undefined && (a.at > b.at || (a.at === b.at && a.pc > b.pc));
 const same = (a: unknown, b: unknown): boolean => a === b || canonical(a ?? null) === canonical(b ?? null);
 /** A node or a connection in the trash, or absent. */
 const deleted = (r: unknown): boolean => r === null || r === undefined || (r as { trashedAt?: number }).trashedAt !== undefined;

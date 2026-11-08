@@ -19,7 +19,7 @@ import { lockBase } from './lock.ts';
 import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
 import { type FetchFn, importPublication, requestFetch } from './publications/fetch.ts';
 import { replayDirOf, replayFetch } from './publications/replay.ts';
-import { readSettings, writeSettings } from './settings.ts';
+import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
 import { stagedDir, startBase } from './sync/firstSync.ts';
 import { SyncHost, watchWindow } from './sync/host.ts';
@@ -223,12 +223,17 @@ ipcMain.handle('cirrus:load', (_e, fromTables: unknown) => {
 ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { saveSnapshot(store!, data, seq); });
 /** The settings: the defaults, or on the bench CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting. */
 const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir));
-/** The settings LaTeX reads at each compilation, several times: read from the file again once the interface writes it. */
+/**
+ * The settings LaTeX and the sync read, several times: read from the file again once the interface writes it, or the
+ * server changes it (task 6).
+ */
 let latexParams: RenderParams | null = null;
 const currentParams = (): RenderParams => (latexParams ??= withOverrides(settings()));
 ipcMain.handle('cirrus:settings:get', () => settings());
-ipcMain.handle('cirrus:settings:set', (_e, overrides: Record<string, unknown>) => {
-  if (!bench) writeSettings(dir, overrides);
+// The settings changed in Réglages, only those (key: value, null back to the default): settings.json, and with a server
+// paired, shared with it (task 6, D9).
+ipcMain.handle('cirrus:settings:set', (_e, changes: unknown) => {
+  if (!bench) sync?.setSettings(changes);
   latexParams = null;
 });
 /** The largest file an import takes, in bytes (setting maxImportMb). */
@@ -478,7 +483,9 @@ void app.whenReady().then(() => {
   pc = pcId(dir);
   sync = new SyncHost({
     fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher), secretsAt: (d) => fileSecrets(d, tokenCipher),
-    canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(), window: appWindows,
+    canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(),
+    // Shared settings received (task 6): read again by what reads them here, and told to the interface.
+    window: { ...appWindows, settings: (changes) => { latexParams = null; appWindows.settings(changes); } },
     // A base taken from the server (D7): the app quits as it does (the last snapshot, the sync stopped, the base closed),
     // then starts again, and swaps it in before it opens.
     relaunch: () => {

@@ -9,12 +9,13 @@ import { MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAG
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
 import { SeedError, Seeds } from './seed.ts';
+import { parseSettingChanges, SettingsError } from './settings.ts';
 import { hashToken, PairingError, Tokens } from './tokens.ts';
 
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
-// anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db`, and
-// `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7).
+// anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
+// paired PCs, the shared settings), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7).
 
 export interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number }
 export interface RunningServer { url: string; close(): Promise<void> }
@@ -261,6 +262,21 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         reply(res, 200, { results });
       },
     },
+    /**
+     * The shared settings (task 6, D9, R23, R24): GET, every one the server keeps, `{ [key]: { value, at, pc } }`; POST
+     * `{ changes: { [key]: { value, at } } }`, each kept if more recent than the setting's last change (then the
+     * greater PC identifier), the request checked whole before anything is written. Its answer: the setting as kept
+     * now, for every key sent (a change that lost gives the winner's); the event streams hear of those it changed.
+     */
+    '/settings': {
+      GET: (_req, res) => reply(res, 200, tokens.settings()),
+      POST: async (req, res, _url, who) => {
+        const changes = parseSettingChanges(await readJson(req, MAX_BODY_BYTES));
+        const { rows, changed } = tokens.putSettings(changes, who.pc);
+        if (Object.keys(changed).length > 0) hub.publishSettings(changed);
+        reply(res, 200, { settings: rows });
+      },
+    },
     '/files/missing': {
       POST: async (req, res) => {
         const body = await readJson(req, MAX_BODY_BYTES);
@@ -343,7 +359,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
       try {
         await handle(req, res);
       } catch (e) {
-        const known = e instanceof HttpError ? e : e instanceof PairingError || e instanceof SeedError ? new HttpError(e.status, e.message)
+        const known = e instanceof HttpError ? e : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError ? new HttpError(e.status, e.message)
           : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
         if (res.headersSent) {
           res.destroy();

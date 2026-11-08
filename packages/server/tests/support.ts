@@ -119,8 +119,8 @@ export class EventReader {
     }
   }
 
-  /** The next `n` writes relayed (event: unit), each checked to carry its number as its id. */
-  async units(n: number, timeoutMs = 4000): Promise<RemoteUnit[]> {
+  /** The next `n` events, whatever they are. */
+  async next(n: number, timeoutMs = 4000): Promise<SseEvent[]> {
     const limit = Date.now() + timeoutMs;
     while (this.events.length < n) {
       if (this.ended) throw new Error(`flux fermé après ${this.events.length} événements sur ${n}`);
@@ -132,12 +132,24 @@ export class EventReader {
       });
       this.wake = null;
     }
-    return this.events.splice(0, n).map((e) => {
+    return this.events.splice(0, n);
+  }
+
+  /** The next `n` writes relayed (event: unit), each checked to carry its number as its id. */
+  async units(n: number, timeoutMs = 4000): Promise<RemoteUnit[]> {
+    return (await this.next(n, timeoutMs)).map((e) => {
       if (e.event !== 'unit') throw new Error(`événement ${e.event} inattendu`);
       const u = JSON.parse(e.data!) as RemoteUnit;
       if (e.id !== String(u.seq)) throw new Error(`id ${e.id} pour le numéro ${u.seq}`);
       return u;
     });
+  }
+
+  /** The next shared settings changed (event: settings, task 6), without an id: the stream's numbers are the writes'. */
+  async settings(timeoutMs = 4000): Promise<Record<string, unknown>> {
+    const [e] = await this.next(1, timeoutMs);
+    if (e.event !== 'settings' || e.id !== undefined) throw new Error(`événement ${e.event} (id ${e.id}) au lieu de réglages`);
+    return JSON.parse(e.data!) as Record<string, unknown>;
   }
 
   /** The events received and not yet taken. */

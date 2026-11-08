@@ -1,10 +1,11 @@
 import { openAsBlob } from 'node:fs';
 import {
-  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit, SNAPSHOT_VERSION,
-  SYNC_PROTOCOL_VERSION, SyncDivergedError, truncateLabel, type Unit, type UnitResult,
+  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit,
+  type SettingChange, type SettingRow, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, SyncDivergedError, truncateLabel, type Unit, type UnitResult,
 } from '@cirrus/core';
 import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
+import { parseSettingRows } from '../settings.ts';
 import type { SecretStore, ServerConfig } from './config.ts';
 import { Downloads, filesToFetch, filesToSend, hasBlob, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
@@ -12,8 +13,10 @@ import { readEvents } from './events.ts';
 // The main process's sync client (plan 5a, task 3, D2 to D8). It sends this PC's pending writes to the server, in
 // order, files first; it receives the writes the server numbered, every PC's, its own included (their
 // acknowledgements), from its event stream, and hands them in batches to the interface's reconciliation (`reconcile`),
-// which the base writes; it downloads the files they bring, but the PDFs. It depends on nothing of Electron: the network
-// (`fetch`), the secrets, the clock and the reconciliation are given, so that the tests run several PCs in one process.
+// which the base writes; it downloads the files they bring, but the PDFs. It shares the settings too (task 6, D9): the
+// server's read at each connection, those changed elsewhere received by the stream, this PC's sent with the writes. It
+// depends on nothing of Electron: the network (`fetch`), the secrets, the clock and the reconciliation are given, so that
+// the tests run several PCs in one process.
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs'>;
@@ -56,6 +59,18 @@ export interface SyncDeps {
   now(): number;
   params(): SyncParams;
   status(s: SyncStatus): void;
+  /** The shared settings (task 6, main/settings.ts's SharedSettings); none: the client shares none. */
+  settings?: SettingsSync;
+}
+
+/** What the client asks of this PC's shared settings (task 6, D9). */
+export interface SettingsSync {
+  /** The changes made here that the server has not answered for, by key. */
+  pending(): Record<string, SettingChange>;
+  /** Settings the server gave: `whole`, all it keeps (GET /settings); otherwise some (its stream). */
+  receive(rows: Record<string, SettingRow>, whole: boolean): void;
+  /** The server's answer to the changes `sent`: the setting as kept there now, for each key sent. */
+  acknowledge(sent: Record<string, SettingChange>, rows: Record<string, SettingRow>): void;
 }
 
 /** The format headers of /hello (D10): the server refuses another protocol, schema or snapshot version. */
@@ -307,6 +322,18 @@ export class SyncClient {
     const res = await this.request(conn, '/events', { headers: { 'Last-Event-ID': String(from), Accept: 'text/event-stream' } });
     await this.ok(res);
     if (!res.body) throw new Error('Flux du serveur sans corps.');
+    // The shared settings (task 6), read whole once the stream is open, and applied before anything it brings: a setting
+    // changed meanwhile comes by both, and its stamp keeps it from being applied twice (SharedSettings.receive).
+    if (this.deps.settings) {
+      const rows = await this.json(await this.request(conn, '/settings'));
+      let settings: Record<string, SettingRow>;
+      try {
+        settings = parseSettingRows(rows);
+      } catch (e) {
+        throw new Refusal(messageOf(e));
+      }
+      this.deps.settings.receive(settings, true);
+    }
     conn.received = from;
     conn.open = true;
     // Opened is not proven: a stream the server ends at once, or a reconciliation that always fails, would otherwise
@@ -319,7 +346,11 @@ export class SyncClient {
     this.progress(conn);
     started(this.send(conn));
     for await (const e of readEvents(res.body, conn.abort.signal)) {
-      // `settings` (task 6) and any other event: not this client's yet.
+      if (e.event === 'settings') {
+        this.settingsEvent(e.data);
+        continue;
+      }
+      // Any other event: not this client's.
       if (e.event !== 'unit') continue;
       let u: RemoteUnit;
       try {
@@ -333,6 +364,22 @@ export class SyncClient {
       conn.inbox.push(u);
       this.schedule(conn);
     }
+  }
+
+  /**
+   * Shared settings changed elsewhere (event `settings`, task 6), applied at once, one batch per event. One the client
+   * cannot read is only said: a setting is never worth stopping the writes.
+   */
+  private settingsEvent(data: string): void {
+    if (!this.deps.settings) return;
+    let rows: Record<string, SettingRow>;
+    try {
+      rows = parseSettingRows(JSON.parse(data));
+    } catch (e) {
+      console.warn(`Réglages reçus illisibles, ignorés : ${messageOf(e)}`);
+      return;
+    }
+    this.deps.settings.receive(rows, false);
   }
 
   /** The reconciliation of what arrived, once the window (syncReceiveBatchMs) since the first of it has passed. */
@@ -384,13 +431,16 @@ export class SyncClient {
   }
 
   /**
-   * The sender: the pending writes, in order, syncBatchUnits at most per request, the files they add first — when no
-   * reconciliation is under way, no refusal waits for one, and the base has received what a stale answer asked for.
+   * The sender: the shared settings changed here first (task 6), whatever the writes wait for; then the pending writes,
+   * in order, syncBatchUnits at most per request, the files they add first — when no reconciliation is under way, no
+   * refusal waits for one, and the base has received what a stale answer asked for.
    */
   private async send(conn: Connection): Promise<void> {
     const { store } = this.deps;
     try {
       while (!conn.closed) {
+        await this.sendSettings(conn);
+        if (conn.closed) return;
         await this.reconciled();
         if (conn.closed) return;
         const at = store.lastServerSeq();
@@ -424,6 +474,35 @@ export class SyncClient {
       }
     } catch (e) {
       conn.fail(e);
+    }
+  }
+
+  /**
+   * The shared settings changed here (task 6, D9): their latest values, MAX_SETTINGS_PER_REQUEST at most per POST
+   * /settings; the server's answer handed back (acknowledge), a change that lost giving way to the winner's. Changes the
+   * server refuses (400, 413: they would be refused again) are dropped, said in the console; any other failure ends the
+   * connection, and they go at the next one.
+   */
+  private async sendSettings(conn: Connection): Promise<void> {
+    const settings = this.deps.settings;
+    if (!settings) return;
+    const pending = settings.pending(), keys = Object.keys(pending);
+    for (let i = 0; i < keys.length && !conn.closed; i += MAX_SETTINGS_PER_REQUEST) {
+      const sent = Object.fromEntries(keys.slice(i, i + MAX_SETTINGS_PER_REQUEST).map((k) => [k, pending[k]]));
+      const res = await this.request(conn, '/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
+      if (res.status === 400 || res.status === 413) {
+        console.warn(`Réglages refusés par le serveur, abandonnés : ${await reasonOf(res)}`);
+        settings.acknowledge(sent, {});
+        continue;
+      }
+      const answer = await this.json(res);
+      let rows: Record<string, SettingRow>;
+      try {
+        rows = parseSettingRows((answer as { settings?: unknown } | null)?.settings);
+      } catch (e) {
+        throw new Refusal(messageOf(e));
+      }
+      settings.acknowledge(sent, rows);
     }
   }
 

@@ -68,6 +68,19 @@ export const MAX_HASHES_PER_REQUEST = 10_000;
  */
 export const MAX_JOURNAL_PAGE = 10_000;
 export const MAX_SEED_BYTES = 2 * 2 ** 30;
+/**
+ * The most shared settings in one POST /settings (task 6, R24), which the PC respects too (its client cuts its changes
+ * to it): more than twice the settings there are.
+ */
+export const MAX_SETTINGS_PER_REQUEST = 500;
+
+/**
+ * A shared setting's change as a PC sends it (POST /settings, task 6, D9): its value, JSON, null going back to the
+ * default; its time, the server's clock (D4).
+ */
+export interface SettingChange { value: unknown; at: number }
+/** A shared setting as the server keeps it: its last change, and the PC that made it (the more recent wins: `newer`). */
+export interface SettingRow extends SettingChange { pc: string }
 
 /** A received operation that does not apply to this PC's state: it no longer follows the server's. */
 export class SyncDivergedError extends Error {}
