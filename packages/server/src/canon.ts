@@ -3,8 +3,8 @@ import {
   addedViolation, applyOps, decodeState, encodeState, invertOp, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
   SyncFormatError, type Unit, type UnitResult,
 } from '@cirrus/core';
-import { filePath, LocalStore } from '@cirrus/store';
-import { SERVER_SNAPSHOT_UNITS } from './bounds.ts';
+import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
+import { MAX_JOURNAL_PAGE, SERVER_SNAPSHOT_UNITS } from './bounds.ts';
 
 // The reference base (plan 5a, D1): a base in a PC's format, numbered — each line's server number is its journal
 // number — and its state in memory, against which each write is checked as a command is.
@@ -38,7 +38,8 @@ function load(store: LocalStore): { s: State; snapshotSeq: number } {
 export class Canon {
   private readonly store: LocalStore;
   private readonly dir: string;
-  private readonly s: State;
+  /** Replaced once only, by a seed (task 5). */
+  private s: State;
   private readonly relay: (u: RemoteUnit) => void;
   /** The server's last number: its journal's last line. */
   private last: number;
@@ -88,6 +89,38 @@ export class Canon {
     if (s.nodes.size > 0 || s.connections.size > 0 || s.placements.size > 0) return false;
     for (const p of s.plans.values()) if (p.type !== 'lobby') return false;
     return true;
+  }
+
+  /**
+   * Holding no base yet (task 5, D7, R7): no write accepted and an empty state. Only such a server takes a PC's base
+   * whole (a seed), or an empty PC's lobby as its first write. A seeded base whose journal was empty (one built in bulk,
+   * as the bench's) leaves it with no write, but not empty.
+   */
+  fresh(): boolean {
+    return this.last === 0 && this.empty();
+  }
+
+  /**
+   * A PC's base taken whole by this fresh server (task 5, D7: POST /seed/done, every input checked by Seeds.take): its
+   * journal, each line numbered as this server numbers its own (server_seq = local_seq), and its state, written in one
+   * transaction; then the state in memory replaced, and the numbering goes on after its last line. A failure writes
+   * nothing and keeps the state.
+   */
+  seed(s: State, last: number, lines: (after: number, limit: number) => ChangeRow[]): void {
+    if (!this.fresh()) throw new Error('Ce serveur tient déjà une base.');
+    this.store.atomically(() => {
+      for (let after = 0; after < last; ) {
+        const page = lines(after, MAX_JOURNAL_PAGE);
+        if (page.length === 0) throw new Error(`Journal de la base reçue incomplet : il s’arrête à la ligne ${after} sur ${last}.`);
+        this.store.importJournal(page);
+        after = page.at(-1)!.localSeq;
+      }
+      this.store.importState(s, last);
+    });
+    this.s = s;
+    this.last = last;
+    this.snapshotSeq = last;
+    this.sinceSnapshot = 0;
   }
 
   /**

@@ -4,7 +4,7 @@ import { createNode, createPlan, decodeState, editNode, encodeState, type Id, ty
 import { afterEach, expect, test, vi } from 'vitest';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { FIRST_SYNC_LATER, insecureServer, SERVER_NOT_EMPTY, watchWindow } from '../src/main/sync/host.ts';
+import { insecureServer, watchWindow } from '../src/main/sync/host.ts';
 import { EventEmitter } from 'node:events';
 import { AppPc } from './support/appPc.ts';
 import { created, Lab, sleep, until } from './support/virtualPc.ts';
@@ -39,7 +39,7 @@ test('R10 : sans HTTPS, seul un serveur de cette machine', () => {
   expect(insecureServer('http://127.0.0.2:7310')).toBe(true);
 });
 
-test('jumeler : refusé sans chiffrement de Windows, pour un http hors de cette machine, pour une base pas vide, sans rien demander au serveur ; un code faux : le message du serveur', async () => {
+test('jumeler : refusé sans chiffrement de Windows, pour un http hors de cette machine, sans code ni nom, sans rien demander au serveur ; un code faux : le message du serveur', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');
   const code = l.code('Portable');
@@ -50,9 +50,6 @@ test('jumeler : refusé sans chiffrement de Windows, pour un http hors de cette 
   expect(await a.sync.pair('ftp://127.0.0.1', code, 'Portable')).toEqual({ ok: false, message: 'Adresse du serveur invalide : http://hôte:port attendu.' });
   expect(await a.sync.pair(l.url, ' ', 'Portable')).toEqual({ ok: false, message: 'Donne le code de jumelage affiché par le serveur.' });
   expect(await a.sync.pair(l.url, code, '  ')).toEqual({ ok: false, message: 'Donne un nom à ce PC.' });
-  // A base with a plan besides its lobby is not empty (D7): its first sync comes with the next step (R8).
-  await a.session.run((s) => createPlan(s, 'Thèse', 'plan'));
-  expect(await a.sync.pair(l.url, code, 'Portable')).toEqual({ ok: false, message: FIRST_SYNC_LATER });
   expect(a.net.requests).toEqual([]);
   expect(existsSync(join(a.dir, SERVER_FILE))).toBe(false);
   // The code was not spent: an empty PC takes it; a wrong one gets the server's word.
@@ -92,19 +89,23 @@ test('jumeler un PC vide à un serveur vide : le jeton chiffré dans serveur.jso
   expect(a.store.loadState().nodes.get(X)?.title).toBe('X par A');
 });
 
-test('un serveur dont le journal n’est pas vide, même d’un lobby seul : jumelage refusé après l’échange du code, rien de gardé ni de démarré (R11 : la première synchro arrive avec l’étape suivante)', async () => {
+test('un serveur dont le journal n’est pas vide, même d’un lobby seul : un PC vide se voit proposer de prendre sa base (R7) ; rien de gardé ni de démarré avant sa réponse', async () => {
   const l = (lab = await Lab.start());
   // A first PC paired: its lobby is the server's first write.
   const first = await app(l, 'pc-0');
   expect(await first.sync.pair(l.url, l.code('Premier'), 'Premier')).toEqual({ ok: true });
   await until(async () => (await l.lastSeq()) === 1);
   const a = await app(l, 'pc-a');
-  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: false, message: SERVER_NOT_EMPTY });
-  // A plan besides the lobby, from a virtual PC: refused the same.
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'adopt', nodes: 0 } });
+  // The question held by the main process, for the block to show again (a panel closed and opened).
+  expect(a.host.info()).toMatchObject({ paired: false, url: l.url, name: 'Portable', offer: { offer: { kind: 'adopt' } } });
+  expect(await a.sync.first('cancel')).toMatchObject({ ok: false });
+  expect(a.host.info()).toEqual({ paired: false, url: '', name: 'PORTABLE' });
+  // A plan besides the lobby, from a virtual PC: the same offer.
   const b = await l.pc('pc-b');
   b.act((s) => createPlan(s, 'Thèse', 'plan'));
   await l.settle([b]);
-  expect(await a.sync.pair(l.url, l.code('Portable 2'), 'Portable')).toEqual({ ok: false, message: SERVER_NOT_EMPTY });
+  expect(await a.sync.pair(l.url, l.code('Portable 2'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'adopt', nodes: 0 } });
   expect(existsSync(join(a.dir, SERVER_FILE))).toBe(false);
   expect(a.host.paired()).toBe(false);
   expect(a.net.count('GET', '/events')).toBe(0);
@@ -120,6 +121,9 @@ test('dissocier : le client arrêté, downloads.json et serveur.json effacés ; 
   writeFileSync(join(a.dir, DOWNLOADS_FILE), JSON.stringify({ hashes: ['a'.repeat(64)] }));
   await a.sync.unpair();
   expect([existsSync(join(a.dir, SERVER_FILE)), existsSync(join(a.dir, DOWNLOADS_FILE)), a.status?.state, a.host.paired()]).toEqual([false, false, 'off', false]);
+  // R15: its token revoked by the PC itself, at best.
+  expect(a.net.count('POST', '/unpair')).toBe(1);
+  expect(await l.pairedNames()).not.toContain('Portable');
   await until(() => a.view?.chip === null && a.view.veil === false);
   const before = a.net.requests.length;
   const lobby = [...a.session.state.plans.values()][0].id;

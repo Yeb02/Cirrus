@@ -4,7 +4,7 @@ import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 import type { PublicationResult } from '../main/publications/fetch.ts';
 import type { SyncStatus } from '../main/sync/client.ts';
-import type { Committed, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../main/sync/host.ts';
+import type { Committed, FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../main/sync/host.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -101,7 +101,8 @@ export interface CirrusBridge {
    * starts if a server is paired (its status). syncRetry: the chip's « Réessayer ». syncReconciled: the answer to
    * onSyncIncoming's message `id`, a reconciliation written by the base (its journal number) or why none (null).
    * syncPending: every pending write (JSON). syncServer: the server paired, or what to propose. syncPair, syncUnpair:
-   * the block « Serveur ». onSyncVeil: waking up, the veil rises.
+   * the block « Serveur »; syncFirst: its answer to the first pairing's offer (task 5, D7: send this PC's base, take the
+   * server's, or give up). onSyncVeil: waking up, the veil rises.
    */
   syncStart(): Promise<SyncStatus>;
   syncRetry(): void;
@@ -110,6 +111,7 @@ export interface CirrusBridge {
   syncServer(): Promise<ServerInfo>;
   syncStatus(): Promise<SyncStatus>;
   syncPair(url: string, code: string, name: string): Promise<PairResult>;
+  syncFirst(choice: FirstSyncChoice): Promise<PairResult>;
   syncUnpair(): Promise<void>;
   onSyncIncoming(fn: (m: SyncIncoming) => void): () => void;
   onSyncStatus(fn: (s: SyncStatus) => void): () => void;

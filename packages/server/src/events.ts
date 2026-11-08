@@ -85,6 +85,14 @@ export class Hub {
   /** Every stream ended (the server stops). */
   closeAll(): void {
     clearInterval(this.timer);
+    this.endStreams();
+  }
+
+  /**
+   * Every stream ended, the hub kept: a seed has replaced the base (task 5), and a stream live on the empty one would
+   * miss its lines; each PC reconnects, and catches up from its number through the journal.
+   */
+  endStreams(): void {
     for (const st of this.streams) {
       st.closed = true;
       st.res.end();

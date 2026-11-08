@@ -6,11 +6,13 @@ import type { RenderParams } from '@cirrus/view';
 import { FORMAT, SyncClient, type SyncStatus } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
+import { adoptBase, type FirstSyncOffer, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir } from './firstSync.ts';
 
 // The synchronisation in the app's main process (plan 5a, task 4), without Electron (wire.ts binds it to IPC, the
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,
 // stopped and started again at wake, stopped at quit, never two of these at once —; the reconciliation's round trip
-// through the interface, which holds the state; the pairing and the unpairing; each local write's time.
+// through the interface, which holds the state; the pairing, its first sync (task 5, D7: firstSync.ts), and the
+// unpairing; each local write's time.
 
 /** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */
 export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }
@@ -27,13 +29,21 @@ export type ReconciliationAnswer = Omit<Reconciliation, 'remote'> & { remote: { 
  */
 export type ReconcileOutcome = { reconciliation: ReconciliationAnswer } | { diverged: string } | { error: string };
 
-export type PairResult = { ok: true } | { ok: false; message: string };
+/**
+ * A pairing's outcome: paired (`restarting`: the app starts again on the base taken from the server); refused, why;
+ * or D7's question (`offer`), which `first` answers — until then nothing is kept, the token in memory only.
+ */
+export type PairResult = { ok: true; restarting?: true } | { ok: false; message: string; offer?: FirstSyncOffer };
+
+/** The answers to D7's offer: send this PC's base, take the server's (or replace this PC's with it), or give up. */
+export type FirstSyncChoice = 'seed' | 'adopt' | 'cancel';
 
 /**
  * The block « Serveur » of the settings: the server paired, its address and this PC's name there; not paired, the name
- * to propose (the machine's) and no address (the interface proposes its own).
+ * to propose (the machine's) and no address (the interface proposes its own), or, a pairing awaiting its answer, its
+ * server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is.
  */
-export interface ServerInfo { paired: boolean; url: string; name: string }
+export interface ServerInfo { paired: boolean; url: string; name: string; offer?: { message: string; offer: FirstSyncOffer } }
 
 /** What a local write's commit gives the interface: its journal number, and its time, the server's clock's (D4). */
 export interface Committed { seq: number; at: number }
@@ -54,6 +64,8 @@ export interface HostDeps {
   /** This PC's identifier (pc.json). */
   pc: string;
   secrets: SecretStore;
+  /** The server's configuration in another base's folder: the base taken from the server, staged (D7), starts paired. */
+  secretsAt(dir: string): SecretStore;
   /** Whether the token can be kept encrypted (safeStorage, DPAPI): never in clear on the disk. */
   canEncrypt(): boolean;
   params(): RenderParams;
@@ -61,15 +73,12 @@ export interface HostDeps {
   /** The name proposed for this PC: the machine's. */
   machineName: string;
   window: HostWindow;
+  /** The app quits and starts again: on the base taken from the server, swapped in before it opens (D7, R17). */
+  relaunch(): void;
 }
 
-/** R8: the first sync of a base that is not empty (D7) comes with the next step (task 5). */
-export const FIRST_SYNC_LATER = 'La base de ce PC n’est pas vide : l’envoyer au serveur, ou la remplacer par celle du serveur, arrive avec la prochaine étape de Cirrus. Ce PC n’est pas jumelé.';
-/**
- * R8, R11: a server whose journal is not empty, to a PC whose base is — even a lobby alone, another PC's (this one's
- * would make a second).
- */
-export const SERVER_NOT_EMPTY = 'Le serveur tient déjà une base : la prendre sur ce PC arrive avec la prochaine étape de Cirrus. Ce PC n’est pas jumelé ; sur le serveur, révoque-le (revoquer) avant de le jumeler de nouveau.';
+/** A first sync that did not happen: this PC unpaired (its token revoked, R15), its base as it was. */
+const UNTOUCHED = 'Ce PC n’est pas jumelé, et sa base reste telle quelle.';
 
 /** The hosts a server without HTTPS may have (R10): this machine's. */
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost']);
@@ -113,6 +122,13 @@ export class SyncHost {
    */
   private ready = false;
   private closed = false;
+  /**
+   * A pairing done (/pair, /hello) that awaits the user's answer to D7's offer (`first`): its server and token, in
+   * memory only — nothing is written, nothing starts, until the base's first sync is settled (R8).
+   */
+  private offered: { config: ServerConfig; offer: FirstSyncOffer } | null = null;
+  /** The first sync under way (seed, adopt): aborted if the app quits meanwhile. */
+  private firstSync: AbortController | null = null;
   /** start, stop, pairing, unpairing, waking: one at a time, in order (never a start while a stop runs). */
   private cycle: Promise<void> = Promise.resolve();
   private nextId = 0;
@@ -148,7 +164,9 @@ export class SyncHost {
   }
 
   info(): ServerInfo {
-    return this.config ? { paired: true, url: this.config.url, name: this.config.name } : { paired: false, url: '', name: this.deps.machineName };
+    if (this.config) return { paired: true, url: this.config.url, name: this.config.name };
+    const o = this.offered;
+    return o ? { paired: false, url: o.config.url, name: o.config.name, offer: { message: offerMessage(o.offer), offer: o.offer } } : { paired: false, url: '', name: this.deps.machineName };
   }
 
   /** The pending writes, all of them, as JSON: the interface's list at pairing (in its queue: none is written meanwhile). */
@@ -197,9 +215,15 @@ export class SyncHost {
     });
   }
 
-  /** Quitting: the client stopped (the reconciliations under way rejected first: detach), nothing started again. */
+  /**
+   * Quitting: a first sync under way aborted, an offer left unanswered given up (its token stays at the server until
+   * `revoquer`: quitting does not wait on the network), the client stopped (the reconciliations under way rejected
+   * first: detach), nothing started again.
+   */
   close(): Promise<void> {
     this.closed = true;
+    this.offered = null;
+    this.firstSync?.abort();
     this.detach();
     return this.step(() => this.client.stop());
   }
@@ -299,11 +323,12 @@ export class SyncHost {
   }
 
   /**
-   * Pairs this PC (D3), the code `jumeler` showed traded for a token, kept encrypted in serveur.json; the interface then
-   * takes its pending writes and starts the synchronisation (start). Refused, in French, before anything is asked of
-   * the server: without encryption (no token in clear), an http: address off this machine (R10), a base that is not
-   * empty (R8, D7: the next step sends it, or replaces it). After the exchange: a server whose journal is not empty
-   * (R11: this PC's lobby becomes its first write), or of another format (D10); nothing is kept then.
+   * Pairs this PC (D3), the code `jumeler` showed traded for a token. Refused, in French, before anything is asked of
+   * the server: without encryption (no token in clear), an http: address off this machine (R10), without a code or a
+   * name. Then /pair and /hello, which tells the server's base and format (D10), and D7 decides: both empty, paired at
+   * once — the token kept encrypted in serveur.json, the interface then takes its pending writes and starts the sync
+   * (start), and this PC's lobby becomes the server's first write —; otherwise the offer (`first` answers it). A refusal
+   * after /pair revokes the token (R15): nothing is kept.
    */
   async pair(url: unknown, code: unknown, name: unknown): Promise<PairResult> {
     let result: PairResult = { ok: false, message: 'Jumelage interrompu.' };
@@ -333,9 +358,8 @@ export class SyncHost {
     const typedCode = typeof code === 'string' ? code.trim() : '', typedName = typeof name === 'string' ? name.trim() : '';
     if (typedCode === '') return no('Donne le code de jumelage affiché par le serveur.');
     if (typedName === '') return no('Donne un nom à ce PC.');
-    const { store } = this.deps;
-    // A base that already received from a server is not new either: its stream would resume at a number this one never gave.
-    if (!store.isEmpty() || store.lastServerSeq() > 0) return no(FIRST_SYNC_LATER);
+    // An offer left unanswered (a page reloaded meanwhile): given up, its token revoked.
+    await this.giveUp();
     // Each request within syncConnectTimeoutMs: a server that never answers holds neither the block nor the quit.
     const ms = this.deps.params().syncConnectTimeoutMs;
     const bounded: typeof fetch = (input, init) => this.deps.fetch(input, { ...init, signal: AbortSignal.timeout(ms) });
@@ -345,34 +369,117 @@ export class SyncHost {
     } catch (e) {
       return no(messageOf(e));
     }
+    // Refused from here: the token just given revoked (R15), so that the PC is not left registered.
+    const refuse = async (message: string): Promise<PairResult> => {
+      await revokeSelf(this.deps.fetch, config, ms);
+      return no(message);
+    };
     // The server's base (D7) and format (D10), which only a token may ask.
     let hello: unknown;
     try {
       const res = await bounded(`${config.url}/hello`, { headers: { ...FORMAT, Authorization: `Bearer ${config.token}` } });
       hello = await res.json().catch(() => null);
-      if (!res.ok) return no(isObject(hello) && typeof hello.error === 'string' ? hello.error : `Réponse ${res.status} du serveur.`);
+      if (!res.ok) return refuse(isObject(hello) && typeof hello.error === 'string' ? hello.error : `Réponse ${res.status} du serveur.`);
     } catch (e) {
-      return no(`Serveur injoignable (${config.url}) : ${messageOf(e)}.`);
+      return refuse(`Serveur injoignable (${config.url}) : ${messageOf(e)}.`);
     }
-    if (!isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq)) return no('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
-    if (!hello.empty || hello.lastSeq !== 0) return no(SERVER_NOT_EMPTY);
+    if (!isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq) || !Number.isSafeInteger(hello.nodes)) {
+      return refuse('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
+    }
+    const server = { lastSeq: hello.lastSeq as number, empty: hello.empty, nodes: hello.nodes as number };
+    const offer = firstSyncOffer(this.deps.store, this.deps.dir, server, new Date(this.deps.now()));
+    if (offer) {
+      this.offered = { config, offer };
+      return { ok: false, message: offerMessage(offer), offer };
+    }
     this.deps.secrets.write(config);
     this.config = config;
     return { ok: true };
   }
 
+  /** An offer left unanswered given up: its token revoked, at best (R15). */
+  private async giveUp(): Promise<void> {
+    const left = this.offered;
+    this.offered = null;
+    if (left) await revokeSelf(this.deps.fetch, left.config, this.deps.params().syncConnectTimeoutMs);
+  }
+
   /**
-   * Unpairs this PC: the client stopped (a reconciliation under way ends first), serveur.json removed, then the list of
-   * downloads to do (at best: a failure is only reported). The base then behaves as without a server (plan 4c); its
-   * pending writes stay pending.
+   * The user's answer to D7's offer (the block « Serveur »), after whatever step runs:
+   * - « seed », to a server that holds no base: this PC's sent (seedBase), its lines numbered, then paired — the
+   *   interface takes its pending writes (those made meanwhile) and starts the sync;
+   * - « adopt », to a server that holds one (this PC's base empty, or to be replaced): the server's staged beside this
+   *   one (adoptBase), then the app starts again on it (relaunch), paired; this base is never touched here;
+   * - « cancel », or a choice not offered: given up.
+   * Any failure, and a cancel, revoke the token (R15): this PC stays unpaired, its base as it was.
+   */
+  async first(choice: unknown): Promise<PairResult> {
+    let result: PairResult = { ok: false, message: 'Jumelage interrompu.' };
+    await this.step(async () => {
+      try {
+        result = await this.firstNow(choice);
+      } catch (e) {
+        result = { ok: false, message: `Jumelage interrompu : ${messageOf(e)}` };
+      }
+    });
+    return result;
+  }
+
+  private async firstNow(choice: unknown): Promise<PairResult> {
+    const no = (message: string): PairResult => ({ ok: false, message });
+    const offered = this.offered;
+    if (!offered) return no('Aucun jumelage n’attend de réponse.');
+    this.offered = null;
+    const { config, offer } = offered, { deps } = this;
+    const revoke = () => revokeSelf(deps.fetch, config, deps.params().syncConnectTimeoutMs);
+    if (choice === 'cancel') {
+      await revoke();
+      return no('Jumelage annulé : ce PC n’est pas jumelé.');
+    }
+    if (this.closed || !(choice === 'seed' ? offer.kind === 'seed' : choice === 'adopt' && offer.kind !== 'seed')) {
+      await revoke();
+      return no('Ce choix n’est pas proposé : jumelage annulé, ce PC n’est pas jumelé.');
+    }
+    const abort = (this.firstSync = new AbortController());
+    try {
+      if (choice === 'seed') {
+        try {
+          await seedBase({ fetch: deps.fetch, store: deps.store, dir: deps.dir, config, signal: abort.signal });
+        } catch (e) {
+          if (!this.closed) await revoke();
+          return no(`Base non envoyée : ${sentence(messageOf(e))} ${UNTOUCHED}`);
+        }
+        deps.secrets.write(config);
+        this.config = config;
+        return { ok: true };
+      }
+      try {
+        await adoptBase({ fetch: deps.fetch, dir: deps.dir, pc: deps.pc, config, secrets: deps.secretsAt(stagedDir(deps.dir)), signal: abort.signal });
+      } catch (e) {
+        if (!this.closed) await revoke();
+        return no(`Base du serveur non prise : ${sentence(messageOf(e))} ${UNTOUCHED}`);
+      }
+      deps.relaunch();
+      return { ok: true, restarting: true };
+    } finally {
+      this.firstSync = null;
+    }
+  }
+
+  /**
+   * Unpairs this PC: the client stopped (a reconciliation under way ends first), serveur.json removed, its token revoked
+   * by itself at the server (R15, at best, within syncConnectTimeoutMs), then the list of downloads to do (at best: a
+   * failure is only reported). The base then behaves as without a server (plan 4c); its pending writes stay pending.
    */
   unpair(): Promise<void> {
     return this.step(async () => {
       this.started = false;
       await this.client.stop();
-      // Unpaired first: a list that cannot be removed (a file held) leaves a base without a server, as wanted.
+      // Unpaired first: a list that cannot be removed (a file held), or a server gone, leaves a base without a server, as wanted.
+      const config = this.config;
       this.deps.secrets.write(null);
       this.config = null;
+      if (config) await revokeSelf(this.deps.fetch, config, this.deps.params().syncConnectTimeoutMs);
       try {
         rmSync(join(this.deps.dir, DOWNLOADS_FILE), { force: true });
       } catch (e) {

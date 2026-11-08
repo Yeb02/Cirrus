@@ -2,10 +2,11 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
-  type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
-  OpConflictError, type PhantomRec, type Placement, type PlanRec, type PreambleRec, type Reconciliation, type RemoteUnit, snapshotVersion, type State,
-  subjectOf, type TagKeyDef, type Unit, uuidv7,
+  type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, encodeState, type Flow, flowOf, fromSnapshot, type Id, MAX_ID_CHARS,
+  MAX_LABEL_CHARS, type NodeRec, type Op, OpConflictError, parseOp, type PhantomRec, type Placement, type PlanRec, type PreambleRec, type Reconciliation,
+  type RemoteUnit, snapshotVersion, type State, subjectOf, SyncFormatError, type TagKeyDef, type Unit, uuidv7,
 } from '@cirrus/core';
+import { insertState } from './bulk.ts';
 import { migrate } from './schema.ts';
 
 export { SCHEMA_VERSION } from './schema.ts';
@@ -44,6 +45,41 @@ const toRow = (r: ChangeDbRow): ChangeRow => ({
   localSeq: r.local_seq, serverSeq: r.server_seq, actionId: r.action_id, label: r.label, flow: r.flow as Flow, at: r.at, pc: r.pc, subject: r.subject,
   op: JSON.parse(r.op) as Op, unit: r.unit, kind: r.kind as ChangeKind, superseded: r.superseded !== 0,
 });
+
+const KINDS: readonly ChangeKind[] = ['local', 'remote', 'rewind'];
+const ROW_FIELDS = ['localSeq', 'serverSeq', 'actionId', 'label', 'at', 'pc', 'op', 'unit', 'kind', 'superseded'] as const;
+/** What a line says that is read again from its operation: taken as given, never trusted. */
+const DERIVED = ['flow', 'subject'];
+
+/**
+ * A journal line received from elsewhere (plan 5a, task 5, D7: a seeding PC's, by the server; the server's, by a PC
+ * that adopts its base), checked whole before any of it is written: its fields of the right type and no other, its
+ * identifiers of 1 to MAX_ID_CHARS characters, its label of MAX_LABEL_CHARS at most, its operation as parseOp checks a
+ * write's; `localSeq`, the journal number it must have. Its flow and subject are read from its operation. Throws
+ * SyncFormatError, in French, otherwise.
+ */
+export function parseChangeRow(x: unknown, localSeq: number): ChangeRow {
+  const bad = (why: string): never => { throw new SyncFormatError(why); };
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return bad('ce n’est pas un objet.');
+  const r = x as Record<string, unknown>;
+  for (const k of ROW_FIELDS) if (r[k] === undefined) bad(`${k} manque.`);
+  for (const k in r) if (r[k] !== undefined && !(ROW_FIELDS as readonly string[]).includes(k) && !DERIVED.includes(k)) bad(`${k} est inattendu.`);
+  if (r.localSeq !== localSeq) bad(`son numéro (${String(r.localSeq).slice(0, 20)}) ne suit pas la ligne ${localSeq - 1}.`);
+  if (r.serverSeq !== null && (!Number.isSafeInteger(r.serverSeq) || (r.serverSeq as number) < 1)) bad('son numéro au serveur n’est ni nul ni un entier positif.');
+  for (const k of ['actionId', 'pc', 'unit']) {
+    const v = r[k];
+    if (typeof v !== 'string' || v.length === 0 || v.length > MAX_ID_CHARS) bad(`${k} n’est pas un identifiant de 1 à ${MAX_ID_CHARS} caractères.`);
+  }
+  if (typeof r.label !== 'string' || r.label.length > MAX_LABEL_CHARS) bad(`son libellé n’est pas une chaîne de ${MAX_LABEL_CHARS} caractères au plus.`);
+  if (typeof r.at !== 'number' || !Number.isFinite(r.at)) bad('son heure n’est pas un nombre fini.');
+  if (!KINDS.includes(r.kind as ChangeKind)) bad('son genre n’est ni local, ni remote, ni rewind.');
+  if (typeof r.superseded !== 'boolean') bad('superseded n’est pas un booléen.');
+  const op = parseOp(r.op);
+  return {
+    localSeq, serverSeq: r.serverSeq as number | null, actionId: r.actionId as Id, label: r.label as string, flow: flowOf(op), at: r.at as number, pc: r.pc as string,
+    subject: subjectOf(op), op, unit: r.unit as Id, kind: r.kind as ChangeKind, superseded: r.superseded as boolean,
+  };
+}
 
 /** Who wrote a group of journal lines: their write, action, label, time, PC and kind; the server's number of the first, if any. */
 interface Lines { unit: Id; action: Id; label: string; at: number; pc: string; kind: ChangeKind; serverSeq: number | null }
@@ -190,6 +226,8 @@ export class LocalStore {
   private readonly db: DatabaseSync;
   private readonly pc: string;
   private readonly statements = new Map<string, StatementSync>();
+  /** The transactions open, nested (atomically): only the outermost begins and ends one. */
+  private depth = 0;
   /** Prepared once per statement. */
   private readonly q: Query = (sql) => {
     let st = this.statements.get(sql);
@@ -327,11 +365,81 @@ export class LocalStore {
       if (r.rewind.length > 0) {
         for (const u of r.rebased) this.write(u.ops, { unit: u.unit, action: u.action, label: u.label, at: u.at, pc: u.pc, kind: 'local', serverSeq: null });
       }
-      if (r.remote.length > 0) {
-        q("INSERT INTO meta (key, value) VALUES ('last_server_seq', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(next - 1));
-      }
+      if (r.remote.length > 0) this.setLastServerSeq(next - 1);
     });
     return this.lastSeq();
+  }
+
+  private setLastServerSeq(n: number): void {
+    this.q("INSERT INTO meta (key, value) VALUES ('last_server_seq', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(n));
+  }
+
+  /**
+   * Lines of another base's journal appended as they were (plan 5a, task 5, D7: a base taken whole — the server's, by a
+   * PC that adopts it; a PC's, by the empty server it seeds): each keeps its journal number, which must follow the last
+   * one, its server number, write, action, label, time, PC, kind and whether it was replaced; its flow and subject are
+   * read from its operation. The caller has checked each operation (parseOp); the tables are not touched — the state
+   * comes after, whole (importState). The last server number the lines carry becomes last_server_seq, with them. One
+   * transaction, all or nothing; costs the lines given.
+   */
+  importJournal(rows: readonly ChangeRow[]): void {
+    if (rows.length === 0) return;
+    this.transaction(() => {
+      const insert = this.q('INSERT INTO changes (local_seq, server_seq, action_id, label, flow, at, pc, subject, op, unit, kind, superseded) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      let next = this.lastSeq() + 1, numbered = 0;
+      for (const r of rows) {
+        if (r.localSeq !== next) throw new Error(`Journal importé : la ligne ${r.localSeq} ne suit pas la ${next - 1}.`);
+        insert.run(r.localSeq, r.serverSeq, r.actionId, r.label, flowOf(r.op), r.at, r.pc, subjectOf(r.op), JSON.stringify(r.op), r.unit, r.kind, r.superseded ? 1 : 0);
+        if (r.serverSeq !== null) numbered = r.serverSeq;
+        next++;
+      }
+      if (numbered > this.lastServerSeq()) this.setLastServerSeq(numbered);
+    });
+  }
+
+  /**
+   * A whole state written in bulk into a base that holds none (plan 5a, task 5, D7, after importJournal), as
+   * writeBenchBase writes one — the rows commit would write —, with its snapshot covering the journal up to `seq`, in
+   * place of any (an empty server's, of its empty state). One transaction, all or nothing: refused for a base whose
+   * tables hold anything, or a `seq` beyond the journal.
+   */
+  importState(s: State, seq: number): void {
+    this.transaction(() => {
+      const held = this.q(`SELECT EXISTS (SELECT 1 FROM nodes) OR EXISTS (SELECT 1 FROM connections) OR EXISTS (SELECT 1 FROM plans) OR EXISTS (SELECT 1 FROM tag_keys)
+        OR EXISTS (SELECT 1 FROM placements) OR EXISTS (SELECT 1 FROM branches) OR EXISTS (SELECT 1 FROM conn_layouts) OR EXISTS (SELECT 1 FROM phantoms)
+        OR EXISTS (SELECT 1 FROM preamble) AS held`).get() as { held: number };
+      if (held.held !== 0) throw new Error('Import de l’état refusé : la base tient déjà un état.');
+      insertState(this.db, s);
+      this.dropSnapshot();
+      this.writeSnapshot(encodeState(s), seq);
+    });
+  }
+
+  /**
+   * This PC's journal numbered by the empty server it seeded (plan 5a, task 5, D7): each line up to `last` takes its
+   * journal number as its server number, as the server keeps them (any number an earlier server gave is dropped); the
+   * lines after it, written while the base was being sent, stay pending; last_server_seq is `last`. One transaction.
+   */
+  numberSeeded(last: number): void {
+    this.transaction(() => {
+      if (!Number.isSafeInteger(last) || last < 0 || last > this.lastSeq()) throw new Error(`Numérotation refusée : la ligne ${last} n’est pas dans le journal.`);
+      this.q('UPDATE changes SET server_seq = NULL WHERE server_seq IS NOT NULL').run();
+      this.q('UPDATE changes SET server_seq = local_seq WHERE local_seq <= ?').run(last);
+      this.setLastServerSeq(last);
+    });
+  }
+
+  /**
+   * `fn` in one transaction, all or nothing; the store's writes it makes join it (the server takes a seeded base's
+   * journal and state at once, task 5). A failure inside it must reach `fn`'s end: caught there, the rest would commit.
+   */
+  atomically<T>(fn: () => T): T {
+    return this.transaction(fn);
+  }
+
+  /** How many nodes the base holds, those in the trash included: the first sync's offer (D7). */
+  nodeCount(): number {
+    return (this.q('SELECT COUNT(*) AS n FROM nodes').get() as { n: number }).n;
   }
 
   /**
@@ -382,9 +490,18 @@ export class LocalStore {
     return seq;
   }
 
-  /** `fn` in one write transaction: all of it, or nothing (ROLLBACK, and its error thrown). */
+  /** `fn` in one write transaction: all of it, or nothing (ROLLBACK, and its error thrown); inside another, part of it. */
   private transaction<T>(fn: () => T): T {
+    if (this.depth > 0) {
+      this.depth++;
+      try {
+        return fn();
+      } finally {
+        this.depth--;
+      }
+    }
     this.db.exec('BEGIN IMMEDIATE');
+    this.depth = 1;
     try {
       const out = fn();
       this.db.exec('COMMIT');
@@ -392,6 +509,8 @@ export class LocalStore {
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
+    } finally {
+      this.depth = 0;
     }
   }
 

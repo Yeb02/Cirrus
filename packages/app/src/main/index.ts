@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +21,7 @@ import { type FetchFn, importPublication, requestFetch } from './publications/fe
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings, writeSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
+import { stagedDir, swapStaged } from './sync/firstSync.ts';
 import { SyncHost, watchWindow } from './sync/host.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
 
@@ -407,6 +408,25 @@ void app.whenReady().then(() => {
     failOpen(e);
     return;
   }
+  // A base taken from the server by the last run (plan 5a, D7, R17), staged beside this one: swapped in before the base
+  // opens, while no other instance holds it (the lock just taken, then let go for the renames: the lock file is inside
+  // the folder). One stat when there is none.
+  if (lock && existsSync(stagedDir(dir))) {
+    lock.release();
+    try {
+      const done = swapStaged(dir);
+      if (done === 'swapped') console.log(`Base prise du serveur installée : ${dir}.`);
+      else console.warn(`Base prise du serveur incomplète (téléchargement interrompu) : effacée, ${dir} gardée.`);
+    } catch (e) {
+      console.error('Base prise du serveur non installée (elle le sera au prochain démarrage) :', e);
+    }
+    try {
+      lock = lockBase(dir);
+    } catch (e) {
+      failOpen(e);
+      return;
+    }
+  }
   if (!lock) {
     console.error(`Base déjà ouverte par une autre instance de Cirrus (une capture, le banc ou une autre fenêtre) : ${dir}. Cette instance s’arrête.`);
     app.exit(2);
@@ -455,8 +475,14 @@ void app.whenReady().then(() => {
   // is paired; the token kept by safeStorage (DPAPI), never in clear.
   pc = pcId(dir);
   sync = new SyncHost({
-    fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher),
+    fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher), secretsAt: (d) => fileSecrets(d, tokenCipher),
     canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(), window: appWindows,
+    // A base taken from the server (D7): the app quits as it does (the last snapshot, the sync stopped, the base closed),
+    // then starts again, and swaps it in before it opens.
+    relaunch: () => {
+      app.relaunch();
+      app.quit();
+    },
   });
   wireSync(sync);
   // A blob absent from the store is asked of the server, with one paired (D6); a thumbnail's never.

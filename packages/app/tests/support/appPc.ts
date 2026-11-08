@@ -24,6 +24,8 @@ const clone = <T>(x: T): T => structuredClone(x);
 const later = (fn: () => void) => { setTimeout(fn, 0); };
 
 export class AppPc {
+  /** Its folder's name in the lab: the same name opens the same base again (a restart). */
+  readonly name: string;
   readonly dir: string;
   readonly net = new Net();
   readonly store: LocalStore;
@@ -36,6 +38,8 @@ export class AppPc {
   readonly toasts: string[] = [];
   readonly incoming: SyncIncoming[] = [];
   veils = 0;
+  /** The app's relaunches asked for (a base taken from the server, D7): the test restarts it itself. */
+  relaunched = 0;
   /** Whether the window is there: closed, the host's messages find no one. */
   windowOpen = true;
   canEncrypt = true;
@@ -45,6 +49,7 @@ export class AppPc {
   private readonly listeners = { incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[] };
 
   constructor(lab: Lab, name: string, params: Partial<RenderParams> = {}) {
+    this.name = name;
     this.dir = join(lab.root, name);
     mkdirSync(this.dir, { recursive: true });
     this.params = { ...DEFAULT_PARAMS, ...TEST_PARAMS, ...params };
@@ -68,8 +73,8 @@ export class AppPc {
       },
     };
     this.host = new SyncHost({
-      fetch: this.net.fetch, store: this.store, dir: this.dir, pc: pcId(this.dir), secrets: fileSecrets(this.dir, XOR), canEncrypt: () => this.canEncrypt,
-      params: () => this.params, now: () => lab.clock, machineName: 'PORTABLE', window,
+      fetch: this.net.fetch, store: this.store, dir: this.dir, pc: pcId(this.dir), secrets: fileSecrets(this.dir, XOR), secretsAt: (d) => fileSecrets(d, XOR),
+      canEncrypt: () => this.canEncrypt, params: () => this.params, now: () => lab.clock, machineName: 'PORTABLE', window, relaunch: () => { this.relaunched++; },
     });
     const on = <K extends keyof AppPc['listeners']>(k: K) => (fn: AppPc['listeners'][K][number]) => {
       (this.listeners[k] as unknown[]).push(fn);
@@ -81,6 +86,7 @@ export class AppPc {
       syncReconciled: async (id, outcome) => clone(this.host.reconciled(id, clone(outcome))),
       syncPending: async () => this.host.pending(),
       syncPair: async (url, code, name) => clone(await this.host.pair(url, code, name)),
+      syncFirst: async (choice) => clone(await this.host.first(choice)),
       syncUnpair: () => this.host.unpair(),
       syncServer: async () => clone(this.host.info()),
       onSyncIncoming: on('incoming'),

@@ -5,14 +5,16 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { encodeState, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
-import { MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_UNITS_PER_REQUEST } from './bounds.ts';
+import { MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_SEED_BYTES, MAX_UNITS_PER_REQUEST } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
+import { SeedError, Seeds } from './seed.ts';
 import { hashToken, PairingError, Tokens } from './tokens.ts';
 
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
-// anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it) and `dataDir/serveur.db`.
+// anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db`, and
+// `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7).
 
 export interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number }
 export interface RunningServer { url: string; close(): Promise<void> }
@@ -122,7 +124,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     canon = Canon.open(baseDir, (u) => hub?.publish(u));
     const t = tokens, c = canon;
     hub = new Hub((after, minLines) => c.base.unitsAfter(after, minLines), (hash) => t.pcOfHash(hash) !== null);
-    return await listen({ port: opts.port, host, now, baseDir, tokens: t, canon: c, hub, lock });
+    return await listen({ port: opts.port, host, now, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), lock });
   } catch (e) {
     hub?.closeAll();
     canon?.close();
@@ -133,10 +135,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 }
 
 /** What a started server holds, opened by startServer: closed by its `close`. */
-interface Parts { port: number; host: string; now: () => number; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; lock: { release(): void } }
+interface Parts { port: number; host: string; now: () => number; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; lock: { release(): void } }
+
+/** A seed's steps, to a server that holds a base already (task 5, D7, R16). */
+const NOT_FRESH = 'Le serveur tient déjà une base : il ne reçoit celle d’un PC que vide.';
 
 /** Listens, and serves the routes. */
-async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, lock }: Parts): Promise<RunningServer> {
+async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, seeds, lock }: Parts): Promise<RunningServer> {
   /** The PC of the request's token, and the token's hash; 401 otherwise, checked before anything of the body is read. */
   const authenticate = (req: IncomingMessage): { pc: string; tokenHash: string } => {
     const token = BEARER.exec(req.headers.authorization ?? '')?.[1];
@@ -146,13 +151,73 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, lo
     return { pc, tokenHash };
   };
   const blob = (hash: string) => filePath(baseDir, { name: '', hash, size: 0 });
+  /** A seed's every step: only to a server that holds no base yet (D7, R16). */
+  const fresh = () => {
+    if (!canon.fresh()) throw new HttpError(409, NOT_FRESH);
+  };
 
   const routes: Record<string, Record<string, (req: IncomingMessage, res: ServerResponse, url: URL, who: { pc: string; tokenHash: string }) => Promise<void> | void>> = {
     '/hello': {
       GET: (req, res) => {
         const refusal = formatRefusal(req);
         if (refusal) throw new HttpError(409, refusal);
-        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty() });
+        // The nodes it holds: the first pairing's offer to take its base names them (task 5, D7).
+        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty(), nodes: canon.state.nodes.size });
+      },
+    },
+    // R15: a PC revokes its own token — a pairing it cancels, a first sync that fails, « Dissocier ce PC » —, never another's.
+    '/unpair': {
+      POST: (req, res, _url, who) => {
+        req.resume();
+        tokens.revokeToken(who.tokenHash);
+        seeds.drop(who.tokenHash);
+        res.writeHead(204).end();
+      },
+    },
+    /**
+     * The first sync (task 5, D7, R16): a PC sends its base to this server, which holds none yet. POST /seed: its
+     * snapshot (raw bytes, MAX_SEED_BYTES at most, streamed into a temporary file), the journal line it covers in
+     * Cirrus-Seq; the seed under way, another PC's included, is dropped (the last to start owns it). Then its journal by
+     * pages (POST /seed/journal), then POST /seed/done, which takes the whole and makes the server not empty. Until
+     * then, nothing of it shows.
+     */
+    '/seed': {
+      POST: async (req, res, _url, who) => {
+        if (!/^application\/octet-stream\s*(;|$)/i.test(req.headers['content-type'] ?? '')) throw new HttpError(415, 'Corps attendu : l’instantané de la base (Content-Type: application/octet-stream).');
+        const header = req.headers['cirrus-seq'];
+        if (typeof header !== 'string' || header === '') throw new HttpError(400, 'En-tête Cirrus-Seq attendu : la ligne du journal que couvre l’instantané.');
+        const seq = count(header, 0, 'Cirrus-Seq');
+        if (Number(req.headers['content-length']) > MAX_SEED_BYTES) throw tooBig(MAX_SEED_BYTES);
+        fresh();
+        await seeds.begin(who.tokenHash, req, seq);
+        res.writeHead(204).end();
+      },
+    },
+    '/seed/journal': {
+      POST: async (req, res, _url, who) => {
+        fresh();
+        seeds.owned(who.tokenHash);
+        const body = await readJson(req, MAX_BODY_BYTES);
+        fresh();
+        reply(res, 200, { received: seeds.page(who.tokenHash, body) });
+      },
+    },
+    '/seed/done': {
+      POST: async (req, res, _url, who) => {
+        fresh();
+        seeds.owned(who.tokenHash);
+        const body = await readJson(req, MAX_BODY_BYTES);
+        fresh();
+        // From here to the answer, synchronous: no write comes in between.
+        const taken = seeds.take(who.tokenHash, body);
+        try {
+          canon.seed(taken.state, taken.last, taken.lines);
+        } finally {
+          seeds.drop();
+        }
+        // A stream live on the empty base would miss the seed's lines: each reconnects and catches up.
+        hub.endStreams();
+        reply(res, 200, { lastSeq: canon.seq });
       },
     },
     '/events': {
@@ -272,7 +337,8 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, lo
       try {
         await handle(req, res);
       } catch (e) {
-        const known = e instanceof HttpError ? e : e instanceof PairingError ? new HttpError(e.status, e.message) : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
+        const known = e instanceof HttpError ? e : e instanceof PairingError || e instanceof SeedError ? new HttpError(e.status, e.message)
+          : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
         if (res.headersSent) {
           res.destroy();
         } else if (known) {
@@ -301,6 +367,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, lo
       server.closeAllConnections();
       await closed;
       await Promise.allSettled([...inflight]);
+      seeds.drop();
       canon.close();
       tokens.close();
       lock.release();

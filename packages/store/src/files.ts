@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { FileRef } from '@cirrus/core';
@@ -136,6 +136,26 @@ async function placeAsync(storeDir: string, hash: string, tmp: string): Promise<
 
 /** A hash as the store names its blobs: 64 lower-case hexadecimal digits. */
 const HASH = /^[0-9a-f]{64}$/;
+
+/**
+ * Every blob the store holds (files/<first two hex>/<hash>), its temporaries and anything else aside: what a PC sends
+ * when it seeds an empty server, old versions included (plan 5a, task 5, D7). Lists the folders, reads no file.
+ */
+export function storedHashes(storeDir: string): string[] {
+  const root = join(storeDir, 'files'), out: string[] = [];
+  const list = (dir: string): string[] => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  for (const d of list(root)) {
+    if (!/^[0-9a-f]{2}$/.test(d)) continue;
+    for (const name of list(join(root, d))) if (HASH.test(name) && name.startsWith(d)) out.push(name);
+  }
+  return out;
+}
 
 /** Bytes received that the store refuses (receiveBlob): more than allowed (`tooBig`), or not those of their hash. */
 export class BlobError extends Error {

@@ -46,7 +46,7 @@ export function filesToFetch(units: readonly Unit[]): string[] {
 }
 
 /** A response's body, chunk by chunk; cancelled when its reader stops early (too many bytes, the wrong hash). */
-async function* chunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+export async function* chunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
   const reader = body.getReader();
   try {
     for (;;) {

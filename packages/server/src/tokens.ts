@@ -202,6 +202,14 @@ export class Tokens {
     });
   }
 
+  /**
+   * POST /unpair (R15): the PC of this token's hash unpaired by itself, its token worth nothing from the next request;
+   * no other PC touched. Whether there was one.
+   */
+  revokeToken(tokenHash: string): boolean {
+    return Number(this.q('DELETE FROM pcs WHERE token_hash = ?').run(tokenHash).changes) > 0;
+  }
+
   close(): void {
     this.db.close();
   }

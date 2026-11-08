@@ -4,7 +4,7 @@ import {
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import type { ServerInfo } from '../main/sync/host.ts';
+import type { FirstSyncChoice, ServerInfo } from '../main/sync/host.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
@@ -461,7 +461,7 @@ export function App() {
   };
   /** TinyTeX installed, the user having asked (the notice, the settings); how it goes is told by its state. */
   const installLatex = () => { window.cirrus.latexInstall().catch((e: unknown) => console.error('Installation de LaTeX :', e)); };
-  /** The block « Serveur » (plan 5a): pairing and unpairing, then what the main process now holds. */
+  /** The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing, then what the main process now holds. */
   const serverBlock = {
     info: server, status: syncView.status,
     onPair: async (url: string, code: string, name: string) => {
@@ -469,6 +469,13 @@ export function App() {
         return await sync.current!.pair(url, code, name);
       } finally {
         // What the main process holds, whatever happened here (review, Minor 3).
+        setServer(await window.cirrus.syncServer());
+      }
+    },
+    onFirst: async (choice: FirstSyncChoice) => {
+      try {
+        return await sync.current!.first(choice);
+      } finally {
         setServer(await window.cirrus.syncServer());
       }
     },

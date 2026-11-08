@@ -9,7 +9,7 @@ import type { SyncStatus } from '../src/main/sync/client.ts';
 import type { PairResult, ServerInfo, SyncIncoming } from '../src/main/sync/host.ts';
 import { type Committed, EditSession, type Opened, SnapshotSaver } from '../src/renderer/session.ts';
 import { chipOf, type SyncBridge, SyncSession, type SyncView } from '../src/renderer/sync/syncSession.ts';
-import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
+import { offerAction, ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 
 // The interface's side of the synchronisation (plan 5a, task 4): the session's reconciliation, in the same queue as the
 // actions; the veil and the chip; the block « Serveur » of the settings.
@@ -247,7 +247,7 @@ test('la pastille : rien sans serveur ; « À jour », « Envoi de n actions… 
 });
 
 /** A bridge as the preload gives it, its calls recorded; the main process's messages sent by the test. */
-function fakeBridge(o: { pending?: Unit[]; pair?: PairResult } = {}) {
+function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult } = {}) {
   const calls: string[] = [];
   const reconciled: { id: number; outcome: unknown }[] = [];
   const listeners = { incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[] };
@@ -262,6 +262,7 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult } = {}) {
     syncReconciled: async (id, outcome) => { reconciled.push({ id, outcome }); return 'reconciliation' in outcome ? ++seq : null; },
     syncPending: async () => { calls.push('pending'); return JSON.stringify(o.pending ?? []); },
     syncPair: async (url, code, name) => { calls.push(`pair ${url} ${code} ${name}`); return o.pair ?? { ok: true }; },
+    syncFirst: async (choice) => { calls.push(`first ${choice}`); return o.first ?? { ok: true }; },
     syncUnpair: async () => { calls.push('unpair'); },
     syncServer: async (): Promise<ServerInfo> => ({ paired: false, url: '', name: 'PORTABLE' }),
     onSyncIncoming: on('incoming'),
@@ -277,7 +278,7 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult } = {}) {
 }
 
 /** The interface's SyncSession over a session of world(), its views and toasts recorded. */
-function syncing(o: { pending?: Unit[]; pair?: PairResult; timeoutMs?: number } = {}) {
+function syncing(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; timeoutMs?: number } = {}) {
   const w = world();
   const fake = fakeBridge(o);
   const views: SyncView[] = [], toasts: string[] = [];
@@ -392,15 +393,39 @@ test('jumeler : le principal jumelle, la session prend la liste des écritures e
 
 test('le bloc « Serveur » : non jumelé, l’adresse, le code, le nom de ce PC et « Jumeler » ; jumelé, l’état et « Dissocier ce PC »', () => {
   const none = renderToStaticMarkup(createElement(ServerBlock, {
-    info: { paired: false, url: '', name: 'PORTABLE' }, status: { state: 'off' }, onPair: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
+    info: { paired: false, url: '', name: 'PORTABLE' }, status: { state: 'off' }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
   }));
   for (const text of ['Adresse du serveur', 'Code de jumelage', 'Nom de ce PC', 'Jumeler', 'value="http://127.0.0.1:7310"', 'value="PORTABLE"']) expect(none).toContain(text);
   expect(none).not.toContain('Dissocier');
   const paired = renderToStaticMarkup(createElement(ServerBlock, {
-    info: { paired: true, url: 'http://127.0.0.1:7310', name: 'Portable' }, status: { state: 'live', pending: 0 }, onPair: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
+    info: { paired: true, url: 'http://127.0.0.1:7310', name: 'Portable' }, status: { state: 'live', pending: 0 }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
   }));
   for (const text of ['http://127.0.0.1:7310', 'Portable', 'À jour', 'Dissocier ce PC']) expect(paired).toContain(text);
   expect(paired).not.toContain('Code de jumelage');
+});
+
+test('le premier jumelage (D7, tâche 5) : les boutons de l’offre et leurs nombres ; « Envoyer » fait suivre la session et démarre la synchro, « Prendre » attend le redémarrage', async () => {
+  expect(offerAction({ kind: 'seed', nodes: 2, files: 1 })).toMatchObject({ choice: 'seed', label: 'Envoyer la base de ce PC au serveur (2 nœuds, 1 fichier)' });
+  expect(offerAction({ kind: 'adopt', nodes: 1, archive: 'base-avant-jumelage-2026-11-08' })).toMatchObject({ choice: 'adopt', label: 'Prendre la base du serveur (1 nœud)' });
+  expect(offerAction({ kind: 'replace', nodes: 0, local: 3, archive: 'base-avant-jumelage-2026-11-08' })).toMatchObject({ choice: 'adopt', label: 'Remplacer la base de ce PC par celle du serveur (0 nœud)' });
+  // The question as the main process holds it (info.offer): the block shows it in place of the form.
+  const asking = renderToStaticMarkup(createElement(ServerBlock, {
+    info: { paired: false, url: 'http://127.0.0.1:7310', name: 'Portable', offer: { message: 'Le serveur tient déjà une base : ce PC peut la prendre.', offer: { kind: 'adopt', nodes: 3, archive: 'base-avant-jumelage-2026-11-08' } } },
+    status: { state: 'off' }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
+  }));
+  for (const text of ['Le serveur tient déjà une base : ce PC peut la prendre.', 'Prendre la base du serveur (3 nœuds)', 'Annuler', '« base-avant-jumelage-2026-11-08 »']) expect(asking).toContain(text);
+  expect(asking).not.toContain('Code de jumelage');
+  const offer = { kind: 'seed', nodes: 2, files: 1 } as const;
+  const asked = syncing({ pair: { ok: false, message: 'Le serveur ne tient encore aucune base.', offer } });
+  await asked.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  expect(await asked.sync.pair('http://127.0.0.1:7310', 'X', 'P')).toEqual({ ok: false, message: 'Le serveur ne tient encore aucune base.', offer });
+  expect(asked.calls).toEqual(['pair http://127.0.0.1:7310 X P']);
+  expect(await asked.sync.first('seed')).toEqual({ ok: true });
+  expect(asked.calls).toEqual(['pair http://127.0.0.1:7310 X P', 'first seed', 'pending', 'start']);
+  const taking = syncing({ first: { ok: true, restarting: true } });
+  await taking.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  expect(await taking.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  expect(taking.calls).toEqual(['first adopt']);
 });
 
 test('revue, Important 2 : un instantané demandé pendant l’écriture d’une réconciliation ne se prend pas ; il se prend ensuite, au nouveau numéro, de l’état réconcilié', async () => {

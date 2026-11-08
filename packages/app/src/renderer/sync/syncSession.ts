@@ -1,6 +1,6 @@
 import { SyncDivergedError, type Unit } from '@cirrus/core';
 import type { SyncStatus } from '../../main/sync/client.ts';
-import type { PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../../main/sync/host.ts';
+import type { FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../../main/sync/host.ts';
 import { type EditSession, messageOf, type Opened } from '../session.ts';
 
 // The synchronisation in the interface (plan 5a, task 4, D8): the writes received reconciled by the session and written
@@ -15,6 +15,7 @@ export interface SyncBridge {
   syncReconciled(id: number, outcome: ReconcileOutcome): Promise<number | null>;
   syncPending(): Promise<string>;
   syncPair(url: string, code: string, name: string): Promise<PairResult>;
+  syncFirst(choice: FirstSyncChoice): Promise<PairResult>;
   syncUnpair(): Promise<void>;
   syncServer(): Promise<ServerInfo>;
   onSyncIncoming(fn: (m: SyncIncoming) => void): () => void;
@@ -108,14 +109,27 @@ export class SyncSession {
   }
 
   /**
-   * Pairs this PC (the block « Serveur »): the main process pairs; the session then takes every pending write, read in
-   * its queue (none written meanwhile), and the synchronisation starts. The refusal, in French. Paired by the main
+   * Pairs this PC (the block « Serveur »): the main process pairs, or asks D7's question (`offer`, which `first`
+   * answers); paired, the session takes every pending write, read in its queue (none written meanwhile), and the
+   * synchronisation starts. The refusal, in French. Paired by the main
    * process, it is done, whatever follows (review of task 4, Minor 3): a start that fails is said, and only the next
    * launch starts it — the main process never started the client, so there is no chip, and nothing to try again.
    */
   async pair(url: string, code: string, name: string): Promise<PairResult> {
-    const r = await this.deps.bridge.syncPair(url, code, name);
-    if (!r.ok) return r;
+    return this.paired(await this.deps.bridge.syncPair(url, code, name));
+  }
+
+  /**
+   * The answer to D7's offer that a pairing returned (the block « Serveur »): this PC's base sent, then as a pairing
+   * done; the server's taken, the app restarting on it (nothing more here); given up. The outcome, in French.
+   */
+  async first(choice: FirstSyncChoice): Promise<PairResult> {
+    return this.paired(await this.deps.bridge.syncFirst(choice));
+  }
+
+  /** A pairing the main process did (`ok`, not restarting): every pending write taken, then the sync started. */
+  private async paired(r: PairResult): Promise<PairResult> {
+    if (!r.ok || r.restarting) return r;
     const { bridge, session } = this.deps;
     try {
       await session.follow(this.pc, async () => JSON.parse(await bridge.syncPending()) as Unit[]);

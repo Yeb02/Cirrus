@@ -5,7 +5,7 @@
 // the pointer replays of the captures (CIRRUS_POINTER) skip. Then it reads what the page shows and what the base kept.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -1070,6 +1070,52 @@ const SCENARIOS = [
       } finally {
         await server.close();
         rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
+      }
+    },
+  },
+  {
+    // Plan 5a, task 5 (D7): the full test base paired with an empty server, by the block « Serveur »: the offer to send
+    // it, its counts; sent (every file of its store, its snapshot, its journal), its lines numbered, then the sync live.
+    name: 'envoyer la base de test à un serveur local vide, au premier jumelage (plan 5a, tâche 5)',
+    async run(page, base, data) {
+      const server = await localServer();
+      try {
+        const gear = await page.centre('.tabs .gear', '⚙');
+        await page.click(gear.x, gear.y);
+        const rubric = await page.centre('.settings .rubric-title', 'Serveur');
+        await page.click(rubric.x, rubric.y);
+        if (!(await page.until(`document.querySelectorAll('.server-block input').length === 3`))) throw new Error('le bloc « Serveur » ne montre pas ses trois champs');
+        const url = await serverField(page, 0);
+        await page.click(url.x, url.y);
+        await page.press('a', 'KeyA', 65, 2);
+        await page.type(server.url);
+        const code = await serverField(page, 1);
+        await page.click(code.x, code.y);
+        await page.type(server.code('Base de test'));
+        const pair = await page.centre('.server-block button', '^Jumeler$');
+        await page.click(pair.x, pair.y);
+        // The offer, with the base's counts: its nodes, the blobs of its store.
+        const nodes = base(`SELECT count(*) AS n FROM nodes`)[0].n, store = join(data, 'files');
+        const blobs = readdirSync(store).filter((d) => /^[0-9a-f]{2}$/.test(d)).reduce((n, d) => n + readdirSync(join(store, d)).filter((f) => /^[0-9a-f]{64}$/.test(f)).length, 0);
+        const plural = (n, noun) => `${n} ${noun}${n > 1 ? 's' : ''}`;
+        const label = `Envoyer la base de ce PC au serveur (${plural(nodes, 'nœud')}, ${plural(blobs, 'fichier')})`;
+        if (!(await page.until(`[...document.querySelectorAll('.server-offer button')].some((b) => b.textContent === ${JSON.stringify(label)})`, 10000))) {
+          throw new Error(`pas d’offre « ${label} » : ${await page.evaluate(`document.querySelector('.server-block')?.textContent ?? '(pas de bloc)'`)}`);
+        }
+        if (existsSync(join(data, 'serveur.json')) || server.journal().length !== 0) throw new Error('jumelé, ou la base envoyée, avant la réponse');
+        const send = await page.centre('.server-offer button', '^Envoyer la base');
+        await page.click(send.x, send.y);
+        if (!(await page.until(`[...document.querySelectorAll('.server-block button')].some((b) => b.textContent === 'Dissocier ce PC')`, 30000))) {
+          throw new Error(`pas jumelé : ${await page.evaluate(`document.querySelector('.server-error')?.textContent ?? document.querySelector('.server-block')?.textContent ?? '(aucun message)'`)}`);
+        }
+        if (!(await page.until(`document.querySelector('.tabs .sync-chip')?.textContent === 'À jour'`, 10000))) throw new Error(`la pastille dit « ${await chipText(page)} »`);
+        // The server holds its journal, line for line, and every file of its store; nothing of it is pending here.
+        const lines = base(`SELECT count(*) AS n FROM changes`)[0].n, pending = base(`SELECT count(*) AS n FROM changes WHERE server_seq IS NULL`)[0].n;
+        if (server.journal().length !== lines || pending !== 0) throw new Error(`journal du serveur : ${server.journal().length} lignes, ${lines} ici, ${pending} en attente`);
+        const missing = base(`SELECT DISTINCT json_extract(f.value, '$.hash') AS h FROM nodes, json_each(json_extract(nodes.json, '$.files')) AS f`).filter((r) => !server.hasBlob(r.h));
+        if (missing.length > 0) throw new Error(`${missing.length} fichiers manquent au serveur`);
+      } finally {
+        await server.close();
       }
     },
   },

@@ -7,17 +7,18 @@
  */
 export { MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_OPS_PER_UNIT, MAX_UNITS_PER_REQUEST } from '@cirrus/core';
 
+/**
+ * The core's too (task 5, D7): the largest snapshot a PC sends when it seeds an empty server (POST /seed, streamed to a
+ * temporary file, never held whole in memory while it arrives); the most lines in one page of a journal — one GET
+ * /journal serves, one an event stream reads to catch up, one a seeding PC sends (POST /seed/journal).
+ */
+export { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from '@cirrus/core';
+
 /** The largest body of POST /pair, the only route without a token: a code, an identifier and a name. */
 export const MAX_PAIR_BODY_BYTES = 4096;
 
 /** The largest file a PC sends (PUT /files/<hash>). */
 export const MAX_FILE_BYTES = 2 ** 30;
-
-/** The largest snapshot a PC sends when it seeds an empty server (task 5, D7). */
-export const MAX_SEED_BYTES = 2 * 2 ** 30;
-
-/** The most lines in one page of the journal (GET /journal), and in one page an event stream reads to catch up. */
-export const MAX_JOURNAL_PAGE = 10_000;
 
 /** The longest name of a paired PC: the one `jumeler` gives, and the one the PC gives of itself. */
 export const MAX_PC_NAME_CHARS = 100;

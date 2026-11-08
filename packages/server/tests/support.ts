@@ -57,10 +57,10 @@ export class Client {
     return ((await res.json()) as { results: UnitResult[] }).results;
   }
 
-  async hello(): Promise<{ serverTime: number; lastSeq: number; empty: boolean }> {
+  async hello(): Promise<{ serverTime: number; lastSeq: number; empty: boolean; nodes: number }> {
     const res = await this.get('/hello', FORMAT);
     if (res.status !== 200) throw new Error(`GET /hello : ${res.status} ${await res.text()}`);
-    return (await res.json()) as { serverTime: number; lastSeq: number; empty: boolean };
+    return (await res.json()) as { serverTime: number; lastSeq: number; empty: boolean; nodes: number };
   }
 
   /** An action of this PC as one write. */

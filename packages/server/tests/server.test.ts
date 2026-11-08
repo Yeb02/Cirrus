@@ -82,7 +82,7 @@ test('jumelage : un code, puis un jeton ; la base du serveur ne garde que son em
   // 256 bits.
   expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
   const a = new Client(url, token, 'pc-a');
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0 });
   // Only the token's hash is kept, and the code's: neither in clear, in the tables nor anywhere in the file.
   const db = new DatabaseSync(join(dir, 'serveur.db'));
   const rows = db.prepare('SELECT * FROM pcs').all() as Record<string, unknown>[];
@@ -240,7 +240,7 @@ test('hello : l’heure du serveur, son dernier numéro, s’il est vide ; un au
   const { url } = await start();
   const a = await paired(url, 'pc-a');
   clock = T0 + 1234;
-  expect(await a.hello()).toEqual({ serverTime: T0 + 1234, lastSeq: 0, empty: true });
+  expect(await a.hello()).toEqual({ serverTime: T0 + 1234, lastSeq: 0, empty: true, nodes: 0 });
   const s = emptyState();
   // Empty in the sense of D7: no node, no connection, no placement, no plan but a lobby.
   expect(await a.units([a.unit(run(s, createPlan(s, 'Lobby', 'lobby')))])).toEqual([{ accepted: 1 }]);

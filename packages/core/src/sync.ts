@@ -62,6 +62,13 @@ export const MAX_OPS_PER_UNIT = 200_000;
 export const MAX_BODY_BYTES = 64 * 2 ** 20;
 export const MAX_UNITS_PER_REQUEST = 100;
 export const MAX_HASHES_PER_REQUEST = 10_000;
+/**
+ * The first sync's bounds (task 5, D7), which the PC respects too: the most lines in one page of a journal — one the
+ * server serves (GET /journal, and the pages its event streams read to catch up), one a PC sends when it seeds an
+ * empty server (POST /seed/journal) —; the largest snapshot a PC sends then (POST /seed).
+ */
+export const MAX_JOURNAL_PAGE = 10_000;
+export const MAX_SEED_BYTES = 2 * 2 ** 30;
 
 /** A received operation that does not apply to this PC's state: it no longer follows the server's. */
 export class SyncDivergedError extends Error {}

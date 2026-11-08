@@ -548,3 +548,64 @@ test('isEmpty, au sens de D7 : ni nœud, ni connexion, ni placement, aucun plan 
   other.close();
   store.close();
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The first sync (plan 5a, task 5, D7): a base taken whole — its journal, then its state — and a PC's journal numbered
+// by the server it seeded.
+
+test('importJournal puis importState : le journal tel quel (numéros, genres, PC), puis l’état en bloc et son instantané ; la base se relit comme celle d’où ils viennent', () => {
+  const { store: from, s } = scenario();
+  const rows = from.changesSince(0);
+  const to = LocalStore.open(join(dir, 'pris'), { pc: 'pc-b' });
+  expect(to.isEmpty()).toBe(true);
+  // Numbered as the server numbers its own (server_seq = local_seq), by pages; pc-a's lines are another PC's here.
+  const numbered = rows.map((r) => ({ ...r, serverSeq: r.localSeq, kind: r.pc === 'pc-b' ? 'local' as const : 'remote' as const }));
+  to.importJournal(numbered.slice(0, 2));
+  to.importJournal(numbered.slice(2));
+  expect(to.lastServerSeq()).toBe(rows.length);
+  to.importState(s, rows.length);
+  same(to.loadState(), s);
+  same(replayed(to), s);
+  expect(to.changesSince(0)).toEqual(numbered);
+  expect(to.pendingUnits()).toEqual([]);
+  expect(to.pendingCount()).toBe(0);
+  expect(to.readSnapshot()).toMatchObject({ seq: rows.length, version: SNAPSHOT_VERSION });
+  expect(to.historyOf(afterId({ id: '', label: '', ops: rows.map((r) => r.op) } as Action, 'node'))).toHaveLength(3);
+  // Lines that do not follow the journal, or a state over a base that holds one: refused, nothing written.
+  const journal = JSON.stringify(to.changesSince(0));
+  expect(() => to.importJournal([{ ...numbered[0], localSeq: rows.length + 2 }])).toThrow(/ligne/);
+  expect(() => to.importState(s, rows.length)).toThrow(/tient déjà/);
+  expect(JSON.stringify(to.changesSince(0))).toBe(journal);
+  const empty = LocalStore.open(join(dir, 'vide'), { pc: 'pc-c' });
+  expect(() => empty.importState(s, 1)).toThrow(/journal/);
+  empty.close();
+  to.close();
+  from.close();
+});
+
+test('atomically : importJournal et importState en une transaction, tout ou rien', () => {
+  const { store: from, s } = scenario();
+  const rows = from.changesSince(0).map((r) => ({ ...r, serverSeq: r.localSeq }));
+  const to = LocalStore.open(join(dir, 'serveur'), { pc: 'serveur' });
+  // The state's snapshot cannot cover more lines than the journal has: the whole is undone.
+  expect(() => to.atomically(() => { to.importJournal(rows); to.importState(s, rows.length + 1); })).toThrow();
+  expect([to.lastSeq(), to.isEmpty(), to.readSnapshot()]).toEqual([0, true, null]);
+  to.atomically(() => { to.importJournal(rows); to.importState(s, rows.length); });
+  same(to.loadState(), s);
+  expect(to.lastSeq()).toBe(rows.length);
+  to.close();
+  from.close();
+});
+
+test('numberSeeded : les lignes du PC jusqu’à `last` prennent leur numéro du journal, les suivantes restent en attente ; last_server_seq', () => {
+  const { store, s, id } = scenario();
+  const last = store.lastSeq();
+  // A write made while the base was being sent: after `last`, pending.
+  const later = commitUnit(store, s, editNode(s, id, { summary: 'pendant l’envoi' }));
+  store.numberSeeded(last);
+  expect(store.changesSince(0).map((r) => r.serverSeq)).toEqual([1, 2, 3, 4, null]);
+  expect(store.lastServerSeq()).toBe(last);
+  expect(store.pendingUnits().map((u) => u.unit)).toEqual([later.unit]);
+  expect(store.nodeCount()).toBe(1);
+  store.close();
+});

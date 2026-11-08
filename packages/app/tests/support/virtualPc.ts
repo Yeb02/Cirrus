@@ -290,6 +290,16 @@ export class Lab {
     return pair(fetch, this.url, this.code(name), pc, name);
   }
 
+  /** The names of the PCs paired now (`pcs`). */
+  pairedNames(): string[] {
+    const tokens = Tokens.open(this.dataDir);
+    try {
+      return tokens.pcs().map((p) => p.name);
+    } finally {
+      tokens.close();
+    }
+  }
+
   revoke(name: string): void {
     const tokens = Tokens.open(this.dataDir);
     try {
