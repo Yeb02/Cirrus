@@ -120,6 +120,13 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - **Réseau :** seul le principal interroge le réseau pour une publication, par un module unique de sources (`PUBLICATION_SOURCES`, section 18), à la demande explicite de l'utilisateur.
 - **Lecture :** le BibTeX et le CSL-JSON se lisent par du code à nous, sans dépendance. L'interface construit les nœuds, comme toutes les actions. Un `.bib` déposé ou choisi est lu par le principal, borné, puis décodé et analysé par l'interface ; les `.bib` des entrées sont écrits au magasin par lots [C].
 
+**Synchronisation (plan 5a) :** les décisions D1 à D10 du plan, que l'utilisateur a approuvé le 2026-11-08. Ce qu'elles donnent à l'usage est à la section 6.6, le serveur à la section 18, les réglages partagés à la section 19.
+- **D1, le serveur** est un paquet Node, `@cirrus/server`, qui reprend le cœur et le magasin des PC. Il garde la base de référence au format d'un PC (tables, journal et fichiers), plus `serveur.db` pour les PC jumelés, les codes de jumelage et les réglages. Il en tient aussi l'état en mémoire, comme un PC, et vérifie chaque action reçue comme une commande : elle ne peut pas ajouter de violation. Deux inclusions du même nœud dans deux groupes du même plan, faites en même temps sur deux PC, sont ainsi départagées, alors que chacune est juste seule. Il numérote les actions qu'il accepte et les relaie à tous les PC.
+- **Le PC** écrit chaque action dans sa base tout de suite, comme avant. Elle reste « en attente » jusqu'à ce que le serveur la numérote. Le client de synchro, dans le principal, envoie les actions en attente et reçoit celles des autres PC. Il ne dépend pas d'Electron : le réseau, les secrets et l'horloge lui sont donnés, et les tests font tourner plusieurs PC dans un seul processus.
+- **La réconciliation** se calcule dans l'interface, qui tient l'état : elle défait les actions en attente, applique celles du serveur, puis rejoue les siennes par-dessus, fusionnées (section 6.6). Le principal l'écrit en une transaction, en vérifiant chaque « avant », comme une action. Son coût suit les actions en attente et les enregistrements qu'elles touchent, jamais la taille de la base. Une action reçue sans rien en attente s'applique comme une action locale, par la mise à jour incrémentale de la scène.
+- **D2, le transport :** HTTP, et un flux d'événements (`text/event-stream`) pour ce que le serveur pousse, qui reprend où il s'était arrêté (`Last-Event-ID`) après une coupure. Ni WebSocket, qui demanderait une dépendance au serveur, ni interrogation à intervalle. Aucune dépendance nouvelle : `node:http`, `node:sqlite` et `node:crypto` au serveur ; `net.fetch`, `safeStorage` et `powerMonitor` au PC.
+- **D3, le jumelage par un code**, et **D10, les formats et les versions :** section 18.
+
 **Bancs de mesure en tête de plan :** voir la section 21.
 
 ## 5. Modèle de données
@@ -204,27 +211,23 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 
 ### 6.1 Flux et rythme
 
-- **Trois flux séparés :**
-  - le contenu et les connexions ;
-  - la disposition ;
-  - les analytics, envoyés par lots.
-  Tous se synchronisent en permanence.
+- **Les flux** (plan 5a, D5) : le contenu, les connexions et la disposition passent par un seul flux ordonné, pour que l'ordre du serveur vaille pour tous. Chaque ligne du journal garde son flux (`flow`), que le MCP et les analytics liront [C]. Les analytics auront leur propre envoi, par lots (plan 6). Tout se synchronise en permanence.
 - **Écriture locale :** chaque changement est écrit tout de suite sur le disque, puis envoyé au serveur, qui le relaie aux autres PC ouverts.
-- **Rythme par type :**
-  - un déplacement part au relâchement de la souris ;
-  - un .tex en cours d'édition part à la fermeture du fichier ou de l'app, et aussi après 30 secondes sans frappe ;
+- **Rythme** (plan 5a, D8) : chaque écriture part dès qu'elle est faite.
+  - un déplacement en est une au relâchement de la souris ;
+  - un .tex en est une à chaque enregistrement : après `texSaveIdleMs` (10 s) sans frappe, à Ctrl+S, et à la fermeture de son plein écran ou de la fenêtre (section 12). « Après 30 secondes sans frappe » est donc tenu au plus tard [C] ;
   - une sauvegarde locale a lieu toutes les quelques secondes, contre les plantages.
-- **Veille du PC :** Windows ne laisse qu'environ deux secondes, avec `PBT_APMSUSPEND`. L'app tente un envoi à l'annonce, sans garantie, puis envoie automatiquement au réveil.
-- **.tex ouvert ailleurs :** le serveur note quel PC a ouvert quel .tex. Ouvrir ce fichier sur un autre PC avertit que sa dernière version est peut-être restée sur le premier.
-- **Démarrage :** l'app vérifie sa version, se met à jour si le serveur l'exige, synchronise derrière un écran de chargement, puis s'ouvre. Le réveil d'un PC déclenche la même vérification.
-- **Hors ligne :** si le serveur ne répond pas après quelques secondes, l'app s'ouvre hors ligne avec un indicateur visible, puis se resynchronise au retour du réseau.
+- **Veille du PC :** Windows ne laisse qu'environ deux secondes, avec `PBT_APMSUSPEND`. À l'annonce, l'app tente d'envoyer ce qui attend, pendant `syncSuspendFlushMs` (1,5 s), sans garantie. Au réveil, elle remet le voile « Synchronisation… » et reprend la connexion (plan 5a, D8).
+- **.tex ouvert ailleurs** (plan 5b) : le serveur notera quel PC a ouvert quel .tex. Ouvrir ce fichier sur un autre PC avertira que sa dernière version est peut-être restée sur le premier.
+- **Démarrage** (plan 5a, D8) : le graphe s'affiche depuis la base locale, sous un voile « Synchronisation… » qui retient les actions. Le voile se lève quand le PC a rattrapé le serveur, ou après `syncConnectTimeoutMs` (4 s). À chaque branchement, le PC dit ses versions au serveur, qui refuse un format différent (section 18.1). La mise à jour d'office attend le plan 9.
+- **Hors ligne :** passé ce délai, l'app reste ouverte, hors ligne, et la pastille « Hors ligne » le dit dans la barre des onglets. Elle se reconnecte d'elle-même au retour du serveur, et ses actions partent alors (plan 5a, D8).
 
 ### 6.2 Identifiants et conflits
 
-- **Identifiants :** les changements portent des entiers de 64 bits ordonnés, à partir de 0. Le numéro définitif est attribué par le serveur à l'arrivée, car un PC hors ligne ne peut pas le connaître. Chaque PC retient le dernier numéro vu, ce qui suffit à détecter une divergence.
+- **Identifiants :** les changements portent des entiers ordonnés. Le numéro définitif est attribué par le serveur à l'arrivée, car un PC hors ligne ne peut pas le connaître. Il commence à 1, et 0 veut dire « rien reçu » (plan 5a) [C]. Chaque PC retient le dernier numéro reçu (`last_server_seq`), ce qui suffit à reprendre le flux et à détecter une divergence.
 - **Changements indépendants :** s'ils portent sur des objets ou des champs différents, ils s'appliquent tous les deux.
-- **Même champ** (titre, tag, position…) : le plus récent gagne, et l'autre reste dans l'historique.
-- **Même .tex :** les deux versions restent dans le dossier du nœud, qui est signalé, et l'utilisateur les réconcilie avec la vue des différences.
+- **Même champ** (titre, tag, position…) : le plus récent gagne, selon l'heure de l'action, puis l'identifiant du PC en cas d'égalité, et l'autre reste dans l'historique (6.6, D4).
+- **Même .tex :** les deux versions restent dans le dossier du nœud : la plus récente garde le nom, l'autre devient « nom (conflit du 2026-11-08 14h32).tex », et une notification le dit (6.6, D4). La vue des différences, pour les réconcilier, attend le plan 5b.
 - **Supprimé d'un côté, modifié de l'autre :** la modification gagne et l'objet revient.
 - Il n'y a pas de fusion ligne à ligne.
 
@@ -247,10 +250,66 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 
 ### 6.5 Fichiers volumineux
 
-- **Stockage :** le serveur détient tous les PDF. Un PC télécharge un PDF depuis le serveur à la première lecture, puis le garde. Il ne va jamais le chercher à son URL d'origine.
-- **« Tout télécharger » :** option rare, par PC. Elle annonce le volume et le compare à l'espace libre.
-- **Autres fichiers :** .tex, .py, images et le reste se synchronisent normalement sur chaque PC.
-- **Références d'un fichier** (plan 4c, revue finale) : un fichier du magasin est retenu par le dossier d'un nœud, par l'historique, et par l'empreinte de l'ancre d'une annotation (`anchor.hash`, section 5.2). Après une réimportation, la version annotée n'est plus dans le dossier de son nœud, mais son annotation l'ouvre encore (section 12). La synchronisation (plan 5), le stockage des PDF par le serveur (section 18) et la suppression d'un contenu (« Poids de l'historique », section 6.3) comptent ces empreintes comme des références : une telle version se synchronise et se garde comme un fichier de dossier, et « Poids de l'historique » la compte et nomme ses annotations avant de la supprimer.
+- **Stockage :** le serveur détient tous les PDF. Un PC télécharge un PDF depuis le serveur à la première lecture, puis le garde (plan 5a, D6). Il ne va jamais le chercher à son URL d'origine.
+- **« Tout télécharger »** (plan 5b) : option rare, par PC. Elle annoncera le volume et le comparera à l'espace libre.
+- **Autres fichiers :** .tex, .py, images et le reste se synchronisent normalement sur chaque PC : ils se téléchargent dès que l'action qui les ajoute arrive (plan 5a, D6).
+- **Références d'un fichier** (plan 4c, revue finale) : un fichier du magasin est retenu par le dossier d'un nœud, par l'historique, et par l'empreinte de l'ancre d'une annotation (`anchor.hash`, section 5.2). Après une réimportation, la version annotée n'est plus dans le dossier de son nœud, mais son annotation l'ouvre encore (section 12). La synchronisation (plan 5a, D6), le stockage des PDF par le serveur (section 18) et la suppression d'un contenu (« Poids de l'historique », section 6.3) comptent ces empreintes comme des références : une telle version se synchronise et se garde comme un fichier de dossier, et « Poids de l'historique » la compte et nomme ses annotations avant de la supprimer.
+
+### 6.6 Fixé par le plan 5a
+
+**Fixé par le plan 5a** (approuvé par l'utilisateur le 2026-11-08) : plusieurs PC partagent une même base par un serveur, qui tourne pour l'instant sur le PC de l'utilisateur (section 21, point 3). [C] marque, comme ailleurs, un choix de Claude fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-08-cirrus-synchro-registre.md`) en donne la raison et le coût. L'architecture est à la section 4, le serveur et le jumelage à la section 18, les réglages partagés à la section 19.
+
+- **D4, l'ordre et les conflits :** le serveur numérote et vérifie strictement ; le PC rejoue ses actions en attente sur ce qui arrive.
+  - Le serveur accepte les actions dans leur ordre d'arrivée, chaque « avant » exact. Une action dont un « avant » ne correspond plus est « en retard » : le PC reçoit ce qui lui manque, rejoue son action dessus, puis la renvoie. Une action que le serveur a déjà, reconnue à son identifiant (sa réponse perdue en route), est « acceptée » avec son numéro, sans être appliquée de nouveau.
+  - **La fusion** (6.2) se fait au PC, enregistrement par enregistrement et champ par champ, entre l'« avant » de l'action en attente, l'enregistrement tel que le serveur l'a fait, et l'« après » de l'action :
+    - un champ changé d'un seul côté prend la valeur de ce côté ;
+    - changé des deux côtés, le plus récent gagne : l'heure de l'action, puis l'identifiant du PC ;
+    - un tag d'une clé à une seule valeur, déclarée dans le registre et d'un autre genre que mot simple, se fusionne par clé. Tout autre tag (un mot simple, une clé multiple comme `auteur`) est l'élément d'un ensemble, dont les ajouts et les retraits des deux côtés comptent [C] ;
+    - les fichiers se fusionnent par nom, sans tenir compte de la casse ni de la forme Unicode, comme le réimport. Un même `.tex` changé des deux côtés garde ses deux versions : la plus récente garde le nom, l'autre devient « nom (conflit du 2026-11-08 14h32).tex », daté de l'écriture perdante en heure locale du PC qui rejoue, puis « (2) » si le nom est pris [C]. Une notification le dit : « Un .tex a été modifié sur deux PC : l'autre version est gardée sous « … ». ». Un conflit ne donne qu'une copie, même quand plusieurs enregistrements l'ont perdu [C]. Pour un autre fichier, le plus récent gagne, et l'autre version reste dans l'historique [C] ;
+    - les membres d'une connexion se fusionnent par nœud, et le rôle de chacun est un champ. Un placement, un fantôme, la forme d'une connexion et une clé du registre sont chacun un champ, où le plus récent gagne [C]. La présence d'une branche est un champ ;
+    - une liste fusionnée garde l'ordre du serveur, puis ce que seule l'action a, puis les copies de conflit [C].
+  - **Supprimé d'un côté, modifié de l'autre :** la modification gagne, pour un enregistrement entier comme pour un fichier, un membre, un placement, un fantôme, une forme ou une clé [C]. Un nœud mis à la corbeille ou effacé revient avec la modification, et avec les placements et les branches que la même action lui avait retirés, si leur plan existe encore ; ses appartenances retirées et les connexions jetées ne reviennent pas [C]. Un nœud déplacé, ou posé dans un autre plan, compte comme modifié. À l'inverse, une action en attente qui jette un objet modifié entre-temps ailleurs perd la suppression de cet objet, de ses placements, de ses branches, de ses appartenances et de ses fantômes [C].
+  - Une action rejouée est vérifiée comme une commande : elle ne peut pas ajouter de violation. Si elle en ajoute une, elle est écartée, et une notification la nomme : « « Mettre « X » dans « G » » écartée : « X » est déjà dans le groupe « H », depuis un autre PC. ». Si elle ne change plus rien, elle disparaît sans bruit.
+  - **L'heure des actions :** à chaque branchement, le serveur donne la sienne. Le PC corrige l'heure de ses actions de l'écart mesuré (au milieu de l'échange), et avertit au-delà de `syncClockSkewWarnMs` (2 min) : « L'horloge de ce PC diffère de celle du serveur de 7 minutes : règle-la. ». L'avertissement est dans l'infobulle de la pastille, et dans une notification, une fois par message et par session [C]. Ses limites sont à la section 23.
+  - **Options écartées :** le dernier arrivé au serveur gagne (une modification faite hier hors ligne écraserait celle de ce matin) ; la fusion au serveur (sa logique serait en deux endroits) ; une bibliothèque de CRDT (un autre modèle de données, lourd : le nôtre a déjà ses « avant » et ses « après »).
+- **D5, le journal (schéma v4)** reste l'histoire exacte des tables. Chaque ligne gagne :
+  - `unit`, l'identifiant de l'écriture, une par appel à `commit`. Les enregistrements successifs d'un `.tex`, qui forment une seule action (section 12), font plusieurs écritures ;
+  - `kind` : `local` pour une action de ce PC, `remote` pour une action reçue, `rewind` pour l'inverse d'une action en attente défaite par une réconciliation, jamais envoyé. Les inverses d'une réconciliation forment une seule écriture, « Défaire les écritures en attente (synchronisation) » [C] ;
+  - `superseded`, qui marque une ligne locale remplacée par sa version rejouée, ou écartée ;
+  - `server_seq`, le numéro du serveur. La méta `last_server_seq` dit d'où reprendre le flux, et s'écrit dans la même transaction que les lignes reçues : un arrêt brutal ne perd ni ne double rien.
+  - Rejouer le journal dans l'ordre local redonne toujours les tables ; l'instantané et le chargement ne changent pas. Une base plus ancienne s'ouvre sans changement (migration v4) : son journal est alors en attente, et ne part qu'avec l'envoi de la base (D7).
+  - **L'historique d'un objet** montre les lignes locales et reçues, sans les inverses. Une modification perdante y reste : celle d'un autre PC parce qu'elle est arrivée, la sienne marquée « écartée » sur le PC qui l'a faite [C].
+  - **Le Ctrl+Z :** une action réécrite ou écartée par une réconciliation quitte la pile d'annulation [C], comme une action de ce PC que le serveur a acceptée après celle d'un autre. Annuler une action que d'autres ont touchée depuis reste refusé (« a été modifié depuis »). Limite : les écritures d'une annulation ou d'un rétablissement ne sont pas suivies. Réécrites, leur pas reste dans la pile, et son annulation est ensuite refusée de même [C].
+- **D6, les fichiers :**
+  - **L'envoi :** avant d'envoyer une action, le PC envoie au serveur les fichiers qu'elle ajoute et qu'il n'a pas encore, ceux des dossiers comme l'empreinte des ancres, lus du disque au fil de l'envoi. Le serveur vérifie l'empreinte SHA-256 de chaque fichier reçu, et refuse une action dont un fichier lui manque (« Fichier manquant au serveur. »).
+  - **La réception :** les fichiers que les actions reçues ajoutent se téléchargent tout de suite, en fond, `syncDownloads` (4) à la fois, chacun vérifié par son empreinte, sauf les PDF. Un téléchargement interrompu, par la veille ou par la fermeture de l'app, reprend à la connexion suivante : ce qui reste à faire est noté à côté de la base, dans `downloads.json` [C].
+  - **Les PDF** se téléchargent à leur première lecture (6.5) : le protocole `cirrus-file:` va chercher au serveur un PDF absent, vérifie son empreinte, le garde, puis le sert. L'ouverture par l'application du système fait de même [C]. Hors ligne, le lecteur dit « PDF pas encore téléchargé : serveur injoignable. ». Une vignette, ou la taille de la version d'une annotation, ne déclenche jamais de téléchargement : la vignette montre l'icône du genre [C], l'annotation dit « PDF pas encore téléchargé : il le sera à son ouverture. » et s'ouvre quand même [C].
+  - **Les versions anciennes** d'un fichier, que seul l'historique référence, se téléchargent quand on les ouvre [C].
+  - Un fichier du magasin n'est jamais effacé, au PC comme au serveur.
+- **D7, le premier jumelage : envoyer sa base ou prendre celle du serveur.** Une base de PC est « vide » quand elle n'a ni nœud, ni connexion, ni placement, seulement son lobby, et n'a jamais rien reçu d'un serveur. Un serveur tient une base dès qu'il a accepté une écriture, ou que son état n'est pas vide [C].
+  - **PC vide, serveur vide :** la synchro démarre, et le lobby du PC devient la première écriture du serveur.
+  - **PC plein, serveur vide :** « Envoyer la base de ce PC au serveur (n nœuds, m fichiers) ».
+    - Le PC lit et vérifie d'abord tout ce qu'il enverra, avant toute requête : une ligne abîmée l'arrête là, dite en français [C].
+    - Il envoie ensuite tous les fichiers de son magasin, son instantané, son journal par pages (pour l'historique), et enfin `done`, qui rend le serveur non vide. Ses lignes reçoivent leurs numéros, et la synchro démarre.
+    - Le serveur vérifie la structure de ce qu'il reçoit, mais ne refuse pas une violation que la base portait déjà : il la compte et la signale [C]. Un libellé trop long est coupé, jamais refusé [C].
+  - **PC vide, serveur plein :** « Prendre la base du serveur (n nœuds) ». Un serveur qui ne tient que le lobby d'un autre PC compte comme plein : le PC le prend, plutôt que d'apporter un second lobby [C].
+    - Le PC télécharge l'instantané, le journal et les fichiers autres que les PDF dans un dossier neuf, `<base>-nouvelle`, avec les réglages du serveur et son propre identifiant de PC. Une marque, écrite en dernier, le dit complet [C].
+    - L'app redémarre, et l'échange se fait avant que la base s'ouvre. L'ancienne base est gardée sous `base-avant-jumelage-AAAA-MM-JJ` (« (2) » si le nom est pris). Un renommage refusé un moment, par un antivirus, est retenté ; s'il échoue encore, l'ancienne base s'ouvre, et la base prise attend le démarrage suivant, ce que disent une notification et le bloc « Serveur » [C].
+    - Un téléchargement interrompu laisse l'ancienne base intacte.
+  - **PC plein, serveur plein :** refusé, avec l'explication : « Ce PC et le serveur tiennent chacun une base : Cirrus ne fusionne pas deux bases, le jumelage est refusé. ». Seul est proposé « Remplacer la base de ce PC par celle du serveur (n nœuds) », la sienne gardée de même.
+  - Tant que l'utilisateur n'a pas répondu, rien n'est écrit ni démarré : le jeton reste en mémoire [C]. Une annulation, ou un premier jumelage qui échoue, révoque le jeton : le PC reste non jumelé, sa base telle quelle.
+- **D8, le démarrage, le hors-ligne et la veille** (6.1) :
+  - **le voile** « Synchronisation… » couvre toute la fenêtre et retient le pointeur et les touches, au démarrage d'une base jumelée et au réveil. Il se lève quand le PC a rattrapé le serveur, quand le serveur refuse, ou après `syncConnectTimeoutMs` (4 s). Hors ligne, il attend tout ce délai, le serveur pouvant revenir [C] ;
+  - **la pastille,** dans la barre des onglets, dit « Connexion… », « Synchronisation… » pendant le rattrapage, « À jour », « Envoi de 3 actions… », « Hors ligne », ou « Serveur : <raison> » pour un refus de version ou de jeton. « Hors ligne » et « Serveur : … » se cliquent pour réessayer. Sans serveur jumelé, il n'y a ni voile ni pastille ;
+  - **la reconnexion** se tente à intervalles qui doublent, de `syncRetryMinMs` (1 s) à `syncRetryMaxMs` (30 s). L'attente repart du plus court quand une connexion a fait ses preuves : une réconciliation écrite, ou une connexion tenue `syncRetryMaxMs` [C] ;
+  - **la réception** regroupe les actions arrivées pendant `syncReceiveBatchMs` (50 ms), puis les réconcilie ensemble. La scène reçoit une seule action, « Synchronisation » [C] ;
+  - **sans serveur jumelé,** rien ne change : l'app fonctionne seule, et ses actions restent en attente, sans effet. « Dissocier ce PC » ramène à cet état : les actions faites ensuite restent sur ce PC.
+- **Mesures** (tâche 7, sur ce PC, trois passes chacune, `npm run mesures -w packages/app -- synchro` ; le registre du plan donne la méthode) :
+  - d'une écriture sur un PC virtuel au nouveau titre montré par une app jumelée, sur 50 renommages : 62,9 ms en médiane, 64,7 ms au p95 et 66 ms au plus. Le critère, un p95 sous 200 ms, est tenu. La fenêtre de réception (`syncReceiveBatchMs`, 50 ms) en fait l'essentiel ;
+  - 10 écritures en attente réconciliées avec 100 reçues, sur la base de référence (50 000 nœuds) : 3,3 à 3,6 ms en médiane, 5,2 à 5,7 ms pour la première d'une session ; sur une base de 600 nœuds, 3,6 à 4,5 ms et 7,3 à 7,8 ms. Le critère, 50 ms, est tenu, et le coût ne suit pas la taille de la base ;
+  - une action acceptée par le serveur qui tient la base de référence : 1,9 ms en médiane et 5 ms au p95, la requête HTTP comprise. Le critère, une médiane sous 10 ms, est tenu. La première action après le démarrage du serveur a pris 0,3 s ;
+  - envoyer la base de référence au serveur prend 20,5 s (21 s à la tâche 7), et la prendre 21,6 s, presque tout dans l'écriture en bloc des tables, une fois par PC. Le serveur qui la tient occupe 293 Mo une fois redémarré sur elle (en 0,4 s), et 492 Mo juste après l'envoi (tâche 5).
+- **Hors du plan 5a :** section 24.
 
 ## 7. Lobby, plans et opérations entre plans
 
@@ -544,7 +603,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - **L'aperçu :** le lecteur PDF du plan 4a, sur le dernier PDF valide. Un nouveau PDF y prend la place de l'ancien, au même zoom et au même défilement, sans éclair. Il s'affiche moins de 300 ms après la pause de frappe pour 95 % des frappes mesurées (288 ms au p95, jusqu'au canevas), mais pas toutes : une a pris 329 ms (section 13).
   - **Le bandeau :** « Compilation… », « Erreur ligne 12 : … », « Enregistré » ou « Non enregistré : <raison> ». « Journal » ouvre le journal de pdfLaTeX par-dessus l'aperçu. Un clic sur l'erreur place l'éditeur à sa ligne, et Échap ne ferme que le journal.
   - **Enregistrement** (D6, décision de l'utilisateur, 2026-11-05) : après une pause de frappe de `texSaveIdleMs` (10 s), à Ctrl+S, à la fermeture du plein écran et à celle de la fenêtre. C'est seulement si le texte diffère de la dernière version enregistrée : taper puis effacer n'enregistre rien. Le premier enregistrement écrit le fichier en UTF-8, avec des fins de ligne LF, quels que soient son encodage et ses fins de ligne d'origine (Windows-1252, UTF-16, CRLF) [C].
-  - **Regroupement :** des enregistrements successifs du même .tex ne forment qu'une modification de l'historique, et un seul Ctrl+Z. Il ne faut aucune autre action entre eux : ni modification, ni annulation, ni rétablissement. Cela vaut d'une ouverture du plein écran à la suivante, dans une même session de l'app. Les versions intermédiaires restent dans le journal, invisibles. Pour le plan 5 : une action peut recevoir des lignes après avoir été envoyée.
+  - **Regroupement :** des enregistrements successifs du même .tex ne forment qu'une modification de l'historique, et un seul Ctrl+Z. Il ne faut aucune autre action entre eux : ni modification, ni annulation, ni rétablissement. Cela vaut d'une ouverture du plein écran à la suivante, dans une même session de l'app. Les versions intermédiaires restent dans le journal, invisibles. Chaque enregistrement est une écriture de la même action, qui part au serveur dès qu'elle est faite (6.6, D5).
   - **Un enregistrement refusé** (le nœud ou le fichier parti entre-temps) garde le texte dans l'éditeur et dit pourquoi. Une seconde demande de fermeture pose « Fermer sans enregistrer ? », « Annuler » ayant le focus [C].
   - **Un .tex plus grand que `textViewMaxMb`** s'affiche en lecture seule, avec la raison et sans aperçu [C].
   - L'aperçu d'un .tex, à côté du pop-up, montre son PDF compilé.
@@ -581,7 +640,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - Le PDF d'un article arXiv se télécharge seul, et vient au nœud. S'il ne vient pas, la publication vient sans lui, et une notification dit pourquoi [C]. En attendant le serveur, c'est le PC qui le télécharge (demande de l'utilisateur, 2026-11-05).
   - Un échec se dit en français dans le dialogue, qui reste ouvert : « Identifiant non reconnu. », « Publication introuvable. », « Pas de connexion. »… Rien n'est créé.
 - **Importer une publication par son PDF** (D8) : un PDF déposé sur le dialogue entre au magasin. Ses métadonnées et ses `publicationPdfPages` premières pages (2) sont lues, à la recherche d'un DOI ou d'un identifiant arXiv. Trouvé, il remplit le champ, et « Importer » garde ce PDF. Sinon, « Créer le nœud » crée le nœud sous le titre des métadonnées, ou le nom du fichier, le PDF attaché, et l'utilisateur complète.
-- **L'usage visé** (utilisateur, 2026-11-08 : « j'importerais un PDF soit en collant une URL, soit en important le fichier depuis mon ordinateur ») : le fichier passe aujourd'hui par le dialogue, où on le dépose ; un PDF lâché sur le fond n'est pas importé, et le dialogue n'a pas de bouton pour le choisir. Une adresse n'est lue que d'arXiv ou de `doi.org` : celle d'un PDF d'un autre site (OpenReview, PMLR, actes de NeurIPS…) attend la récupération par le serveur (plans 5 et 9).
+- **L'usage visé** (utilisateur, 2026-11-08 : « j'importerais un PDF soit en collant une URL, soit en important le fichier depuis mon ordinateur ») : le fichier passe aujourd'hui par le dialogue, où on le dépose ; un PDF lâché sur le fond n'est pas importé, et le dialogue n'a pas de bouton pour le choisir. Une adresse n'est lue que d'arXiv ou de `doi.org` : celle d'un PDF d'un autre site (OpenReview, PMLR, actes de NeurIPS…) attend la récupération par le serveur (plans 5b et 9).
 - **La clé BibTeX** (revue finale, révisé) : celle de l'entrée si BibTeX et LaTeX la lisent : des caractères ASCII imprimables, sans blanc ni `\ { } % # , ~ " ' ( ) =`, sans `://` ni `^^`, 200 au plus [C]. L'import d'un `.bib` charge la bibliographie actuelle, dont les `\cite` nomment déjà ces clés : celles de DBLP (`DBLP:conf/nips/VaswaniSPUJGKP17`) et « Auteur:Année » (`Hinton:2006`) sont donc gardées, dans le tag `clé_bibtex` et dans l'entrée écrite. La clé de DataCite, une adresse, est remplacée par le nom de famille du premier auteur et l'année, en lettres et chiffres ASCII (`vaswani2017`), puis `vaswani2017b`, et ainsi de suite ; de même une clé prise ou absente. Seul le nom du fichier est nettoyé : `< > : " / \ | ? *` y deviennent `_`, et un nom réservé de Windows reçoit un `_` (`DBLP_conf_nips_VaswaniSPUJGKP17.bib`, `con_.bib`) [C].
 - **Les doublons :** une publication qui a déjà ce DOI, cet identifiant arXiv, cette clé, ou ce titre et cette année [C], n'est pas recréée, et la notification nomme le nœud existant. Une clé, ou un titre et une année, ne comptent que si aucun identifiant ne les contredit [C]. Un même titre et une même année ne comptent pas non plus quand les deux côtés ont un premier auteur et que leurs noms de famille diffèrent, sans casse, accents ni ponctuation (revue finale) [C] : deux chapitres « Introduction » de 2020, de Smith et de Doe, sont deux publications. Le premier auteur d'un nœud est son premier tag `auteur`, son nom de famille lu comme BibTeX lit un nom (« Prénom Nom » ou « Nom, Prénom », sans les particules ni « Jr. ») [C]. Un nœud à la corbeille ne compte pas.
 - **Importer un fichier `.bib`** (D9) : on le dépose sur le fond du graphe, ou on passe par « Importer un fichier .bib… » dans le menu du fond.
@@ -598,7 +657,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - un PDF de 25 pages et 50 annotations s'ouvre dans l'aperçu en 384 à 390 ms à froid, le premier de la session : sa première page, ses surlignages et la marge de 50 lignes, jusqu'à l'image. Le même fichier sans annotation s'ouvre en 374 à 381 ms. À chaud : 45 ms, contre 34 à 35 ms ;
   - à la molette, de la première page à la dernière (25 000 px en 11 s), les images se suivent à 10,7 ms en médiane et 11,2 ms au p95, avec ou sans surlignages, et aucune ne dépasse 50 ms. La plus longue prend 21 à 22 ms avec eux, 14 à 17 ms sans ;
   - pendant ce défilement, 4 pages au plus sur 25 portent leurs surlignages, et 17 rectangles au plus sur 101 sont dans la page. Aucune page ne les reçoit avant d'entrer dans la vue ± 1 page. Ceux d'une page qui en sort partent avec son canevas, au plus 6 images (64 ms) plus tard.
-- **Hors du plan 4c :** la récupération par le serveur (plans 5 et 9) ; un PDF trouvé hors d'arXiv ; l'annotation à main levée ou par zone ; la veille (section 16.2).
+- **Hors du plan 4c :** la récupération par le serveur (plans 5b et 9) ; un PDF trouvé hors d'arXiv ; l'annotation à main levée ou par zone ; la veille (section 16.2).
 
 ## 13. LaTeX
 
@@ -792,6 +851,33 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 ## 18. Serveur, sécurité et déploiement
 
 - **D'abord en local :** pendant le développement, le serveur tourne sur le PC de l'utilisateur, avec le même code. On ne loue qu'une fois tout validé.
+- **Le serveur local** (plan 5a, D1 et D2 ; architecture à la section 4) : `npm run serveur -w packages/server -- [--data <dossier>] [--port 7310]`. Ses données vont par défaut dans `%LOCALAPPDATA%\Cirrus\serveur` : `base/`, une base au format d'un PC, et `serveur.db`, pour les PC jumelés, les codes en attente et les réglages partagés. Un seul serveur tourne par dossier, par le verrou de sa base [C].
+  - **Il n'écoute que sur la machine** (`127.0.0.1` ou `::1`), et refuse de démarrer sur une autre adresse, faute de HTTPS (plan 9). Il ne répond à aucune requête d'un navigateur : aucun en-tête CORS, un en-tête `Host` qui doit nommer la machine (contre une page qui ferait pointer son domaine sur elle), et un `Content-Type: application/json` exigé pour tout corps JSON [C].
+  - **Toute entrée est vérifiée avant toute écriture :** le JSON, la forme de chaque opération, les empreintes, les tailles. La forme est lue strictement : un champ inconnu est refusé [C]. Un refus ne laisse rien d'écrit, et le serveur continue.
+  - **Une action reçue** passe, dans l'ordre : sa forme ; le PC du jeton, qui seul peut signer ses actions ; une action déjà connue, acceptée avec son numéro ; un fichier manquant, qui la refuse ; ses « avant », sinon elle est « en retard » ; les règles du graphe, sinon elle est refusée ; l'écriture dans la base, synchronisée sur le disque à chaque action, pour qu'une coupure de courant ne fasse jamais redonner un numéro déjà relayé [C] ; enfin le relais à tous les flux ouverts.
+  - **Son instantané** s'écrit toutes les `SERVER_SNAPSHOT_UNITS` (500) actions et à l'arrêt. Avec la base de référence, il redémarre sur lui en 0,4 s.
+- **Le jumelage** (plan 5a, D3) :
+  - sur le serveur, `npm run serveur -w packages/server -- jumeler "Portable"` affiche un code de 16 caractères (80 bits), en quatre groupes (`ABCD-EFGH-JKMN-PQRS`) ; à la saisie, la casse, les tirets et les espaces ne comptent pas [C]. Il ne sert qu'une fois, et expire après 10 minutes ou 5 essais faux, comptés contre chaque code en attente [C] ;
+  - dans Cirrus, Réglages › Serveur (section 19) : l'adresse du serveur, ce code et le nom de ce PC. Le PC reçoit un jeton de 256 bits. Sans HTTPS, seul un serveur de cette machine est accepté : le code et le jeton ne passent jamais en clair sur le réseau [C] ;
+  - le serveur ne garde que l'empreinte SHA-256 du jeton. Le PC garde le jeton chiffré par Windows (`safeStorage`, DPAPI) dans `serveur.json`, à côté de sa base : une base de test ne peut donc jamais parler au serveur de l'utilisateur. Si Windows ne peut pas le chiffrer, le jumelage est refusé ;
+  - `pcs` liste les PC jumelés et les codes en attente, et `revoquer "Portable"` en retire un : son jeton est refusé dès la requête suivante. Un PC révoque aussi son propre jeton quand on annule son premier jumelage, quand celui-ci échoue, et par « Dissocier ce PC » [C] ;
+  - **options écartées :** un mot de passe (il faudrait le stocker et le protéger contre les essais) ; OAuth, prévu pour le MCP et trop lourd pour la synchro ; des certificats clients, pénibles sous Windows ;
+  - au plan 9, l'utilisateur lancera la même commande par SSH.
+- **Les routes** (en JSON, sauf mention ; toutes exigent le jeton du PC, sauf `/pair`) :
+  - `POST /pair` échange le code contre un jeton ; `POST /unpair` révoque le jeton qui la porte, et lui seul [C] ;
+  - `GET /hello`, avec les versions du PC dans ses en-têtes (18.1), rend l'heure du serveur, son dernier numéro, s'il tient une base, et son nombre de nœuds ;
+  - `GET /events` est le flux, qui reprend à `Last-Event-ID`. `event: unit` porte une action numérotée, `event: settings` des réglages changés, et un commentaire `: ping` part toutes les 15 s ;
+  - `POST /units` reçoit des actions, traitées dans l'ordre : chacune est « acceptée » (avec son numéro), « en retard » ou « refusée » (avec sa raison). Après la première non acceptée, les suivantes sont « en retard » ;
+  - `POST /files/missing` dit quels fichiers manquent ; `PUT /files/<empreinte>` reçoit des octets bruts, et `GET /files/<empreinte>` les rend ;
+  - `GET /snapshot` rend l'état encodé et le numéro qu'il couvre ; `GET /journal` rend le journal par pages, pour l'historique ;
+  - `POST /seed`, `/seed/journal` et `/seed/done` reçoivent la base d'un PC, sur un serveur qui n'en tient aucune (6.6, D7). Le dernier PC qui commence un envoi le mène, et un envoi partiel reste invisible jusqu'à `done` [C] ;
+  - `GET /settings` et `POST /settings` : les réglages partagés (section 19).
+- **Les bornes** du serveur sont des constantes nommées et documentées (`packages/server/src/bounds.ts`), pas des réglages, car le serveur sert tous les PC :
+  - 64 Mio par requête d'actions (`MAX_BODY_BYTES`, aussi pour les autres requêtes JSON d'un PC jumelé), 100 actions par requête, 200 000 opérations par action ;
+  - 1 Gio par fichier, 2 Gio pour l'instantané d'une base envoyée, 10 000 lignes par page du journal ;
+  - un `: ping` toutes les 15 s ; un code de jumelage valable 10 min et 5 essais ;
+  - et aussi [C] : 4 Kio pour `/pair`, 10 000 empreintes par requête, 100 caractères pour le nom d'un PC, un instantané toutes les 500 actions ; pour les réglages (section 19), 500 par requête, 1 000 gardés en tout, 64 caractères par clé, 64 Kio par valeur, et une heure d'au plus un jour d'avance sur celle du serveur.
+  - Celles qu'un PC doit respecter aussi sont au cœur, que `bounds.ts` reprend : le client de synchro découpe ses envois pour ne jamais les dépasser [C].
 - **Hébergement [C, accepté] :**
   - Hetzner Cloud CX23 : 2 vCPU, 4 Go de mémoire, 40 Go de SSD, en Allemagne.
   - Environ 4,49 € par mois, IPv4 comprise, selon des sources secondaires, à confirmer à la commande.
@@ -802,9 +888,9 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - le serveur gardera l'installateur épinglé de TinyTeX, et un instantané figé, tel quel, du dépôt de TeX Live de l'année : environ 5 Go. La signature de TeX Live y reste, sans être vérifiée : l'utilisateur a choisi de rester sans gpg (section 13) ;
   - les PC ne téléchargeront que depuis lui, et passer à une TeX Live plus récente deviendra un acte délibéré ;
   - toutes les sources de téléchargement sont déjà dans un seul module du principal (`LATEX_SOURCES`), et `tlmgr` nomme son dépôt à chaque appel : les installations faites avant le serveur le suivront aussi ;
-  - jusqu'à ce que le serveur existe (plans 5 et 9), les PC vont sur Internet. Le gel de printemps de TeX Live, vers avril 2027, est l'échéance.
+  - jusqu'à ce que le serveur loué garde ce dépôt (plan 9), les PC vont sur Internet, le serveur local du plan 5a n'en gardant aucun. Le gel de printemps de TeX Live, vers avril 2027, est l'échéance.
 - **Sources des publications** (plan 4c, D5, D6) : elles iront au serveur, qui récupérera les métadonnées et le PDF d'une publication (section 12).
-  - Toutes les adresses sont dans un seul module du principal, `PUBLICATION_SOURCES`, comme `LATEX_SOURCES`. Les plans 5 et 9 le tourneront vers le serveur. D'ici là, le principal du PC va sur Internet.
+  - Toutes les adresses sont dans un seul module du principal, `PUBLICATION_SOURCES`, comme `LATEX_SOURCES`. Les plans 5b et 9 le tourneront vers le serveur. D'ici là, le principal du PC va sur Internet.
   - Le principal demande à `doi.org` le CSL-JSON (titre, auteurs, date) et le BibTeX de l'entrée, par la négociation de contenu. Un identifiant arXiv passe par le DOI que lui donne arXiv (`10.48550/arXiv.<id>`). Le PDF d'un article arXiv vient de `https://arxiv.org/pdf/<id>`.
   - Seuls sont permis `doi.org`, `api.crossref.org`, `data.crossref.org`, `api.datacite.org`, `data.datacite.org`, `data.crosscite.org` [C] et `arxiv.org`. `doi.org` renvoie un DOI de DataCite vers `data.crosscite.org`, qui succède à `data.datacite.org` (constaté le 2026-11-07).
   - Tout passe en HTTPS. Chaque redirection est vérifiée avant d'être suivie, 5 au plus [C]. Chaque réponse est lue sous son plafond (`publicationMaxKb`, 2 Mo ; `maxImportMb` pour le PDF) et dans son délai (`publicationTimeoutMs`, 20 s), puis lue comme des données, jamais comme du code. Aucun cookie n'est envoyé ni gardé, aucune adresse électronique non plus [C].
@@ -823,7 +909,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Sauvegarde hors serveur :** aucune dans la première version. L'utilisateur a refusé le PC miroir. Chaque PC garde la base et son historique.
   - **Risque accepté :** seul le serveur détient tous les PDF. Un PDF déjà lu reste en cache sur les PC qui l'ont ouvert, les publications se retéléchargent en général depuis leur source, et les annotations sont des nœuds, présents sur chaque PC. Seul un PDF jamais ouvert et introuvable ailleurs serait perdu avec le serveur.
   - **Amélioration possible :** une sauvegarde chiffrée sur un espace externe, pour environ 3 € par mois.
-- **Installation :** l'installateur se télécharge depuis le serveur à la première connexion. Au premier lancement, l'utilisateur s'authentifie et le PC reçoit son jeton [C].
+- **Installation :** l'installateur se téléchargera depuis le serveur à la première connexion (plan 9). Au premier lancement, l'utilisateur jumelle le PC par un code, et le PC reçoit son jeton (plan 5a, plus haut).
 
 ### 18.1 Versions et développement
 
@@ -833,11 +919,12 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
 - **Versions acceptées :** une app plus ancienne que la version officielle se met à jour d'office. Une app plus récente, ou marquée dev ou pré-version, est acceptée.
 - **Protection des vraies données [C] :** une version de développement ne se connecte au vrai serveur que si son format de données est identique à celui du serveur. Si elle change le format, elle travaille sur une copie des données, avec un serveur local. Sans cela, elle écrirait sur le serveur des données que la version officielle des autres PC ne saurait pas lire, et ces PC ne pourraient pas se mettre à jour vers une version qui n'existe pas encore.
 - **Installation de développement [C] :** une version de développement s'installe à côté de la version officielle, sous une identité distincte (« Cirrus Dev ») et avec son propre dossier de données locales. Un test ne peut donc pas abîmer la base locale de la version officielle.
+- **Formats** (plan 5a, D10) : à chaque branchement (`/hello`), le PC dit au serveur la version du protocole de synchro, celle du schéma de sa base et celle de l'instantané. Si l'une diffère, le serveur refuse : « Ce serveur garde ses données dans un autre format (schéma 4, ici 5) : mets à jour Cirrus, ou travaille sur un serveur local. ». Plusieurs versions qui diffèrent sont toutes citées [C]. La pastille dit alors « Serveur : <raison> », et la synchro s'arrête. La mise à jour d'office, les installateurs et l'identité « Cirrus Dev » attendent le plan 9.
 
 ## 19. Paramètres
 
 - **Exposition :** tous les paramètres sont exposés dans l'app pour que l'utilisateur les ajuste, dans un bandeau latéral « Réglages ».
-- **Rubriques** (demande de l'utilisateur, 2026-11-07 : « une hiérarchie des options qui les range par type ») : le bandeau range ses groupes de réglages sous six rubriques repliées, Apparence, Navigation, Fenêtres, Fichiers, LaTeX, Performances et base. Une rubrique ouverte montre ses réglages principaux, puis « Avancés (n) » pour les autres. Un champ de recherche trouve un réglage par son libellé, son groupe ou sa rubrique, sans tenir compte des accents ni de la casse, avancés compris. Les rubriques ouvertes restent ouvertes d'une ouverture du bandeau à la suivante, pendant la session [C].
+- **Rubriques** (demande de l'utilisateur, 2026-11-07 : « une hiérarchie des options qui les range par type ») : le bandeau range ses groupes de réglages sous sept rubriques repliées : Apparence, Navigation, Fenêtres, Fichiers, LaTeX, Performances et base, et Serveur depuis le plan 5a. Une rubrique ouverte montre ses réglages principaux, puis « Avancés (n) » pour les autres. Un champ de recherche trouve un réglage par son libellé, son groupe ou sa rubrique, sans tenir compte des accents ni de la casse, avancés compris. Les rubriques ouvertes restent ouvertes d'une ouverture du bandeau à la suivante, pendant la session [C].
 - **Paramètres graphiques :**
   - distance du titre des connexions ;
   - seuils de disparition du texte ;
@@ -858,9 +945,15 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - réponse par défaut des dialogues « partout ou ici seulement ».
 - **LaTeX (plan 4b) :** les réglages de la chaîne forment la rubrique « LaTeX ». La largeur du résumé compilé (9 cm) et la liste des paquets ajoutés y sont des réglages principaux (2026-11-07) ; les autres sont des avancés : les processus préparés, les délais, la largeur et l'agrandissement du résumé compilé, le cache, le journal, la pause de frappe, l'enregistrement d'un .tex, les suggestions de l'éditeur, le délai de `tlmgr`, l'attente d'un téléchargement bloqué, le délai avant de chercher à nouveau un paquet, et la liste partagée des paquets ajoutés (`latexPackages`). En tête de la rubrique, un bloc dit l'état de LaTeX, propose de l'installer et ouvre le préambule, qui est une donnée de la base et non un réglage (section 13, D5).
 - **Fichiers (plan 4c) :** les groupes « Annotations » et « Publications » suivent « PDF » dans la rubrique « Fichiers » [C]. La couleur du surlignage y est un réglage principal. Les autres sont des avancés : l'opacité du surlignage, la durée du clignotement, la longueur du titre d'une annotation et la largeur de la marge ; pour les publications, le plafond et le délai des réponses du réseau, les auteurs gardés en tags, les pages lues d'un PDF déposé, l'écart entre les boîtes du bloc d'un `.bib`, et les lignes et la durée de sa notification.
+- **Serveur (plan 5a) :** la rubrique « Serveur », la dernière, commence par un bloc. Non jumelé, il montre « Adresse du serveur » (`http://127.0.0.1:7310` proposée), « Code de jumelage », « Nom de ce PC » (celui de la machine) et « Jumeler », et dit un refus en dessous. Au premier jumelage, il pose la question de D7 à la place du formulaire (section 6.6), puis dit l'envoi ou le téléchargement en cours, sans rien à cliquer [C]. Jumelé, il montre le serveur, le nom de ce PC, l'état de la synchro et « Dissocier ce PC ». Son groupe « Synchronisation » n'a que des réglages avancés : l'attente du serveur sous le voile et au jumelage, `syncConnectTimeoutMs` (4 s) ; les délais de reconnexion, `syncRetryMinMs` (1 s) et `syncRetryMaxMs` (30 s) ; les actions par requête, `syncBatchUnits` (50, au plus 100) ; les téléchargements à la fois, `syncDownloads` (4) ; l'écart d'horloge qui fait avertir, `syncClockSkewWarnMs` (2 min) ; l'envoi avant la veille, `syncSuspendFlushMs` (1,5 s) ; la fenêtre de réception, `syncReceiveBatchMs` (50 ms) [C].
 - **Mode performance :** envisageable si les bancs de mesure le rendent nécessaire (section 21). Un interrupteur dans les paramètres graphiques allégerait alors les effets coûteux : flou des enveloppes, rubans à largeur variable, ciel étoilé, résolution du rendu.
-- **Stockage :** les valeurs sont centralisées sur le serveur et communes à tous les PC. Des valeurs propres à un PC seront revues plus tard si besoin.
-- **Hors ligne :** chaque PC garde sa copie, et la modification la plus récente l'emporte à la reconnexion.
+- **Stockage** (plan 5a, D9) : les valeurs sont centralisées sur le serveur et communes à tous les PC : tous les réglages sont partagés. Des valeurs propres à un PC seront revues plus tard si besoin. L'adresse du serveur, le nom du PC et son jeton (`serveur.json`) ne sont pas des réglages.
+  - **Le serveur fait autorité :** un réglage qu'il n'a pas vaut sa valeur par défaut. Il garde chaque réglage avec l'heure de sa dernière modification et le PC qui l'a faite. Le plus récent gagne, réglage par réglage, puis l'identifiant du PC, comme pour les actions [C].
+  - **L'heure d'un changement** est celle du serveur, par l'écart mesuré au branchement, et vient toujours après le dernier changement de ce réglage que ce PC a vu, d'une milliseconde au moins [C]. Elle ne dépasse jamais l'heure corrigée du PC de plus d'un jour, moins `syncClockSkewWarnMs`, et le serveur refuse un réglage daté de plus d'un jour d'avance sur la sienne [C].
+  - **Un retour au défaut** est gardé avec son heure, comme une valeur : un changement plus ancien ne peut pas faire revenir l'ancienne [C].
+  - **Un réglage reçu** s'applique tout de suite, borné comme un réglage lu du disque. Une clé inconnue est ignorée, une valeur hors bornes est ramenée dans ses bornes, et une valeur d'un autre genre est ignorée, celle du PC gardée, avec un avertissement dans la console [C]. `latexPackages` reçu s'installe au démarrage suivant (section 13, D1).
+  - **Au premier jumelage :** deux bases vides, ou un PC qui envoie la sienne, envoient tous les réglages du PC, datés de l'heure du serveur au jumelage. Un PC qui prend la base du serveur, ou y remplace la sienne, prend ses réglages et n'envoie rien des siens [C].
+- **Hors ligne :** chaque PC garde sa copie, `settings.json`. Un changement fait dans les Réglages attend dans `settings-pending.json`, sa dernière valeur seulement par réglage, et part à la reconnexion ; la modification la plus récente l'emporte. Un PC jumelé qui a perdu ce fichier prend les réglages du serveur [C].
 - **Historique :** les paramètres sont hors de l'historique et de l'annulation [C].
 
 ## 20. Santé du graphe, analytics et état du serveur
@@ -875,7 +968,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - plans ignorés lors d'une répercussion.
   Elle fonctionne sans LLM.
 - **Analytics :** l'app trace les ouvertures, les consultations de nœuds, l'usage de chaque fonction, le temps passé et l'historique des actions, dans le flux séparé. La première version se contente d'enregistrer. Un tableau de bord est un objectif à très long terme.
-- **État du serveur :** l'app affiche la latence, le débit et l'espace utilisé.
+- **État du serveur** (plan 5b) : l'app affichera la latence, le débit et l'espace utilisé. Au plan 5a, la pastille ne dit que l'état de la synchro (section 6.6).
 
 ## 21. Ordre de construction imposé
 
@@ -897,7 +990,7 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
      - **Arrière-plan :** fenêtre cachée ou sans le focus, le rendu est en pause (réglage avancé « Mise en pause du rendu »). Le reste du temps, une image n'est dessinée que si quelque chose a changé.
    - **compilation :** TinyTeX, processus préparé à l'avance et objectif de 300 ms, mesurés sur le portable principal. Le banc du 2026-11-02 l'a tenu. L'app le tient au p95 au plan 4b, mais pas à chaque frappe (section 13, « Mesures »).
 2. **Base de test artificielle :** juste ce qu'il faut pour exercer chaque fonctionnalité, avec des tests automatiques par fonctionnalité.
-3. **Serveur en local :** tout fonctionne en local, y compris la synchro entre deux instances de l'app, avant de louer le serveur.
+3. **Serveur en local :** tout fonctionne en local, y compris la synchro entre deux instances de l'app, avant de louer le serveur. Le plan 5a l'a fait : ses scénarios de l'interface synchronisent deux apps, l'une après l'autre, et un PC virtuel, par un serveur de la machine (section 6.6).
 4. **Déploiement sur le serveur loué :** en dernier.
 
 Le découpage détaillé relève du plan d'implémentation.
@@ -917,7 +1010,12 @@ Le découpage détaillé relève du plan d'implémentation.
 - **Inclusion multi-plans :** problème mis de côté, à juger à l'usage (section 10).
 - **Plan créé par filtrage :** il reste à définir (instantané ou vue liée, choix des critères), de même que le langage de requête de graphe évoqué par la spécification.
 - **Performances :** non mesurées, d'où les bancs de la section 21. Le petit PC à carte graphique intégrée est le cas le plus risqué, et il n'est mesuré que par extrapolation.
-- **Volume :** quelques centaines de milliers de connexions pèsent aussi sur la première synchro d'un nouveau PC, l'index de recherche et la pagination du MCP, à vérifier avec la base synthétique.
+- **Volume :** quelques centaines de milliers de connexions pèsent aussi sur la première synchro d'un nouveau PC, l'index de recherche et la pagination du MCP, à vérifier avec la base synthétique. La première synchro est mesurée au plan 5a : environ 20 s pour envoyer ou prendre la base de référence, une fois par PC (section 6.6).
+- **Horloge des PC** (plan 5a) : le plus récent gagne selon l'heure des actions et des réglages. Le PC corrige la sienne de l'écart avec le serveur, mesuré à chaque branchement, et avertit au-delà de `syncClockSkewWarnMs` (2 min) : un PC en avance d'une heure ne gagne donc pas tous les conflits. Restent trois limites, à revoir avant le serveur loué (plan 9) :
+  - l'écart n'est connu qu'au premier branchement de la session. Une action faite hors ligne avant lui garde l'heure du PC, décalage compris, et peut gagner ou perdre à tort un conflit ;
+  - il est mesuré une fois par connexion, et n'est pas gardé d'une session à l'autre : la dérive d'une horloge pendant une longue connexion n'est pas suivie ;
+  - un réglage ne peut être daté de plus d'un jour d'avance sur le serveur : une horloge très en avance ne tient un réglage contre les autres PC que ce temps-là, au plus (section 19).
+- **Connexion à moitié morte** (plan 5a) : le PC ne remarque ni un flux qui ne reçoit plus rien, `: ping` compris, ni un serveur qui ne répond plus. La pastille peut alors dire « À jour » sur une connexion morte. Rare avec un serveur sur la même machine, dont l'arrêt ferme les connexions, c'est à régler avant le serveur loué (plan 9) : une limite de temps sur chaque requête, et un flux tenu pour coupé après deux `: ping` manqués.
 - **ChatGPT :** le mode développeur est en bêta, les forfaits éligibles sont incertains, et l'emplacement de l'option a changé en 2026.
 - **Hébergeur :** disponibilité et prix des offres Hetzner à vérifier à la commande.
 - **Noms accentués :** risque avec pdfLaTeX sous Windows. Au plan 4b, un fichier accentué et une base au chemin accentué compilent ; une installation de TinyTeX sous un chemin accentué n'a pas été essayée.
@@ -961,3 +1059,15 @@ Le découpage détaillé relève du plan d'implémentation.
   - suggestions de liens ou de doublons ;
   - revue espacée ;
   - partage.
+
+**Hors du plan 5a, au plan 5b :**
+- les publications récupérées par le serveur (section 12) ;
+- l'import par l'adresse du PDF de n'importe quel site (OpenReview, PMLR, actes de NeurIPS…), avec les gardes contre les adresses internes ;
+- le DOI lu dans l'adresse d'un éditeur ;
+- un PDF lâché sur le fond, qui ouvre le dialogue d'import, et le bouton « Choisir un PDF… » de ce dialogue ;
+- « .tex ouvert ailleurs » (section 6.1) ;
+- la vue des différences d'un `.tex` en conflit (section 6.2) ;
+- « Tout télécharger » (section 6.5) ;
+- l'état du serveur : latence, débit, espace (section 20).
+
+**Hors du plan 5a, plus tard :** le flux des analytics (plan 6) ; le HTTPS et le serveur loué, les installateurs, la mise à jour d'office et « Cirrus Dev », le dépôt figé de TeX Live (plan 9).
