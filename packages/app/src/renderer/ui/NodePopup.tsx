@@ -9,7 +9,7 @@ import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild
 import { type AnnotationEntry, type AnnotationIndex, type AnnotationSource, annotationSource, titleChars } from '../files/annotations.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName } from '../files/merge.ts';
-import { blobSize, loading, ReadError } from '../files/read.ts';
+import { absentVersion, blobSize, loading } from '../files/read.ts';
 import {
   droppedPaths, dropRoute, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor,
 } from '../files/nodeFiles.ts';
@@ -206,23 +206,26 @@ export type OpenFile = (name: string, how: 'preview' | 'full') => void;
 /** An annotation opened from a pop-up (plan 4c, D4): the preview of `name`, a file of node `pdf`, beside it, showing `anchor`. */
 export type RevealAnnotation = (pdf: Id, name: string, anchor: Anchor) => void;
 
+/** A version the store does not hold: why, and whether it cannot be opened (absentVersion). */
+type Absent = { text: string; blocks: boolean };
 /** Versions the store cannot give: none. */
-const ALL_READ: ReadonlyMap<string, string> = new Map();
+const ALL_READ: ReadonlyMap<string, Absent> = new Map();
 
 /**
- * The versions among `refs` the store cannot give — a blob missing: a base copied without it, a PC never sent it
- * (Review Focus 4) — each with why, in French. Each is asked once per list of versions shown, by its length (blobSize:
- * the body is not read); counted among what the views load, which the captures wait for.
+ * The versions among `refs` the store does not hold — a blob missing: a base copied without it, a PC never sent it
+ * (Review Focus 4); or not downloaded yet from the server paired (plan 5a, R12), which opens and is downloaded then —
+ * each with why, in French. Each is asked once per list of versions shown, by its size only (blobSize, `sizeOnly`: the
+ * body is not read, nothing downloaded); counted among what the views load, which the captures wait for.
  */
-function useUnreadable(refs: readonly { name: string; hash: string }[]): ReadonlyMap<string, string> {
+function useAbsent(refs: readonly { name: string; hash: string }[]): ReadonlyMap<string, Absent> {
   const key = refs.map((r) => `${r.hash}:${r.name}`).join('|');
   const [out, setOut] = useState(ALL_READ);
   useEffect(() => {
     if (refs.length === 0) { setOut(ALL_READ); return; }
     const stop = new AbortController();
-    void loading(Promise.all(refs.map((r) => blobSize(r, stop.signal).then(
+    void loading(Promise.all(refs.map((r) => blobSize(r, stop.signal, { sizeOnly: true }).then(
       () => null,
-      (e: unknown): [string, string] => [r.hash, e instanceof ReadError ? e.message : `Cette version de « ${r.name} » n’a pas pu être lue.`],
+      (e: unknown): [string, Absent] => [r.hash, absentVersion(e, r.name)],
     )))).then((found) => {
       if (stop.signal.aborted) return;
       const m = new Map(found.filter((x) => x !== null));
@@ -233,9 +236,17 @@ function useUnreadable(refs: readonly { name: string; hash: string }[]): Readonl
   return out;
 }
 
-/** Why an annotation cannot be opened, or null: its source missing (annotationSource), or its version (useUnreadable). */
-const missing = (src: AnnotationSource, hash: string, unreadable: ReadonlyMap<string, string>): string | null =>
-  'why' in src ? src.why : unreadable.get(hash) ?? null;
+/** Why an annotation cannot be opened, or null: its source missing (annotationSource), or its version (useAbsent). */
+const missing = (src: AnnotationSource, hash: string, absent: ReadonlyMap<string, Absent>): string | null => {
+  if ('why' in src) return src.why;
+  const a = absent.get(hash);
+  return a?.blocks ? a.text : null;
+};
+/** What is said of an annotation that opens: its version not downloaded yet (plan 5a, R12), or null. */
+const pendingNote = (hash: string, absent: ReadonlyMap<string, Absent>): string | null => {
+  const a = absent.get(hash);
+  return a && !a.blocks ? a.text : null;
+};
 
 /**
  * An annotation's node (plan 4c, D1): « Annotation de « <PDF> », p. <n> », a click opening its PDF there — its file's
@@ -245,13 +256,13 @@ const missing = (src: AnnotationSource, hash: string, unreadable: ReadonlyMap<st
  */
 function AnnotationOf(props: { s: State; anchor: Anchor; onReveal: RevealAnnotation }) {
   const a = props.anchor, src = annotationSource(props.s, a);
-  const unreadable = useUnreadable('file' in src ? [{ name: src.file.name, hash: a.hash }] : []);
-  const why = missing(src, a.hash, unreadable);
+  const absent = useAbsent('file' in src ? [{ name: src.file.name, hash: a.hash }] : []);
+  const why = missing(src, a.hash, absent), note = pendingNote(a.hash, absent);
   const text = `Annotation de « ${props.s.nodes.get(a.pdf)?.title ?? '?'} », p. ${a.page}`;
   return (
     <p className="annotation-of">
       {why === null && 'file' in src
-        ? <button title="Ouvrir le PDF à cette page" onClick={() => props.onReveal(a.pdf, src.file.name, a)}>{text}</button>
+        ? <><button title="Ouvrir le PDF à cette page" onClick={() => props.onReveal(a.pdf, src.file.name, a)}>{text}</button>{note && <span className="why">{note}</span>}</>
         : <>{text}<span className="why">{why}</span></>}
     </p>
   );
@@ -269,17 +280,18 @@ function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; tit
   const sources = props.entries.map((e) => annotationSource(props.s, e.anchor));
   const refs = new Map<string, { name: string; hash: string }>();
   sources.forEach((src, i) => { const hash = props.entries[i].anchor.hash; if ('file' in src) refs.set(hash, { name: src.file.name, hash }); });
-  const unreadable = useUnreadable([...refs.values()]);
+  const absent = useAbsent([...refs.values()]);
   const { onMenu, menu } = useAnnotationMenu(props.actions);
   return (
     <>
       <ol className="annotation-list">
         {props.entries.map((e, i) => {
-          const src = sources[i], why = missing(src, e.anchor.hash, unreadable);
+          const src = sources[i], why = missing(src, e.anchor.hash, absent);
+          const earlier = 'file' in src && src.earlier ? EARLIER_VERSION : null, note = pendingNote(e.anchor.hash, absent);
           return (
             <AnnotationItem
               key={e.node.id} entry={e} titleChars={props.titleChars} here={false} draggable
-              note={why ?? ('file' in src && src.earlier ? EARLIER_VERSION : null)}
+              note={why ?? (note && earlier ? `${earlier} ; ${note}` : note ?? earlier)}
               onOpen={why === null && 'file' in src ? () => props.onReveal(e.anchor.pdf, src.file.name, e.anchor) : undefined} onMenu={onMenu}
             />
           );

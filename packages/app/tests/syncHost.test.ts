@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createNode, createPlan, decodeState, editNode, encodeState, type Id, type Reconciliation, reconcile, SyncDivergedError } from '@cirrus/core';
 import { afterEach, expect, test, vi } from 'vitest';
@@ -133,6 +133,8 @@ test('reconcile : la base écrit la réconciliation de l’interface avant de re
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');
   a.answers = false;
+  // The page holds its state and listens (cirrus:sync:start): reconciliations may be sent to it (R13).
+  await a.host.start();
   // The lobby, pending, acknowledged by the server (line 1), and B's node Y after it.
   const lobby = a.session.state.plans.values().next().value!;
   const ops = createNode(a.session.state, { plan: lobby.id, title: 'Y', x: 0, y: 0, k: 0 }).ops;
@@ -165,14 +167,19 @@ test('reconcile : la base écrit la réconciliation de l’interface avant de re
   await until(() => a.incoming.length === 4);
   a.host.detach();
   await expect(w).rejects.toThrow(/Fenêtre/);
+  // Until a page asks to start again, nothing is sent (R13); and without a window at all, nothing either.
+  await expect(a.host.reconcile([{ ...unit, unit: 'u-5', seq: unit.seq + 2 }], [])).rejects.toThrow(/pas prête/);
+  await a.host.start();
   a.windowOpen = false;
-  await expect(a.host.reconcile([{ ...unit, unit: 'u-5', seq: unit.seq + 2 }], [])).rejects.toThrow(/Fenêtre/);
+  await expect(a.host.reconcile([{ ...unit, unit: 'u-6', seq: unit.seq + 2 }], [])).rejects.toThrow(/Fenêtre/);
 });
 
 test('une réconciliation dont les écritures reçues ne sont pas celles du serveur est refusée, rien d’écrit', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');
   a.answers = false;
+  // The page holds its state and listens (cirrus:sync:start): reconciliations may be sent to it (R13).
+  await a.host.start();
   const first = { ...a.store.pendingUnits()[0], seq: 1 };
   const p = a.host.reconcile([first], []);
   await until(() => a.incoming.length === 1);
@@ -231,4 +238,71 @@ test('commit : l’heure du principal corrigée de l’écart du serveur, rendue
   const sent = a.session.pending.find((u) => u.unit === row.unit) ?? (await l.journal()).find((x) => x.unit === row.unit);
   expect(sent?.at).toBe(row.at);
   expect(() => a.host.commit(createNode(a.session.state, { plan: lobby, title: 'W', x: 0, y: 0, k: 0 }), '' as Id)).toThrow(/identifiant/);
+});
+
+test('R13 : la page rechargée (detach), une écriture reçue avant le cirrus:sync:start de la nouvelle est rejetée aussitôt ; stop() rend la main ; après start, le lot est réconcilié', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  const b = await l.pc('pc-b');
+  await until(() => b.store.lastServerSeq() === 1);
+  // The page reloads: nothing listens until the new one asks to start.
+  a.answers = false;
+  a.host.detach();
+  const sent = a.incoming.length;
+  const lobby = [...b.s.plans.values()][0].id;
+  const X = created(b.act((s) => createNode(s, { plan: lobby, title: 'X', x: 0, y: 0, k: 0 })), 'node');
+  await until(async () => (await l.lastSeq()) === 3);
+  await sleep(200);
+  expect(a.incoming.length).toBe(sent);
+  // Nothing hangs: the client stops.
+  let stopped = false;
+  await Promise.race([a.host.client.stop().then(() => { stopped = true; }), sleep(3000)]);
+  expect(stopped).toBe(true);
+  // The new page is ready: the batch comes again, reconciled.
+  a.answers = true;
+  await a.host.start();
+  await until(() => a.session.state.nodes.has(X) && a.store.lastServerSeq() === 3, 5000, () => JSON.stringify(a.statuses.slice(-3)));
+});
+
+test('revue, Minor 2 : dissocier efface d’abord serveur.json ; une liste des téléchargements qui ne s’efface pas est seulement signalée', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  // A list that cannot be removed (here, a folder of that name).
+  mkdirSync(join(a.dir, DOWNLOADS_FILE, 'bloqué'), { recursive: true });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await a.host.unpair();
+  expect([a.host.paired(), existsSync(join(a.dir, SERVER_FILE)), a.status?.state]).toEqual([false, false, 'off']);
+  expect(warn.mock.calls.some((c) => String(c[0]).includes(DOWNLOADS_FILE))).toBe(true);
+});
+
+test('revue, Minor 11 : dissocier pendant un démarrage, jumeler pendant un arrêt — la file les fait l’un après l’autre', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  // A pairing asked while a stop (waking) runs: it waits for the stop, then refuses (already paired).
+  const client = a.host.client, stop = client.stop.bind(client), events: string[] = [];
+  vi.spyOn(client, 'stop').mockImplementation(async () => {
+    events.push('stop');
+    await sleep(50);
+    await stop();
+    events.push('stopped');
+  });
+  const woke = a.host.resume();
+  const paired = a.host.pair(l.url, l.code('Autre'), 'Autre').then((r) => { events.push('pair'); return r; });
+  await woke;
+  expect(await paired).toEqual({ ok: false, message: 'Ce PC est déjà jumelé à un serveur : dissocie-le d’abord.' });
+  expect(events).toEqual(['stop', 'stopped', 'pair']);
+  // Unpairing asked during a start: the start first, then the stop; nothing starts again.
+  const started = a.host.start();
+  await a.host.unpair();
+  await started;
+  expect([a.host.paired(), a.status?.state]).toEqual([false, 'off']);
+  const hellos = a.net.count('GET', '/hello');
+  await sleep(200);
+  expect(a.net.count('GET', '/hello')).toBe(hellos);
 });

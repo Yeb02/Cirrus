@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { SyncStatus } from '../src/main/sync/client.ts';
 import type { PairResult, ServerInfo, SyncIncoming } from '../src/main/sync/host.ts';
-import { type Committed, EditSession, type Opened } from '../src/renderer/session.ts';
+import { type Committed, EditSession, type Opened, SnapshotSaver } from '../src/renderer/session.ts';
 import { chipOf, type SyncBridge, SyncSession, type SyncView } from '../src/renderer/sync/syncSession.ts';
 import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 
@@ -293,7 +293,7 @@ function syncing(o: { pending?: Unit[]; pair?: PairResult; timeoutMs?: number } 
 
 test('sans serveur jumelé, rien ne change : ni voile, ni pastille, ni démarrage', async () => {
   const { sync, calls, views } = syncing();
-  await sync.open({ paired: false, pc: 'pc-a', pending: [] });
+  await sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   expect(calls).toEqual([]);
   expect(views.every((v) => !v.veil && v.chip === null)).toBe(true);
 });
@@ -301,7 +301,7 @@ test('sans serveur jumelé, rien ne change : ni voile, ni pastille, ni démarrag
 test('jumelé au démarrage : le voile, jusqu’à « à jour » ; puis la pastille ; un clic sur « Hors ligne » réessaie', async () => {
   const { sync, calls, status, view, session } = syncing();
   const kept: Unit = { unit: 'u1', action: 'a1', label: 'x', at: 1, pc: 'pc-a', ops: [] };
-  await sync.open({ paired: true, pc: 'pc-a', pending: [kept] });
+  await sync.open({ paired: true, pc: 'pc-a', pending: [kept], timeoutMs: 4000 });
   expect(session.pending).toEqual([kept]);
   expect(calls).toEqual(['start']);
   expect(view().veil).toBe(true);
@@ -320,7 +320,7 @@ test('jumelé au démarrage : le voile, jusqu’à « à jour » ; puis la pasti
 test('le voile se lève après syncConnectTimeoutMs sans réponse : la pastille dit « Hors ligne » ; au réveil, il revient, et « off » ne le lève pas', async () => {
   vi.useFakeTimers();
   const { sync, status, view, veil } = syncing({ timeoutMs: 4000 });
-  await sync.open({ paired: true, pc: 'pc-a', pending: [] });
+  await sync.open({ paired: true, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   status({ state: 'connecting' });
   await vi.advanceTimersByTimeAsync(3999);
   expect(view().veil).toBe(true);
@@ -343,13 +343,15 @@ test('le voile se lève après syncConnectTimeoutMs sans réponse : la pastille 
 
 test('reçu : réconcilié par la session, écrit par le principal ; les écartées et les notifications en messages ; l’horloge dite une fois', async () => {
   const { sync, incoming, reconciled, toasts, status, s, X, P, G, H, session } = syncing();
-  await sync.open({ paired: true, pc: 'pc-a', pending: [] });
+  await sync.open({ paired: true, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   const t = copy(s);
   await session.run((st) => include(st, P, X, G));
   const u = remote(t, (st) => include(st, P, X, H), 0);
   incoming({ id: 7, units: [u], refused: [] });
   await vi.waitFor(() => expect(reconciled).toHaveLength(1));
-  expect(reconciled[0]).toMatchObject({ id: 7, outcome: { reconciliation: { remote: [{ unit: u.unit }] } } });
+  expect(reconciled[0]).toMatchObject({ id: 7 });
+  // The received writes go back as their identifiers and numbers only (review of task 4, Minor 4): main has them.
+  expect((reconciled[0].outcome as { reconciliation: { remote: unknown[] } }).reconciliation.remote).toEqual([{ unit: u.unit, seq: u.seq }]);
   await vi.waitFor(() => expect(toasts).toEqual(['« Mettre « X » dans « G » » écartée : « X » est déjà dans le groupe « H », depuis un autre PC.']));
   const warn = 'L\'horloge de ce PC diffère de celle du serveur de 7 minutes : règle-la.';
   status({ state: 'live', pending: 0, clockWarning: warn });
@@ -359,7 +361,7 @@ test('reçu : réconcilié par la session, écrit par le principal ; les écart�
 
 test('reçu qui diverge : le principal le sait (diverged), puis l’état refusé « diverged » fait relire l’état de la base', async () => {
   const { sync, incoming, reconciled, status, reloads, s, X } = syncing();
-  await sync.open({ paired: true, pc: 'pc-a', pending: [] });
+  await sync.open({ paired: true, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   const bad: RemoteUnit = {
     unit: uuidv7(), action: uuidv7(), label: 'Ailleurs', at: 1, pc: 'pc-b', seq: 1,
     ops: [{ t: 'node', before: { ...s.nodes.get(X)!, title: 'jamais' }, after: { ...s.nodes.get(X)!, title: 'B' } }],
@@ -375,7 +377,7 @@ test('reçu qui diverge : le principal le sait (diverged), puis l’état refus�
 test('jumeler : le principal jumelle, la session prend la liste des écritures en attente, puis la synchro démarre ; un refus est rendu ; dissocier', async () => {
   const lobby: Unit = { unit: 'u-lobby', action: 'a-lobby', label: 'Créer le plan « Lobby »', at: 1, pc: 'pc-a', ops: [] };
   const ok = syncing({ pending: [lobby] });
-  await ok.sync.open({ paired: false, pc: 'pc-a', pending: [] });
+  await ok.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   expect(await ok.sync.pair(' http://127.0.0.1:7310 ', 'ABCD-EFGH', 'Portable')).toEqual({ ok: true });
   expect(ok.calls).toEqual(['pair  http://127.0.0.1:7310  ABCD-EFGH Portable', 'pending', 'start']);
   expect(ok.session.pending).toEqual([lobby]);
@@ -383,7 +385,7 @@ test('jumeler : le principal jumelle, la session prend la liste des écritures e
   expect(ok.calls.at(-1)).toBe('unpair');
   expect(ok.session.pending).toEqual([]);
   const no = syncing({ pair: { ok: false, message: 'Code de jumelage inconnu.' } });
-  await no.sync.open({ paired: false, pc: 'pc-a', pending: [] });
+  await no.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   expect(await no.sync.pair('http://127.0.0.1:7310', 'X', 'P')).toEqual({ ok: false, message: 'Code de jumelage inconnu.' });
   expect(no.calls).toEqual(['pair http://127.0.0.1:7310 X P']);
 });
@@ -399,4 +401,62 @@ test('le bloc « Serveur » : non jumelé, l’adresse, le code, le nom de ce PC
   }));
   for (const text of ['http://127.0.0.1:7310', 'Portable', 'À jour', 'Dissocier ce PC']) expect(paired).toContain(text);
   expect(paired).not.toContain('Code de jumelage');
+});
+
+test('revue, Important 2 : un instantané demandé pendant l’écriture d’une réconciliation ne se prend pas ; il se prend ensuite, au nouveau numéro, de l’état réconcilié', async () => {
+  const { s, X, G } = world();
+  const t = copy(s);
+  let seq = 0, hold: Promise<void> | null = null, release!: () => void, saver: SnapshotSaver | null = null;
+  const writes: Reconciliation[] = [];
+  const session = new EditSession(s, async (a): Promise<Committed> => ({ seq: (seq += a.ops.length), at: 1 }), () => saver!.applied(), 0, { pc: 'pc-a', pending: [] });
+  const saved: { state: State; seq: number }[] = [];
+  saver = new SnapshotSaver(session, async (data, at) => { saved.push({ state: decodeState(data), seq: at }); }, () => ({ snapshotAfterActions: 100, snapshotIdleMs: 60_000 }), false);
+  await session.run((st) => editNode(st, G, { title: 'G2' }));
+  hold = new Promise<void>((r) => { release = r; });
+  const u = remote(t, (st) => editNode(st, X, { title: 'B' }), 5000);
+  const reconciled = session.reconcile([u], [], async (r) => {
+    writes.push(r);
+    await hold;
+    return (seq += 10);
+  });
+  await vi.waitFor(() => expect(writes).toHaveLength(1));
+  // The state is reconciled, the base has not written it yet: no snapshot of it under the old number.
+  await saver.flush();
+  expect(saved).toEqual([]);
+  release();
+  await reconciled;
+  await saver.flush();
+  expect(saved.map((x) => x.seq)).toEqual([session.seq]);
+  expect(image(saved[0].state)).toBe(image(s));
+});
+
+test('revue, Important 3 : le voile du démarrage dure le syncConnectTimeoutMs chargé, pas celui d’avant le chargement', async () => {
+  vi.useFakeTimers();
+  // The getter answers what App's ref holds before its first render with the settings: the defaults.
+  const { sync, view } = syncing({ timeoutMs: 4000 });
+  await sync.open({ paired: true, pc: 'pc-a', pending: [], timeoutMs: 1500 });
+  await vi.advanceTimersByTimeAsync(1499);
+  expect(view().veil).toBe(true);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(view().veil).toBe(false);
+});
+
+test('revue, Minor 3 : jumelé par le principal, mais la liste des écritures en attente ou le démarrage échoue : le jumelage reste dit fait, l’échec en message', async () => {
+  const w = syncing();
+  w.bridge.syncPending = async () => { throw new Error('IPC rompu'); };
+  await w.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  expect(await w.sync.pair('http://127.0.0.1:7310', 'CODE', 'Portable')).toEqual({ ok: true });
+  expect(w.toasts.some((x) => x.includes('IPC rompu'))).toBe(true);
+});
+
+test('revue, Minor 5 : une vue de la synchro identique à la précédente n’est pas redonnée', async () => {
+  const { sync, status, views } = syncing();
+  await sync.open({ paired: true, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  status({ state: 'live', pending: 0 });
+  const n = views.length;
+  status({ state: 'live', pending: 0 });
+  status({ state: 'live', pending: 0 });
+  expect(views.length).toBe(n);
+  status({ state: 'live', pending: 1 });
+  expect(views.length).toBe(n + 1);
 });

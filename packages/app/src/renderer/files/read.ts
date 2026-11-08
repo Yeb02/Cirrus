@@ -15,6 +15,12 @@ export function rangeHeader(size: number, maxBytes: number): string | null {
 export class ReadError extends Error {}
 
 /**
+ * A file the store does not hold yet, which the server paired may give (503, plan 5a, D6): not downloaded, rather than
+ * unreadable.
+ */
+export class NotDownloadedError extends ReadError {}
+
+/**
  * Why a blob the store does not hold yet could not be had from the server (503, plan 5a, D6): offline, mostly. A PDF
  * comes down at its first reading; another file is downloaded in the background, and may not have come yet.
  */
@@ -33,7 +39,7 @@ export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSig
   const range = rangeHeader(ref.size, maxBytes);
   const res = await fetch(fileUrl(ref, opts), { headers: range ? { Range: range } : {}, signal });
   if (res.status === 404) throw new ReadError(`« ${ref.name} » est introuvable dans la base.`);
-  if (res.status === 503) throw new ReadError(notDownloaded(ref.name));
+  if (res.status === 503) throw new NotDownloadedError(notDownloaded(ref.name));
   if (!res.ok) throw new ReadError(`« ${ref.name} » n’a pas pu être lu (${res.status}).`);
   const out = new Uint8Array(Math.min(ref.size, maxBytes));
   let n = 0;
@@ -59,15 +65,32 @@ export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSig
  * The size of a version of a file the store keeps (plan 4c, D2: the one an annotation was made on, re-imported since;
  * the node no longer holds its FileRef), by the length the cirrus-file: protocol answers it with: its content is not
  * read, the answer's stream let go at once. A blob missing from the store, or an answer without its length, rejects
- * with a ReadError, in French.
+ * with a ReadError, in French; one the server paired may give, with a NotDownloadedError (plan 5a). `sizeOnly`: only
+ * its size is wanted (an annotation listed, R12), never a download; otherwise the version is being opened, and the
+ * protocol fetches it from the server.
  */
-export async function blobSize(ref: { name: string; hash: string }, signal?: AbortSignal): Promise<number> {
-  const res = await fetch(fileUrl({ ...ref, size: 0 }), { signal });
+export async function blobSize(ref: { name: string; hash: string }, signal?: AbortSignal, opts: { sizeOnly?: boolean } = {}): Promise<number> {
+  const res = await fetch(fileUrl({ ...ref, size: 0 }, opts), { signal });
   void res.body?.cancel().catch(() => {});
   if (res.status === 404) throw new ReadError(`Cette version de « ${ref.name} » est introuvable dans la base.`);
+  if (res.status === 503) throw new NotDownloadedError(opts.sizeOnly ? notDownloadedYet(ref.name) : notDownloaded(ref.name));
   const size = Number(res.headers.get('content-length') ?? Number.NaN);
   if (!res.ok || !Number.isSafeInteger(size) || size < 0) throw new ReadError(`Cette version de « ${ref.name} » n’a pas pu être lue (${res.status}).`);
   return size;
+}
+
+/** A version the server may give, never asked of it here (R12): it comes down when it is opened. */
+function notDownloadedYet(name: string): string {
+  return `${fileKind(name) === 'pdf' ? 'PDF' : `« ${name} »`} pas encore téléchargé : il le sera à son ouverture.`;
+}
+
+/**
+ * Why a version an annotation is on is not in the store, from blobSize's failure: `blocks`, it cannot be opened (missing
+ * from the base, unreadable); a version not downloaded yet opens, and is downloaded then (plan 5a, R12).
+ */
+export function absentVersion(e: unknown, name: string): { text: string; blocks: boolean } {
+  if (e instanceof NotDownloadedError) return { text: e.message, blocks: false };
+  return { text: e instanceof ReadError ? e.message : `Cette version de « ${name} » n’a pas pu être lue.`, blocks: true };
 }
 
 /** What the views are still reading or loading: a file, a view's code, a language, an image. */

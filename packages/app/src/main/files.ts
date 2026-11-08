@@ -121,12 +121,14 @@ export function blobResponse(storeDir: string, request: Request): Response {
 }
 
 /**
- * A request of a thumbnail (`?vignette`, plan 5a, D6): served if the store holds the blob, never downloaded — the pop-up
- * shows the kind's icon instead.
+ * A request that never downloads (plan 5a, D6, R12): a thumbnail's (`?vignette`: the pop-up shows the kind's icon
+ * instead), or one asking only a version's size (`?taille`: an annotation listed). Served if the store holds the blob.
  */
-export function isThumbnailRequest(url: string): boolean {
+export function isNoDownloadRequest(url: string): boolean {
   const query = url.split('#')[0].split('?')[1];
-  return query !== undefined && new URLSearchParams(query).has('vignette');
+  if (query === undefined) return false;
+  const params = new URLSearchParams(query);
+  return params.has('vignette') || params.has('taille');
 }
 
 /** A blob the server must give: `true` once it is in the store, checked against its hash (SyncClient.fetchBlob). */
@@ -136,13 +138,15 @@ export type FetchBlob = (hash: string) => Promise<boolean>;
  * The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). With a
  * server paired (`fetchBlob`, plan 5a, D6), a blob absent from the store — a PDF at its first reading, a file whose
  * download has not come yet — is fetched from it, checked, kept, then served; when it cannot be had (offline, absent
- * there, bytes that are not its hash's), 503. A thumbnail's request never downloads (404, as without a server).
+ * there, bytes that are not its hash's), 503. A request that never downloads (a thumbnail's, a size's) answers 503 at
+ * once for an absent blob: not downloaded yet (R12). Without a server, an absent blob is 404, as in plan 4c.
  */
 export function fileResponse(storeDir: string, cacheDir: string, request: Request, fetchBlob: FetchBlob | null = null): Response | Promise<Response> {
   const range = request.headers.get('range'), url = request.url;
   if (url.startsWith(LATEX_PREFIX)) return respond(latexRequest(cacheDir, url, range));
   const answer = blobRequest(storeDir, url, range);
-  if (answer.status !== 404 || !fetchBlob || isThumbnailRequest(url)) return respond(answer);
+  if (answer.status !== 404 || !fetchBlob) return respond(answer);
+  if (isNoDownloadRequest(url)) return respond(bare(503));
   const hash = parseUrl(url, BLOB_PREFIX)?.hash;
   if (!hash) return respond(answer);
   return fetchBlob(hash).then(

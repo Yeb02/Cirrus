@@ -52,7 +52,7 @@ export interface SyncSessionDeps {
   session: EditSession;
   /** The state, read again from the base (after a reconciliation the base refused, or a divergence). */
   load(): Promise<Opened>;
-  /** syncConnectTimeoutMs, read when the veil rises. */
+  /** syncConnectTimeoutMs, read when the veil rises on waking (the startup's is open's). */
   timeoutMs(): number;
   toast(text: string): void;
   onView(v: SyncView): void;
@@ -70,6 +70,8 @@ export class SyncSession {
   private pc = '';
   /** The statuses the main process sent: one sent after a call began is newer than that call's answer. */
   private told = 0;
+  /** The view last given (as text): an identical one is not given again (review of task 4, Minor 5). */
+  private shown = '';
   private readonly off: (() => void)[] = [];
 
   constructor(deps: SyncSessionDeps) {
@@ -81,20 +83,21 @@ export class SyncSession {
         this.told++;
         this.setStatus(s);
       }),
-      bridge.onSyncVeil(() => this.raise()),
+      bridge.onSyncVeil(() => this.raise(deps.timeoutMs())),
     );
   }
 
   /**
    * The interface has opened its state: with a server paired, the session keeps the pending writes the base gave,
-   * the veil rises, and the synchronisation starts (the main process waits for this to reconcile anything).
+   * the veil rises for `timeoutMs` at most — the settings just loaded (review of task 4, Important 3) — and the
+   * synchronisation starts (the main process waits for this to reconcile anything).
    */
-  async open(o: { paired: boolean; pc: string; pending: Unit[] }): Promise<void> {
+  async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number }): Promise<void> {
     this.pc = o.pc;
     // Without a server, nothing to show: the interface is as in plan 4c.
     if (!o.paired) return;
     await this.deps.session.follow(o.pc, async () => o.pending);
-    this.raise();
+    this.raise(o.timeoutMs);
     await this.start();
   }
 
@@ -106,14 +109,21 @@ export class SyncSession {
 
   /**
    * Pairs this PC (the block « Serveur »): the main process pairs; the session then takes every pending write, read in
-   * its queue (none written meanwhile), and the synchronisation starts. The refusal, in French.
+   * its queue (none written meanwhile), and the synchronisation starts. The refusal, in French. Paired by the main
+   * process, it is done, whatever follows: a start that fails is said, and the chip's « Réessayer » or the next launch
+   * starts it (review of task 4, Minor 3).
    */
   async pair(url: string, code: string, name: string): Promise<PairResult> {
     const r = await this.deps.bridge.syncPair(url, code, name);
     if (!r.ok) return r;
     const { bridge, session } = this.deps;
-    await session.follow(this.pc, async () => JSON.parse(await bridge.syncPending()) as Unit[]);
-    await this.start();
+    try {
+      await session.follow(this.pc, async () => JSON.parse(await bridge.syncPending()) as Unit[]);
+      await this.start();
+    } catch (e) {
+      console.error('Synchronisation non démarrée :', e);
+      this.deps.toast(`Ce PC est jumelé, mais la synchronisation n’a pas démarré (${messageOf(e)}) : relance Cirrus.`);
+    }
     return r;
   }
 
@@ -147,7 +157,9 @@ export class SyncSession {
     try {
       const out = await session.reconcile(m.units, m.refused, async (r) => {
         written = true;
-        const seq = await bridge.syncReconciled(m.id, { reconciliation: r });
+        // The received writes named only: the main process holds them (review of task 4, Minor 4).
+        const reconciliation = { ...r, remote: r.remote.map((u) => ({ unit: u.unit, seq: u.seq })) };
+        const seq = await bridge.syncReconciled(m.id, { reconciliation });
         if (seq === null) throw new Error('Réconciliation non écrite.');
         return seq;
       });
@@ -192,15 +204,15 @@ export class SyncSession {
     }
   }
 
-  /** The veil rises (startup, waking), syncConnectTimeoutMs at most. */
-  private raise(): void {
+  /** The veil rises (startup, waking), `ms` (syncConnectTimeoutMs) at most. */
+  private raise(ms: number): void {
     if (this.timer !== null) clearTimeout(this.timer);
     this.veil = true;
     this.gaveUp = false;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.lower(true);
-    }, Math.max(0, this.deps.timeoutMs()));
+    }, Math.max(0, ms));
     this.show();
   }
 
@@ -212,7 +224,12 @@ export class SyncSession {
     this.show();
   }
 
+  /** The view, given only when it changed: a status that changes nothing renders nothing (review of task 4, Minor 5). */
   private show(): void {
-    this.deps.onView({ veil: this.veil, status: this.status, chip: chipOf(this.status, this.gaveUp) });
+    const v: SyncView = { veil: this.veil, status: this.status, chip: chipOf(this.status, this.gaveUp) };
+    const key = JSON.stringify(v);
+    if (key === this.shown) return;
+    this.shown = key;
+    this.deps.onView(v);
   }
 }

@@ -407,7 +407,7 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
 - Ruling: **la scène reçoit une action « Synchronisation »** dont les opérations sont les inverses, les écritures reçues hors accusés, et les écritures rejouées quand il y a eu des inverses. Un accusé seul ne change pas l'état : la scène n'en sait rien, et il ne coupe pas la fusion d'un `.tex` (une écriture reçue la coupe).
   - Coût si faux : nul.
 - Ruling: **l'aller-retour d'une réconciliation** :
-  - le principal envoie `cirrus:sync:incoming { id, units, refused }` ; l'interface répond `cirrus:sync:reconciled(id, issue)`, où l'issue est `{ reconciliation }`, `{ diverged }` ou `{ error }` ;
+  - le principal envoie `cirrus:sync:incoming { id, units, refused }` ; l'interface répond `cirrus:sync:reconciled(id, issue)`, où l'issue est `{ reconciliation }`, `{ diverged }` ou `{ error }`. La réconciliation renvoyée ne nomme les écritures reçues que par leur identifiant et leur numéro : le principal les a (revue, Minor 4) ;
   - le principal vérifie que les écritures reçues de la réconciliation sont celles qu'il a envoyées (identifiants et numéros, dans l'ordre), puis écrit sa propre copie de celles-ci. Il vérifie aussi que les écritures rejouées sont de ce PC et bien formées ;
   - leurs opérations sont vérifiées par la base en écrivant (`checkRecord`, chaque « avant »), pas par `parseOp`, plus strict. Une écriture que le serveur refuserait doit encore pouvoir être défaite ici, puis écartée ; sinon, la synchro bloquerait pour toujours ;
   - un `id` inconnu ou déjà réglé est refusé ;
@@ -422,21 +422,25 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
   - Options : recharger la page (`location.reload`), plus simple, mais on perdrait les panneaux ouverts et le texte tapé.
   - Coût si faux : nul.
 - Ruling: **une fenêtre qui s'en va** (fermée, son rendu perdu, sa page rechargée : `did-start-navigation` du cadre principal) voit ses réconciliations rejetées (`detach`). `stop()` ne les attend donc jamais. Sans fenêtre, une réception est rejetée tout de suite.
+  - Révisé par R13 (revue de la tâche 4, Important 1) : `detach` lève aussi le drapeau `ready`, que pose `cirrus:sync:start`. Tant qu'il est baissé, `reconcile` rejette aussitôt. Le client réessaie plus tard, et la nouvelle page le relance en demandant à démarrer. Avant, une réception envoyée à une page rechargée qui n'écoutait pas encore restait en attente pour toujours, et `stop()` avec elle. Aucune limite de temps n'est posée sur les attentes (R13).
   - Coût si faux : nul.
 - Ruling: **un nouveau client à chaque dissociation** : les fichiers connus du serveur (`onServer`), l'écart d'horloge et les téléchargements en mémoire sont ceux d'un serveur. Cela règle la remarque de la revue de la tâche 3 (`onServer` jamais vidé).
   - Coût si faux : nul.
 - Ruling: **`cirrus-file:` avec un serveur** :
-  - un fichier absent du magasin (404) est demandé par `fetchBlob`, sauf pour une vignette ;
+  - un fichier absent du magasin (404) est demandé par `fetchBlob`, sauf pour une requête qui ne télécharge jamais : une vignette (`?vignette`), ou la seule taille d'une version (`?taille`, R12) ;
   - tout échec donne 503, car `fetchBlob` ne dit que vrai ou faux : hors ligne, absent du serveur, octets faux ;
-  - une vignette, et tout `cirrus-file:` sans serveur jumelé, répondent 404 comme au plan 4c ;
+  - une requête qui ne télécharge jamais, pour un fichier absent, répond 503 tout de suite, sans rien demander au serveur : pas encore téléchargé (revu par R12 ; une vignette répondait 404) ;
+  - sans serveur jumelé, tout `cirrus-file:` répond comme au plan 4c (404 pour un fichier absent) ;
   - le message du lecteur est celui du plan pour un PDF, « « nom » pas encore téléchargé : serveur injoignable. » pour un autre fichier ;
   - les vignettes d'images demandent `?vignette` elles aussi, et montrent l'icône de l'image si elles échouent ;
   - une vignette de PDF qui n'a pas pu lire son fichier (`ReadError`) n'est pas gardée en cache : elle est redemandée à la prochaine ouverture ;
   - une vue qui rejoint l'ouverture d'un PDF par une vignette, et la voit échouer ainsi, l'ouvre de nouveau elle-même.
   - Coût si faux : « serveur injoignable » dit pour un fichier que le serveur n'a pas.
-- Ruling: **la liste des versions d'un fichier dans un pop-up** (`blobSize`, plan 4c) n'a pas `?vignette` : une version ancienne absente est téléchargée quand le pop-up l'énumère, et non à son ouverture seulement (D6 [C], lu largement).
-  - Options : `?vignette`, mais la version serait dite « introuvable dans la base » alors que le serveur l'a.
-  - Coût si faux : le téléchargement d'anciennes versions d'un PDF annoté, à l'ouverture de son pop-up.
+- Ruling (annulé par R12, revue de la tâche 4, Important 4) : **la liste des versions d'un fichier dans un pop-up** (`blobSize`) téléchargeait une version absente dès qu'un pop-up l'énumérait.
+  - Désormais, la taille de la version d'une annotation se demande par `?taille` (`blobSize(…, { sizeOnly: true })`). Elle ne télécharge jamais. Jumelé, une version absente est « PDF pas encore téléchargé : il le sera à son ouverture. » (`NotDownloadedError`, `absentVersion`). L'annotation reste ouverte au clic, et c'est le lecteur qui télécharge le PDF.
+  - Sans serveur, une version absente est introuvable et ne s'ouvre pas, comme au plan 4c.
+  - L'ouverture d'une version précédente dans le lecteur (`Viewer`) demande sa taille sans `?taille` : c'est une ouverture, qui télécharge.
+  - Coût si faux (R12) : une annotation dont le serveur a perdu le PDF paraît saine jusqu'à son ouverture.
 - Ruling: **`safeStorage.encryptString` et `decryptString`**, synchrones, sont dépréciés dans Electron 45 au profit de leurs formes asynchrones. Ils sont gardés : `SecretStore` (tâche 3) est synchrone.
   - Coût si faux : passer `SecretStore` en asynchrone quand Electron les retirera.
 - Ruling: **`EditSession.receive` est gardé** : l'app ne l'appelle plus, `reconcile` le remplace, mais ses tests l'emploient pour figurer une modification venue d'ailleurs.
@@ -446,3 +450,19 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
 - Ruling: **l'adresse proposée par le bloc** (`http://127.0.0.1:7310`, le port par défaut de la ligne de commande du serveur) est une constante de l'interface (`ServerBlock`) : non jumelé, `info()` du principal ne propose pas d'adresse. Le test de garde du plan 4b (`tinytex.test.ts`) interdit toute adresse écrite dans un module du principal hors des fichiers de sources.
   - Options : un fichier de sources de la synchro au principal, ajouté aux exceptions du test.
   - Coût si faux : nul ; ce n'est qu'une proposition, que l'utilisateur remplace.
+
+### Correctifs de la revue (tâche 4, tour 1)
+
+Décisions du contrôleur : R12 (D6 tient : aucune lecture de la taille d'une version ne télécharge) et R13 (le drapeau `ready`, sans limite de temps sur les attentes), plus haut dans les règles qu'elles révisent.
+
+- Ruling: **l'instantané pendant l'écriture d'une réconciliation** (Important 2) : la session se dit occupée (`busy`) entre la réconciliation de son état et son écriture par la base. `SnapshotSaver` ne prend alors rien, comme pour une session rompue. Un instantané dû attend de nouveau le repos ; à la fermeture, il est sauté, et le journal a tout.
+  - Options : faire passer les instantanés par la file de la session (la fermeture attendrait la réconciliation en cours).
+  - Coût si faux : un instantané de moins, pris au repos suivant.
+- Ruling: **le voile du démarrage dure le `syncConnectTimeoutMs` chargé** (Important 3) : `SyncSession.open` le reçoit des réglages que l'app vient de lire. La référence de l'app n'a le réglage qu'après son premier rendu. Le voile du réveil lit le réglage du moment.
+  - Coût si faux : nul.
+- Ruling: **dissocier efface `serveur.json` d'abord** (Minor 2), puis la liste des téléchargements, au mieux : un échec n'est que signalé (`console.warn`). La base est alors sans serveur, même si la liste reste.
+  - Coût si faux : une liste orpheline, que le client du prochain jumelage relit et dont les fichiers absents du serveur ne sont pas redemandés.
+- Ruling: **jumelé par le principal, c'est fait** (Minor 3) : si la prise des écritures en attente ou le démarrage échoue ensuite, `SyncSession.pair` le dit par une notification (« relance Cirrus ») et rend tout de même `{ ok: true }`. L'app relit l'état du serveur jumelé après tout jumelage, réussi ou non : le bloc montre « Dissocier ce PC ».
+  - Coût si faux : nul.
+- Ruling: **une vue de la synchro identique à la précédente n'est pas redonnée** (Minor 5) : comparée en texte (voile, état, pastille), quelques dizaines d'octets.
+  - Coût si faux : nul.

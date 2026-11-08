@@ -16,10 +16,16 @@ import { DOWNLOADS_FILE } from './downloads.ts';
 export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }
 
 /**
+ * A reconciliation as the interface sends it back: the received writes named only, by identifier and number (main
+ * holds them: it sent them); the rest whole.
+ */
+export type ReconciliationAnswer = Omit<Reconciliation, 'remote'> & { remote: { unit: Id; seq: number }[] };
+
+/**
  * The interface's answer (cirrus:sync:reconciled): its reconciliation, for the base to write; or why it could not make
  * one — `diverged`, a received write that does not apply to its state (SyncDivergedError); `error`, anything else.
  */
-export type ReconcileOutcome = { reconciliation: Reconciliation } | { diverged: string } | { error: string };
+export type ReconcileOutcome = { reconciliation: ReconciliationAnswer } | { diverged: string } | { error: string };
 
 export type PairResult = { ok: true } | { ok: false; message: string };
 
@@ -85,6 +91,11 @@ export class SyncHost {
   private last: SyncStatus = { state: 'off' };
   /** The interface asked for the synchronisation (cirrus:sync:start), a server being paired. */
   private started = false;
+  /**
+   * The page holds its state and listens (cirrus:sync:start), since its last going away (detach): a reconciliation sent
+   * otherwise would reach no one, and the client would wait for it for ever (R13).
+   */
+  private ready = false;
   private closed = false;
   /** start, stop, pairing, unpairing, waking: one at a time, in order (never a start while a stop runs). */
   private cycle: Promise<void> = Promise.resolve();
@@ -141,6 +152,7 @@ export class SyncHost {
    * at startup, or once a pairing is done. Its status, as it then is.
    */
   async start(): Promise<SyncStatus> {
+    this.ready = true;
     await this.step(() => {
       if (this.closed || !this.config) return;
       this.started = true;
@@ -191,9 +203,12 @@ export class SyncHost {
   /**
    * The client's reconcile (task 3): the writes received sent to the interface, which reconciles them on its state; once
    * the base has written its reconciliation (`reconciled`), resolved. Rejected with SyncDivergedError when the
-   * interface's reconcile threw it, with an Error for any other failure, or at once without a window to answer.
+   * interface's reconcile threw it, with an Error for any other failure, or at once without a window, or a page, ready to
+   * answer (R13).
    */
   reconcile(incoming: RemoteUnit[], refused: { unit: Id; message: string }[]): Promise<void> {
+    // A page loading (or none): rejected at once, the client tries again later, and the new page asks to start.
+    if (!this.ready) return Promise.reject(new Error('Interface pas prête : réconciliation remise à plus tard.'));
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
       this.waiting.set(id, { incoming, resolve, reject });
@@ -234,7 +249,8 @@ export class SyncHost {
 
   /**
    * A reconciliation as the base may write it: the received writes are this process's own copy of what the server sent
-   * (the interface's must name the same, in order); the replayed writes this PC's, as the base will keep them. Their
+   * (the interface names the same, in order, by identifier and number); the replayed writes this PC's, as the base will
+   * keep them. Their
    * operations are checked by the base as it writes them (checkRecord, each "before"), not by the server's stricter
    * parseOp: a write the server refuses must still be undone here, and dropped. Costs the lists' lengths.
    */
@@ -255,8 +271,12 @@ export class SyncHost {
     return { rewind: rewind as Op[], remote: incoming, rebased: rebased as Unit[], dropped: dropped as Reconciliation['dropped'], acked: acked as Id[], notices: notices as string[] };
   }
 
-  /** The window is gone (closed, its page reloaded or crashed): the reconciliations it held rejected, so that stop() never waits for them. */
+  /**
+   * The window is gone (closed, its page reloaded or crashed): the reconciliations it held rejected, so that stop() never
+   * waits for them; none sent until a page asks to start again (R13).
+   */
   detach(): void {
+    this.ready = false;
     const waiting = [...this.waiting.values()];
     this.waiting.clear();
     for (const w of waiting) w.reject(new Error('Fenêtre fermée : réconciliation abandonnée.'));
@@ -326,16 +346,22 @@ export class SyncHost {
   }
 
   /**
-   * Unpairs this PC: the client stopped (a reconciliation under way ends first), the list of downloads to do and
-   * serveur.json removed. The base then behaves as without a server (plan 4c); its pending writes stay pending.
+   * Unpairs this PC: the client stopped (a reconciliation under way ends first), serveur.json removed, then the list of
+   * downloads to do (at best: a failure is only reported). The base then behaves as without a server (plan 4c); its
+   * pending writes stay pending.
    */
   unpair(): Promise<void> {
     return this.step(async () => {
       this.started = false;
       await this.client.stop();
-      rmSync(join(this.deps.dir, DOWNLOADS_FILE), { force: true });
+      // Unpaired first: a list that cannot be removed (a file held) leaves a base without a server, as wanted.
       this.deps.secrets.write(null);
       this.config = null;
+      try {
+        rmSync(join(this.deps.dir, DOWNLOADS_FILE), { force: true });
+      } catch (e) {
+        console.warn(`Liste des téléchargements non effacée (${DOWNLOADS_FILE}) : ${messageOf(e)}`);
+      }
       // The next server starts from nothing known: its files, its clock.
       this.client = this.newClient();
       this.last = { state: 'off' };

@@ -101,7 +101,7 @@ export class AppPc {
       load: () => openState(this.load),
     });
     const info = await this.bridge.syncServer();
-    await this.sync.open({ paired: info.paired, pc: opened.pc, pending: opened.pending });
+    await this.sync.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: this.params.syncConnectTimeoutMs });
     return this;
   }
 

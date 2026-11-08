@@ -49,11 +49,13 @@ export const viewKey = (ref: ViewRef): string => `${ref.store ?? 'blob'}:${ref.h
 
 /**
  * The file's address under the main process's cirrus-file: protocol (FILE_SCHEME, plan 4a, D1): the store's blobs, or
- * the compiled PDFs (`latex`); the name only gives its type. `thumbnail` (plan 5a, D6): a thumbnail's request
- * (`?vignette`), which never downloads a blob absent from the store.
+ * the compiled PDFs (`latex`); the name only gives its type. Two requests never download a blob absent from the store
+ * (plan 5a, D6, R12): a thumbnail's (`thumbnail`, `?vignette`), and one that asks only a version's size (`sizeOnly`,
+ * `?taille`: an annotation's, whose PDF nobody opened).
  */
-export function fileUrl(ref: ViewRef, opts: { thumbnail?: boolean } = {}): string {
-  return `cirrus-file://${ref.store === 'latex' ? 'latex' : 'blob'}/${ref.hash}/${encodeURIComponent(ref.name)}${opts.thumbnail ? '?vignette' : ''}`;
+export function fileUrl(ref: ViewRef, opts: { thumbnail?: boolean; sizeOnly?: boolean } = {}): string {
+  const flag = opts.thumbnail ? '?vignette' : opts.sizeOnly ? '?taille' : '';
+  return `cirrus-file://${ref.store === 'latex' ? 'latex' : 'blob'}/${ref.hash}/${encodeURIComponent(ref.name)}${flag}`;
 }
 
 const UNITS = ['o', 'Ko', 'Mo', 'Go', 'To'];

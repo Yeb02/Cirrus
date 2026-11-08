@@ -255,7 +255,9 @@ export function App() {
         setTabs(open);
         setActive(current);
         setShown({ state: s, rev: 0, action: null });
-        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending }).catch((e: unknown) => console.error('Synchronisation :', e));
+        // The startup veil lasts the setting just read: the ref holds it only once rendered (review, Important 3).
+        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs })
+          .catch((e: unknown) => console.error('Synchronisation :', e));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -463,9 +465,12 @@ export function App() {
   const serverBlock = {
     info: server, status: syncView.status,
     onPair: async (url: string, code: string, name: string) => {
-      const r = await sync.current!.pair(url, code, name);
-      if (r.ok) setServer(await window.cirrus.syncServer());
-      return r;
+      try {
+        return await sync.current!.pair(url, code, name);
+      } finally {
+        // What the main process holds, whatever happened here (review, Minor 3).
+        setServer(await window.cirrus.syncServer());
+      }
     },
     onUnpair: async () => {
       await sync.current!.unpair();

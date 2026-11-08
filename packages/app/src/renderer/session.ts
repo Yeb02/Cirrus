@@ -81,6 +81,8 @@ export class EditSession {
   private revision = 0;
   private journalSeq: number;
   private diverged = false;
+  /** A reconciliation applied to the state, its writing by the base awaited: the state is ahead of `seq` (plan 5a). */
+  private writing = false;
   private stack = new UndoStack();
   private queue: Promise<unknown> = Promise.resolve();
   private readonly commit: (a: Action, unit: Id) => Promise<Committed>;
@@ -135,6 +137,14 @@ export class EditSession {
    */
   get broken(): boolean {
     return this.diverged;
+  }
+
+  /**
+   * Whether the state is, for now, ahead of the journal number it is said to cover: a reconciliation applied to it, its
+   * writing by the base awaited (plan 5a). No snapshot is taken of it then (review of task 4, Important 2).
+   */
+  get busy(): boolean {
+    return this.writing;
   }
 
   /**
@@ -253,11 +263,14 @@ export class EditSession {
       const before = this.sync?.pending ?? [];
       const r = reconcile(this.s, before, units, refused);
       let seq: number;
+      this.writing = true;
       try {
         seq = await write(r);
       } catch (e) {
         this.diverged = true;
         throw e;
+      } finally {
+        this.writing = false;
       }
       if (this.sync) this.sync.pending = r.rebased;
       // An acknowledged write, or one replayed unchanged (the same object), stays undoable; any other was rewritten,
@@ -336,7 +349,8 @@ export interface SnapshotTiming { snapshotAfterActions: number; snapshotIdleMs: 
  * once `snapshotAfterActions` actions are unsaved, or when the one found at load was stale (the journal's tail was
  * replayed); a due snapshot is taken at rest only, once nothing has happened for `snapshotIdleMs` (no action, no input:
  * touch), never inside an action, and not before the first frame (start). Closing (flush) takes one whenever anything
- * is unsaved. Never from a broken session. The state is encoded at once, between two actions: what is sent is exactly
+ * is unsaved. Never from a broken session, nor while a reconciliation is being written (busy: the state is ahead of
+ * `seq`); a due one waits for rest again. The state is encoded at once, between two actions: what is sent is exactly
  * the state at `seq`.
  */
 export class SnapshotSaver {
@@ -393,6 +407,11 @@ export class SnapshotSaver {
   private saveNow(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     if ((this.unsaved === 0 && !this.stale) || this.session.broken) return this.sending;
+    // A reconciliation is being written: its state is not yet that of `seq`. Tried again at rest.
+    if (this.session.busy) {
+      if (this.started) this.rearm();
+      return this.sending;
+    }
     const seq = this.session.seq, count = this.unsaved, stale = this.stale;
     // Not kept, whatever failed: the journal still has everything, the next snapshot will cover it.
     const warn = (e: unknown) => console.warn(`Instantané de la base non enregistré : ${messageOf(e)}`);
