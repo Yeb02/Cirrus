@@ -236,11 +236,12 @@ function mergeFiles(b: readonly FileRef[], t: readonly FileRef[], m: readonly Fi
   // The .tex changed on both sides into two contents: the loser's version, and the earlier rounds' copies it replaces.
   const losers: { file: FileRef; at: number }[] = [], replaced = new Set<string>();
   for (const [k, mf] of M) {
+    // Changed on both sides, or added on both, into two contents.
     const bf = B.get(k), tf = T.get(k);
-    if (!k.endsWith('.tex') || !bf || !tf || tf.hash === mf.hash || same(mf, bf) || same(tf, bf)) continue;
+    if (!k.endsWith('.tex') || !tf || tf.hash === mf.hash || (bf && (same(mf, bf) || same(tf, bf)))) continue;
     const stamp = c.stamps?.get(`file:${k}`), theirs = newer(stamp, c.mine);
     losers.push(theirs ? { file: mf, at: c.mine.at } : { file: tf, at: stamp?.at ?? c.mine.at });
-    for (const [x, f] of [...T, ...M]) if (!B.has(x) && f.hash === bf.hash && isCopyOf(f.name, k)) replaced.add(x);
+    if (bf) for (const [x, f] of [...T, ...M]) if (!B.has(x) && f.hash === bf.hash && isCopyOf(f.name, k)) replaced.add(x);
   }
   const out: FileRef[] = [], done = new Set<string>(replaced);
   const emit = (k: string) => {

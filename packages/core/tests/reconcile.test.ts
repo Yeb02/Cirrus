@@ -185,6 +185,24 @@ test.each([
 });
 
 test.each([
+  { name: 'le leur plus récent', theirsAt: MIN, kept: 'b', copy: 'a', copyAt: 0 },
+  { name: 'le mien plus récent', theirsAt: -MIN, kept: 'a', copy: 'b', copyAt: -MIN },
+])('reconcile : un même .tex ajouté sur deux PC, deux contenus ($name) : les deux versions restent, une notification', ({ theirsAt, kept, copy: held, copyAt }) => {
+  const T = Date.UTC(2026, 10, 8, 9);
+  const { s, X } = world();
+  const server = copy(s);
+  const tex = (h: string) => [{ name: 'note.tex', hash: h.repeat(64), size: 1 }];
+  const mine = unitOf(run(s, editNode(s, X, { files: tex('a') })), 'pc-a', T);
+  const theirs = unitOf(run(server, editNode(server, X, { files: tex('b') })), 'pc-b', T + theirsAt);
+  const r = reconcile(s, [mine], [relayed(theirs, 1)], []);
+  const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
+  expect(s.nodes.get(X)!.files.map((f) => `${f.name}=${f.hash[0]}`)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
+  expect(r.notices).toEqual([`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
+  for (const u of r.rebased) applyOps(server, wire(u).ops);
+  expect(image(s)).toBe(image(server));
+});
+
+test.each([
   { name: 'ma version avait gagné, la leur change encore, plus récente : une seule copie, la mienne', secondAt: 30 * MIN, kept: 'c', copy: '1', copyAt: 0 },
   { name: 'ma version avait gagné, la leur change encore, plus ancienne : une seule copie, leur dernière', secondAt: -30 * MIN, kept: '1', copy: 'c', copyAt: -30 * MIN },
   { name: 'la leur avait gagné, elle change encore : la copie de la mienne reste seule', secondAt: 30 * MIN, firstAt: 10 * MIN, kept: 'c', copy: '1', copyAt: 0 },

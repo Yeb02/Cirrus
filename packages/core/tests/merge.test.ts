@@ -154,6 +154,18 @@ const CASES: Case[] = [
     },
   },
   {
+    name: 'un même .tex ajouté des deux côtés, deux contenus : les deux versions restent, le plus récent garde le nom',
+    check: ({ s, M }) => {
+      const out = rebase(s, { mine: editNode(s, M, { files: [file('note.tex', 'a')] }), theirs: editNode(s, M, { files: [file('note.tex', 'b')] }), mineAt: T0, theirsAt: T0 + 60_000 });
+      expect(files(s, M)).toEqual(['note.tex=b', `note (conflit du ${stamp(T0)}).tex=a`]);
+      expect(out.conflictCopies).toEqual([`note (conflit du ${stamp(T0)}).tex`]);
+      const w = world();
+      const out2 = rebase(w.s, { mine: editNode(w.s, w.M, { files: [file('note.tex', 'a')] }), theirs: editNode(w.s, w.M, { files: [file('note.tex', 'b')] }), mineAt: T0 + 60_000, theirsAt: T0 });
+      expect(files(w.s, w.M)).toEqual(['note.tex=a', `note (conflit du ${stamp(T0)}).tex=b`]);
+      expect(out2.conflictCopies).toEqual([`note (conflit du ${stamp(T0)}).tex`]);
+    },
+  },
+  {
     name: 'un .tex encore en conflit : la copie de ma version précédente, qui avait perdu, est celle du même conflit — remplacée, pas doublée',
     check: ({ s, N }) => {
       // My version a, pushed earlier, lost to the other PC's b there: its replay kept a beside b, as a copy.
