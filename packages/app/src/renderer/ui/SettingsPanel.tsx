@@ -1,7 +1,10 @@
 import type { LatexStatus } from '@cirrus/core';
 import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
+import type { SyncStatus } from '../../main/sync/client.ts';
+import type { PairResult, ServerInfo } from '../../main/sync/host.ts';
 import { latexStateText } from '../latex/install.ts';
+import { ServerBlock } from './settings/ServerBlock.tsx';
 import { type RubricView, settingsTree } from './settingsTree.ts';
 
 type Value = RenderParams[keyof RenderParams];
@@ -125,10 +128,12 @@ const advancedShown = new Set<string>();
  * folded until clicked; in each, its main settings, then « Avancés » for every other rendering or interaction constant.
  * A search shows every setting it finds, advanced ones included. Changes apply at once; they are not in the history nor
  * undoable. The « LaTeX » rubric (plan 4b, task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX »
- * when it is absent or its installation failed, and opens the preamble's full screen.
+ * when it is absent or its installation failed, and opens the preamble's full screen. The « Serveur » rubric (plan 5a)
+ * begins with its block: pairing this PC, or its server and « Dissocier ce PC » (`server`).
  */
 export function SettingsPanel(props: {
   params: RenderParams; onChange(p: RenderParams): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
+  server: { info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onUnpair(): Promise<void> };
 }) {
   const [query, setQuery] = useState('');
   const [, refresh] = useState(0);
@@ -165,6 +170,7 @@ export function SettingsPanel(props: {
               {open && (
                 <div className="rubric-body">
                   {r.title === 'LaTeX' && latexSetup}
+                  {r.title === 'Serveur' && <ServerBlock {...props.server} />}
                   <Groups groups={r.groups} pick="main" params={props.params} onChange={set} />
                   {count > 0 && <button className="toggle" aria-expanded={advanced} onClick={() => toggle(advancedShown, r.title)}>{advanced ? '▾' : '▸'} Avancés ({count})</button>}
                   {advanced && <Groups groups={r.groups} pick="advanced" params={props.params} onChange={set} />}

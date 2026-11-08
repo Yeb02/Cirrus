@@ -303,20 +303,24 @@ test('un réglage hors bornes est ramené dans les bornes de sa fiche (C1 de la 
   expect(p.gridSpacingPx[0]).toBeLessThan(p.gridSpacingPx[1]);
 });
 
-test('synchronisation : écritures par requête, téléchargements, reconnexion, horloge, lots reçus ; groupe « Synchronisation » de la rubrique « Serveur » (plan 5a, tâche 3)', () => {
+test('synchronisation : écritures par requête, téléchargements, reconnexion, horloge, lots reçus, voile et veille ; groupe « Synchronisation » de la rubrique « Serveur » (plan 5a, tâches 3 et 4)', () => {
   const S = 'Synchronisation';
   const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['syncConnectTimeoutMs', 4000, 'Attente maximale du serveur, sous le voile « Synchronisation… » (démarrage, réveil) et au jumelage (ms)', 500, 60_000, 100],
     ['syncBatchUnits', 50, 'Écritures envoyées au serveur par requête', 1, 100, 1],
     ['syncDownloads', 4, 'Fichiers téléchargés du serveur à la fois', 1, 16, 1],
     ['syncRetryMinMs', 1000, 'Premier délai avant de réessayer de joindre le serveur (ms)', 100, 60_000, 100],
     ['syncRetryMaxMs', 30_000, 'Délai maximal entre deux essais de joindre le serveur (ms)', 1000, 600_000, 1000],
     ['syncClockSkewWarnMs', 120_000, 'Écart d’horloge avec le serveur au-delà duquel avertir (ms)', 10_000, 3_600_000, 1000],
     ['syncReceiveBatchMs', 50, 'Durée maximale d’un lot d’actions reçues avant de l’appliquer (ms)', 0, 1000, 5],
+    ['syncSuspendFlushMs', 1500, 'Temps laissé à l’envoi des actions en attente avant la mise en veille (ms)', 0, 10_000, 100],
   ];
   for (const [key, value, label, min, max, step] of specs) {
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
   }
+  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual(specs.map(([key]) => key).sort());
   expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
-  expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1 })).toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100 });
+  expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1, syncConnectTimeoutMs: 0, syncSuspendFlushMs: 1e9 }))
+    .toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100, syncConnectTimeoutMs: 500, syncSuspendFlushMs: 10_000 });
 });

@@ -345,3 +345,101 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
   - Coût si faux : nul.
 - Ruling: **le PC virtuel des tests** ne crée pas de lobby. Il écrit chaque action dans la base, puis dans l'état. Si l'écriture d'une réconciliation échoue, il relit l'état et les écritures en attente depuis la base, comme le fera la tâche 4.
   - Coût si faux : nul.
+
+## Tâche 4 : l'app — réconciliation dans l'interface, voile, pastille, jumelage, PDF à la demande
+
+### Fait
+
+- **Le principal :**
+  - `main/sync/host.ts`, nouveau et sans Electron : `SyncHost`, la vie du client (démarré quand l'interface tient ses écritures en attente, arrêté puis relancé au réveil, arrêté à la fermeture), l'aller-retour d'une réconciliation par l'interface, le jumelage et la dissociation, l'heure de chaque écriture locale ;
+  - `main/sync/wire.ts`, nouveau : les IPC `cirrus:sync:*`, la fenêtre, `safeStorage` et `powerMonitor` ;
+  - `main/index.ts` : `SyncHost` créé à l'ouverture de la base, `cirrus:commit` par lui, `cirrus:load` avec les écritures en attente, l'arrêt du client avant la fermeture de la base ;
+  - `main/base.ts` : `pcId` exporté, `loadPayload(store, fromTables, pending)` ;
+  - `main/files.ts` : `cirrus-file:` va chercher au serveur un fichier absent (`fileResponse(…, fetchBlob)`), 503 sinon ; `?vignette` ne télécharge jamais.
+- **L'interface :**
+  - `renderer/session.ts` : `EditSession` tire l'identifiant de chaque écriture, garde les écritures en attente (`follow`, `unfollow`, `pending`), `reconcile`, `reload` ;
+  - `renderer/sync/syncSession.ts`, nouveau : `SyncSession` (réception, voile, pastille, jumelage) et `chipOf` ;
+  - `ui/SyncVeil.tsx`, `ui/SyncChip.tsx`, `ui/settings/ServerBlock.tsx`, nouveaux ; `Tabs` (la pastille), `SettingsPanel` (le bloc en tête de « Serveur »), `App.tsx` ;
+  - `files/kind.ts`, `read.ts`, `pdf.ts`, `NodePopup.tsx` : les vignettes demandent `?vignette` ; le lecteur dit « PDF pas encore téléchargé : serveur injoignable. ».
+- **Magasin :** `LocalStore.isEmpty()`, « vide » au sens de D7, comme `Canon.empty`.
+- **Réglages :** `syncConnectTimeoutMs` (4 000) et `syncSuspendFlushMs` (1 500), dans le groupe « Synchronisation ».
+- **Tests :** `tests/syncSession.test.ts`, `tests/syncHost.test.ts`, `tests/syncFiles.test.ts`, `tests/support/appPc.ts` (l'app comme PC du labo, sans Electron), et des ajouts à `load.test.ts`, `localStore.test.ts` et `params.test.ts`.
+- **Scénario de l'interface** (`interface.mjs`, le 26e) : une base neuve jumelée par le bloc « Serveur » à un serveur démarré par le scénario (127.0.0.1, un port libre, un dossier temporaire). Il vérifie dans Electron `net.fetch` (le flux, les écritures, l'envoi d'un fichier lu du disque), `safeStorage` (le jeton chiffré dans `serveur.json`), la pastille, puis « Dissocier ce PC ». L'option `empty` d'un scénario prend une base neuve au lieu de la base de test.
+
+### Décisions
+
+- Ruling: **l'heure d'une écriture locale est donnée par le principal** : `cirrus:commit(action, unit)` rend `{ seq, at }`, où `at` est `Date.now()` du principal plus `clockOffset()` du client. L'écriture en attente de l'interface prend ce même `at`.
+  - Options : envoyer l'écart à l'interface, qui calculerait `at` et le passerait (deux horloges, et un écart qui peut changer sans changement d'état) ; le rendre du principal (choix : une seule source).
+  - Coût si faux : un champ de plus dans la réponse de `cirrus:commit`.
+- Ruling: **le client démarre quand l'interface le demande** (`cirrus:sync:start`) : au chargement, une fois que la session tient ses écritures en attente, ou après un jumelage. Le principal n'envoie donc jamais d'écritures reçues à une interface qui ne peut pas les réconcilier.
+  - Options : démarrer au lancement et retenir les réconciliations jusqu'à ce que la fenêtre soit prête.
+  - Coût si faux : la connexion s'ouvre après le chargement de la fenêtre, quelques centaines de millisecondes plus tard qu'au plus tôt.
+- Ruling: **les écritures en attente ne vont à l'interface qu'avec un serveur jumelé** (R5 : toutes alors). Sans serveur, `cirrus:load` n'en envoie aucune et la session n'en garde aucune (`follow` seulement jumelé) : rien ne change au plan 4c, ni en mémoire.
+  - Au jumelage, la session demande la liste entière au principal (`cirrus:sync:pending`) dans sa file : aucune écriture n'est en cours, et la liste est complète avant le démarrage.
+  - Coût si faux : nul.
+- Ruling: **l'ordre du jumelage** (R8, R10, R11, D3) :
+  - d'abord, sans rien demander au serveur, donc sans dépenser le code : `safeStorage` disponible, une adresse `http`/`https` valide, `http:` seulement sur cette machine (R10), un code et un nom donnés, et une base « vide » (`LocalStore.isEmpty()`) qui n'a jamais rien reçu d'un serveur (`lastServerSeq() = 0`, sinon son flux reprendrait à un numéro que ce serveur n'a jamais donné) ;
+  - puis `/pair`, puis `/hello` avec le jeton, seul moyen de connaître le journal du serveur ;
+  - un serveur dont le journal n'est pas vide est refusé, même s'il ne tient qu'un lobby (R11 : le journal vide). Le lobby de ce PC deviendrait un second lobby, alors que `/hello` dit `empty` au sens de D7 et l'accepterait ;
+  - un refus après `/pair` jette le jeton : le PC reste inscrit au serveur, et le message dit de le révoquer (`revoquer`) avant un nouveau code.
+  - Options : garder le jeton sans démarrer (le client démarrerait au lancement suivant, contre R8) ; ne regarder que `empty` (deux lobbies).
+  - Coût si faux : un `revoquer` pour l'utilisateur, dans un cas que la tâche 5 remplace (prendre la base du serveur).
+- Ruling: **les requêtes du jumelage attendent `syncConnectTimeoutMs` au plus** (le réglage du voile, son libellé étendu) : un serveur qui ne répond jamais ne bloque ni le bloc ni la fermeture de l'app, qui attend la fin d'un jumelage en cours.
+  - Options : un réglage de plus ; aucune borne.
+  - Coût si faux : un serveur très lent ne peut pas être jumelé en moins de 4 s.
+- Ruling: **le voile** monte au chargement d'une base jumelée et au réveil (`cirrus:sync:veil`), pas à un clic sur « Réessayer ». Il descend à « live » ou à « refused », ou après `syncConnectTimeoutMs`. « off » ne le lève pas (le réveil arrête puis relance le client), « offline » non plus : le serveur peut revenir pendant ces 4 s (D8, à la lettre).
+  - Il couvre toute la fenêtre, onglets compris, et retient le pointeur et les touches (prises à la fenêtre, avant toute autre écoute).
+  - Options : le lever dès « offline », pour travailler sans attendre quand le serveur est éteint.
+  - Coût si faux : 4 s d'attente au démarrage quand le serveur est éteint.
+- Ruling: **les textes de la pastille** :
+  - aucune sans serveur ;
+  - « Connexion… », puis « Hors ligne » (un clic réessaie) quand le voile a renoncé (D8) ;
+  - « Synchronisation… » pendant le rattrapage ;
+  - « À jour », ou « Envoi de n actions… » (« 1 action » au singulier ; n compte les écritures) ;
+  - « Hors ligne », un clic réessaie ;
+  - « Serveur : <raison> » : un clic réessaie aussi, comme `start()` le permet ;
+  - l'avertissement de l'horloge dans l'infobulle, et une notification une fois par message et par session (chaque reconnexion le redit).
+  - Coût si faux : des textes.
+- Ruling: **« Réessayer » pendant un arrêt est mis en file**, pas ignoré : le démarrage, l'arrêt, le réveil, le jumelage, la dissociation et la fermeture forment une seule file au principal. Le clic part donc une fois l'arrêt fini, jamais pendant.
+  - Coût si faux : nul.
+- Ruling: **la pile d'annulation après une réconciliation** (D5) : une écriture en attente qui n'est ni accusée ni rejouée telle quelle (le même objet dans `rebased`) quitte la pile (`forget` de son action). Cela vaut pour une écriture réécrite, écartée, reçue après celles d'un autre PC (règle de la tâche 1) ou devenue sans effet.
+  - Coût si faux : nul.
+- Ruling: **la scène reçoit une action « Synchronisation »** dont les opérations sont les inverses, les écritures reçues hors accusés, et les écritures rejouées quand il y a eu des inverses. Un accusé seul ne change pas l'état : la scène n'en sait rien, et il ne coupe pas la fusion d'un `.tex` (une écriture reçue la coupe).
+  - Coût si faux : nul.
+- Ruling: **l'aller-retour d'une réconciliation** :
+  - le principal envoie `cirrus:sync:incoming { id, units, refused }` ; l'interface répond `cirrus:sync:reconciled(id, issue)`, où l'issue est `{ reconciliation }`, `{ diverged }` ou `{ error }` ;
+  - le principal vérifie que les écritures reçues de la réconciliation sont celles qu'il a envoyées (identifiants et numéros, dans l'ordre), puis écrit sa propre copie de celles-ci. Il vérifie aussi que les écritures rejouées sont de ce PC et bien formées ;
+  - leurs opérations sont vérifiées par la base en écrivant (`checkRecord`, chaque « avant »), pas par `parseOp`, plus strict. Une écriture que le serveur refuserait doit encore pouvoir être défaite ici, puis écartée ; sinon, la synchro bloquerait pour toujours ;
+  - un `id` inconnu ou déjà réglé est refusé ;
+  - `EditSession.reconcile` prend un troisième argument, `write` (l'écriture par le principal, son numéro du journal), en plus des deux du plan.
+  - Coût si faux : nul.
+- Ruling: **les échecs** :
+  - **divergence dans l'interface** (`SyncDivergedError`, l'état intact) : le principal rejette par une vraie `SyncDivergedError`. Le client s'arrête (« refused », diverged), et l'interface relit alors son état de la base, une fois par refus. La pastille dit pourquoi, et un clic réessaie ;
+  - **réconciliation refusée par la base** : le principal rejette, le client passe hors ligne et réessaie. L'interface, en avance sur la base, relit son état et le dit par une notification ;
+  - **autre échec dans l'interface** (le cœur a rendu l'état intact) : `{ error }`, sans relecture.
+  - Coût si faux : nul.
+- Ruling: **relire l'état sur place** (`EditSession.reload`) : un nouvel objet d'état, son numéro du journal et ses écritures en attente, la pile d'annulation vidée, la scène refaite. La fenêtre, les onglets et les panneaux restent.
+  - Options : recharger la page (`location.reload`), plus simple, mais on perdrait les panneaux ouverts et le texte tapé.
+  - Coût si faux : nul.
+- Ruling: **une fenêtre qui s'en va** (fermée, son rendu perdu, sa page rechargée : `did-start-navigation` du cadre principal) voit ses réconciliations rejetées (`detach`). `stop()` ne les attend donc jamais. Sans fenêtre, une réception est rejetée tout de suite.
+  - Coût si faux : nul.
+- Ruling: **un nouveau client à chaque dissociation** : les fichiers connus du serveur (`onServer`), l'écart d'horloge et les téléchargements en mémoire sont ceux d'un serveur. Cela règle la remarque de la revue de la tâche 3 (`onServer` jamais vidé).
+  - Coût si faux : nul.
+- Ruling: **`cirrus-file:` avec un serveur** :
+  - un fichier absent du magasin (404) est demandé par `fetchBlob`, sauf pour une vignette ;
+  - tout échec donne 503, car `fetchBlob` ne dit que vrai ou faux : hors ligne, absent du serveur, octets faux ;
+  - une vignette, et tout `cirrus-file:` sans serveur jumelé, répondent 404 comme au plan 4c ;
+  - le message du lecteur est celui du plan pour un PDF, « « nom » pas encore téléchargé : serveur injoignable. » pour un autre fichier ;
+  - les vignettes d'images demandent `?vignette` elles aussi, et montrent l'icône de l'image si elles échouent ;
+  - une vignette de PDF qui n'a pas pu lire son fichier (`ReadError`) n'est pas gardée en cache : elle est redemandée à la prochaine ouverture ;
+  - une vue qui rejoint l'ouverture d'un PDF par une vignette, et la voit échouer ainsi, l'ouvre de nouveau elle-même.
+  - Coût si faux : « serveur injoignable » dit pour un fichier que le serveur n'a pas.
+- Ruling: **la liste des versions d'un fichier dans un pop-up** (`blobSize`, plan 4c) n'a pas `?vignette` : une version ancienne absente est téléchargée quand le pop-up l'énumère, et non à son ouverture seulement (D6 [C], lu largement).
+  - Options : `?vignette`, mais la version serait dite « introuvable dans la base » alors que le serveur l'a.
+  - Coût si faux : le téléchargement d'anciennes versions d'un PDF annoté, à l'ouverture de son pop-up.
+- Ruling: **`safeStorage.encryptString` et `decryptString`**, synchrones, sont dépréciés dans Electron 45 au profit de leurs formes asynchrones. Ils sont gardés : `SecretStore` (tâche 3) est synchrone.
+  - Coût si faux : passer `SecretStore` en asynchrone quand Electron les retirera.
+- Ruling: **`EditSession.receive` est gardé** : l'app ne l'appelle plus, `reconcile` le remplace, mais ses tests l'emploient pour figurer une modification venue d'ailleurs.
+  - Coût si faux : une méthode morte.
+- Ruling: **le nom montré dans le bloc d'un PC jumelé** est celui donné au jumelage, gardé dans `serveur.json`. Le nom de `jumeler` au serveur peut être différent.
+  - Coût si faux : un texte.

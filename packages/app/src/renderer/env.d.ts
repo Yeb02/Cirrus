@@ -3,20 +3,26 @@ import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@c
 import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 import type { PublicationResult } from '../main/publications/fetch.ts';
+import type { SyncStatus } from '../main/sync/client.ts';
+import type { Committed, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../main/sync/host.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
   /**
    * The state to open: the base's snapshot (encodeState), the journal's operations after it (JSON) and the journal
    * number they reach; `fromTables`, the state of the base's tables instead (the snapshot sent first was unusable).
+   * With a server paired, every pending write (JSON, plan 5a); this PC's identifier.
    */
-  load(fromTables: boolean): Promise<{ data: ArrayBuffer; tail: string; seq: number }>;
+  load(fromTables: boolean): Promise<{ data: ArrayBuffer; tail: string; seq: number; pending: string; pc: string }>;
   /** Keeps a snapshot of the state covering the journal up to `seq`, if later than the base's. */
   saveSnapshot(data: ArrayBuffer, seq: number): Promise<void>;
   getSettings(): Promise<Record<string, unknown>>;
   setSettings(overrides: Record<string, unknown>): Promise<void>;
-  /** Writes an edit to the local base; resolves with the journal number of its last line, rejects with the reason. */
-  commit(action: unknown): Promise<number>;
+  /**
+   * Writes an edit to the local base as the write `unit` (its identifier, uuidv7, plan 5a); resolves with the journal
+   * number of its last line and its time (this PC's clock corrected by the server's, D4), rejects with the reason.
+   */
+  commit(action: unknown, unit: string): Promise<Committed>;
   /** The window is closing: `fn` saves what it must, then calls quitReady. Returns the unsubscription. */
   onQuit(fn: () => void): () => void;
   /** Ready to close (after the last snapshot): the main process closes the window. */
@@ -90,6 +96,24 @@ export interface CirrusBridge {
    * `{ pdf: false }`: an arXiv article's PDF is not downloaded (a PDF dropped in the import dialog, which the node keeps).
    */
   publicationFetch(text: string, options?: { pdf?: boolean }): Promise<PublicationResult>;
+  /**
+   * The synchronisation (plan 5a, task 4). syncStart: the interface holds its state and pending writes; the client
+   * starts if a server is paired (its status). syncRetry: the chip's « Réessayer ». syncReconciled: the answer to
+   * onSyncIncoming's message `id`, a reconciliation written by the base (its journal number) or why none (null).
+   * syncPending: every pending write (JSON). syncServer: the server paired, or what to propose. syncPair, syncUnpair:
+   * the block « Serveur ». onSyncVeil: waking up, the veil rises.
+   */
+  syncStart(): Promise<SyncStatus>;
+  syncRetry(): void;
+  syncReconciled(id: number, outcome: ReconcileOutcome): Promise<number | null>;
+  syncPending(): Promise<string>;
+  syncServer(): Promise<ServerInfo>;
+  syncStatus(): Promise<SyncStatus>;
+  syncPair(url: string, code: string, name: string): Promise<PairResult>;
+  syncUnpair(): Promise<void>;
+  onSyncIncoming(fn: (m: SyncIncoming) => void): () => void;
+  onSyncStatus(fn: (s: SyncStatus) => void): () => void;
+  onSyncVeil(fn: () => void): () => void;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

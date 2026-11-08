@@ -176,7 +176,7 @@ function opened() {
   const store = LocalStore.open(dir, { pc: 'test' });
   const ids = buildFixture(store, dir);
   const s = store.loadState();
-  const session = new EditSession(s, async (a) => store.commit(a), () => {}, store.lastSeq());
+  const session = new EditSession(s, async (a, unit) => ({ seq: store.commit(a, { unit }), at: 0 }), () => {}, store.lastSeq());
   const put = async (name: string, text: string) => storeText(dir, name, text, MAX);
   const save = (text: string, node: Id = ids.nodes.kolmogorov, name = TEX) => saveTex(session, put, node, name, text);
   const fileOf = (node: Id = ids.nodes.kolmogorov, name = TEX) => session.state.nodes.get(node)!.files.find((f) => f.name === name)!;

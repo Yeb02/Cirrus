@@ -26,7 +26,7 @@ const HASH = /^[0-9a-f]{64}$/;
 const RANGE = /^bytes=(\d*)-(\d*)$/i;
 
 export type BlobAnswer =
-  | { status: 400 | 404 | 416; headers: Record<string, string> }
+  | { status: 400 | 404 | 416 | 503; headers: Record<string, string> }
   | { status: 200 | 206; headers: Record<string, string>; path: string; start: number; end: number };
 
 /** The extension as Windows reads it: after the last dot, trailing dots and spaces dropped (« a.bat. » opens as « a.bat »). */
@@ -69,7 +69,7 @@ export function latexRequest(cacheDir: string, url: string, range: string | null
   return served(join(cacheDir, `${parsed.hash}.pdf`), 'application/pdf', range);
 }
 
-const bare = (status: 400 | 404 | 416, more?: Record<string, string>): BlobAnswer =>
+const bare = (status: 400 | 404 | 416 | 503, more?: Record<string, string>): BlobAnswer =>
   ({ status, headers: { 'Accept-Ranges': 'bytes', 'Content-Length': '0', ...more } });
 
 /** <prefix><sha256>/<name>, the name decoded; null for anything else. */
@@ -120,10 +120,35 @@ export function blobResponse(storeDir: string, request: Request): Response {
   return respond(blobRequest(storeDir, request.url, request.headers.get('range')));
 }
 
-/** The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). */
-export function fileResponse(storeDir: string, cacheDir: string, request: Request): Response {
-  const range = request.headers.get('range');
-  return respond(request.url.startsWith(LATEX_PREFIX) ? latexRequest(cacheDir, request.url, range) : blobRequest(storeDir, request.url, range));
+/**
+ * A request of a thumbnail (`?vignette`, plan 5a, D6): served if the store holds the blob, never downloaded — the pop-up
+ * shows the kind's icon instead.
+ */
+export function isThumbnailRequest(url: string): boolean {
+  const query = url.split('#')[0].split('?')[1];
+  return query !== undefined && new URLSearchParams(query).has('vignette');
+}
+
+/** A blob the server must give: `true` once it is in the store, checked against its hash (SyncClient.fetchBlob). */
+export type FetchBlob = (hash: string) => Promise<boolean>;
+
+/**
+ * The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). With a
+ * server paired (`fetchBlob`, plan 5a, D6), a blob absent from the store — a PDF at its first reading, a file whose
+ * download has not come yet — is fetched from it, checked, kept, then served; when it cannot be had (offline, absent
+ * there, bytes that are not its hash's), 503. A thumbnail's request never downloads (404, as without a server).
+ */
+export function fileResponse(storeDir: string, cacheDir: string, request: Request, fetchBlob: FetchBlob | null = null): Response | Promise<Response> {
+  const range = request.headers.get('range'), url = request.url;
+  if (url.startsWith(LATEX_PREFIX)) return respond(latexRequest(cacheDir, url, range));
+  const answer = blobRequest(storeDir, url, range);
+  if (answer.status !== 404 || !fetchBlob || isThumbnailRequest(url)) return respond(answer);
+  const hash = parseUrl(url, BLOB_PREFIX)?.hash;
+  if (!hash) return respond(answer);
+  return fetchBlob(hash).then(
+    (ok) => respond(ok ? blobRequest(storeDir, url, range) : bare(503)),
+    () => respond(bare(503)),
+  );
 }
 
 function respond(a: BlobAnswer): Response {

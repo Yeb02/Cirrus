@@ -59,7 +59,7 @@ export interface SyncDeps {
 }
 
 /** The format headers of /hello (D10): the server refuses another protocol, schema or snapshot version. */
-const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
+export const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
 const JSON_BODY = { 'Content-Type': 'application/json' };
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));

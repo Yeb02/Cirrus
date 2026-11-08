@@ -1,13 +1,13 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { type Action, type CompileRequest, type FileRef, type Id, OpConflictError } from '@cirrus/core';
 import { forceGc } from '@cirrus/fixtures';
 import { type LocalStore, storeBytes } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, screen, shell } from 'electron';
-import { dataDir, keepSnapshot, loadPayload, openBase, saveSnapshot } from './base.ts';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, screen, shell } from 'electron';
+import { dataDir, keepSnapshot, loadPayload, openBase, pcId, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { bibPickOf, readBib } from './bib.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText, storeTexts } from './files.ts';
@@ -20,6 +20,9 @@ import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
 import { type FetchFn, importPublication, requestFetch } from './publications/fetch.ts';
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings, writeSettings } from './settings.ts';
+import { fileSecrets } from './sync/config.ts';
+import { SyncHost } from './sync/host.ts';
+import { appWindows, tokenCipher, watchWindow, wireSync } from './sync/wire.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
@@ -27,7 +30,9 @@ import { readSettings, writeSettings } from './settings.ts';
  * by the cirrus-file: protocol, imports them and opens their copies (files.ts, plan 4a). It compiles LaTeX, the PDFs
  * served by the same protocol, and installs TinyTeX when the user asks, then the packages it misses (latex/, plan 4b).
  * It fetches a publication's metadata, and an arXiv article's PDF, when the user imports one (publications/, plan 4c).
- * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit.
+ * With a server paired, it syncs the base with it (sync/, plan 5a): the interface reconciles, this process writes.
+ * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
+ * for the sync client to stop.
  * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
@@ -35,6 +40,10 @@ import { readSettings, writeSettings } from './settings.ts';
  */
 let store: LocalStore | null = null;
 let dir = '';
+/** This PC's identifier (pc.json), once the base is open: it signs the writes. */
+let pc = '';
+/** The synchronisation (plan 5a), once the base is open: with no server paired, it does nothing. */
+let sync: SyncHost | null = null;
 const capture = process.env.CIRRUS_CAPTURE;
 const bench = process.env.CIRRUS_BENCH;
 const benchBuild = process.env.CIRRUS_BENCH_BUILD;
@@ -164,6 +173,8 @@ function createWindow(): void {
     console.warn(`Navigation refusée : ${e.url}`);
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // A page gone (closed, reloaded, crashed): the reconciliations it held are abandoned, the sync client tries later.
+  if (sync) watchWindow(win, sync);
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(page);
   // The user's LaTeX packages (latexPackages, D1), installed if missing once the window is loaded (task 7), in the
@@ -199,12 +210,13 @@ function createWindow(): void {
 
 // The state as one ArrayBuffer (plan 3c, decision 5): the base's snapshot and the journal after it, or, without a
 // usable snapshot (or when the interface could not use it: fromTables), the state of the tables, kept as the new
-// snapshot once sent. An ArrayBuffer crosses IPC and the context bridge at the speed of memory.
+// snapshot once sent. An ArrayBuffer crosses IPC and the context bridge at the speed of memory. With a server paired,
+// every pending write too (plan 5a, R5), and always this PC's identifier, which signs them.
 ipcMain.handle('cirrus:load', (_e, fromTables: unknown) => {
-  const { payload, rebuilt } = loadPayload(store!, fromTables === true);
+  const { payload, rebuilt } = loadPayload(store!, fromTables === true, sync?.paired() === true);
   markNow('dataSent');
   if (rebuilt) setImmediate(() => keepSnapshot(store!, payload.data, payload.seq));
-  return payload;
+  return { ...payload, pc };
 });
 // The interface's snapshot, at rest and at closing: checked, kept if later than the stored one.
 ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { saveSnapshot(store!, data, seq); });
@@ -290,11 +302,12 @@ ipcMain.handle('cirrus:open-url', async (_e, url: unknown) => {
   }
 });
 ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));
-// An edit computed by the interface (spec 4: only this process writes), each "before" checked against the base. A
-// conflicting record refuses it. Returns the journal number of its last line.
-ipcMain.handle('cirrus:commit', (_e, action: Action) => {
+// An edit computed by the interface (spec 4: only this process writes), each "before" checked against the base, as
+// the write `unit` the interface named (plan 5a), at this PC's time corrected by the server's (D4). A conflicting
+// record refuses it. Returns the journal number of its last line, and that time.
+ipcMain.handle('cirrus:commit', (_e, action: Action, unit: unknown) => {
   try {
-    return store!.commit(action);
+    return sync!.commit(action, unit);
   } catch (e) {
     if (e instanceof OpConflictError) throw new Error('La base a changé : action refusée.');
     throw e;
@@ -437,15 +450,26 @@ void app.whenReady().then(() => {
     packages: (bins) => new Packages(bins, toolRun),
     status: (s) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('cirrus:latex:status', s); },
   });
-  protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request));
+  // The synchronisation (plan 5a): its client starts once the interface holds its state (cirrus:sync:start), if a server
+  // is paired; the token kept by safeStorage (DPAPI), never in clear.
+  pc = pcId(dir);
+  sync = new SyncHost({
+    fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher),
+    canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(), window: appWindows,
+  });
+  wireSync(sync);
+  // A blob absent from the store is asked of the server, with one paired (D6); a thumbnail's never.
+  protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request, sync?.blobFetcher() ?? null));
   createWindow();
   // The copies of earlier sessions, while the window loads; measuring runs leave the user's alone.
   if (!bench && !capture) cleanCopies(copies);
 });
-// The base's lock is released once every pdfLaTeX is gone: the next instance empties the service's folders.
+// The base's lock is released once every pdfLaTeX is gone, and the sync client stopped (nothing writes the base any
+// more): the next instance empties the service's folders.
 let latexDisposed = false;
 app.on('window-all-closed', () => {
-  void (latex?.dispose() ?? Promise.resolve()).finally(() => {
+  const syncStopped = (sync?.close() ?? Promise.resolve()).catch((e: unknown) => console.error('Arrêt de la synchronisation :', e));
+  void Promise.all([latex?.dispose() ?? Promise.resolve(), syncStopped]).finally(() => {
     latexDisposed = true;
     store?.close();
     lock?.release();

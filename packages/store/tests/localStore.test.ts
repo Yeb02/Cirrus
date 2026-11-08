@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
-  type Action, type Anchor, applyOps, canonical, type ConnectionLayout, connect, createAnnotation, createNode, createPlan, DEFAULT_PREAMBLE, editNode,
-  emptyState, encodeState, fromSnapshot, type Id, type NodeRec, OpConflictError, type PhantomRec, preambleText, reconcile, type RemoteUnit, removeFromPlan,
+  type Action, type Anchor, applyOps, canonical, type ConnectionLayout, connect, createAnnotation, createNode, createPlan, DEFAULT_PREAMBLE, deleteEverywhere, editNode,
+  emptyState, encodeState, fromSnapshot, type Id, invertAction, type NodeRec, OpConflictError, type PhantomRec, preambleText, reconcile, type RemoteUnit, removeFromPlan,
   setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot, type Unit, uuidv7,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
@@ -515,5 +515,36 @@ test('unitsAfter : les écritures numérotées après un numéro, entières, par
   expect(store.unitsAfter(3, 1).map((u) => u.seq)).toEqual([5]);
   expect(store.unitsAfter(9, 10)).toEqual([]);
   expect(() => store.unitsAfter(2, 10)).toThrow(RangeError);
+  store.close();
+});
+
+test('isEmpty, au sens de D7 : ni nœud, ni connexion, ni placement, aucun plan qu’un lobby (plan 5a, tâche 4)', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  expect(store.isEmpty()).toBe(true);
+  write(store, s, createPlan(s, 'Lobby', 'lobby'));
+  expect(store.isEmpty()).toBe(true);
+  // Another plan, then a node in the lobby: no longer empty; the node's creation undone, empty again.
+  const P = withPlan(store, s);
+  expect(store.isEmpty()).toBe(false);
+  const lobby = [...s.plans.values()].find((p) => p.type === 'lobby')!.id;
+  const n = createNode(s, { plan: lobby, title: 'X', x: 0, y: 0, k: 0 });
+  write(store, s, n);
+  expect(store.isEmpty()).toBe(false);
+  const other = LocalStore.open(join(dir, 'autre'), { pc: 'pc2' }), t = emptyState();
+  write(other, t, createPlan(t, 'Lobby', 'lobby'));
+  const lobby2 = [...t.plans.values()].find((p) => p.type === 'lobby')!.id;
+  const m = createNode(t, { plan: lobby2, title: 'Y', x: 0, y: 0, k: 0 });
+  write(other, t, m);
+  expect(other.isEmpty()).toBe(false);
+  write(other, t, invertAction(m));
+  expect(other.isEmpty()).toBe(true);
+  // A node in the trash is still a node.
+  write(other, t, createNode(t, { plan: lobby2, title: 'Z', x: 0, y: 0, k: 0 }));
+  const z = [...t.nodes.values()][0].id;
+  write(other, t, deleteEverywhere(t, z));
+  expect(t.nodes.get(z)?.trashedAt).toBeDefined();
+  expect(other.isEmpty()).toBe(false);
+  expect(P).toBeTruthy();
+  other.close();
   store.close();
 });

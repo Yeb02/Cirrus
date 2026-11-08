@@ -12,8 +12,11 @@ export function dataDir(userData: string, measuring = false): string {
   return process.env.CIRRUS_DATA ?? join(userData, 'base');
 }
 
-/** The PC's identifier, created on first opening and kept in pc.json (it signs the journal lines, spec 6.2). */
-function pcId(dir: string): string {
+/**
+ * The PC's identifier, created on first opening and kept in pc.json (it signs the journal lines, spec 6.2): the one the
+ * pairing gives the server (plan 5a, D3), and the interface its pending writes (task 4).
+ */
+export function pcId(dir: string): string {
   const file = join(dir, 'pc.json');
   try {
     const id = JSON.parse(readFileSync(file, 'utf8')).id;
@@ -35,21 +38,27 @@ export function openBase(dir: string): LocalStore {
   return store;
 }
 
-/** What cirrus:load sends the interface: the snapshot, the journal's operations after it as JSON, the number they reach. */
-export interface Payload { data: ArrayBuffer; tail: string; seq: number }
+/**
+ * What cirrus:load sends the interface: the snapshot, the journal's operations after it as JSON, the number they reach;
+ * the pending writes as JSON (plan 5a: all of them with a server paired, R5; none otherwise).
+ */
+export interface Payload { data: ArrayBuffer; tail: string; seq: number; pending: string }
 
 /**
  * cirrus:load (plan 3c, decision 4): the base's snapshot and the journal after it. Without a snapshot of this format,
  * or when the interface could not use the one it got (`fromTables`), the state is built from the tables (the fallback
  * path), encoded, and forgotten; only then is the stored snapshot dropped, and `rebuilt` asks for the new one to be
- * kept once sent. Tables that cannot be loaded throw, the stored snapshot left in place.
+ * kept once sent. Tables that cannot be loaded throw, the stored snapshot left in place. `pending` (a server paired,
+ * plan 5a): every pending write too, which a reconciliation undoes whole — none without a server, whose journal is all
+ * pending and never sent (registry, task 1).
  */
-export function loadPayload(store: LocalStore, fromTables: boolean): { payload: Payload; rebuilt: boolean } {
+export function loadPayload(store: LocalStore, fromTables: boolean, pending = false): { payload: Payload; rebuilt: boolean } {
+  const writes = pending ? JSON.stringify(store.pendingUnits()) : '[]';
   const snap = fromTables ? null : store.readSnapshot();
   if (snap && snap.version === SNAPSHOT_VERSION) {
     const rows = store.changesSince(snap.seq);
     const seq = rows.length > 0 ? rows[rows.length - 1].localSeq : snap.seq;
-    return { payload: { data: snap.data, tail: JSON.stringify(rows.map((r) => r.op)), seq }, rebuilt: false };
+    return { payload: { data: snap.data, tail: JSON.stringify(rows.map((r) => r.op)), seq, pending: writes }, rebuilt: false };
   }
   const seq = store.lastSeq();
   let data: ArrayBuffer;
@@ -59,7 +68,7 @@ export function loadPayload(store: LocalStore, fromTables: boolean): { payload: 
     throw new Error(`Les tables de la base n’ont pas pu être relues (${e instanceof Error ? e.message : String(e)}) : son instantané est gardé.`);
   }
   store.dropSnapshot();
-  return { payload: { data, tail: '[]', seq }, rebuilt: true };
+  return { payload: { data, tail: '[]', seq, pending: writes }, rebuilt: true };
 }
 
 /** Keeps a snapshot the main process built itself (after it was sent): a failure is only reported, the tables have everything. */

@@ -26,13 +26,13 @@ function bridge(store: LocalStore, calls: boolean[] = []) {
   return async (fromTables: boolean) => {
     calls.push(fromTables);
     const { payload, rebuilt } = loadPayload(store, fromTables);
-    const sent = structuredClone(payload);
+    const sent = structuredClone({ ...payload, pc: 'test' });
     if (rebuilt) keepSnapshot(store, payload.data, payload.seq);
     return sent;
   };
 }
 /** The interface's session over the store, as App wires it: each commit's journal number kept. */
-const sessionOn = (store: LocalStore, s: State, seq: number) => new EditSession(s, async (a: Action) => store.commit(a), () => {}, seq);
+const sessionOn = (store: LocalStore, s: State, seq: number) => new EditSession(s, async (a: Action, unit) => ({ seq: store.commit(a, { unit }), at: 0 }), () => {}, seq);
 
 test('sans instantané : l’état des tables, encodé par le principal, gardé ensuite comme instantané', async () => {
   const store = open(), calls: boolean[] = [];
@@ -155,5 +155,22 @@ test('l’instantané envoyé par l’interface : arguments vérifiés, un plus 
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
   expect(db.prepare('SELECT count(*) AS n FROM snapshot').get()).toEqual({ n: 1 });
   db.close();
+  store.close();
+});
+
+test('le chargement rend toutes les écritures en attente, quand un serveur est jumelé (R5) ; sinon aucune', async () => {
+  const store = open();
+  const first = await openState(bridge(store));
+  expect(first.pending).toEqual([]);
+  const session = sessionOn(store, first.state, first.seq);
+  for (let i = 0; i < 3; i++) expect((await session.run((s) => editNode(s, ids.nodes.mdl, { title: `MDL ${i}` }))).ok).toBe(true);
+  const all = store.pendingUnits();
+  // The fixture's journal is pending as a whole (no server ever numbered it), the three edits last.
+  expect(all.length).toBeGreaterThan(3);
+  const paired = await openState(async (fromTables) => structuredClone({ ...loadPayload(store, fromTables, true).payload, pc: 'pc-a' }));
+  expect(paired.pending).toEqual(all);
+  expect(paired.pc).toBe('pc-a');
+  expect(paired.pending.slice(-3).map((u) => u.label)).toEqual(['Modifier « MDL 0 »', 'Modifier « MDL 1 »', 'Modifier « MDL 2 »']);
+  expect(loadPayload(store, false).payload.pending).toBe('[]');
   store.close();
 });

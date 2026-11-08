@@ -65,9 +65,9 @@ class StoreRanges extends PDFDataRangeTransport {
   /** Called once, at the first range that fails or would go past the budget; none is fetched after it. */
   failed: (e: unknown) => void = () => {};
 
-  constructor(ref: ViewRef, head: Uint8Array, budget: number) {
+  constructor(ref: ViewRef, head: Uint8Array, budget: number, thumbnail: boolean) {
     super(ref.size, head, head.length >= ref.size);
-    this.url = fileUrl(ref);
+    this.url = fileUrl(ref, { thumbnail });
     this.budget = budget;
     this.read = head.length;
   }
@@ -112,8 +112,9 @@ class StoreRanges extends PDFDataRangeTransport {
  * A document open or opening: `destroy` closes it (and stops its opening); `unbound` lifts its budget (a view now
  * holds it); `failure` rejects if its bytes cannot all be read (StoreRanges.failed) — what pdf.js was then doing for it
  * would wait for ever (a document closed while it opens, or while a page is read, never settles), so its users race it.
+ * `thumbnail`: opened by a thumbnail, whose requests never download a PDF absent from the store (plan 5a, D6).
  */
-interface Entry { doc: Promise<PDFDocumentProxy>; failure: Promise<never>; users: number; destroy(): void; unbound(): void }
+interface Entry { doc: Promise<PDFDocumentProxy>; failure: Promise<never>; users: number; thumbnail: boolean; destroy(): void; unbound(): void }
 /** The documents open, by store and hash (viewKey), the one used longest ago first (a Map keeps its insertion order). */
 const docs = new Map<string, Entry>();
 
@@ -160,25 +161,31 @@ export async function openPdf(ref: ViewRef, kept: number, budget = Infinity): Pr
     entry.users--;
     if (docs.get(key) === entry) docs.delete(key);
     entry.destroy();
+    // A view that joined a thumbnail's opening, which may not download the PDF (plan 5a, D6): opened again, its own way.
+    if (budget === Infinity && entry.thumbnail && err instanceof ReadError) return openPdf(ref, kept, budget);
     throw err;
   }
 }
 
-/** A document opening: its head read, then pdf.js asks the rest by ranges, none ahead, within `budget` bytes. */
+/**
+ * A document opening: its head read, then pdf.js asks the rest by ranges, none ahead, within `budget` bytes. A bounded
+ * budget is a thumbnail's: its requests never download the PDF (plan 5a, D6).
+ */
 function opening(ref: ViewRef, budget: number): Entry {
   let task: PDFDocumentLoadingTask | null = null, range: StoreRanges | null = null, closed = false, limit = budget;
   let fail: (e: unknown) => void = () => {};
   const failure = new Promise<never>((_, reject) => { fail = reject; });
   failure.catch(() => {});
+  const thumbnail = budget !== Infinity;
   const entry: Entry = {
-    users: 0, failure,
+    users: 0, failure, thumbnail,
     destroy: () => { closed = true; if (task) void task.destroy(); },
     unbound: () => { limit = Infinity; if (range) range.budget = Infinity; },
     doc: (async () => {
       if (Math.min(RANGE, ref.size) > limit) throw new BudgetError(`plus de ${(limit / 2 ** 20).toLocaleString('fr-FR')} Mo à lire`);
-      const { bytes } = await readHead(ref, RANGE);
+      const { bytes } = await readHead(ref, RANGE, undefined, { thumbnail });
       if (closed) throw new Error('Fermé avant d’être ouvert.');
-      const r = new StoreRanges(ref, bytes, limit);
+      const r = new StoreRanges(ref, bytes, limit, thumbnail);
       range = r;
       const t = getDocument({
         range: r, worker: sharedWorker(),
@@ -238,7 +245,10 @@ export async function destination(doc: PDFDocumentProxy, dest: unknown): Promise
   }
 }
 
-/** The thumbnails drawn, by store and hash, size, density and budget: blob: URLs, kept for the session (a failure too). */
+/**
+ * The thumbnails drawn, by store and hash, size, density and budget: blob: URLs, kept for the session (a failure too,
+ * but a file the store could not give: a PDF not downloaded yet, plan 5a, is asked again at the next opening).
+ */
 const thumbs = new Map<string, Promise<string>>();
 /** One thumbnail drawn at a time: a pop-up of many PDFs does not open them all at once. */
 let queue: Promise<unknown> = Promise.resolve();
@@ -253,9 +263,10 @@ export function pageThumbnail(ref: ViewRef, px: number, kept: number, budget: nu
   const key = `${viewKey(ref)}/${px}/${density}/${budget}`;
   let p = thumbs.get(key);
   if (!p) {
-    p = queue.then(() => drawThumbnail(ref, px * density, kept, budget));
-    queue = p.catch(() => {});
-    thumbs.set(key, p);
+    const drawn = queue.then(() => drawThumbnail(ref, px * density, kept, budget));
+    queue = drawn.catch(() => {});
+    drawn.catch((e: unknown) => { if (e instanceof ReadError && thumbs.get(key) === drawn) thumbs.delete(key); });
+    thumbs.set(key, (p = drawn));
   }
   return p;
 }

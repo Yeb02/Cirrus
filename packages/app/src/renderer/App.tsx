@@ -4,6 +4,7 @@ import {
 import { DEFAULT_PARAMS, diffFromDefaults, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
+import type { ServerInfo } from '../main/sync/host.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
@@ -29,9 +30,12 @@ import type { Rect } from './ui/panels/geometry.ts';
 import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
+import { SyncChip } from './ui/SyncChip.tsx';
+import { SyncVeil } from './ui/SyncVeil.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, toastClicked, Toasts, toastMsFor, toastsEscaped } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
+import { SyncSession, type SyncView } from './sync/syncSession.ts';
 
 const TABS_KEY = 'cirrus.tabs';
 const NODE_GONE = 'Ce nœud n’existe plus.';
@@ -40,6 +44,8 @@ const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx'
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 const NO_TEXTS: ReadonlyMap<string, string> = new Map();
+/** Without a server paired (plan 5a, D8): no veil, no chip. */
+const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null };
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
 // nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
@@ -123,6 +129,10 @@ export function App() {
   const builtAnnotations = useRef<AnnotationIndex | null>(null);
   /** The steps made in the full screen open (its annotations): the only ones its Ctrl+Z and Ctrl+Y undo and redo. */
   const fullSteps = useRef(new Set<Id>());
+  /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
+  const [syncView, setSyncView] = useState<SyncView>(NO_SYNC);
+  const [server, setServer] = useState<ServerInfo | null>(null);
+  const sync = useRef<SyncSession | null>(null);
 
   /**
    * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
@@ -211,9 +221,10 @@ export function App() {
   useEffect(() => {
     void (async () => {
       try {
-        // The snapshot and the journal after it (plan 3c); the tables when the snapshot cannot be used.
+        // The snapshot and the journal after it (plan 3c); the tables when the snapshot cannot be used. With a server
+        // paired, the pending writes too (plan 5a).
         const load = (fromTables: boolean) => window.cirrus.load(fromTables).then((l) => { mark('dataReceived'); return l; });
-        const [opened, settings] = await Promise.all([openState(load), window.cirrus.getSettings()]);
+        const [opened, settings, info] = await Promise.all([openState(load), window.cirrus.getSettings(), window.cirrus.syncServer()]);
         if (opened.fallback) console.warn(`Instantané de la base inutilisable (${opened.fallback}) : état relu dans ses tables.`);
         const s = opened.state;
         const plans = [...s.plans.values()];
@@ -227,16 +238,24 @@ export function App() {
         }
         const p = withOverrides(settings);
         loadedParams.current = p;
-        session.current = new EditSession(s, (a) => window.cirrus.commit(a), (st, action, rev) => {
+        session.current = new EditSession(s, (a, unit) => window.cirrus.commit(a, unit), (st, action, rev) => {
           setShown({ state: st, rev, action });
           saver.current?.applied();
         }, opened.seq);
         if (!measuring) saver.current = new SnapshotSaver(session.current, (data, seq) => window.cirrus.saveSnapshot(data, seq), () => paramsRef.current, opened.stale);
+        // The synchronisation (plan 5a): with a server paired, the veil, then the client started once the session
+        // holds the pending writes; the state read again from the base when a reconciliation could not be written.
+        sync.current = new SyncSession({
+          bridge: window.cirrus, session: session.current, load: () => openState(window.cirrus.load), timeoutMs: () => paramsRef.current.syncConnectTimeoutMs,
+          toast: (text) => toast(text), onView: setSyncView,
+        });
+        setServer(info);
         mark('stateReady');
         setParams(p);
         setTabs(open);
         setActive(current);
         setShown({ state: s, rev: 0, action: null });
+        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending }).catch((e: unknown) => console.error('Synchronisation :', e));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -440,6 +459,19 @@ export function App() {
   };
   /** TinyTeX installed, the user having asked (the notice, the settings); how it goes is told by its state. */
   const installLatex = () => { window.cirrus.latexInstall().catch((e: unknown) => console.error('Installation de LaTeX :', e)); };
+  /** The block « Serveur » (plan 5a): pairing and unpairing, then what the main process now holds. */
+  const serverBlock = {
+    info: server, status: syncView.status,
+    onPair: async (url: string, code: string, name: string) => {
+      const r = await sync.current!.pair(url, code, name);
+      if (r.ok) setServer(await window.cirrus.syncServer());
+      return r;
+    },
+    onUnpair: async () => {
+      await sync.current!.unpair();
+      setServer(await window.cirrus.syncServer());
+    },
+  };
   const files: NodeFiles = {
     importInto: (node, paths, refused) => addFiles(node, paths.length > 0 ? window.cirrus.importFiles(paths) : Promise.resolve({ refs: [], refused: [] }), refused),
     pickInto: (node) => addFiles(node, window.cirrus.pickFiles()),
@@ -466,6 +498,7 @@ export function App() {
         }}
         settingsOpen={panel}
         onSettings={() => setPanel((o) => !o)}
+        chip={syncView.chip && <SyncChip chip={syncView.chip} onRetry={() => sync.current?.retry()} />}
       />
       <div className="main">
         <GraphBoundary plan={active}>
@@ -479,7 +512,7 @@ export function App() {
         {panel && (
           <SettingsPanel
             params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
-            onEditPreamble={() => setPreambleOpen(true)}
+            onEditPreamble={() => setPreambleOpen(true)} server={serverBlock}
           />
         )}
         <Panels
@@ -517,6 +550,7 @@ export function App() {
           </Suspense>
         </PanelBoundary>
       )}
+      {syncView.veil && <SyncVeil />}
     </div>
   );
 }

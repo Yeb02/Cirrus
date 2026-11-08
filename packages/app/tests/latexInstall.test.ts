@@ -279,7 +279,7 @@ test('withPackage : un ajout à latexPackages ; un paquet déjà là, ou que pro
 test('preambleBuild : « Modifier le préambule LaTeX », que Ctrl+Z annule', async () => {
   const s = emptyState();
   let seq = 0;
-  const session = new EditSession(s, async (a: Action) => (seq += a.ops.length), () => {});
+  const session = new EditSession(s, async (a: Action) => ({ seq: (seq += a.ops.length), at: 0 }), () => {});
   const text = '\\documentclass{article}\n\\usepackage{tikz-cd}\n';
   const r = await session.run(preambleBuild(text)!);
   expect(r).toMatchObject({ ok: true, action: { label: 'Modifier le préambule LaTeX' } });

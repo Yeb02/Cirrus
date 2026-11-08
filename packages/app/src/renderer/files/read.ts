@@ -1,4 +1,4 @@
-import { fileUrl, type ViewRef } from './kind.ts';
+import { fileKind, fileUrl, type ViewRef } from './kind.ts';
 
 /** A mebibyte: the « Mo » of the settings (textViewMaxMb, tableViewMaxMb), as formatSize counts them. */
 export const MB = 2 ** 20;
@@ -15,16 +15,25 @@ export function rangeHeader(size: number, maxBytes: number): string | null {
 export class ReadError extends Error {}
 
 /**
+ * Why a blob the store does not hold yet could not be had from the server (503, plan 5a, D6): offline, mostly. A PDF
+ * comes down at its first reading; another file is downloaded in the background, and may not have come yet.
+ */
+export function notDownloaded(name: string): string {
+  return fileKind(name) === 'pdf' ? 'PDF pas encore téléchargé : serveur injoignable.' : `« ${name} » pas encore téléchargé : serveur injoignable.`;
+}
+
+/**
  * A file's head, at most `maxBytes` (a view's ceiling: « une vue ne lit jamais plus que son plafond »), by the
  * cirrus-file: protocol; `truncated` when the file is longer. The body is read as a stream and let go at the ceiling, so
  * a server that would ignore the range (200, the whole file) is not read further either. A blob missing from the store
- * (404) or an answer in error rejects with a ReadError, in French; `signal` gives the reading up (a view closed
- * meanwhile).
+ * (404), not downloaded from the server (503) or an answer in error rejects with a ReadError, in French; `signal` gives
+ * the reading up (a view closed meanwhile). `thumbnail`: a thumbnail's request, which never downloads (plan 5a, D6).
  */
-export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSignal): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSignal, opts: { thumbnail?: boolean } = {}): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   const range = rangeHeader(ref.size, maxBytes);
-  const res = await fetch(fileUrl(ref), { headers: range ? { Range: range } : {}, signal });
+  const res = await fetch(fileUrl(ref, opts), { headers: range ? { Range: range } : {}, signal });
   if (res.status === 404) throw new ReadError(`« ${ref.name} » est introuvable dans la base.`);
+  if (res.status === 503) throw new ReadError(notDownloaded(ref.name));
   if (!res.ok) throw new ReadError(`« ${ref.name} » n’a pas pu être lu (${res.status}).`);
   const out = new Uint8Array(Math.min(ref.size, maxBytes));
   let n = 0;

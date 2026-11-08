@@ -12,6 +12,13 @@ const dropped = new Set<string>();
 if (typeof launch.import === 'string') for (const p of launch.import.split('|').slice(1)) if (p) dropped.add(p);
 const nameOf = (p: unknown) => String(p).slice(Math.max(String(p).lastIndexOf('\\'), String(p).lastIndexOf('/')) + 1);
 
+/** A message of the main process passed to `fn`, its argument only; returns the unsubscription. */
+const on = (channel: string, fn: (x: unknown) => void) => {
+  const listener = (_e: unknown, x: unknown) => fn(x);
+  ipcRenderer.on(channel, listener);
+  return () => { ipcRenderer.removeListener(channel, listener); };
+};
+
 contextBridge.exposeInMainWorld('cirrus', {
   load: (fromTables: boolean) => ipcRenderer.invoke('cirrus:load', fromTables === true),
   saveSnapshot: (data: ArrayBuffer, seq: number) => ipcRenderer.invoke('cirrus:snapshot:save', data, seq),
@@ -20,7 +27,7 @@ contextBridge.exposeInMainWorld('cirrus', {
   ready: () => ipcRenderer.send('cirrus:ready'),
   benchMemory: () => ipcRenderer.invoke('cirrus:bench:memory'),
   benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),
-  commit: (action: unknown) => ipcRenderer.invoke('cirrus:commit', action),
+  commit: (action: unknown, unit: string) => ipcRenderer.invoke('cirrus:commit', action, unit),
   onQuit: (fn: () => void) => {
     const listener = () => fn();
     ipcRenderer.on('cirrus:quit', listener);
@@ -61,10 +68,18 @@ contextBridge.exposeInMainWorld('cirrus', {
   latexStatus: () => ipcRenderer.invoke('cirrus:latex:status:get'),
   latexInstall: () => ipcRenderer.invoke('cirrus:latex:install'),
   publicationFetch: (text: string, options?: { pdf?: boolean }) => ipcRenderer.invoke('cirrus:publications:fetch', text, options),
-  onLatexStatus: (fn: (s: unknown) => void) => {
-    const listener = (_e: unknown, s: unknown) => fn(s);
-    ipcRenderer.on('cirrus:latex:status', listener);
-    return () => { ipcRenderer.removeListener('cirrus:latex:status', listener); };
-  },
+  onLatexStatus: (fn: (s: unknown) => void) => on('cirrus:latex:status', fn),
+  // The synchronisation (plan 5a, task 4).
+  syncStart: () => ipcRenderer.invoke('cirrus:sync:start'),
+  syncRetry: () => ipcRenderer.send('cirrus:sync:retry'),
+  syncReconciled: (id: number, outcome: unknown) => ipcRenderer.invoke('cirrus:sync:reconciled', id, outcome),
+  syncPending: () => ipcRenderer.invoke('cirrus:sync:pending'),
+  syncServer: () => ipcRenderer.invoke('cirrus:sync:server'),
+  syncStatus: () => ipcRenderer.invoke('cirrus:sync:status:get'),
+  syncPair: (url: string, code: string, name: string) => ipcRenderer.invoke('cirrus:sync:pair', url, code, name),
+  syncUnpair: () => ipcRenderer.invoke('cirrus:sync:unpair'),
+  onSyncIncoming: (fn: (m: unknown) => void) => on('cirrus:sync:incoming', fn),
+  onSyncStatus: (fn: (s: unknown) => void) => on('cirrus:sync:status', fn),
+  onSyncVeil: (fn: () => void) => on('cirrus:sync:veil', () => fn()),
   launch,
 });

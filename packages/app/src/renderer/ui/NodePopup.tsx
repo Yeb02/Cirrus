@@ -34,8 +34,9 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * The node's history in three figures (historyOf), read at opening, then again after each action on it — its record or
- * its places, undo and redo included. Several actions gathered into one render are not told apart: read again. Null
- * while it is read; « failed » when it could not be (Minor 3 of the review).
+ * its places, undo and redo included. Several actions gathered into one render are not told apart, nor a state read
+ * again from the base (no action, plan 5a): read again. Null while it is read; « failed » when it could not be (Minor 3
+ * of the review).
  */
 function useHistory(id: Id, rev: number, action: Action | null): HistorySummary | 'failed' | null {
   const [summary, setSummary] = useState<HistorySummary | 'failed' | null>(null);
@@ -43,7 +44,7 @@ function useHistory(id: Id, rev: number, action: Action | null): HistorySummary 
   useEffect(() => {
     const before = seen.current;
     seen.current = rev;
-    if (before !== null && rev === before + 1 && !action?.ops.some((op) => subjectOf(op) === id)) return;
+    if (before !== null && rev === before + 1 && action && !action.ops.some((op) => subjectOf(op) === id)) return;
     const n = ++asked.current;
     window.cirrus.historyOf(id).then(
       (h) => { if (asked.current === n) setSummary(h); },
@@ -156,6 +157,22 @@ const PdfIcon = (props: { px: number }) => (
     <path d="M9 11h6.5M9 13.5h6.5M9 16h4.5" stroke="currentColor" strokeWidth="1" opacity="0.6" />
   </svg>
 );
+
+/**
+ * An image as its own thumbnail, read once in view; by a thumbnail's request (plan 5a, D6), which never downloads it:
+ * an image the store does not hold yet shows its kind's icon.
+ */
+function ImageThumb(props: { file: FileRef; px: number }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [props.file.hash]);
+  if (failed) return <ImageIcon px={props.px} />;
+  return (
+    <img
+      className="thumb" src={fileUrl(props.file, { thumbnail: true })} alt="" loading="lazy" decoding="async" draggable={false}
+      width={props.px} height={props.px} onError={() => setFailed(true)}
+    />
+  );
+}
 
 /**
  * A PDF's first page as its thumbnail (pageThumbnail: read by ranges whatever the file's size, at most thumbMaxMb),
@@ -326,12 +343,7 @@ function Files(props: {
                 onDoubleClick={() => { if (renaming !== f.name && fileDoubleClick(f.name)) props.onOpen(f.name, 'full'); }}
                 onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, file: f }); }}
               >
-                {thumb === 'image' && (
-                  <img
-                    className="thumb" src={fileUrl(f)} alt="" loading="lazy" decoding="async" draggable={false}
-                    width={props.thumbPx} height={props.thumbPx}
-                  />
-                )}
+                {thumb === 'image' && <ImageThumb file={f} px={props.thumbPx} />}
                 {thumb === 'icon' && <ImageIcon px={props.thumbPx} />}
                 {thumb === 'pdf' && <PdfThumb file={f} px={props.thumbPx} kept={props.pdfDocsKept} maxMb={props.thumbMaxMb} />}
                 {renaming === f.name ? (

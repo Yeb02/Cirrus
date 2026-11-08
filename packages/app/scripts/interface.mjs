@@ -4,11 +4,13 @@
 // the browser's own default actions — the focus a press gives, a click after a press — happen as for the user, which
 // the pointer replays of the captures (CIRRUS_POINTER) skip. Then it reads what the page shows and what the base kept.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { bibFileName } from '@cirrus/core';
+import { startServer, Tokens } from '@cirrus/server';
 import { appDir, launch, sleep } from './cdp.mjs';
 
 // Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
@@ -146,6 +148,33 @@ async function pickBibByMenu(page, at = SKY) {
   const item = await page.centre('.context-menu button', 'Importer un fichier \\.bib');
   await page.click(item.x, item.y);
 }
+
+// Plan 5a, task 4: a server of this machine, started by the scenario on 127.0.0.1 and a free port, its data in a
+// temporary folder (never %LOCALAPPDATA%\Cirrus); a pairing code made as `jumeler` makes it.
+async function localServer() {
+  const dir = mkdtempSync(join(tmpdir(), 'cirrus-interface-serveur-'));
+  const server = await startServer({ dataDir: dir, port: 0 });
+  return {
+    url: server.url,
+    code(name) {
+      const tokens = Tokens.open(dir);
+      try { return tokens.createCode(name, Date.now()).code; } finally { tokens.close(); }
+    },
+    /** The server's journal, its operations in order. */
+    journal() {
+      const db = new DatabaseSync(join(dir, 'base', 'cirrus.db'), { readOnly: true });
+      try { return db.prepare('SELECT op FROM changes ORDER BY local_seq').all().map((r) => JSON.parse(r.op)); } finally { db.close(); }
+    },
+    hasBlob: (hash) => existsSync(join(dir, 'base', 'files', hash.slice(0, 2), hash)),
+    async close() {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    },
+  };
+}
+/** The centre of the `i`-th field of the block « Serveur ». */
+const serverField = (page, i) => page.evaluate(`(() => { const b = document.querySelectorAll('.server-block input')[${i}]?.getBoundingClientRect(); return b && { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+const chipText = (page) => page.evaluate(`document.querySelector('.tabs .sync-chip')?.textContent ?? null`);
 
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
 const SCENARIOS = [
@@ -962,6 +991,88 @@ const SCENARIOS = [
       }
     },
   },
+  {
+    // Plan 5a, task 4: a new base (empty: its lobby only) paired, by the block « Serveur » of the settings, with a
+    // server of this machine: Electron's network (net.fetch: the event stream, the writes, a file's upload) and the
+    // token kept by Windows (safeStorage). The lobby is the server's first write; a node made by the menu, then a file
+    // dropped on it, reach it; the chip says « À jour »; « Dissocier ce PC » takes it all away.
+    name: 'jumeler une base neuve à un serveur local, synchroniser, dissocier (plan 5a)',
+    empty: true,
+    async run(page, base, data) {
+      const server = await localServer();
+      const dropDir = mkdtempSync(join(tmpdir(), 'cirrus-interface-depot-'));
+      try {
+        const gear = await page.centre('.tabs .gear', '⚙');
+        await page.click(gear.x, gear.y);
+        const rubric = await page.centre('.settings .rubric-title', 'Serveur');
+        await page.click(rubric.x, rubric.y);
+        if (!(await page.until(`document.querySelectorAll('.server-block input').length === 3`))) throw new Error('le bloc « Serveur » ne montre pas ses trois champs');
+        const values = await page.evaluate(`[...document.querySelectorAll('.server-block input')].map((i) => i.value)`);
+        if (values[0] !== 'http://127.0.0.1:7310' || values[1] !== '' || values[2] === '') throw new Error(`champs proposés : ${JSON.stringify(values)}`);
+        if (await chipText(page)) throw new Error('une pastille sans serveur jumelé');
+        // The server's address, typed over the one proposed; the code `jumeler` shows.
+        const url = await serverField(page, 0);
+        await page.click(url.x, url.y);
+        await page.press('a', 'KeyA', 65, 2);
+        await page.type(server.url);
+        const code = await serverField(page, 1);
+        await page.click(code.x, code.y);
+        await page.type(server.code('Interface'));
+        const pair = await page.centre('.server-block button', '^Jumeler$');
+        await page.click(pair.x, pair.y);
+        if (!(await page.until(`[...document.querySelectorAll('.server-block button')].some((b) => b.textContent === 'Dissocier ce PC')`, 10000))) {
+          throw new Error(`pas jumelé : ${await page.evaluate(`document.querySelector('.server-error')?.textContent ?? '(aucun message)'`)}`);
+        }
+        if (!(await page.until(`document.querySelector('.tabs .sync-chip')?.textContent === 'À jour'`, 10000))) throw new Error(`la pastille dit « ${await chipText(page)} »`);
+        const stored = JSON.parse(readFileSync(join(data, 'serveur.json'), 'utf8'));
+        // The token as safeStorage keeps it: bytes encrypted for this user (a version, a nonce, the text, a tag), never the text.
+        const sealed = Buffer.from(stored.token, 'base64');
+        if (stored.url !== server.url || sealed.length <= 43 || /^[ -~]*$/.test(sealed.toString('latin1'))) {
+          throw new Error(`serveur.json ne garde pas l’adresse, ou pas un jeton chiffré par Windows (${stored.url}, ${sealed.length} octets)`);
+        }
+        const first = server.journal();
+        if (first.length !== 1 || first[0].t !== 'plan' || first[0].after?.type !== 'lobby') throw new Error(`le journal du serveur : ${JSON.stringify(first.map((op) => op.t))}`);
+        // A node by the menu of the background, as the first scenario does it.
+        const settingsClose = await page.centre('.settings .close', '×');
+        await page.click(settingsClose.x, settingsClose.y);
+        for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(250, 850, 'right');
+        const item = await page.centre('.context-menu button', 'Nouveau nœud');
+        await page.click(item.x, item.y);
+        await page.move(400, 800);
+        await page.click(400, 800);
+        await page.type('Nœud synchronisé');
+        await page.press('Enter', 'Enter', 13);
+        if (!(await until(() => server.journal().some((op) => op.t === 'node' && op.after?.title === 'Nœud synchronisé'), 8000))) throw new Error('le nœud n’arrive pas au serveur');
+        // A file dropped on it: uploaded (PUT, the file read from the disk), then the write that refers to it.
+        const file = join(dropDir, 'notes_synchro.txt'), text = 'Envoyé au serveur par Electron.\n';
+        writeFileSync(file, text, 'utf8');
+        await page.dropFiles({ x: 400, y: 800 }, [file]);
+        const hash = createHash('sha256').update(text).digest('hex');
+        if (!(await until(() => server.hasBlob(hash) && server.journal().some((op) => op.t === 'node' && op.after?.files.some((f) => f.hash === hash)), 8000))) {
+          throw new Error(`le fichier n’arrive pas au serveur ; ${await toastsText(page)}`);
+        }
+        if (!(await page.until(`document.querySelector('.tabs .sync-chip')?.textContent === 'À jour'`, 8000))) throw new Error(`la pastille dit « ${await chipText(page)} »`);
+        // « Dissocier ce PC »: no chip, no serveur.json, nothing sent any more.
+        await page.click(gear.x, gear.y);
+        const again = await page.centre('.settings .rubric-title', 'Serveur');
+        if (!(await page.evaluate(`!!document.querySelector('.server-block')`))) await page.click(again.x, again.y);
+        const unpair = await page.centre('.server-block button', 'Dissocier ce PC');
+        await page.click(unpair.x, unpair.y);
+        if (!(await page.until(`!document.querySelector('.tabs .sync-chip') && document.querySelectorAll('.server-block input').length === 3`, 8000))) throw new Error('toujours jumelé après « Dissocier ce PC »');
+        if (existsSync(join(data, 'serveur.json'))) throw new Error('serveur.json reste après la dissociation');
+        const lines = server.journal().length;
+        const field = await page.centre('.settings input.search', '');
+        await page.click(field.x, field.y);
+        await page.type('x');
+        await sleep(500);
+        if (server.journal().length !== lines) throw new Error('le serveur reçoit encore après la dissociation');
+        if (base(`SELECT count(*) AS n FROM nodes`)[0].n !== 1) throw new Error('la base locale a perdu son nœud');
+      } finally {
+        await server.close();
+        rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
+      }
+    },
+  },
 ];
 
 // `node scripts/interface.mjs <texte>`: only the scenarios whose name holds that text.
@@ -973,7 +1084,8 @@ for (const s of chosen) {
   const profile = mkdtempSync(join(tmpdir(), 'cirrus-interface-profil-'));
   let app = null;
   try {
-    execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
+    // `empty`: a new base, its lobby only (the app makes it), instead of the test base.
+    if (!s.empty) execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
     app = await launch(data, profile, s.env);
     const base = (sql) => {

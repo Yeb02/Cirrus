@@ -13,14 +13,14 @@ function world() {
   return { s, plan };
 }
 /** A commit as the main process answers it: the journal number of the action's last line. */
-const numbered = () => { let seq = 0; return async (a: Action) => (seq += a.ops.length); };
+const numbered = () => { let seq = 0; return async (a: Action) => ({ seq: (seq += a.ops.length), at: 0 }); };
 const nodeId = (a: Action) => (a.ops.find((o) => o.t === 'node' && o.before === null) as { after: { id: Id } }).after.id;
 
 test('une action réussie s’applique, s’annule et se rétablit ; les plans touchés sont nommés', async () => {
   const { s, plan } = world();
   const written: Action[] = [];
   const changes: Action[] = [];
-  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, (_st, a) => { changes.push(a); });
+  const session = new EditSession(s, async (a) => { written.push(a); return { seq: written.length, at: 0 }; }, (_st, a) => { changes.push(a!); });
   const r = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
   expect(r.ok).toBe(true);
   const id = r.ok ? nodeId(r.action) : '';
@@ -37,7 +37,7 @@ test('une action réussie s’applique, s’annule et se rétablit ; les plans t
 test('l’action s’applique sur l’état même, et rev augmente à chaque changement', async () => {
   const { s, plan } = world();
   const changes: [State, Action, number][] = [];
-  const session = new EditSession(s, numbered(), (st, a, rev) => { changes.push([st, a, rev]); });
+  const session = new EditSession(s, numbered(), (st, a, rev) => { changes.push([st, a!, rev]); });
   expect(session.rev).toBe(0);
   const r = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
   expect(session.state).toBe(s);
@@ -63,7 +63,7 @@ test('un commit qui échoue laisse l’état et rev inchangés', async () => {
 test('une écriture qui échoue laisse l’état intact et la pile en place', async () => {
   const { s, plan } = world();
   let fail = false;
-  const session = new EditSession(s, async () => { if (fail) throw new Error('disque plein'); return 1; }, () => {});
+  const session = new EditSession(s, async () => { if (fail) throw new Error('disque plein'); return { seq: 1, at: 0 }; }, () => {});
   const r = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
   const id = r.ok ? nodeId(r.action) : '';
   fail = true;
@@ -81,7 +81,7 @@ test('une écriture qui échoue laisse l’état intact et la pile en place', as
 test('une commande refusée devient un message, sans écriture', async () => {
   const { s } = world();
   let writes = 0;
-  const session = new EditSession(s, async () => ++writes, () => {});
+  const session = new EditSession(s, async () => ({ seq: ++writes, at: 0 }), () => {});
   const r = await session.run((st) => editNode(st, 'inconnu', { title: 'x' }));
   expect(r).toEqual({ ok: false, message: 'Nœud introuvable.' });
   expect(writes).toBe(0);
@@ -105,7 +105,7 @@ test('annuler après une modification venue d’ailleurs : refusé proprement (R
 test('deux actions lancées sans attendre s’exécutent dans l’ordre', async () => {
   const { s, plan } = world();
   const order: string[] = [];
-  const session = new EditSession(s, async (a) => { await new Promise((r) => setTimeout(r, a.label.includes('A') ? 20 : 0)); return order.push(a.label); }, () => {});
+  const session = new EditSession(s, async (a) => { await new Promise((r) => setTimeout(r, a.label.includes('A') ? 20 : 0)); return { seq: order.push(a.label), at: 0 }; }, () => {});
   const p1 = session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }));
   const p2 = session.run((st) => createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 }));
   await Promise.all([p1, p2]);
@@ -307,7 +307,7 @@ function withFiles() {
 test('un dépôt de trois fichiers donne un seul pas d’annulation ; Ctrl+Z rend la liste d’avant, Ctrl+Y la remet', async () => {
   const { s, node, files } = withFiles();
   const written: Action[] = [];
-  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const session = new EditSession(s, async (a) => { written.push(a); return { seq: written.length, at: 0 }; }, () => {});
   const incoming: FileRef[] = [
     { name: 'figure.png', hash: '3'.repeat(64), size: 30 }, { name: 'rapport.pdf', hash: '4'.repeat(64), size: 40 }, { name: 'données.csv', hash: '5'.repeat(64), size: 50 },
   ];
@@ -326,7 +326,7 @@ test('un dépôt de trois fichiers donne un seul pas d’annulation ; Ctrl+Z ren
 test('addImported : les refus d’abord, puis ce que fait le dépôt ; « Déjà à jour. » sans rien écrire ; un nœud disparu, refusé', async () => {
   const { s, node, files } = withFiles();
   const written: Action[] = [];
-  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const session = new EditSession(s, async (a) => { written.push(a); return { seq: written.length, at: 0 }; }, () => {});
   const refused = [{ name: 'photos', reason: 'c’est un dossier' }, { name: 'film.mkv', reason: 'plus de 200 Mo' }];
   expect(await addImported(session, node, { refs: [{ ...files[0], hash: '6'.repeat(64) }], refused })).toEqual([
     '2 fichiers non importés : photos (c’est un dossier), film.mkv (plus de 200 Mo)', '« Rapport.pdf » remplacé',
@@ -344,7 +344,7 @@ test('addImported : les refus d’abord, puis ce que fait le dépôt ; « Déjà
 test('merge : des actions successives de même clé, rien d’écrit entre elles, prennent l’identifiant de la première et un seul pas d’annulation (D6)', async () => {
   const { s, plan } = world();
   const written: Action[] = [];
-  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const session = new EditSession(s, async (a) => { written.push(a); return { seq: written.length, at: 0 }; }, () => {});
   const a = await session.run((st) => createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 }), { merge: 'k' });
   const b = await session.run((st) => createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 }), { merge: 'k' });
   // A refused command writes nothing: it does not end the merge.
@@ -369,7 +369,7 @@ test('merge : des actions successives de même clé, rien d’écrit entre elles
 test('merge : une autre clé, une action sans clé, une annulation ou un changement reçu entre deux actions les séparent', async () => {
   const { s, plan } = world();
   const written: Action[] = [];
-  const session = new EditSession(s, async (a) => { written.push(a); return written.length; }, () => {});
+  const session = new EditSession(s, async (a) => { written.push(a); return { seq: written.length, at: 0 }; }, () => {});
   const make = (title: string, merge?: string) => session.run((st) => createNode(st, { plan, title, x: 0, y: 0, k: 0 }), merge === undefined ? {} : { merge });
   await make('A', 'k');
   await make('B', 'autre');

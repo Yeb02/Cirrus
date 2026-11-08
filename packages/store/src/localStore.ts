@@ -423,6 +423,16 @@ export class LocalStore {
     return this.q("SELECT 1 AS x FROM plans WHERE json_extract(json, '$.type') = 'lobby' LIMIT 1").get() !== undefined;
   }
 
+  /**
+   * Empty in the sense of D7 (plan 5a), as the server reads its own (Canon.empty): no node (in the trash included), no
+   * connection, no placement, no plan but a lobby. A few index lookups, whatever the size of the base.
+   */
+  isEmpty(): boolean {
+    const sql = `SELECT EXISTS (SELECT 1 FROM nodes) OR EXISTS (SELECT 1 FROM connections) OR EXISTS (SELECT 1 FROM placements)
+      OR EXISTS (SELECT 1 FROM plans WHERE json_extract(json, '$.type') != 'lobby') AS full`;
+    return (this.q(sql).get() as { full: number }).full === 0;
+  }
+
   readSnapshot(): StoredSnapshot | null {
     const row = this.q('SELECT version, seq, data FROM snapshot WHERE id = 1').get() as { version: number; seq: number; data: Uint8Array } | undefined;
     if (!row) return null;

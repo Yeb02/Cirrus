@@ -275,16 +275,19 @@ export class Lab {
     this.server = null;
   }
 
-  /** A code made as `jumeler` makes it, traded for a token as the app does (config.pair). */
-  async pairing(name: string, pc: string): Promise<ServerConfig> {
+  /** A code made as `jumeler` makes it (the app's pairing takes it: task 4). */
+  code(name: string): string {
     const tokens = Tokens.open(this.dataDir);
-    let code: string;
     try {
-      code = tokens.createCode(name, this.clock).code;
+      return tokens.createCode(name, this.clock).code;
     } finally {
       tokens.close();
     }
-    return pair(fetch, this.url, code, pc, name);
+  }
+
+  /** A code made as `jumeler` makes it, traded for a token as the app does (config.pair). */
+  async pairing(name: string, pc: string): Promise<ServerConfig> {
+    return pair(fetch, this.url, this.code(name), pc, name);
   }
 
   revoke(name: string): void {

@@ -1,9 +1,12 @@
 import type { Id, PlanRec } from '@cirrus/core';
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 
 const KIND: Record<PlanRec['type'], string> = { lobby: '', plan: '', document: 'document' };
 
-/** The lobby tab, always open, then the open plans (spec 7: each plan opens in a tab). */
+/**
+ * The lobby tab, always open, then the open plans (spec 7: each plan opens in a tab); at the right end, the
+ * synchronisation's chip (plan 5a, D8: none without a server) and the settings.
+ */
 export function Tabs(props: {
   plans: PlanRec[];
   open: Id[];
@@ -13,6 +16,7 @@ export function Tabs(props: {
   onClose(id: Id): void;
   settingsOpen: boolean;
   onSettings(): void;
+  chip?: ReactNode;
 }) {
   const [menu, setMenu] = useState(false);
   const byId = new Map(props.plans.map((p) => [p.id, p]));
@@ -47,6 +51,7 @@ export function Tabs(props: {
         )}
       </div>
       <div className="spacer" />
+      {props.chip}
       <button className={`gear${props.settingsOpen ? ' on' : ''}`} aria-label="Réglages" title="Réglages" onClick={props.onSettings}>⚙</button>
     </div>
   );
