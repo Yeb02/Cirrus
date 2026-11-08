@@ -94,6 +94,21 @@ export async function openServerBlock(page) {
   if (!(await page.until(`!!document.querySelector('.server-block')`))) throw new Error('le bloc « Serveur » ne s’ouvre pas');
 }
 
+/** The settings panel closed by its ×. */
+export async function closeSettings(page) {
+  const close = await page.centre('.settings .close', '×');
+  await page.click(close.x, close.y);
+}
+
+/** `text` typed over what the `i`-th field of the block « Serveur » holds: a click in it, Ctrl+A, the text. */
+export async function typeInBlock(page, i, text) {
+  const field = await serverField(page, i);
+  if (!field) throw new Error(`le bloc « Serveur » n’a pas de champ ${i + 1}`);
+  await page.click(field.x, field.y);
+  await page.press('a', 'KeyA', 65, 2);
+  await page.type(text);
+}
+
 /**
  * A pairing by the block, as the user makes it: the server's address typed over the one proposed, the code `jumeler`
  * showed, this PC's name typed over the machine's if `name` is given, « Jumeler ».
@@ -101,15 +116,9 @@ export async function openServerBlock(page) {
 export async function pairThrough(page, url, code, name) {
   await openServerBlock(page);
   if (!(await page.until(`document.querySelectorAll('.server-block input').length === 3`))) throw new Error('le bloc « Serveur » ne montre pas ses trois champs');
-  const typeOver = async (i, text) => {
-    const field = await serverField(page, i);
-    await page.click(field.x, field.y);
-    await page.press('a', 'KeyA', 65, 2);
-    await page.type(text);
-  };
-  await typeOver(0, url);
-  await typeOver(1, code);
-  if (name !== undefined) await typeOver(2, name);
+  await typeInBlock(page, 0, url);
+  await typeInBlock(page, 1, code);
+  if (name !== undefined) await typeInBlock(page, 2, name);
   const pair = await page.centre('.server-block button', '^Jumeler$');
   await page.click(pair.x, pair.y);
 }
@@ -120,15 +129,22 @@ export const chipSays = (page, text, ms = 10_000) => page.until(`document.queryS
 /**
  * Watches the title of the node's pop-up: `window.__shown` resolves with the page's absolute time (its clock's origin
  * plus now, as `performance.timeOrigin + performance.now()` in Node) at which it first shows `title`, or null after 10 s.
+ * Two watchers, the first to see it wins: a DOM observer, exact today, since NodePopup gives the title's field a new
+ * key when the title changes (a new element, in the very commit that shows it); and a check at each frame, which still
+ * sees the title, a frame late at most, if that field ever keeps its element and only its value changes.
  */
 export const TITLE_PROBE = (title) => `(() => {
   const want = ${JSON.stringify(title)}, now = () => performance.timeOrigin + performance.now();
   const shown = () => document.querySelector('.node-popup input.title')?.value === want;
   window.__shown = new Promise((resolve) => {
     if (shown()) return resolve(now());
-    const o = new MutationObserver(() => { if (shown()) { o.disconnect(); resolve(now()); } });
+    let done = false;
+    const end = (t) => { if (done) return; done = true; o.disconnect(); clearTimeout(timer); resolve(t); };
+    const o = new MutationObserver(() => { if (shown()) end(now()); });
     o.observe(document.body, { subtree: true, childList: true });
-    setTimeout(() => { o.disconnect(); resolve(null); }, 10_000);
+    const frame = () => { if (done) return; if (shown()) end(now()); else requestAnimationFrame(frame); };
+    requestAnimationFrame(frame);
+    const timer = setTimeout(() => end(null), 10_000);
   });
   return true;
 })()`;

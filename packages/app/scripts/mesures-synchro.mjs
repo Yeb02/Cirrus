@@ -19,17 +19,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
+import { launch, quantile, sleep } from './cdp.mjs';
 
 const SCRIPT = import.meta.filename;
 const node = (mode, args, extra = []) => spawn(process.execPath, ['--expose-gc', ...extra, SCRIPT, mode, ...args], { stdio: ['pipe', 'pipe', 'inherit'] });
 const mb = (bytes) => Math.round(bytes / 2 ** 20);
 const PASSES = 3;
 const REFERENCE = join(tmpdir(), 'cirrus-bench-1-50000-500000');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** This process's time as the page's (`performance.timeOrigin + performance.now()`): absolute, under the millisecond. */
 const now = () => performance.timeOrigin + performance.now();
-/** As mesures-annotations.mjs: the value under which a share `q` of the sorted values falls. */
-const quantile = (xs, q) => { const v = [...xs].sort((a, b) => a - b); return v.length === 0 ? Number.NaN : v[Math.min(v.length - 1, Math.floor(q * v.length))]; };
 const r1 = (x) => Math.round(x * 10) / 10;
 /** The median, p95, smallest and largest of `xs`, to a tenth of a millisecond. */
 const stats = (xs) => ({ n: xs.length, median: r1(quantile(xs, 0.5)), p95: r1(quantile(xs, 0.95)), min: r1(Math.min(...xs)), max: r1(Math.max(...xs)) });
@@ -244,8 +242,7 @@ async function stopServer(server) {
  * and virtual PC each pass; B paired through its block, as the user pairs it.
  */
 async function latence() {
-  const { launch } = await import('./cdp.mjs');
-  const { chipSays, pairingCode, pairThrough, TITLE_PROBE, virtualPc } = await import('./serveur-local.mjs');
+  const { chipSays, closeSettings, pairingCode, pairThrough, TITLE_PROBE, virtualPc } = await import('./serveur-local.mjs');
   const { createNode, editNode } = await import('@cirrus/core');
   const passes = [], all = [];
   for (let pass = 1; pass <= PASSES; pass++) {
@@ -261,8 +258,7 @@ async function latence() {
       const { page } = app;
       await pairThrough(page, url, code('B'));
       if (!(await chipSays(page, 'À jour'))) throw new Error('B ne se jumelle pas au serveur');
-      const close = await page.centre('.settings .close', '×');
-      await page.click(close.x, close.y);
+      await closeSettings(page);
       virtual = await virtualPc({ url, code }, 'pc-virtuel');
       const pc = virtual.pc;
       const lobbyOf = () => [...pc.s.plans.values()].find((p) => p.type === 'lobby')?.id;

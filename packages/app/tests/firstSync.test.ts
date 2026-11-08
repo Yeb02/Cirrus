@@ -480,7 +480,7 @@ test('revue, Important 2 : une base prise qui attend est dite à l’ouverture (
 });
 
 test('R27 : CIRRUS_NO_RELAUNCH fait seulement quitter l’app après une prise, et seulement sur une base de test en arrière-plan ou en capture', () => {
-  const env = { CIRRUS_NO_RELAUNCH: '1', CIRRUS_DATA: 'D:\base-de-test' };
+  const env = { CIRRUS_NO_RELAUNCH: '1', CIRRUS_DATA: 'D:\\base-de-test' };
   expect(quitsInsteadOfRelaunch({ ...env, CIRRUS_BACKGROUND: '1' }, false)).toBe(true);
   expect(quitsInsteadOfRelaunch(env, true)).toBe(true);
   // Inert by default, on the user's own base, in a window in front, or for another value.

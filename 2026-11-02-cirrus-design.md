@@ -291,7 +291,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
   - **PC plein, serveur vide :** « Envoyer la base de ce PC au serveur (n nœuds, m fichiers) ».
     - Le PC lit et vérifie d'abord tout ce qu'il enverra, avant toute requête : une ligne abîmée l'arrête là, dite en français [C].
     - Il envoie ensuite tous les fichiers de son magasin, son instantané, son journal par pages (pour l'historique), et enfin `done`, qui rend le serveur non vide. Ses lignes reçoivent leurs numéros, et la synchro démarre.
-    - Le serveur vérifie la structure de ce qu'il reçoit, mais ne refuse pas une violation que la base portait déjà : il la compte et la signale [C]. Un libellé trop long est coupé, jamais refusé [C].
+    - Le serveur vérifie la structure de ce qu'il reçoit, mais ne refuse pas une violation que la base portait déjà : il la compte et la signale [C]. Le PC coupe un libellé trop long avant l'envoi, qui n'est donc jamais bloqué par lui ; le serveur refuse toujours un libellé trop long qu'il reçoit [C].
   - **PC vide, serveur plein :** « Prendre la base du serveur (n nœuds) ». Un serveur qui ne tient que le lobby d'un autre PC compte comme plein : le PC le prend, plutôt que d'apporter un second lobby [C].
     - Le PC télécharge l'instantané, le journal et les fichiers autres que les PDF dans un dossier neuf, `<base>-nouvelle`, avec les réglages du serveur et son propre identifiant de PC. Une marque, écrite en dernier, le dit complet [C].
     - L'app redémarre, et l'échange se fait avant que la base s'ouvre. L'ancienne base est gardée sous `base-avant-jumelage-AAAA-MM-JJ` (« (2) » si le nom est pris). Un renommage refusé un moment, par un antivirus, est retenté ; s'il échoue encore, l'ancienne base s'ouvre, et la base prise attend le démarrage suivant, ce que disent une notification et le bloc « Serveur » [C].
@@ -306,7 +306,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
   - **sans serveur jumelé,** rien ne change : l'app fonctionne seule, et ses actions restent en attente, sans effet. « Dissocier ce PC » ramène à cet état : les actions faites ensuite restent sur ce PC.
 - **Mesures** (tâche 7, sur ce PC, trois passes chacune, `npm run mesures -w packages/app -- synchro` ; le registre du plan donne la méthode) :
   - d'une écriture sur un PC virtuel au nouveau titre montré par une app jumelée, sur 50 renommages : 62,9 ms en médiane, 64,7 ms au p95 et 66 ms au plus. Le critère, un p95 sous 200 ms, est tenu. La fenêtre de réception (`syncReceiveBatchMs`, 50 ms) en fait l'essentiel ;
-  - 10 écritures en attente réconciliées avec 100 reçues, sur la base de référence (50 000 nœuds) : 3,3 à 3,6 ms en médiane, 5,2 à 5,7 ms pour la première d'une session ; sur une base de 600 nœuds, 3,6 à 4,5 ms et 7,3 à 7,8 ms. Le critère, 50 ms, est tenu, et le coût ne suit pas la taille de la base ;
+  - 10 écritures en attente réconciliées avec 100 reçues, sur la base de référence (50 000 nœuds) : 3,3 à 3,6 ms en médiane et 4,2 ms au plus, ce qui borne le p95, puis 5,2 à 5,7 ms pour la première d'une session ; sur une base de 600 nœuds, 3,6 à 4,5 ms et 7,3 à 7,8 ms. Le critère, 50 ms, est tenu, et le coût ne suit pas la taille de la base ;
   - une action acceptée par le serveur qui tient la base de référence : 1,9 ms en médiane et 5 ms au p95, la requête HTTP comprise. Le critère, une médiane sous 10 ms, est tenu. La première action après le démarrage du serveur a pris 0,3 s ;
   - envoyer la base de référence au serveur prend 20,5 s (21 s à la tâche 7), et la prendre 21,6 s, presque tout dans l'écriture en bloc des tables, une fois par PC. Le serveur qui la tient occupe 293 Mo une fois redémarré sur elle (en 0,4 s), et 492 Mo juste après l'envoi (tâche 5).
 - **Hors du plan 5a :** section 24.
@@ -669,7 +669,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Erreur :** le dernier PDF valide reste affiché, avec le journal à côté.
 - **Sécurité :** aucune commande du document n'est exécutée (`\write18` est refusé). Un paquet comme `minted`, qui en a besoin, ne fonctionnera pas. Pour le document, TeX n'écrit que dans son dossier de travail, mais peut tout lire. Les outils de polices de TeX Live peuvent écrire dans TinyTeX (D4, plus bas).
 - **Exigence explicite : temps de compilation minimaux.**
-  - **Pas de compilation inutile :** chaque PDF est retrouvé par une empreinte de son contenu, du préambule et des titres cités. Après une synchro, les nœuds modifiés se recompilent en arrière-plan, donc ouvrir un nœud ne compile presque jamais.
+  - **Pas de compilation inutile :** chaque PDF est retrouvé par une empreinte de son contenu, du préambule et des titres cités. Après une synchro, les nœuds modifiés se recompileront en arrière-plan (plan 5b), donc ouvrir un nœud ne compilera presque jamais. D'ici là, un nœud changé sur un autre PC se compile à son ouverture, comme un nœud qu'on vient de modifier.
   - **Préambule chargé d'avance :** un processus pdfLaTeX est lancé à l'avance et attend après le préambule, puis reçoit le nœud. C'est la technique de TeX-fast-recompile, qui fonctionne avec tous les paquets. `mylatexformat` (2011) ne sert qu'en complément si les mesures le justifient.
   - **Une seule passe :** les liens vers d'autres nœuds sont fournis par l'app. Une seconde passe n'a lieu que si les références internes au nœud ont changé.
   - **Pendant la frappe :** toute modification interrompt la compilation en cours et en relance une après une courte pause (`latexTypingPauseMs`, 300 ms).
@@ -730,7 +730,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - la cible de 300 ms est tenue au p95, mais pas à chaque frappe : une frappe du .tex sur 69 l'a dépassée (329 ms), et une autre, avec un repos de 0,8 s, a pris 306 ms. L'image suivante vient de 1 à 13 ms après le canevas (environ 4 ms en médiane) : pour le .tex, elle donne 291 ms au p95 et 331 ms au plus ;
   - la compilation, dans le principal, en prend environ les trois quarts (de 118 à 208 ms selon la frappe pour le résumé, de 131 à 239 ms pour le .tex). pdf.js, de la première réponse du PDF au canevas, prend de 25 à 56 ms pour le résumé, et de 41 à 95 ms pour le .tex. L'IPC, le rendu de React et la première réponse du PDF prennent environ 5 ms (de 4 à 8) ;
   - un pop-up rouvert dans la session, son résumé en cache : 17 ms. Le premier résumé d'une session : 0,49 s en cache, 0,62 s s'il faut compiler, dont 0,45 s pour charger pdf.js et son travailleur. Les charger d'avance, au repos, serait le levier suivant.
-- **Hors du plan 4b :** la recompilation en arrière-plan après une synchro (plan 5) ; le saut vers la cible avec « précédent » et « suivant », et l'aperçu au survol d'un lien (plan 6) ; la liste des doublons et des liens cassés dans la santé du graphe ; l'assemblage des documents (section 15) ; SyncTeX ; l'installation de TinyTeX hors de Windows, où `CIRRUS_TINYTEX` désigne une TinyTeX existante.
+- **Hors du plan 4b :** la recompilation en arrière-plan après une synchro (plan 5b) ; le saut vers la cible avec « précédent » et « suivant », et l'aperçu au survol d'un lien (plan 6) ; la liste des doublons et des liens cassés dans la santé du graphe ; l'assemblage des documents (section 15) ; SyncTeX ; l'installation de TinyTeX hors de Windows, où `CIRRUS_TINYTEX` désigne une TinyTeX existante.
 
 ## 14. Navigation et recherche
 
@@ -1061,6 +1061,7 @@ Le découpage détaillé relève du plan d'implémentation.
   - partage.
 
 **Hors du plan 5a, au plan 5b :**
+- la recompilation en arrière-plan des résumés compilés après une synchro (section 13) ;
 - les publications récupérées par le serveur (section 12) ;
 - l'import par l'adresse du PDF de n'importe quel site (OpenReview, PMLR, actes de NeurIPS…), avec les gardes contre les adresses internes ;
 - le DOI lu dans l'adresse d'un éditeur ;

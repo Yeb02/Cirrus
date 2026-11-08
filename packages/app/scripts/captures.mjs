@@ -3,7 +3,7 @@
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
 // suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a,
 // docs/captures/plan4b, docs/captures/plan4c and docs/captures/plan5a (those new in plans 4a, 4b, 4c and 5a; the last
-// ones of plan 5a need a server: pairedCaptures), each compared on its own images. A
+// ones of plan 5a go through DevTools: serverCaptures), each compared on its own images. A
 // folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
 // captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
 // reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
@@ -121,41 +121,46 @@ const SCENES = [
   // The test base's .bib (fixtures/assets) dropped on the sky (CIRRUS_IMPORT): its block's ghost, « Importer 7
   // publications » and its outline at the readable step, once its .bib are stored; nothing made before a click.
   { name: 'bloc-bib', view: '-420,-300,1', import: { at: '350,250', name: 'bibliographie.bib', from: join(appDir, '..', 'fixtures', 'assets', 'bibliographie.bib') } },
-  // Plan 5a: the block « Serveur » at the head of its rubric, not paired: the address proposed, the code, this PC's name.
-  { name: 'serveur-non-jumele', panel: true, click: '.settings .rubric[data-rubric="Serveur"] .rubric-title' },
 ];
 
 /**
- * Plan 5a, task 7 (R28): the states of a paired PC — the block « Serveur » paired, the chip « Hors ligne », the veil
- * « Synchronisation… » — need a server. One of this machine is started (serveur-local.mjs: 127.0.0.1, a free port, a
- * temporary folder), and the test base sent to it through the block, as the user pairs: no hook writes a token. The app
- * is driven by DevTools (cdp.mjs), in its window out of the user's way, and each image taken by DevTools
- * (Page.captureScreenshot) once the class of capture mode is set (`.capture`: the server's address, whose port changes,
- * is not drawn) and the pointer is on the tabs' bar. Its base and profile (which holds the key of its token) are kept
- * from one state to the next: paired; its server stopped; the app quit, then started again with its server still
- * stopped, the veil's wait at its longest (syncConnectTimeoutMs, 60 s, in its settings).
+ * Plan 5a, task 7: the block « Serveur » and the states of a paired PC. The block not paired (its fields: the address
+ * proposed, the code, this PC's name) is taken with « Portable » typed over the machine's name, so that the reference
+ * does not depend on the PC that takes it (R30): the capture mode can neither focus a field nor select its text, so these
+ * scenes go through DevTools. The block paired, the chip « Hors ligne » and the veil « Synchronisation… » need a server
+ * (R28): one of this machine is started (serveur-local.mjs: 127.0.0.1, a free port, a temporary folder), and the test
+ * base sent to it through the block, as the user pairs: no hook writes a token. The app is driven by DevTools (cdp.mjs),
+ * in its window out of the user's way, and each image taken by DevTools (Page.captureScreenshot) once the class of
+ * capture mode is set (`.capture`: the server's address, whose port changes, is not drawn), the focus taken from the
+ * field typed in and the pointer on the tabs' bar. Its base and profile (which holds the key of its token) are kept from
+ * one state to the next: not paired; paired; its server stopped; the app quit, then started again with its server still
+ * stopped, the veil's wait at its longest (syncConnectTimeoutMs, 60 s, in its settings), once its chip says « Hors
+ * ligne ». The names of the images taken go to `taken`: a failure on the way counts only the ones missing.
  */
-const PAIRED = ['serveur-jumele', 'pastille-hors-ligne', 'voile-synchronisation'];
-async function pairedCaptures(names) {
+const SERVER_SCENES = ['serveur-non-jumele', 'serveur-jumele', 'pastille-hors-ligne', 'voile-synchronisation'];
+async function serverCaptures(names, taken) {
   const { launch, sleep } = await import('./cdp.mjs');
-  const { chipSays, localServer, pairThrough } = await import('./serveur-local.mjs');
+  const { chipSays, closeSettings, localServer, openServerBlock, pairThrough, typeInBlock } = await import('./serveur-local.mjs');
   const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-')), profile = mkdtempSync(join(tmpdir(), 'cirrus-captures-profil-'));
   const server = await localServer(), env = { CIRRUS_TINYTEX: tinyTex };
-  let app = null, done = 0;
+  let app = null;
   const shoot = async (name) => {
     if (!names.includes(name)) return;
-    await app.page.evaluate(`document.documentElement.classList.add('capture')`);
+    await app.page.evaluate(`document.documentElement.classList.add('capture'); document.activeElement?.blur()`);
     await app.page.move(1000, 18);
     await sleep(1000);
     writeFileSync(join(out, `${name}.png`), await app.page.screenshot());
     console.log(`${name}.png`);
-    done++;
+    taken.push(name);
   };
   try {
     execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     fixHistoryTimes(data);
     app = await launch(data, profile, env);
     let page = app.page;
+    await openServerBlock(page);
+    await typeInBlock(page, 2, 'Portable');
+    await shoot('serveur-non-jumele');
     await pairThrough(page, server.url, server.code('Captures'), 'Portable');
     if (!(await page.until(`!!document.querySelector('.server-offer button')`, 10_000))) throw new Error('pas d’offre d’envoyer la base de test');
     const send = await page.centre('.server-offer button', '^Envoyer la base');
@@ -163,8 +168,7 @@ async function pairedCaptures(names) {
     const paired = `[...document.querySelectorAll('.server-block button')].some((b) => b.textContent === 'Dissocier ce PC')`;
     if (!(await page.until(paired, 30_000)) || !(await chipSays(page, 'À jour'))) throw new Error('la base de test n’est pas envoyée au serveur');
     await shoot('serveur-jumele');
-    const close = await page.centre('.settings .close', '×');
-    await page.click(close.x, close.y);
+    await closeSettings(page);
     await server.stop();
     if (!(await chipSays(page, 'Hors ligne'))) throw new Error('pas de pastille « Hors ligne » une fois le serveur arrêté');
     await shoot('pastille-hors-ligne');
@@ -173,17 +177,17 @@ async function pairedCaptures(names) {
     const file = join(data, 'settings.json');
     const settings = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
     writeFileSync(file, JSON.stringify({ ...settings, syncConnectTimeoutMs: 60_000 }), 'utf8');
-    rmSync(join(profile, 'DevToolsActivePort'), { force: true });
     app = await launch(data, profile, env);
     page = app.page;
     if (!(await page.until(`!!document.querySelector('.sync-veil')`))) throw new Error('pas de voile au démarrage d’une base jumelée dont le serveur est arrêté');
+    // Under the veil, the chip says « Connexion… » until the first attempt fails, then « Hors ligne ».
+    if (!(await chipSays(page, 'Hors ligne'))) throw new Error('pas de pastille « Hors ligne » sous le voile, le serveur arrêté');
     await shoot('voile-synchronisation');
   } finally {
     await app?.close();
     await server.close();
     for (const d of [data, profile]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
   }
-  return done;
 }
 
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
@@ -208,9 +212,9 @@ function fixHistoryTimes(dir) {
 }
 
 const chosen = only ? SCENES.filter((s) => only.includes(s.name)) : SCENES;
-const pairedChosen = only ? PAIRED.filter((n) => only.includes(n)) : PAIRED;
-if (only && chosen.length + pairedChosen.length !== only.length) {
-  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n) && !PAIRED.includes(n)).join(', ')}.`);
+const serverChosen = only ? SERVER_SCENES.filter((n) => only.includes(n)) : SERVER_SCENES;
+if (only && chosen.length + serverChosen.length !== only.length) {
+  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n) && !SERVER_SCENES.includes(n)).join(', ')}.`);
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -248,15 +252,15 @@ for (const s of chosen) {
     if (dropDir) rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
   }
 }
-let pairedDone = 0;
-if (pairedChosen.length > 0) {
+if (serverChosen.length > 0) {
+  const taken = [];
   try {
-    pairedDone = await pairedCaptures(pairedChosen);
+    await serverCaptures(serverChosen, taken);
   } catch (e) {
-    console.error(`captures d’un PC jumelé : échec (${e instanceof Error ? e.message : String(e)})`);
+    console.error(`captures du bloc « Serveur » et d’un PC jumelé : échec après ${taken.length} image(s) (${e instanceof Error ? e.message : String(e)})`);
   }
-  failed += pairedChosen.length - pairedDone;
+  failed += serverChosen.length - taken.length;
 }
-const total = chosen.length + pairedChosen.length;
+const total = chosen.length + serverChosen.length;
 console.log(`${total - failed} captures sur ${total} dans ${out}`);
 process.exit(failed > 0 ? 1 : 0);

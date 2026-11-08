@@ -12,7 +12,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { bibFileName, editNode } from '@cirrus/core';
 import { storeBytes } from '@cirrus/store';
 import { appDir, launch, sleep } from './cdp.mjs';
-import { chipSays, localServer, pairThrough, serverField, TITLE_PROBE, virtualPc } from './serveur-local.mjs';
+import { chipSays, closeSettings, localServer, pairThrough, serverField, TITLE_PROBE, virtualPc } from './serveur-local.mjs';
 
 // Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
 // wide enough to read it at about its real size beside its margin.
@@ -169,10 +169,6 @@ async function newNode(page, at, title, menu = { x: at.x - 150, y: at.y + 50 }) 
   await page.type(title);
   await page.press('Enter', 'Enter', 13);
 }
-const closeSettings = async (page) => {
-  const close = await page.centre('.settings .close', '×');
-  await page.click(close.x, close.y);
-};
 /** What the block says when pairing failed, for a failure's message. */
 const blockText = (page) => page.evaluate(`document.querySelector('.server-error')?.textContent ?? document.querySelector('.server-block')?.textContent ?? '(pas de bloc)'`);
 
@@ -235,6 +231,8 @@ const TWO_PCS = {
         if (!(await chipSays(page, 'À jour'))) throw new Error(`la pastille de A dit « ${await chipText(page)} »`);
         // A quits as the user does, by closing its window.
         if (!(await ctx.app.quit())) throw new Error('A ne se ferme pas');
+        const codeA = await ctx.app.exited;
+        if (codeA !== 0) throw new Error(`A se ferme avec le code ${codeA}`);
         ctx.app = null;
         // B: a new base; the server holds A's, so the pairing offers to take it (D7, R7).
         const env = { ...SYNC_VIEW, CIRRUS_NO_RELAUNCH: '1' };
@@ -250,13 +248,13 @@ const TWO_PCS = {
         // Taken, staged beside B's base; B quits instead of starting again (R27: the relaunch stays this script's).
         const code = await Promise.race([ctx.app.exited, sleep(30_000).then(() => null)]);
         if (code === null) throw new Error(`B ne quitte pas après la prise : ${await blockText(page)}`);
+        if (code !== 0) throw new Error(`B quitte avec le code ${code} après la prise`);
         await ctx.app.close();
         ctx.app = null;
         const staged = `${b.data}-nouvelle`;
         if (!existsSync(join(staged, 'complete.json'))) throw new Error('pas de base prise complète à côté de celle de B');
         // B started again as the relaunch would (its profile, which holds the key of its token): the base taken swapped
         // in before it opens, the old one kept beside it.
-        rmSync(join(b.profile, 'DevToolsActivePort'), { force: true });
         ctx.app = await launch(b.data, b.profile, env);
         page = ctx.app.page;
         const kept = readdirSync(tmpdir()).filter((n) => n.startsWith(`${basename(b.data)}-avant-jumelage-`));
@@ -1229,8 +1227,7 @@ const SCENARIOS = [
         await page.press('a', 'KeyA', 65, 2);
         await page.press('Backspace', 'Backspace', 8);
         // A node by the menu of the background, as the first scenario does it.
-        const settingsClose = await page.centre('.settings .close', '×');
-        await page.click(settingsClose.x, settingsClose.y);
+        await closeSettings(page);
         for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(250, 850, 'right');
         const item = await page.centre('.context-menu button', 'Nouveau nœud');
         await page.click(item.x, item.y);

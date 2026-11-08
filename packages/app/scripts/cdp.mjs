@@ -2,7 +2,7 @@
 // measures of plans 4c and 5a (mesures-annotations.mjs, mesures-synchro.mjs) and the captures of a paired PC
 // (captures.mjs). Each launch takes a base and a profile of its own, never the user's.
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,15 +10,19 @@ import { fileURLToPath } from 'node:url';
 export const appDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const electron = createRequire(import.meta.url)('electron');
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** For the measures: the value under which a share `q` of the sorted values falls. */
+export const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); return s.length === 0 ? Number.NaN : s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
 
 /** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…). */
 export async function launch(data, profile, more = {}) {
   // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/index.ts); the page is told it has it.
   const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
-  // Port 0: Chromium picks a free one, and writes it in the profile (DevToolsActivePort).
-  const child = spawn(electron, [appDir, `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: 'ignore' });
+  // Port 0: Chromium picks a free one, and writes it in the profile (DevToolsActivePort) — the file an earlier launch on
+  // the same profile left removed first, so that its port is never read.
   const portFile = join(profile, 'DevToolsActivePort');
+  rmSync(portFile, { force: true });
+  const child = spawn(electron, [appDir, `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: 'ignore' });
   let target;
   for (let i = 0; i < 120 && !target; i++) {
     await sleep(250);

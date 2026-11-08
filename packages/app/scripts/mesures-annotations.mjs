@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseBibtex } from '@cirrus/core';
-import { appDir, launch, sleep } from './cdp.mjs';
+import { appDir, launch, quantile, sleep } from './cdp.mjs';
 
 if (process.argv[2] === 'synchro') {
   const r = spawnSync(process.execPath, ['--expose-gc', join(appDir, 'scripts', 'mesures-synchro.mjs'), ...process.argv.slice(3)], { stdio: 'inherit' });
@@ -27,7 +27,6 @@ const PASSES = 3;
 const fixtures = join(appDir, '..', 'fixtures');
 const what = process.argv[2] ?? 'tout';
 const ms = (v) => (v === null || v === undefined ? '—' : `${Math.round(v)} ms`);
-const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); return s.length === 0 ? Number.NaN : s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
 
 /** A fresh test base, with the long annotated PDF if `reading`, and its settings; removed by `done`. */
 function testBase(reading, settings) {
