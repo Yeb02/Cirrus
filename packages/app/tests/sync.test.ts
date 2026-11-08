@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, checkState, createNode, createPlan, deleteEverywhere, editNode, type FileRef, groupOf, include } from '@cirrus/core';
+import { applyOp, checkState, createNode, createPlan, deleteEverywhere, editNode, type FileRef, groupOf, include, type RemoteUnit } from '@cirrus/core';
 import { filePath, LocalStore, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
 import { SyncClient, type SyncStatus } from '../src/main/sync/client.ts';
 import { fileSecrets, pair, SERVER_FILE, type ServerConfig, type TokenCipher } from '../src/main/sync/config.ts';
-import { Downloads, hasBlob } from '../src/main/sync/downloads.ts';
+import { DOWNLOADS_FILE, Downloads, hasBlob } from '../src/main/sync/downloads.ts';
 import { readEvents } from '../src/main/sync/events.ts';
 import { created, image, Lab, sleep, T0, TEST_PARAMS, until, type VirtualPc } from './support/virtualPc.ts';
 
@@ -345,6 +345,41 @@ test('fichiers : un .txt ajouté sur A arrive au magasin de B ; un PDF seulement
   expect(await b.client.fetchBlob(other.hash)).toBe(true);
 });
 
+test('des téléchargements interrompus par stop() (la veille) ou par la fermeture de l’app ne sont pas perdus : ils reprennent au démarrage suivant (R9)', async () => {
+  const { lab: l, a, b, P } = await twoPcs();
+  const list = join(b.dir, DOWNLOADS_FILE);
+  /** Six .txt files on a new node of A's. */
+  const sixFiles = (from: number) => {
+    const refs = Array.from({ length: 6 }, (_, i) => storeBytes(a.dir, `notes-${from + i}.txt`, bytes(`notes ${from + i}`)));
+    a.act((s) => createNode(s, { plan: P, title: `fichiers ${from}`, x: from * 100, y: 1200, k: 0, files: refs }));
+    return refs;
+  };
+  const here = (refs: FileRef[]) => refs.every((f) => existsSync(filePath(b.dir, f)));
+  const gets = () => b.net.count('GET', /^\/files\//);
+  // Asleep mid-download: four under way (syncDownloads), two queued; stopped, then started again, on the same client.
+  b.net.holdFiles();
+  let asked = gets();
+  const first = sixFiles(0);
+  await until(() => gets() === asked + 4);
+  await b.client.stop();
+  expect(first.some((f) => existsSync(filePath(b.dir, f)))).toBe(false);
+  expect((JSON.parse(readFileSync(list, 'utf8')) as { hashes: string[] }).hashes.sort()).toEqual(first.map((f) => f.hash).sort());
+  b.net.releaseFiles();
+  b.client.start();
+  await until(() => here(first));
+  // The app closed mid-download, then opened again: a new client on the same base reads the list back.
+  b.net.holdFiles();
+  asked = gets();
+  const second = sixFiles(6);
+  await until(() => gets() === asked + 4);
+  await b.restart();
+  await until(() => here(second));
+  // Nothing left to download: the list is gone.
+  await until(() => !existsSync(list));
+  await l.settle();
+  await converged(l, [a, b]);
+});
+
 test('le client arrêté entre l’acceptation et sa réponse, puis une réponse perdue : rien n’est doublé au serveur', async () => {
   const { lab: l, a, b, X, G } = await twoPcs();
   // Its acknowledgements held on the wire: the write stays pending at B when its client stops.
@@ -407,42 +442,82 @@ test('une horloge de PC en avance de 10 min : l’avertissement, et l’heure de
   expect(server.nodes.get(X)!.title).toBe('X par B');
 });
 
-test('la reconnexion espace ses essais de syncRetryMinMs à syncRetryMaxMs (horloge simulée), et repart du plus court après un branchement', async () => {
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
-  const dir = tempDir(), store = LocalStore.open(dir, { pc: 'pc-r' });
-  const hellos: number[] = [], statuses: SyncStatus[] = [];
-  let up = false;
-  const fake: typeof fetch = async (input) => {
-    const path = new URL(String(input)).pathname;
-    if (path === '/hello') hellos.push(Date.now());
-    if (!up) throw new TypeError('fetch failed');
-    if (path === '/hello') return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: true });
-    // A stream that opens, then ends at once.
-    if (path === '/events') return new Response(new ReadableStream({ start(c) { c.close(); } }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-    throw new Error(`requête inattendue : ${path}`);
-  };
+/**
+ * A client whose server is a fake `fetch`, on a base of its own, for the tests under a simulated clock: reconnections
+ * from 1 s to 30 s; each /hello's time logged.
+ */
+function fakeClient(f: typeof fetch, reconcile: (incoming: RemoteUnit[]) => Promise<void> = async () => {}) {
+  const dir = tempDir(), store = LocalStore.open(dir, { pc: 'pc-r' }), statuses: SyncStatus[] = [];
   const client = new SyncClient({
-    fetch: fake, store, storeDir: dir, secrets: { read: () => ({ url: 'http://127.0.0.1:7310', token: 't'.repeat(43), name: 'R' }), write: () => {} },
-    reconcile: async () => {}, now: () => Date.now(), params: () => ({ ...TEST_PARAMS, syncRetryMinMs: 1000, syncRetryMaxMs: 30_000 }), status: (s) => { statuses.push(s); },
+    fetch: f, store, storeDir: dir, secrets: { read: () => ({ url: 'http://127.0.0.1:7310', token: 't'.repeat(43), name: 'R' }), write: () => {} },
+    reconcile, now: () => Date.now(), params: () => ({ ...TEST_PARAMS, syncRetryMinMs: 1000, syncRetryMaxMs: 30_000 }), status: (s) => { statuses.push(s); },
+  });
+  return { client, store, statuses };
+}
+
+test('la reconnexion espace ses essais de syncRetryMinMs à syncRetryMaxMs (horloge simulée) ; arrêtée, elle cesse', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const hellos: number[] = [];
+  const { client, store, statuses } = fakeClient(async (input) => {
+    if (new URL(String(input)).pathname === '/hello') hellos.push(Date.now());
+    throw new TypeError('fetch failed');
   });
   const t0 = Date.now();
   client.start();
   await vi.advanceTimersByTimeAsync(91_000);
   expect(hellos.map((t) => t - t0)).toEqual([0, 1000, 3000, 7000, 15_000, 31_000, 61_000, 91_000]);
-  up = true;
-  await vi.advanceTimersByTimeAsync(30_000);
-  up = false;
-  await vi.advanceTimersByTimeAsync(3000);
-  const gaps = hellos.slice(1).map((t, i) => t - hellos[i]);
-  expect(gaps).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000, 30_000, 30_000, 1000, 2000]);
-  expect(statuses[0]).toEqual({ state: 'connecting' });
-  expect(statuses).toContainEqual({ state: 'live', pending: 0 });
-  expect(statuses.at(-1)).toEqual({ state: 'offline', pending: 0 });
+  expect(statuses).toEqual([{ state: 'connecting' }, { state: 'offline', pending: 0 }]);
   await client.stop();
-  const n = hellos.length;
   await vi.advanceTimersByTimeAsync(120_000);
-  expect(hellos).toHaveLength(n);
+  expect(hellos).toHaveLength(8);
   expect(statuses.at(-1)).toEqual({ state: 'off' });
+  store.close();
+});
+
+test('un flux qui s’ouvre puis se ferme aussitôt ne remet pas l’attente à zéro ; une connexion qui a fait ses preuves, si (revue de la tâche 3, I1)', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const hellos: number[] = [], reconciled: number[] = [];
+  /** What the server's stream does: end at once, stay open, bring one write then end 200 ms later; or the server is down. */
+  let mode: 'closes' | 'holds' | 'unit' | 'down' = 'closes';
+  let held: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const unit = { unit: 'u1', action: 'a1', label: 'Créer le plan « P »', at: 0, pc: 'pc-x', ops: [{ t: 'plan', before: null, after: { id: 'p1', name: 'P', type: 'plan' } }], seq: 1 };
+  const { client, store, statuses } = fakeClient(async (input) => {
+    const path = new URL(String(input)).pathname, m = mode;
+    if (path === '/hello') hellos.push(Date.now());
+    if (m === 'down') throw new TypeError('fetch failed');
+    if (path === '/hello') return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: false });
+    if (path !== '/events') throw new Error(`requête inattendue : ${path}`);
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        if (m === 'closes') c.close();
+        else if (m === 'holds') held = c;
+        else {
+          c.enqueue(bytes(`id: 1\nevent: unit\ndata: ${JSON.stringify(unit)}\n\n`));
+          setTimeout(() => c.close(), 200);
+        }
+      },
+    });
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }, async (incoming) => { reconciled.push(incoming.length); });
+  const t0 = Date.now();
+  client.start();
+  // Streams that open then end at once: the pauses grow as if the server were down.
+  await vi.advanceTimersByTimeAsync(15_000);
+  // A stream that stays open syncRetryMaxMs: the connection has proven itself, the next pause is the shortest.
+  mode = 'holds';
+  await vi.advanceTimersByTimeAsync(16_000 + 30_000);
+  mode = 'closes';
+  held!.close();
+  await vi.advanceTimersByTimeAsync(4000);
+  // A reconciliation written: proven too.
+  mode = 'unit';
+  await vi.advanceTimersByTimeAsync(4000);
+  mode = 'down';
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(hellos.map((t) => t - t0)).toEqual([0, 1000, 3000, 7000, 15_000, 31_000, 62_000, 64_000, 68_000, 69_200, 71_200]);
+  expect(reconciled).toEqual([1]);
+  expect(statuses).toContainEqual({ state: 'live', pending: 0 });
+  await client.stop();
   store.close();
 });
 

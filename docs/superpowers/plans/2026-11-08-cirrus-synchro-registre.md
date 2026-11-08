@@ -220,7 +220,7 @@ Décisions du contrôleur avant la tâche 1 (journal du contrôleur, `.superpowe
   - `client.ts` : `SyncClient`, `SyncDeps`, `SyncParams` et `SyncStatus` ;
   - `events.ts` : `readEvents`, la lecture d'un flux SSE ;
   - `config.ts` : `ServerConfig`, `SecretStore`, `fileSecrets` (`serveur.json`, le jeton chiffré par un `TokenCipher`), `serverUrl` et `pair` ;
-  - `downloads.ts` : `Downloads`, `filesToSend`, `filesToFetch`, `isPdf` et `hasBlob`.
+  - `downloads.ts` : `Downloads`, `filesToSend`, `filesToFetch`, `isPdf`, `isHash`, `hasBlob` et `DOWNLOADS_FILE` (la liste des téléchargements d'office restant à faire, R9).
 - **Tests :** `packages/app/tests/support/virtualPc.ts` (`Lab`, `VirtualPc`, `Net`) et `packages/app/tests/sync.test.ts`. L'app prend `@cirrus/server` en dépendance de développement.
 - **Cœur :** `MAX_BODY_BYTES`, `MAX_UNITS_PER_REQUEST` et `MAX_HASHES_PER_REQUEST` passent dans `sync.ts` ; le `bounds.ts` du serveur les réexporte.
 - **Magasin :** `LocalStore.pendingCount()`.
@@ -266,10 +266,17 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
   - Coût si faux : un 4xx passager arrête la synchro jusqu'au prochain `start()`.
 - Ruling: **la reconnexion** :
   - le premier essai après `start()` montre « connecting ». Les suivants restent « offline » jusqu'à ce que l'un réussisse : la pastille ne clignote pas ;
-  - le premier nouvel essai part après `syncRetryMinMs`, puis l'attente double, jusqu'à `syncRetryMaxMs`. Elle repart du plus court dès qu'un flux s'ouvre. Pas d'aléa : un serveur ne sert que quelques PC ;
+  - le premier nouvel essai part après `syncRetryMinMs`, puis l'attente double, jusqu'à `syncRetryMaxMs`. Pas d'aléa : un serveur ne sert que quelques PC ;
+  - l'attente repart du plus court quand une connexion a fait ses preuves : une réconciliation écrite, ou un flux resté ouvert `syncRetryMaxMs`. Un flux qui s'ouvre ne suffit pas (revue de la tâche 3, Important 1) :
+    - un flux que le serveur ferme aussitôt, ou une réconciliation qui échoue toujours, ramènerait sinon le client toutes les `syncRetryMinMs`, sans fin ;
+    - à chaque retour, il relirait tout depuis `last_server_seq`, et la pastille clignoterait ;
   - un `syncRetryMinMs` au-dessus de `syncRetryMaxMs` est lu comme `syncRetryMaxMs` ;
   - `start()`, hors ligne ou refusé, réessaie tout de suite (le clic sur la pastille), sans remettre l'attente à zéro.
-  - Coût si faux : le libellé d'un état.
+  - Options pour la preuve :
+    - le flux ouvert (le premier choix, écarté par la revue) ;
+    - le rattrapage atteint : un serveur dont la lecture du journal échoue après l'ouverture du flux bouclerait encore ;
+    - une réconciliation écrite, ou `syncRetryMaxMs` de connexion (choix) : un progrès réel, ou une connexion qui tient. Une connexion calme qui tombe après une heure repart donc du plus court.
+  - Coût si faux : après une coupure, le premier essai d'une connexion qui n'a encore rien reçu peut attendre jusqu'à `syncRetryMaxMs`.
 - Ruling: **`behind` compte des numéros du serveur** (des lignes), pas des écritures : le dernier numéro donné par `/hello`, moins `last_server_seq`.
   - Coût si faux : une unité d'affichage.
 - Ruling: **`pending` compte les écritures pas encore accusées**, y compris celles que le serveur a acceptées et dont l'accusé n'est pas revenu. `LocalStore.pendingCount()` les compte comme `pendingUnits` les groupe, sur l'index des lignes en attente, sans lire leurs opérations.
@@ -295,9 +302,27 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
     - Le corps est lu du disque au fil de l'envoi (`fs.openAsBlob`), jamais chargé en entier ;
   - **la réception :** seulement les fichiers qu'une écriture reçue ajoute par rapport à l'« avant ». Un PDF se reconnaît à l'extension `.pdf`, sans tenir compte de la casse ;
   - **la taille :** au plus ce que le serveur annonce (`Content-Length`, qu'il envoie toujours), puis l'empreinte est vérifiée (`receiveBlob`). Une réponse sans longueur est refusée ;
-  - **un téléchargement coupé par le réseau** est repris à la connexion suivante. Un fichier absent du serveur, ou aux octets faux, ne l'est pas ;
+  - **un téléchargement d'office coupé par le réseau, ou par `stop()`,** est repris à la connexion suivante, et au démarrage suivant (R9, plus bas). Un fichier absent du serveur, ou aux octets faux, ne l'est pas ;
   - **`fetchBlob`** part tout de suite, hors de la limite `syncDownloads` (un lecteur attend), ou rejoint le téléchargement en cours du même fichier.
+    - Un fichier en file d'attente qu'on demande ainsi reste un téléchargement d'office : repris s'il échoue.
+    - Un PDF demandé qui échoue, hors ligne, ne l'est pas : il sera redemandé à sa prochaine ouverture (D6). Avant la revue, tout échec était repris d'office, PDF compris.
   - Coût si faux : un fichier absent jusqu'à son ouverture, que `cirrus-file:` ira chercher (tâche 4).
+- Ruling: **R9 du contrôleur, mis en œuvre : les téléchargements d'office interrompus par `stop()` (la veille) ou par la fermeture de l'app ne sont pas perdus** (revue de la tâche 3, Important 2).
+  - **La liste :** ceux qui restent à faire (en file, en cours, coupés) sont gardés à côté de la base, dans `downloads.json` (`DOWNLOADS_FILE`, `{ "hashes": [...] }`).
+    - Elle s'écrit dans un fichier temporaire, ensuite renommé, comme `settings.json`.
+    - Elle est relue par le `Downloads` du prochain client sur la même base, et remise en file à l'ouverture du flux (`retry`).
+  - **Quand elle s'écrit :**
+    - quand `want` met en file au moins un fichier nouveau ;
+    - à `stop()`, exacte : ce qui était en file ou en cours, moins ce qui est arrivé avant l'arrêt ;
+    - elle est effacée quand il ne reste plus rien (file, en cours, coupés).
+  - **Son contenu :** elle peut nommer un fichier arrivé depuis, si l'app s'est arrêtée brutalement. `want` le saute alors : il est déjà au magasin, ce qui coûte un `existsSync`.
+  - **Son coût :** une écriture proportionnelle à ce qui reste à télécharger, à chaque lot reçu qui apporte des fichiers nouveaux. Aucune lecture de la base.
+  - **Une liste illisible** est signalée et ignorée. Un échec d'écriture est signalé, et les téléchargements continuent.
+  - Options :
+    - une recherche des fichiers absents au démarrage : elle lirait toute la base ;
+    - accepter la perte : les fichiers resteraient absents jusqu'à leur ouverture, et hors ligne, pour toujours ;
+    - une liste gardée (choix du contrôleur).
+  - Coût si faux : un petit fichier de plus à côté de la base, réécrit à chaque lot qui apporte des fichiers.
 - Ruling: **l'horloge** :
   - l'écart est l'heure du serveur moins le milieu de l'échange `/hello`, arrondi à la milliseconde. Il est mesuré à chaque `/hello` ;
   - il est gardé en mémoire, et vaut 0 avant le premier `/hello` du processus : une écriture faite hors ligne avant toute connexion garde l'heure du PC ;

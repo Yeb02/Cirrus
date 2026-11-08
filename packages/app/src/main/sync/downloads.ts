@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { FileRef, Op, Unit } from '@cirrus/core';
 import { BlobError, filePath, receiveBlob } from '@cirrus/store';
 
@@ -61,33 +62,54 @@ async function* chunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Ar
 /** GET /files/<hash> on the paired server, with its token; null without a server. */
 export type BlobRequest = (hash: string, signal: AbortSignal) => Promise<Response> | null;
 
+/** A hash as the store names its blobs: 64 lower-case hexadecimal digits. */
+export const isHash = (h: unknown): h is string => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h);
+
+/**
+ * The eager downloads still to do — queued, under way, broken by the network — kept beside the base (R9): a stop
+ * (sleep) or a quit loses none. `{ hashes: [...] }`; read back by the next Downloads on the same base.
+ */
+export const DOWNLOADS_FILE = 'downloads.json';
+
 /**
  * The downloads: those wanted (the files of received records) queued, `limit()` of them at once; one asked for now
- * (fetch: a PDF opened, a file absent) starts at once, outside the limit, or joins the same one under way. A download
- * the network broke is tried again at the next connection (retry); one the server does not have, or whose bytes are not
- * those of their hash, is not.
+ * (fetch: a PDF opened, a file absent) starts at once, outside the limit, or joins the same one under way. An eager
+ * download the network broke, or that a stop interrupted, is tried again at the next connection (retry), after a
+ * restart too (DOWNLOADS_FILE); one the server does not have, or whose bytes are not those of their hash, is not.
  */
 export class Downloads {
   private readonly storeDir: string;
   private readonly request: BlobRequest;
   private readonly limit: () => number;
+  private readonly file: string;
   /** The queued hashes, in order (a Set: queued once, taken from the front). */
   private readonly queue = new Set<string>();
   private readonly running = new Map<string, Promise<boolean>>();
+  /** The eager downloads under way (the others were asked for: fetch). */
+  private readonly eager = new Set<string>();
+  /** The eager downloads to try again at the next connection. */
   private readonly failed = new Set<string>();
   private abort = new AbortController();
-  /** The queued downloads running, within `limit()`. */
-  private active = 0;
+  /** Whether DOWNLOADS_FILE may hold hashes: found at the start, or written since it was last removed. */
+  private saved = false;
 
   constructor(storeDir: string, request: BlobRequest, limit: () => number) {
     this.storeDir = storeDir;
     this.request = request;
     this.limit = limit;
+    this.file = join(storeDir, DOWNLOADS_FILE);
+    for (const h of this.load()) this.failed.add(h);
   }
 
-  /** Queues the blobs of `hashes` that the store does not hold. */
+  /** Queues the blobs of `hashes` that the store does not hold; the list beside the base written when that adds any. */
   want(hashes: Iterable<string>): void {
-    for (const h of hashes) if (!this.queue.has(h) && !this.running.has(h) && !hasBlob(this.storeDir, h)) this.queue.add(h);
+    let added = false;
+    for (const h of hashes) {
+      if (this.queue.has(h) || this.running.has(h) || hasBlob(this.storeDir, h)) continue;
+      this.queue.add(h);
+      added = true;
+    }
+    if (added) this.save();
     this.pump();
   }
 
@@ -96,27 +118,35 @@ export class Downloads {
     if (hasBlob(this.storeDir, hash)) return Promise.resolve(true);
     const under = this.running.get(hash);
     if (under) return under;
-    this.queue.delete(hash);
-    return this.start(hash, false);
+    // Queued, it stays an eager download (tried again if it breaks), started now, outside the limit.
+    return this.start(hash, this.queue.delete(hash));
   }
 
-  /** The downloads the network broke, queued again (a connection is back). */
+  /** The eager downloads broken, interrupted or left at the last quit, queued again (a connection is back). */
   retry(): void {
     const hashes = [...this.failed];
     this.failed.clear();
     this.want(hashes);
+    this.tidy();
   }
 
-  /** Every download stopped and awaited, the queue emptied. */
+  /**
+   * Every download stopped and awaited. The eager ones queued or interrupted are not dropped: kept for the next
+   * connection, and in the list beside the base for the next start (R9).
+   */
   async stop(): Promise<void> {
     this.abort.abort();
+    for (const h of [...this.queue, ...this.eager]) this.failed.add(h);
     this.queue.clear();
     await Promise.allSettled([...this.running.values()]);
+    // One that ended before its abort is there: done.
+    for (const h of this.failed) if (hasBlob(this.storeDir, h)) this.failed.delete(h);
+    this.save();
     this.abort = new AbortController();
   }
 
   private pump(): void {
-    while (this.active < Math.max(1, this.limit())) {
+    while (this.eager.size < Math.max(1, this.limit())) {
       const next = this.queue.values().next();
       if (next.done) return;
       this.queue.delete(next.value);
@@ -124,29 +154,30 @@ export class Downloads {
     }
   }
 
-  private start(hash: string, queued: boolean): Promise<boolean> {
-    if (queued) this.active++;
-    const p = this.download(hash).finally(() => {
+  private start(hash: string, eager: boolean): Promise<boolean> {
+    if (eager) this.eager.add(hash);
+    const p = this.download(hash, eager).finally(() => {
       this.running.delete(hash);
-      if (queued) {
-        this.active--;
+      if (eager) {
+        this.eager.delete(hash);
         this.pump();
+        this.tidy();
       }
     });
     this.running.set(hash, p);
     return p;
   }
 
-  private async download(hash: string): Promise<boolean> {
+  private async download(hash: string, eager: boolean): Promise<boolean> {
     const signal = this.abort.signal;
     try {
       const res = await this.request(hash, signal);
       if (!res) return false;
-      const size = Number(res.headers.get('content-length'));
+      const length = res.headers.get('content-length'), size = length === null ? Number.NaN : Number(length);
       if (res.status !== 200 || !res.body || !Number.isSafeInteger(size) || size < 0) {
         await res.body?.cancel().catch(() => {});
         // Absent from the server (404), or a server that refuses (a token, a format): not tried again; its own failure is.
-        if (res.status >= 500) this.failed.add(hash);
+        if (res.status >= 500 && eager) this.failed.add(hash);
         return false;
       }
       // The bytes announced at most, checked against the hash before anything is kept.
@@ -155,10 +186,55 @@ export class Downloads {
     } catch (e) {
       if (e instanceof BlobError) {
         console.warn(`Fichier ${hash} reçu du serveur refusé : ${e.message}`);
-      } else if (!signal.aborted) {
+      } else if (!signal.aborted && eager) {
         this.failed.add(hash);
       }
       return false;
     }
+  }
+
+  /** The list left by the last run on this base (none: empty); an unreadable one is reported and ignored. */
+  private load(): string[] {
+    let text: string;
+    try {
+      text = readFileSync(this.file, 'utf8');
+    } catch {
+      return [];
+    }
+    this.saved = true;
+    try {
+      const hashes = (JSON.parse(text) as { hashes?: unknown }).hashes;
+      if (Array.isArray(hashes)) return hashes.filter(isHash);
+    } catch {
+      // reported below
+    }
+    console.warn(`Liste des téléchargements illisible (${DOWNLOADS_FILE}) : ignorée.`);
+    return [];
+  }
+
+  /**
+   * Writes the eager downloads still to do beside the base (a temporary file renamed: a crash never leaves half a file),
+   * or removes the list when there are none. Costs what is pending. The list may name a file done since: the next
+   * want skips it (in the store already).
+   */
+  private save(): void {
+    const hashes = [...new Set([...this.queue, ...this.eager, ...this.failed])];
+    try {
+      if (hashes.length > 0) {
+        const tmp = `${this.file}.${process.pid}.tmp`;
+        writeFileSync(tmp, JSON.stringify({ hashes }), 'utf8');
+        renameSync(tmp, this.file);
+      } else if (this.saved) {
+        rmSync(this.file, { force: true });
+      }
+      this.saved = hashes.length > 0;
+    } catch (e) {
+      console.warn(`Liste des téléchargements non enregistrée (${DOWNLOADS_FILE}) : ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** The list removed once no eager download remains. */
+  private tidy(): void {
+    if (this.saved && this.queue.size === 0 && this.eager.size === 0 && this.failed.size === 0) this.save();
   }
 }

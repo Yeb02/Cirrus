@@ -68,6 +68,8 @@ export class Net {
   corruptBlobs = false;
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
   private gate: Deferred | null = null;
+  /** Holds the downloads (GET /files/<hash>) until released, or until their request is aborted. */
+  private filesGate: Deferred | null = null;
   /** The bytes the event stream still passes before it is cut (null: not armed). */
   private cutIn: number | null = null;
 
@@ -76,6 +78,14 @@ export class Net {
   release(): void {
     const g = this.gate;
     this.gate = null;
+    g?.resolve();
+  }
+
+  holdFiles(): void { this.filesGate ??= deferred(); }
+
+  releaseFiles(): void {
+    const g = this.filesGate;
+    this.filesGate = null;
     g?.resolve();
   }
 
@@ -89,6 +99,18 @@ export class Net {
     const url = new URL(input instanceof Request ? input.url : String(input)), method = init?.method ?? 'GET';
     this.requests.push({ method, path: url.pathname });
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
+    if (method === 'GET' && url.pathname.startsWith('/files/')) {
+      const signal = init?.signal ?? undefined;
+      while (this.filesGate) {
+        const gate = this.filesGate.promise;
+        await new Promise<void>((resolve) => {
+          void gate.then(resolve);
+          signal?.addEventListener('abort', () => resolve(), { once: true });
+          if (signal?.aborted) resolve();
+        });
+        signal?.throwIfAborted();
+      }
+    }
     const res = await fetch(input, init);
     if (url.pathname === '/events' && res.ok && res.body) return new Response(this.stream(res.body), { status: res.status, headers: res.headers });
     if (url.pathname === '/units' && method === 'POST' && res.ok) {

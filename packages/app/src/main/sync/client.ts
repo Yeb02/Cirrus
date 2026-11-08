@@ -6,7 +6,7 @@ import {
 import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { SecretStore, ServerConfig } from './config.ts';
-import { Downloads, filesToFetch, filesToSend, hasBlob } from './downloads.ts';
+import { Downloads, filesToFetch, filesToSend, hasBlob, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
 
 // The main process's sync client (plan 5a, task 3, D2 to D8). It sends this PC's pending writes to the server, in
@@ -61,7 +61,6 @@ export interface SyncDeps {
 /** The format headers of /hello (D10): the server refuses another protocol, schema or snapshot version. */
 const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
 const JSON_BODY = { 'Content-Type': 'application/json' };
-const HASH = /^[0-9a-f]{64}$/;
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -116,6 +115,8 @@ class Connection {
   batchLimit = MAX_UNITS_PER_REQUEST;
   /** The receive window under way. */
   timer: ReturnType<typeof setTimeout> | null = null;
+  /** Running from the stream's opening: once it fires, the connection has proven itself (the backoff starts again from the shortest pause). */
+  proof: ReturnType<typeof setTimeout> | null = null;
   /** The run: the hello, the stream, then the sender awaited. */
   done: Promise<void> = Promise.resolve();
   /** flush's waits: resolved once the sender has nothing left to send. */
@@ -166,7 +167,9 @@ class Connection {
   close(): void {
     this.abort.abort();
     if (this.timer !== null) clearTimeout(this.timer);
+    if (this.proof !== null) clearTimeout(this.proof);
     this.timer = null;
+    this.proof = null;
     this.poke();
     this.settled();
   }
@@ -241,7 +244,7 @@ export class SyncClient {
    * checked against its hash; false when it could not be had (no server, offline, absent there, wrong bytes).
    */
   fetchBlob(hash: string): Promise<boolean> {
-    return HASH.test(hash) ? this.downloads.fetch(hash) : Promise.resolve(false);
+    return isHash(hash) ? this.downloads.fetch(hash) : Promise.resolve(false);
   }
 
   /** The server's clock minus this PC's, measured at the last hello (0 before): a write's time is now() + clockOffset(). */
@@ -306,7 +309,12 @@ export class SyncClient {
     if (!res.body) throw new Error('Flux du serveur sans corps.');
     conn.received = from;
     conn.open = true;
-    this.retryDelay = 0;
+    // Opened is not proven: a stream the server ends at once, or a reconciliation that always fails, would otherwise
+    // bring the client back every syncRetryMinMs, forever (review of task 3, I1).
+    conn.proof = setTimeout(() => {
+      conn.proof = null;
+      this.retryDelay = 0;
+    }, this.deps.params().syncRetryMaxMs);
     this.downloads.retry();
     this.progress(conn);
     started(this.send(conn));
@@ -355,6 +363,8 @@ export class SyncClient {
       } catch (e) {
         throw e instanceof SyncDivergedError ? new Refusal(e.message, true) : e;
       }
+      // A reconciliation written: the connection has proven itself.
+      this.retryDelay = 0;
       const at = store.lastServerSeq();
       for (const [unit, seq] of conn.accepted) if (seq <= at) conn.accepted.delete(unit);
       this.downloads.want(filesToFetch(incoming));
@@ -502,7 +512,10 @@ export class SyncClient {
       : undefined;
   }
 
-  /** The next attempt, after a pause twice the last one, from syncRetryMinMs to syncRetryMaxMs (D8). */
+  /**
+   * The next attempt, after a pause twice the last one, from syncRetryMinMs to syncRetryMaxMs (D8); the shortest again
+   * once a connection has proven itself: a reconciliation written, or its stream open for syncRetryMaxMs.
+   */
   private retryLater(): void {
     const p = this.deps.params(), shortest = Math.max(1, Math.min(p.syncRetryMinMs, p.syncRetryMaxMs)), longest = Math.max(shortest, p.syncRetryMaxMs);
     this.retryDelay = this.retryDelay === 0 ? shortest : Math.min(longest, this.retryDelay * 2);
