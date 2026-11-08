@@ -4,12 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalStore, filePath } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
-import { fileResponse } from '../src/main/files.ts';
+import { cleanCopies, fileResponse, openFailure, openTargetFetched } from '../src/main/files.ts';
 import { SyncClient } from '../src/main/sync/client.ts';
 import { fileSecrets } from '../src/main/sync/config.ts';
 import { fileUrl } from '../src/renderer/files/kind.ts';
 import { absentVersion, blobSize, NotDownloadedError, ReadError, readHead } from '../src/renderer/files/read.ts';
-import { PLAIN, TEST_PARAMS } from './support/virtualPc.ts';
+import { readFileSync } from 'node:fs';
+import { createNode, createPlan } from '@cirrus/core';
+import { storeBytes } from '@cirrus/store';
+import { created, Lab, PLAIN, TEST_PARAMS, until } from './support/virtualPc.ts';
 
 // cirrus-file: with a server (plan 5a, task 4, D6): a blob absent from the store — a PDF at its first reading — is
 // fetched from the server (SyncClient.fetchBlob), checked against its hash, kept, then served; offline, 503; a
@@ -142,4 +145,37 @@ test('revue, Minor 11 : deux lectures du même PDF absent en même temps : un se
   const [a, b] = await Promise.all([get(fileUrl(REF)), get(fileUrl(REF), 'bytes=0-3')]);
   expect([a.status, b.status]).toEqual([200, 206]);
   expect(net.requests).toHaveLength(1);
+});
+
+test('R14 : l’ouverture par l’application du système d’un PDF absent, jumelé, le télécharge d’abord (vérifié, une fois pour deux ouvertures), puis ouvre sa copie ; hors ligne, « pas encore téléchargé : serveur injoignable » ; sans serveur, comme avant', async () => {
+  const lab = await Lab.start();
+  const root = mkdtempSync(join(tmpdir(), 'cirrus-ouverts-'));
+  try {
+    // A adds two PDFs to a node; the server has them. B (its client stopped: fetchBlob needs none) has neither.
+    const a = await lab.pc('pc-a'), b = await lab.pc('pc-b', { start: false });
+    const pdf = storeBytes(a.dir, 'Article.pdf', PDF), later = storeBytes(a.dir, 'Ancien.pdf', new TextEncoder().encode('%PDF-1.4\n% ancienne version\n'));
+    const lobby = created(a.act((s) => { const p = createPlan(s, 'Lobby', 'lobby'); return p; }), 'plan');
+    created(a.act((s) => createNode(s, { plan: lobby, title: 'Article', x: 0, y: 0, k: 0, files: [pdf, later] })), 'node');
+    await lab.settle([a]);
+    const fetchB = (h: string) => b.client.fetchBlob(h);
+    expect(existsSync(filePath(b.dir, pdf))).toBe(false);
+    // Two openings at once: one download, checked, then the read-only copy.
+    const [one, two] = await Promise.all([openTargetFetched(b.dir, pdf, root, fetchB), openTargetFetched(b.dir, pdf, root, fetchB)]);
+    expect(one).toEqual(two);
+    expect(one.shown).toBe('app');
+    expect(new Uint8Array(readFileSync(one.path))).toEqual(PDF);
+    expect(existsSync(filePath(b.dir, pdf))).toBe(true);
+    expect(b.net.count('GET', `/files/${pdf.hash}`)).toBe(1);
+    // Offline: said as the reader says it, nothing copied.
+    await lab.stopServer();
+    const offline = await openTargetFetched(b.dir, later, root, fetchB).catch((e: unknown) => e);
+    expect(openFailure(later.name, offline)).toBe('PDF pas encore téléchargé : serveur injoignable.');
+    // Without a server paired: as in plan 4c.
+    const alone = await openTargetFetched(b.dir, later, root, null).catch((e: unknown) => e);
+    expect(openFailure(later.name, alone)).toBe(`Impossible d’ouvrir « ${later.name} » : le fichier manque dans la base.`);
+  } finally {
+    cleanCopies(root);
+    rmSync(root, { recursive: true, force: true });
+    await lab.close();
+  }
 });

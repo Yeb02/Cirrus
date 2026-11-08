@@ -10,7 +10,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, screen
 import { dataDir, keepSnapshot, loadPayload, openBase, pcId, saveSnapshot } from './base.ts';
 import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { bibPickOf, readBib } from './bib.ts';
-import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTarget, storeText, storeTexts } from './files.ts';
+import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTargetFetched, storeText, storeTexts } from './files.ts';
 import { PdfCache } from './latex/cache.ts';
 import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
@@ -21,8 +21,8 @@ import { type FetchFn, importPublication, requestFetch } from './publications/fe
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings, writeSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
-import { SyncHost } from './sync/host.ts';
-import { appWindows, tokenCipher, watchWindow, wireSync } from './sync/wire.ts';
+import { SyncHost, watchWindow } from './sync/host.ts';
+import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
@@ -269,11 +269,12 @@ ipcMain.handle('cirrus:bib:pick', async (e) => {
   return chosen.canceled || chosen.filePaths.length === 0 ? null : readBib(chosen.filePaths[0]);
 });
 // A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
-// instead, never run (plan 4a, D5). Failures reach the user in French, their cause in the console.
+// instead, never run (plan 4a, D5). With a server paired, a file the store lacks is downloaded first (plan 5a, R14).
+// Failures reach the user in French, their cause in the console.
 ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
   const name = typeof ref?.name === 'string' ? ref.name : '';
   try {
-    const { path, shown } = openTarget(dir, ref, copies);
+    const { path, shown } = await openTargetFetched(dir, ref, copies, sync?.blobFetcher() ?? null);
     if (shown === 'folder') shell.showItemInFolder(path);
     else {
       const error = await shell.openPath(path);

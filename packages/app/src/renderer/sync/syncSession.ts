@@ -110,8 +110,8 @@ export class SyncSession {
   /**
    * Pairs this PC (the block « Serveur »): the main process pairs; the session then takes every pending write, read in
    * its queue (none written meanwhile), and the synchronisation starts. The refusal, in French. Paired by the main
-   * process, it is done, whatever follows: a start that fails is said, and the chip's « Réessayer » or the next launch
-   * starts it (review of task 4, Minor 3).
+   * process, it is done, whatever follows (review of task 4, Minor 3): a start that fails is said, and only the next
+   * launch starts it — the main process never started the client, so there is no chip, and nothing to try again.
    */
   async pair(url: string, code: string, name: string): Promise<PairResult> {
     const r = await this.deps.bridge.syncPair(url, code, name);

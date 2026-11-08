@@ -4,8 +4,8 @@ import type { TokenCipher } from './config.ts';
 import type { HostWindow, ReconcileOutcome, SyncHost, SyncIncoming } from './host.ts';
 
 // The synchronisation's wires to Electron (plan 5a, task 4): its IPC, the window it speaks to, the token's encryption
-// (safeStorage, DPAPI) and sleep (powerMonitor). Everything else is SyncHost's (host.ts), which the tests run without
-// Electron.
+// (safeStorage, DPAPI) and sleep (powerMonitor). Everything else is SyncHost's (host.ts, watchWindow too), which the
+// tests run without Electron.
 
 /** The token encrypted by Windows for this user (D3): serveur.json never holds it in clear. */
 export const tokenCipher: TokenCipher = {
@@ -48,9 +48,3 @@ export function wireSync(host: SyncHost): void {
   powerMonitor.on('resume', () => { void host.resume(); });
 }
 
-/** A window's page gone or replaced: what it was reconciling is abandoned (the client tries again later). */
-export function watchWindow(win: BrowserWindow, host: SyncHost): void {
-  win.on('closed', () => host.detach());
-  win.webContents.on('render-process-gone', () => host.detach());
-  win.webContents.on('did-start-navigation', (e) => { if (e.isMainFrame && !e.isSameDocument) host.detach(); });
-}

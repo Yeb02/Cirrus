@@ -422,6 +422,7 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
   - Options : recharger la page (`location.reload`), plus simple, mais on perdrait les panneaux ouverts et le texte tapé.
   - Coût si faux : nul.
 - Ruling: **une fenêtre qui s'en va** (fermée, son rendu perdu, sa page rechargée : `did-start-navigation` du cadre principal) voit ses réconciliations rejetées (`detach`). `stop()` ne les attend donc jamais. Sans fenêtre, une réception est rejetée tout de suite.
+  - Revu au tour 2 de la revue (Minor 1) : `detach` suit une navigation du cadre principal **faite** (`did-navigate`), plus une navigation commencée (`did-start-navigation`). Une navigation que `will-navigate` refuse finit avant d'être faite : la page qui l'a refusée reste prête. Electron n'émet `did-navigate` que pour une navigation du cadre principal vers un autre document ; une ancre dans la page donne `did-navigate-in-page`. `watchWindow` est passé dans `host.ts`, testé sans Electron sur des émetteurs.
   - Révisé par R13 (revue de la tâche 4, Important 1) : `detach` lève aussi le drapeau `ready`, que pose `cirrus:sync:start`. Tant qu'il est baissé, `reconcile` rejette aussitôt. Le client réessaie plus tard, et la nouvelle page le relance en demandant à démarrer. Avant, une réception envoyée à une page rechargée qui n'écoutait pas encore restait en attente pour toujours, et `stop()` avec elle. Aucune limite de temps n'est posée sur les attentes (R13).
   - Coût si faux : nul.
 - Ruling: **un nouveau client à chaque dissociation** : les fichiers connus du serveur (`onServer`), l'écart d'horloge et les téléchargements en mémoire sont ceux d'un serveur. Cela règle la remarque de la revue de la tâche 3 (`onServer` jamais vidé).
@@ -466,3 +467,13 @@ Décisions du contrôleur : R12 (D6 tient : aucune lecture de la taille d'une ve
   - Coût si faux : nul.
 - Ruling: **une vue de la synchro identique à la précédente n'est pas redonnée** (Minor 5) : comparée en texte (voile, état, pastille), quelques dizaines d'octets.
   - Coût si faux : nul.
+
+### Correctifs de la revue (tâche 4, tour 2)
+
+Décision du contrôleur : R14 (l'ouverture par l'application du système est une ouverture : elle télécharge, comme le veulent D6 et R12).
+
+- Ruling: **R14, mis en œuvre** : `openTargetFetched` (`main/files.ts`). Jumelé, un fichier que le magasin n'a pas est d'abord demandé par `fetchBlob`, le même chemin que `cirrus-file:` : vérifié par son empreinte, et deux ouvertures à la fois ne font qu'un téléchargement. Sa copie en lecture seule s'ouvre ensuite comme avant.
+  - Hors ligne, ou absent du serveur : « PDF pas encore téléchargé : serveur injoignable. », les mots du lecteur (`notDownloaded`, pris de `renderer/files/read.ts`, comme `files.ts` prend déjà `checkFileName` à l'interface).
+  - Une version ancienne suit la même règle. Sans serveur, rien ne change (« le fichier manque dans la base »).
+  - Coût si faux : nul.
+

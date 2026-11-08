@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import {
-  chmodSync, copyFileSync, createReadStream, type Dirent, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync,
-  writeFileSync,
+  chmodSync, copyFileSync, createReadStream, type Dirent, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync,
+  unlinkSync, writeFileSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { type FileRef, plainName } from '@cirrus/core';
 import { type ChangeRow, filePath, importFile, storeBytes, storeBytesAsync } from '@cirrus/store';
 import { checkFileName } from '../renderer/files/merge.ts';
+import { notDownloaded } from '../renderer/files/read.ts';
 
 /**
  * The nodes' files on the main process's side (plan 4a, D1, D5, D6): the store's blobs served read-only to the
@@ -278,6 +279,8 @@ export function isRunnable(name: string): boolean {
 
 /** The code of the error openableCopy throws for a refused name or hash. */
 const REFUSED_NAME = 'CIRRUS_REFUSED_NAME';
+/** The code of the error openTargetFetched throws for a blob the server paired could not give (plan 5a, R14). */
+const NOT_DOWNLOADED = 'CIRRUS_NOT_DOWNLOADED';
 
 /** The rule of a plain file name, the core's since plan 5a: the server refuses a file added under another name (parseOp). */
 export { plainName };
@@ -360,6 +363,18 @@ export function openTarget(storeDir: string, ref: FileRef, root: string): { path
   return { path: openableCopy(storeDir, ref, root), shown: isRunnable(ref.name) ? 'folder' : 'app' };
 }
 
+/**
+ * openTarget, with a server paired (`fetchBlob`, plan 5a, D6, R12, R14): a blob the store does not hold — a PDF never
+ * read on this PC, an older version — is opened, so it is downloaded first, by the same path as cirrus-file: (checked
+ * against its hash; two openings at once, one download). When it cannot be had (offline, absent there), it throws, said
+ * as the reader says it (openFailure). Without a server, openTarget as in plan 4c.
+ */
+export async function openTargetFetched(storeDir: string, ref: FileRef, root: string, fetchBlob: FetchBlob | null): Promise<{ path: string; shown: 'app' | 'folder' }> {
+  const absent = HASH.test(ref.hash) && plainName(ref.name) && !existsSync(filePath(storeDir, ref));
+  if (fetchBlob && absent && !(await fetchBlob(ref.hash))) throw Object.assign(new Error('fichier pas encore téléchargé'), { code: NOT_DOWNLOADED });
+  return openTarget(storeDir, ref, root);
+}
+
 /** What cirrus:files:open answers: opened by its application, or shown in the explorer; else why not, in French. */
 export type OpenResult = { ok: true; shown: 'app' | 'folder' } | { ok: false; message: string };
 
@@ -370,6 +385,8 @@ export type OpenResult = { ok: true; shown: 'app' | 'folder' } | { ok: false; me
 export function openFailure(name: string, e: unknown): string {
   if (typeof e === 'string') return `Windows n’a pas pu ouvrir « ${name} » : aucune application ne semble associée à ce type de fichier.`;
   const why = (e as NodeJS.ErrnoException | null)?.code;
+  // Not downloaded from the server paired (R14): the reader's words.
+  if (why === NOT_DOWNLOADED) return notDownloaded(name);
   const reason = why === 'ENOENT' ? 'le fichier manque dans la base'
     : why === 'EBUSY' ? 'sa copie est encore ouverte dans une autre application'
     : why === 'EACCES' || why === 'EPERM' ? 'Windows refuse l’accès à sa copie'

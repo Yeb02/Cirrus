@@ -4,7 +4,8 @@ import { createNode, createPlan, decodeState, editNode, encodeState, type Id, ty
 import { afterEach, expect, test, vi } from 'vitest';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { FIRST_SYNC_LATER, insecureServer, SERVER_NOT_EMPTY } from '../src/main/sync/host.ts';
+import { FIRST_SYNC_LATER, insecureServer, SERVER_NOT_EMPTY, watchWindow } from '../src/main/sync/host.ts';
+import { EventEmitter } from 'node:events';
 import { AppPc } from './support/appPc.ts';
 import { created, Lab, sleep, until } from './support/virtualPc.ts';
 
@@ -305,4 +306,37 @@ test('revue, Minor 11 : dissocier pendant un démarrage, jumeler pendant un arr�
   const hellos = a.net.count('GET', '/hello');
   await sleep(200);
   expect(a.net.count('GET', '/hello')).toBe(hellos);
+});
+
+test('revue 2, Minor 1 : une navigation commencée puis refusée ne détache rien ; une navigation faite (did-navigate), un rendu perdu ou la fenêtre fermée détachent', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  a.answers = false;
+  await a.host.start();
+  const win = Object.assign(new EventEmitter(), { webContents: new EventEmitter() });
+  watchWindow(win, a.host);
+  const unit = { ...a.store.pendingUnits()[0], seq: 1 };
+  const sent = () => a.incoming.length;
+  // Started, then refused by will-navigate (a link dropped on the page): Electron emits no did-navigate.
+  win.webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false, url: 'https://exemple.org/' });
+  const first = a.host.reconcile([unit], []);
+  await until(() => sent() === 1);
+  // The page is still the same, its reconciliations still go to it: committed now, they are rejected, and none is sent
+  // until a page asks to start (the reload case, R13).
+  win.webContents.emit('did-navigate', {}, 'file:///index.html');
+  await expect(first).rejects.toThrow(/Fenêtre/);
+  await expect(a.host.reconcile([unit], [])).rejects.toThrow(/pas prête/);
+  expect(sent()).toBe(1);
+  // A same-document navigation (an anchor) detaches nothing; a crash or the window closed does.
+  await a.host.start();
+  win.webContents.emit('did-navigate-in-page', {}, 'file:///index.html#x');
+  const kept = a.host.reconcile([unit], []);
+  await until(() => sent() === 2);
+  win.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  await expect(kept).rejects.toThrow(/Fenêtre/);
+  await a.host.start();
+  const last = a.host.reconcile([unit], []);
+  await until(() => sent() === 3);
+  win.emit('closed');
+  await expect(last).rejects.toThrow(/Fenêtre/);
 });

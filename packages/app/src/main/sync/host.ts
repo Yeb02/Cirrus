@@ -83,6 +83,22 @@ export function insecureServer(url: string): boolean {
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
+/** What watchWindow listens to: a window and its page, as Electron's BrowserWindow and WebContents emit them. */
+interface Emitter { on(event: string, listener: (...args: unknown[]) => void): unknown }
+export type WatchedWindow = Emitter & { webContents: Emitter };
+
+/**
+ * A window's page gone or replaced: what it was reconciling is abandoned, and nothing is sent until a page asks to start
+ * (detach, R13) — the window closed, its renderer lost, or a navigation of its main frame to another document committed
+ * (`did-navigate`: never for one in the same document, nor for one refused by will-navigate, which ends before it
+ * commits; the page that refused it lives on, ready). Review of task 4, round 2, Minor 1.
+ */
+export function watchWindow(win: WatchedWindow, host: { detach(): void }): void {
+  win.on('closed', () => host.detach());
+  win.webContents.on('render-process-gone', () => host.detach());
+  win.webContents.on('did-navigate', () => host.detach());
+}
+
 export class SyncHost {
   /** The sync client of the server paired now; a new one at each unpairing (its files known there, its downloads, its clock). */
   client: SyncClient;
