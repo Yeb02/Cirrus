@@ -443,3 +443,6 @@ Mesuré par un test jetable, hors du dépôt : deux PC virtuels et le serveur da
   - Coût si faux : une méthode morte.
 - Ruling: **le nom montré dans le bloc d'un PC jumelé** est celui donné au jumelage, gardé dans `serveur.json`. Le nom de `jumeler` au serveur peut être différent.
   - Coût si faux : un texte.
+- Ruling: **l'adresse proposée par le bloc** (`http://127.0.0.1:7310`, le port par défaut de la ligne de commande du serveur) est une constante de l'interface (`ServerBlock`) : non jumelé, `info()` du principal ne propose pas d'adresse. Le test de garde du plan 4b (`tinytex.test.ts`) interdit toute adresse écrite dans un module du principal hors des fichiers de sources.
+  - Options : un fichier de sources de la synchro au principal, ajouté aux exceptions du test.
+  - Coût si faux : nul ; ce n'est qu'une proposition, que l'utilisateur remplace.
