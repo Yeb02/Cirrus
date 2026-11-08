@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_PER_REQUEST } from '../src/bounds.ts';
+import { MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_KEPT, MAX_SETTINGS_PER_REQUEST } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Client, EventReader, newCode, pair, T0 } from './support.ts';
 
@@ -118,6 +118,10 @@ test('R24 : une requête abîmée ou hostile est refusée avant toute écriture,
     ['heure en texte', { changes: { factor: { value: 1, at: '1' } } }],
     ['heure absente', { changes: { factor: { value: 1 } } }],
     ['heure nulle', { changes: { factor: { value: 1, at: null } } }],
+    // Review of task 6, Minor 4: a time is whole milliseconds, from 0 to 2^53 − 1 (past it, `at + 1 === at`).
+    ['heure fractionnaire', { changes: { factor: { value: 1, at: T0 + 0.5 } } }],
+    ['heure négative', { changes: { factor: { value: 1, at: -1 } } }],
+    ['heure au-delà de 2^53', { changes: { factor: { value: 1, at: 2 ** 53 } } }],
     ['valeur absente', { changes: { factor: { at: T0 } } }],
     ['un champ de trop dans un réglage', { changes: { factor: { value: 1, at: T0, pc: 'pc-b' } } }],
     ['réglage pas un objet', { changes: { factor: 3 } }],
@@ -144,4 +148,26 @@ test('R24 : une requête abîmée ou hostile est refusée avant toute écriture,
   expect(Object.keys(await put(a, most))).toHaveLength(MAX_SETTINGS_PER_REQUEST);
   const big = 'y'.repeat(MAX_SETTING_VALUE_BYTES - 2);
   expect(await put(a, { latexPackages: { value: big, at: T0 } })).toEqual({ latexPackages: { value: big, at: T0, pc: 'pc-a' } });
+  expect(await put(a, { factor: { value: 1, at: 2 ** 53 - 1 } })).toEqual({ factor: { value: 1, at: 2 ** 53 - 1, pc: 'pc-a' } });
+});
+
+test('revue de la tâche 6, Minor 3 : le serveur garde au plus MAX_SETTINGS_KEPT réglages ; une requête qui en ajouterait trop est refusée entière, rien d’écrit', async () => {
+  const { url } = await start();
+  const a = await paired(url, 'pc-a');
+  const r = await stream(a);
+  const keys = (from: number, n: number, at = T0) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${from + i}`, { value: 1, at }]));
+  // Filled to the bound, by requests of MAX_SETTINGS_PER_REQUEST at most.
+  for (let n = 0; n < MAX_SETTINGS_KEPT; n += MAX_SETTINGS_PER_REQUEST) {
+    expect(Object.keys(await put(a, keys(n, Math.min(MAX_SETTINGS_PER_REQUEST, MAX_SETTINGS_KEPT - n))))).toHaveLength(Math.min(MAX_SETTINGS_PER_REQUEST, MAX_SETTINGS_KEPT - n));
+  }
+  await r.next(Math.ceil(MAX_SETTINGS_KEPT / MAX_SETTINGS_PER_REQUEST));
+  // One more: refused, with the change to a kept key it carried; nothing written, nothing told.
+  const res = await a.send('POST', '/settings', { changes: { ...keys(0, 1, T0 + 1), ...keys(MAX_SETTINGS_KEPT, 1) } });
+  expect(res.status).toBe(400);
+  expect(((await res.json()) as { error: string }).error).toMatch(new RegExp(`${MAX_SETTINGS_KEPT} réglages`));
+  const kept = await all(a);
+  expect([Object.keys(kept).length, kept.k0]).toEqual([MAX_SETTINGS_KEPT, { value: 1, at: T0, pc: 'pc-a' }]);
+  // A kept key still changes.
+  expect(await put(a, keys(0, 1, T0 + 2))).toEqual({ k0: { value: 1, at: T0 + 2, pc: 'pc-a' } });
+  expect(await r.settings()).toEqual({ k0: { value: 1, at: T0 + 2, pc: 'pc-a' } });
 });

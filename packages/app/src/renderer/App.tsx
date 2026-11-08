@@ -17,7 +17,7 @@ import { LatexRegistry } from './latex/registry.ts';
 import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { quitInOrder, typedFields } from './quit.ts';
-import { applyReceived, keepUnsaved, localChanges } from './settingChanges.ts';
+import { applyReceived, keepUnsaved, localChanges, withSetting } from './settingChanges.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -99,6 +99,22 @@ export function App() {
   const savedParams = useRef<RenderParams | null>(null);
   /** Shared settings received before the settings were read (task 6): applied once they are. */
   const earlySettings = useRef<Record<string, unknown>[]>([]);
+  /**
+   * Settings as the main process wrote them, a batch (task 6): received from the server, or the answer to a save. Applied
+   * over the saved settings at once, in one render — none when they change nothing —; a setting changed here and not yet
+   * written keeps its value, which is written next. Reads only refs: the first render's copy serves the listeners.
+   */
+  const adoptSettings = (changes: Record<string, unknown>) => {
+    const before = savedParams.current;
+    if (!before) {
+      earlySettings.current.push(changes);
+      return;
+    }
+    const after = applyReceived(before, changes);
+    if (after === before) return;
+    savedParams.current = after;
+    setParams((p) => keepUnsaved(p, before, after, Object.keys(changes)));
+  };
   const session = useRef<EditSession | null>(null);
   const saver = useRef<SnapshotSaver | null>(null);
   const activeRef = useRef<Id | null>(null);
@@ -280,23 +296,17 @@ export function App() {
     const timer = setTimeout(() => {
       const changes = localChanges(savedParams.current!, params);
       savedParams.current = params;
-      if (Object.keys(changes).length > 0) void window.cirrus.setSettings(changes);
+      // The main process answers with what it wrote (review of task 6, Minor 2): a row received for one of these keys
+      // while the save was on its way, told before the answer, gives way to it, as in settings.json.
+      if (Object.keys(changes).length > 0) {
+        window.cirrus.setSettings(changes).then((written) => { if (written) adoptSettings(written); }, (e: unknown) => console.error('Réglages non enregistrés :', e));
+      }
     }, params.settingsSaveDelayMs);
     return () => clearTimeout(timer);
   }, [params, state]);
 
-  // Shared settings received from the server (task 6, D9), one batch at a time: applied at once, in one render; a setting
-  // changed here and not yet written keeps its value, which is written next.
-  useEffect(() => window.cirrus.onSettingsChanged((changes) => {
-    const before = savedParams.current;
-    if (!before) {
-      earlySettings.current.push(changes);
-      return;
-    }
-    const after = applyReceived(before, changes);
-    savedParams.current = after;
-    setParams((p) => keepUnsaved(p, before, after, Object.keys(changes)));
-  }), []);
+  // Shared settings received from the server (task 6, D9), one batch at a time.
+  useEffect(() => window.cirrus.onSettingsChanged((changes) => adoptSettings(changes)), []);
 
   // LaTeX (plan 4b, D2): pdfLaTeX prepared with the preamble once the state is loaded, and again when it changes. Not
   // for the bench, which measures the graph.
@@ -537,7 +547,9 @@ export function App() {
         </GraphBoundary>
         {panel && (
           <SettingsPanel
-            params={params} onChange={(p) => setParams(withOverrides(p))} onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
+            // Key by key, from the latest settings (review of task 6, Important 1); « Tout réinitialiser »: every default.
+            params={params} onChange={(key, v) => setParams(withSetting(key, v))} onResetAll={() => setParams(withOverrides({}))}
+            onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
             onEditPreamble={() => setPreambleOpen(true)} server={serverBlock}
           />
         )}

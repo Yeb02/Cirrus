@@ -43,9 +43,12 @@ export const SERVER_SNAPSHOT_UNITS = 500;
  *   longest of today's is 22);
  * - a setting's value: its JSON, MAX_SETTING_VALUE_BYTES at most (the longest of today's, a list of LaTeX packages,
  *   holds a few hundred bytes);
- * - its time: a finite number.
+ * - its time: whole milliseconds, from 0 to 2^53 − 1 (a time past it no longer grows by 1: review of task 6, Minor 4);
+ * - the most settings the server keeps, MAX_SETTINGS_KEPT: GET /settings gives them all at each connection of each
+ *   PC, so a request that would keep more is refused (review of task 6, Minor 3). Today's are 173.
  * The body itself is bounded by MAX_BODY_BYTES, as every JSON request of a paired PC.
  */
 export { MAX_SETTINGS_PER_REQUEST } from '@cirrus/core';
 export const MAX_SETTING_KEY_CHARS = 64;
 export const MAX_SETTING_VALUE_BYTES = 64 * 1024;
+export const MAX_SETTINGS_KEPT = 1000;

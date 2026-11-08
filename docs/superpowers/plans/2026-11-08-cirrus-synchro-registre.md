@@ -637,13 +637,13 @@ Décisions du contrôleur pour cette tâche : R23 (tous les réglages sont parta
   - `GET /settings` et `POST /settings` (la réponse : chaque réglage envoyé tel que le serveur le garde) ; `Hub.publishSettings` (`event: settings`, sans `id`) ;
   - `bounds.ts` : `MAX_SETTING_KEY_CHARS` (64), `MAX_SETTING_VALUE_BYTES` (64 Kio), `MAX_SETTINGS_PER_REQUEST` réexporté du cœur ; le corps borné par `MAX_BODY_BYTES`, comme toute requête JSON d'un PC jumelé.
 - **L'app :**
-  - `main/settings.ts` : `SharedSettings` (`local`, `pending`, `receive`, `acknowledge`, `pairedAt`, `adopt`, `upgrade`, `unpaired`) et `parseSettingRows` ; `settings-pending.json` ;
+  - `main/settings.ts` : `SharedSettings` (`local`, `pending`, `receive`, `acknowledge`, `pairedAt`, `adopt`, `unpaired`) et `parseSettingRows` ; `settings-pending.json` ;
   - `main/sync/client.ts` : les réglages du serveur lus en entier à chaque connexion, une fois le flux ouvert ; l'événement `settings` ; l'envoi des réglages en attente en tête de la boucle d'envoi ;
   - `main/sync/host.ts` : `setSettings` (ce que `cirrus:settings:set` appelle), les réglages datés de l'heure du jumelage (deux bases vides, ou après un envoi de base), effacés de l'attente à la dissociation ; `HostWindow.settings` ;
   - `main/sync/firstSync.ts` : la prise écrit les réglages du serveur dans la base prise, et ne copie plus ceux du PC ;
   - `main/index.ts`, `wire.ts`, `preload`, `env.d.ts` : `cirrus:settings:set` reçoit les seuls réglages changés ; `cirrus:settings:changed` (`onSettingsChanged`) porte un lot reçu ;
   - l'interface : `renderer/settingChanges.ts` (`localChanges`, `applyReceived`, `keepUnsaved`), et `App.tsx` n'écrit que ce qui a changé ici et applique chaque lot reçu en un rendu.
-- **Tests :** `packages/server/tests/settings.test.ts` (2), `packages/app/tests/sharedSettings.test.ts` (11) ; `EventReader.next` et `settings` (support du serveur), `Lab.settings` et `Lab.putSettings`, `AppPc.settingsTold`.
+- **Tests :** `packages/server/tests/settings.test.ts` (3 après la revue), `packages/app/tests/sharedSettings.test.ts` (17 après la revue) ; `EventReader.next` et `settings` (support du serveur), `Lab.settings` et `Lab.putSettings`, `AppPc.settingsTold`.
 - **Scénario de l'interface** (le 26e, « jumeler une base neuve… ») : un réglage changé par un autre PC arrive dans `settings.json` et dans le bandeau (le champ montre la valeur reçue) ; un réglage tapé dans le bandeau arrive au serveur, puis rien n'attend ; après « Dissocier ce PC », `settings-pending.json` n'est plus là et les réglages de ce PC restent.
 
 ### Décisions
@@ -669,10 +669,35 @@ Décisions du contrôleur pour cette tâche : R23 (tous les réglages sont parta
   - Les réglages en attente ne comptent pas dans la pastille (« Envoi de n actions… »).
 - Ruling: **« l'heure du jumelage » (R23) est l'heure du serveur que donne le `/hello` du jumelage.** Pour un envoi de base, elle est gardée avec l'offre, et c'est elle qui date les réglages une fois l'envoi fait. `settings-pending.json` est écrit juste avant `serveur.json` : un arrêt entre les deux le laisse sans serveur, et le jumelage suivant le récrit.
 - Ruling: **la prise écrit les réglages du serveur dans la base prise** (`GET /settings` pendant `adoptBase`), avec un `settings-pending.json` vide : l'app redémarre sur eux, sans passer par les défauts sous le voile, et n'envoie rien des siens.
-- Ruling: **une base jumelée avant cette tâche envoie ses réglages au premier démarrage, au lieu de les perdre.** Une fois les réglages partagés, `settings-pending.json` existe toujours tant qu'un serveur est jumelé (écrit avant `serveur.json`, vide quand tout est envoyé). Un serveur jumelé sans ce fichier est donc une base jumelée aux tâches 4 ou 5 : son serveur n'a aucun de ses réglages, et à la lettre de R23 (« une clé absente du serveur vaut le défaut »), elle les perdrait tous. Ils sont envoyés, comme au premier jumelage, datés de l'horloge du PC (l'écart avec le serveur n'est pas encore connu).
-  - Coût : un `stat` au démarrage, seulement avec un serveur jumelé.
-  - Coût si faux : les réglages d'une base jumelée avant la tâche 6 remplacent ceux du serveur, s'il en avait.
+- ~~Ruling: une base jumelée avant cette tâche envoie ses réglages au premier démarrage.~~ **Retirée par R25** (revue de la tâche 6, Minor 1) : aucune vraie base n'a jamais été jumelée, et cette migration faisait de la présence de `settings-pending.json` une marque cachée. Si ce fichier était perdu pendant le jumelage, tout `settings.json` passait au-dessus des changements plus récents des autres PC. Un PC jumelé sans ce fichier prend maintenant les réglages du serveur, comme le dit R23.
+  - Coût si faux : une base de développement jumelée avant la tâche 6 revient aux réglages du serveur.
 - Ruling: **un lot reçu avant que l'interface ait lu ses réglages** (une page rechargée pendant que le principal synchronise) est appliqué sur eux quand elle les lit.
-- Ruling: **le serveur ne borne que chaque requête, pas le nombre de réglages qu'il garde** : un PC jumelé est l'un de ceux de l'utilisateur, il en garde moins de 200, et un PC hostile ferait grossir son journal de toute façon.
-  - Coût si faux : `serveur.db` grossit à la demande d'un PC jumelé, que `revoquer` arrête.
+- ~~Ruling: le serveur ne borne que chaque requête, pas le nombre de réglages qu'il garde.~~ **Remplacée** au tour 1 de la revue (Minor 3) : voir `MAX_SETTINGS_KEPT` ci-dessous.
 - Ruling: **`latexPackages` reçu s'installe au démarrage suivant**, comme le dit D1 du plan 4b (« installés sur chaque PC à son démarrage »), pas aussitôt.
+
+### Correctifs de la revue (tâche 6, tour 1)
+
+Décision du contrôleur : R25 (la migration `upgrade` est retirée).
+
+- Ruling: **le bandeau change un réglage clé par clé, sur l'état le plus récent** (Important 1).
+  - Le défaut : `SettingsPanel` rebâtissait toute la table à partir des réglages de son dernier rendu, et App la posait telle quelle. Un lot reçu du serveur s'applique par une mise à jour fonctionnelle, que React ne rend qu'un peu plus tard. Une entrée faite dans cet intervalle (un curseur, un chiffre tapé, un ↺) posait donc une table qui ne le contenait pas encore. Les réglages reçus repartaient alors avec leur ancienne valeur, datés comme le changement le plus récent, et défaisaient le changement de l'autre PC partout.
+  - Le correctif : le bandeau donne `onChange(clé, valeur)`, et App fait `setParams(withSetting(clé, valeur))`, une mise à jour fonctionnelle bornée par `withOverrides`. « Tout réinitialiser » a son propre appel (`onResetAll`, tous les défauts). Le ↺ passe par `onChange(clé, défaut)`. Aucun autre endroit ne rebâtit la table depuis un rendu : les paquets LaTeX installés (`onPackagesInstalled`) passaient déjà par une mise à jour fonctionnelle. Il n'y a pas de « Rétablir » des réglages : les réglages sont hors de l'historique.
+  - Coût si faux : nul.
+- Ruling: **`cirrus:settings:set` répond par ce qu'il a écrit pour ses clés** (bornées, `null` pour le défaut), et l'interface l'adopte comme un lot reçu (Minor 2). Un réglage reçu pendant que l'enregistrement était en route, et dit à l'interface avant la réponse, cède ainsi la place à ce qui est dans `settings.json`. Une réponse qui ne change rien (le cas courant) ne coûte aucun rendu (`applyReceived` rend alors l'objet lui-même). Aucun message de plus : c'est la réponse de l'appel.
+- Ruling: **le serveur garde au plus `MAX_SETTINGS_KEPT` réglages** (1 000, plus de cinq fois les 173 d'aujourd'hui ; Minor 3). Une requête qui en ajouterait au-delà est refusée entière (400), dans la transaction, avant toute écriture. Un réglage déjà gardé change toujours. Ce plafond borne aussi `GET /settings`, que chaque PC lit à chaque connexion.
+- Ruling: **l'heure d'un réglage est un nombre entier de millisecondes, de 0 à 2^53 − 1** (`isSettingTime`, dans le cœur ; Minor 4). Le serveur la vérifie à la réception ; le PC aussi, dans ce que le serveur rend et dans son `settings-pending.json`. Au-delà, `at + 1 === at` : un PC ne pourrait plus passer un changement qu'il a vu, et à heure égale le plus grand identifiant gagnerait toujours.
+- Ruling: **un changement local s'écrit dans `settings-pending.json` avant `settings.json`** (Minor 5). Un arrêt entre les deux laisse le changement en attente : il part, et la réponse du serveur écrit `settings.json` et le dit à l'interface. Dans l'ordre inverse, il était perdu à la lecture entière suivante.
+- Ruling: **une erreur de disque en appliquant des réglages reçus est dite** (`console.warn`, « Réglages reçus non appliqués ») **et n'arrête jamais la synchro des documents** (Minor 6). La lecture entière de la connexion suivante les applique de nouveau.
+- Ruling: **une seule comparaison des valeurs de réglage** (`sameSetting`, dans la vue), que `diffFromDefaults`, le bandeau, le principal et l'interface partagent ; `keepUnsaved` ne regarde que les propriétés propres (Minor 7).
+- **Tests ajoutés :**
+  - serveur : l'heure fractionnaire, négative ou au-delà de 2^53 est refusée, 2^53 − 1 acceptée ; le plafond des réglages gardés (rempli, une clé de trop refusée avec la requête entière, une clé gardée change encore) ;
+  - app :
+    - R25 (un PC jumelé sans `settings-pending.json` prend les réglages du serveur, n'envoie rien) ;
+    - l'entrée du bandeau juste après un lot reçu (la file de mises à jour de React, rejouée) ;
+    - la réponse de `cirrus:settings:set` et sa course avec un lot reçu ;
+    - les heures non entières refusées ;
+    - `settings-pending.json` écrit avant `settings.json` ;
+    - le disque qui refuse `settings.json` pendant que les écritures continuent ;
+    - un changement local pendant que `GET /settings` est en cours ;
+    - un objet reçu pour une liste ;
+    - une clé qui n'est pas un réglage dans `keepUnsaved`.

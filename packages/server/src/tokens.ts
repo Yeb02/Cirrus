@@ -3,8 +3,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import { MAX_ID_CHARS, newer, type SettingRow } from '@cirrus/core';
-import { MAX_PC_NAME_CHARS, PAIRING_TRIES, PAIRING_TTL_MS } from './bounds.ts';
-import type { StoredChange } from './settings.ts';
+import { MAX_PC_NAME_CHARS, MAX_SETTINGS_KEPT, PAIRING_TRIES, PAIRING_TTL_MS } from './bounds.ts';
+import { SettingsError, type StoredChange } from './settings.ts';
 
 // Pairing and tokens (plan 5a, D3): `jumeler` makes a one-time code, a PC trades it for a token of 256 bits. The
 // server's own file, serveur.db, keeps only their SHA-256 hashes: neither a code nor a token is ever on its disk. It
@@ -226,13 +226,21 @@ export class Tokens {
    * POST /settings (task 6, D9, R23): each change of PC `pc` kept if it is more recent than the setting's last one, by
    * the core's merge order (`newer`: its time, then the PC's identifier), in one transaction. `rows`: the setting as the
    * server keeps it now, for every key sent; `changed`: those this request changed, for the event streams. A change
-   * sent again (its answer lost) changes nothing.
+   * sent again (its answer lost) changes nothing. SettingsError, nothing written, for a request that would keep more
+   * than MAX_SETTINGS_KEPT settings.
    */
   putSettings(changes: Map<string, StoredChange>, pc: string): { rows: Record<string, SettingRow>; changed: Record<string, SettingRow> } {
     return this.transaction(() => {
       const rows: Record<string, SettingRow> = {}, changed: Record<string, SettingRow> = {};
+      const kept = [...changes.keys()].map((key) => this.q('SELECT key, value, at, pc FROM settings WHERE key = ?').get(key) as unknown as SettingsRow | undefined);
+      // The settings kept bounded (review of task 6, Minor 3), checked before anything is written.
+      const added = kept.filter((r) => r === undefined).length;
+      if (added > 0 && (this.q('SELECT count(*) AS n FROM settings').get() as { n: number }).n + added > MAX_SETTINGS_KEPT) {
+        throw new SettingsError(`Le serveur garde au plus ${MAX_SETTINGS_KEPT} réglages : cette requête en ajouterait ${added} de trop.`);
+      }
+      let i = 0;
       for (const [key, c] of changes) {
-        const before = this.q('SELECT key, value, at, pc FROM settings WHERE key = ?').get(key) as unknown as SettingsRow | undefined;
+        const before = kept[i++];
         if (before && !newer({ at: c.at, pc }, before)) {
           rows[key] = rowOf(before);
           continue;

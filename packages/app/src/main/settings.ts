@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { newer, type SettingChange, type SettingRow, type Stamp } from '@cirrus/core';
-import { DEFAULT_PARAMS, type RenderParams, settingValue } from '@cirrus/view';
+import { isSettingTime, newer, type SettingChange, type SettingRow, type Stamp } from '@cirrus/core';
+import { DEFAULT_PARAMS, type RenderParams, sameSetting, settingValue } from '@cirrus/view';
 
 // The settings (spec 19: outside the history and undo). settings.json holds those that differ from the defaults: this
 // PC's copy. With a server paired (plan 5a, task 6, D9, R23), they are shared: the server keeps each with the time of
@@ -48,8 +48,8 @@ const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
 const has = (o: object, key: string): boolean => Object.hasOwn(o, key);
 /** A key of RenderParams (its own: never `constructor` or `__proto__`). */
 const isSetting = (key: string): boolean => has(DEFAULT_PARAMS, key);
-const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
-const isStamp = (x: Record<string, unknown>): boolean => typeof x.at === 'number' && Number.isFinite(x.at);
+/** A change's time, as the PCs make them: whole milliseconds, from 0 to 2^53 − 1 (review of task 6, Minor 4). */
+const isStamp = (x: Record<string, unknown>): boolean => isSettingTime(x.at);
 
 /**
  * Shared settings as the server gives them (GET /settings, the event `settings`, the answer to POST /settings): each a
@@ -96,24 +96,30 @@ export class SharedSettings {
    * key that is no setting is ignored, a value bounded as withOverrides reads it. Written to settings.json; with a
    * server paired (`at`: now, the server's clock, D4), each waits too, its latest value. Its time is later than the
    * setting's last one here, its own or received: a change the user makes after seeing another comes after it.
+   * settings-pending.json is written first (review of task 6, Minor 5): a stop between the two files leaves the change
+   * to go, and the server's answer writes settings.json. Returns what is now written for each of these keys (null: the
+   * default), which the interface adopts (review, Minor 2): a row received while the change was on its way may have
+   * passed it.
    */
-  local(changes: unknown, at: number | null): void {
-    if (!isObject(changes)) return;
+  local(changes: unknown, at: number | null): Record<string, unknown> {
+    const written: Record<string, unknown> = {};
+    if (!isObject(changes)) return written;
     const overrides = readSettings(this.dir), pending = at === null ? null : this.pending();
-    let written = false, queued = false;
+    let changed = false;
     for (const [key, v] of Object.entries(changes)) {
       const value = v === null ? null : settingValue(key, v);
       if (value === undefined || !isSetting(key)) continue;
-      written = put(overrides, key, value) || written;
+      changed = put(overrides, key, value) || changed;
+      written[key] = has(overrides, key) ? overrides[key] : null;
       if (pending && at !== null) {
         const floor = Math.max(pending[key]?.at ?? -Infinity, this.seen.get(key)?.at ?? -Infinity);
-        pending[key] = { value: has(overrides, key) ? overrides[key] : null, at: Math.max(at, floor + 1) };
+        pending[key] = { value: written[key], at: Math.max(at, floor + 1) };
         this.seen.delete(key);
-        queued = true;
       }
     }
-    if (written) writeSettings(this.dir, overrides);
-    if (queued) this.savePending();
+    if (pending && Object.keys(written).length > 0) this.savePending();
+    if (changed) writeSettings(this.dir, overrides);
+    return written;
   }
 
   /** The changes made here that the server has not answered for, by key (the client sends them). */
@@ -183,7 +189,7 @@ export class SharedSettings {
     let pendingChanged = false;
     for (const [key, c] of Object.entries(sent)) {
       const now = pending[key];
-      if (!now || now.at !== c.at || !same(now.value, c.value)) continue;
+      if (!now || now.at !== c.at || !sameSetting(now.value, c.value)) continue;
       delete pending[key];
       pendingChanged = true;
     }
@@ -207,18 +213,8 @@ export class SharedSettings {
   }
 
   /**
-   * A base paired before the settings were shared (tasks 4 and 5): its server paired, but no settings-pending.json —
-   * which, once settings are shared, always exists while paired (written before serveur.json, empty once all is sent).
-   * At its first connection the server, which holds none of its settings, would put them all back to their defaults:
-   * they are sent instead, as at a first pairing (R23), stamped `at`. One stat, at the start, with a server paired only.
-   */
-  upgrade(at: number): void {
-    if (!existsSync(join(this.dir, PENDING_SETTINGS_FILE))) this.pairedAt(at);
-  }
-
-  /**
    * A base taken from the server (R23: an adopt, or a replace): the server's settings, `rows` (GET /settings), in
-   * settings.json; nothing of this PC's waits, and settings-pending.json says the settings are exchanged.
+   * settings.json; nothing of this PC's waits (an empty settings-pending.json).
    */
   adopt(rows: Record<string, SettingRow>): void {
     this.waiting = {};
@@ -243,13 +239,13 @@ export class SharedSettings {
  * that changed them.
  */
 function put(overrides: Record<string, unknown>, key: string, value: unknown): boolean {
-  const def = value === null || same(value, DEFAULT_PARAMS[key as keyof RenderParams]);
+  const def = value === null || sameSetting(value, DEFAULT_PARAMS[key as keyof RenderParams]);
   if (def) {
     if (!has(overrides, key)) return false;
     delete overrides[key];
     return true;
   }
-  if (has(overrides, key) && same(overrides[key], value)) return false;
+  if (has(overrides, key) && sameSetting(overrides[key], value)) return false;
   overrides[key] = value;
   return true;
 }

@@ -19,9 +19,10 @@ export interface CirrusBridge {
   getSettings(): Promise<Record<string, unknown>>;
   /**
    * The settings changed here since the last call, only those: key: value, null back to the default (plan 5a, task 6:
-   * with a server paired, each is shared with it).
+   * with a server paired, each is shared with it). Resolves with what is now written for those keys, bounded (null: the
+   * default; a key that is no setting left out); nothing on the bench, which writes none.
    */
-  setSettings(changes: Record<string, unknown>): Promise<void>;
+  setSettings(changes: Record<string, unknown>): Promise<Record<string, unknown> | undefined>;
   /**
    * Shared settings received from the server that changed here (task 6), as one batch: key: value (bounded as a
    * settings file is read), null back to the default. Returns the unsubscription.

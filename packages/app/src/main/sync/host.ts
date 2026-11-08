@@ -152,8 +152,6 @@ export class SyncHost {
     this.deps = deps;
     this.config = deps.secrets.read();
     this.settings = new SharedSettings(deps.dir, deps.pc, (changes) => deps.window.settings(changes));
-    // A base paired before the settings were shared sends its own, rather than losing them (SharedSettings.upgrade).
-    if (this.config) this.settings.upgrade(deps.now());
     this.client = this.newClient();
   }
 
@@ -262,12 +260,14 @@ export class SyncHost {
   /**
    * Settings changed in Réglages (cirrus:settings:set, task 6): only those changed, key: value, null back to the
    * default. Written to settings.json; with a server paired, each waits too, at this PC's time corrected by the
-   * server's (D4), and the client is told. Without one, nothing else happens (plan 4c).
+   * server's (D4), and the client is told. Without one, nothing else happens (plan 4c). Returns what is now written for
+   * each of these keys, which the interface adopts (review of task 6, Minor 2).
    */
-  setSettings(changes: unknown): void {
+  setSettings(changes: unknown): Record<string, unknown> {
     const paired = this.config !== null;
-    this.settings.local(changes, paired ? this.deps.now() + this.client.clockOffset() : null);
+    const written = this.settings.local(changes, paired ? this.deps.now() + this.client.clockOffset() : null);
     if (paired) this.client.kick();
+    return written;
   }
 
   /**

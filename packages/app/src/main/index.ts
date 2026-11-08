@@ -231,10 +231,10 @@ let latexParams: RenderParams | null = null;
 const currentParams = (): RenderParams => (latexParams ??= withOverrides(settings()));
 ipcMain.handle('cirrus:settings:get', () => settings());
 // The settings changed in Réglages, only those (key: value, null back to the default): settings.json, and with a server
-// paired, shared with it (task 6, D9).
+// paired, shared with it (task 6, D9). The answer: what is written for those keys, which the interface adopts.
 ipcMain.handle('cirrus:settings:set', (_e, changes: unknown) => {
-  if (!bench) sync?.setSettings(changes);
   latexParams = null;
+  return bench ? undefined : sync?.setSettings(changes);
 });
 /** The largest file an import takes, in bytes (setting maxImportMb). */
 const maxImportBytes = () => withOverrides(settings()).maxImportMb * 2 ** 20;

@@ -81,6 +81,12 @@ export const MAX_SETTINGS_PER_REQUEST = 500;
 export interface SettingChange { value: unknown; at: number }
 /** A shared setting as the server keeps it: its last change, and the PC that made it (the more recent wins: `newer`). */
 export interface SettingRow extends SettingChange { pc: string }
+/**
+ * A setting's time as the PCs make them (now + the server's offset, rounded): whole milliseconds, from 0 to 2^53 − 1.
+ * Past it `at + 1 === at`, and a PC could never pass a change it has seen (review of task 6, Minor 4): checked by the
+ * server on receipt, and by the PC in what the server gives and in its own pending changes.
+ */
+export const isSettingTime = (at: unknown): at is number => Number.isSafeInteger(at) && (at as number) >= 0;
 
 /** A received operation that does not apply to this PC's state: it no longer follows the server's. */
 export class SyncDivergedError extends Error {}

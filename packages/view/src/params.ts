@@ -722,11 +722,14 @@ function bounded(spec: ParamSpec, v: unknown): unknown {
   return Array.isArray(v) ? [...v] : v;
 }
 
+/** Whether two values of a setting are the same (a list, an interval or a colour compared by its content). */
+export const sameSetting = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
 /** The fields that differ from the defaults: only those are written, so a later default reaches everyone else (spec 5.4 spirit). */
 export function diffFromDefaults(p: RenderParams): Partial<RenderParams> {
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(p)) {
-    if (JSON.stringify(v) !== JSON.stringify(DEFAULT_PARAMS[key as keyof RenderParams])) out[key] = v;
+    if (!sameSetting(v, DEFAULT_PARAMS[key as keyof RenderParams])) out[key] = v;
   }
   return out as Partial<RenderParams>;
 }

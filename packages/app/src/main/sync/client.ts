@@ -324,7 +324,8 @@ export class SyncClient {
     if (!res.body) throw new Error('Flux du serveur sans corps.');
     // The shared settings (task 6), read whole once the stream is open, and applied before anything it brings: a setting
     // changed meanwhile comes by both, and its stamp keeps it from being applied twice (SharedSettings.receive).
-    if (this.deps.settings) {
+    const shared = this.deps.settings;
+    if (shared) {
       const rows = await this.json(await this.request(conn, '/settings'));
       let settings: Record<string, SettingRow>;
       try {
@@ -332,7 +333,7 @@ export class SyncClient {
       } catch (e) {
         throw new Refusal(messageOf(e));
       }
-      this.deps.settings.receive(settings, true);
+      this.applySettings(() => shared.receive(settings, true));
     }
     conn.received = from;
     conn.open = true;
@@ -371,7 +372,8 @@ export class SyncClient {
    * cannot read is only said: a setting is never worth stopping the writes.
    */
   private settingsEvent(data: string): void {
-    if (!this.deps.settings) return;
+    const shared = this.deps.settings;
+    if (!shared) return;
     let rows: Record<string, SettingRow>;
     try {
       rows = parseSettingRows(JSON.parse(data));
@@ -379,7 +381,20 @@ export class SyncClient {
       console.warn(`Réglages reçus illisibles, ignorés : ${messageOf(e)}`);
       return;
     }
-    this.deps.settings.receive(rows, false);
+    this.applySettings(() => shared.receive(rows, false));
+  }
+
+  /**
+   * Settings the server gave, handed to this PC's (receive, acknowledge). A failure there — the disk refusing
+   * settings.json — is only said: a setting is never worth stopping the writes, and the next connection's whole read
+   * applies them again (review of task 6, Minor 6).
+   */
+  private applySettings(apply: () => void): void {
+    try {
+      apply();
+    } catch (e) {
+      console.warn(`Réglages reçus non appliqués : ${messageOf(e)}`);
+    }
   }
 
   /** The reconciliation of what arrived, once the window (syncReceiveBatchMs) since the first of it has passed. */
@@ -492,7 +507,7 @@ export class SyncClient {
       const res = await this.request(conn, '/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
       if (res.status === 400 || res.status === 413) {
         console.warn(`Réglages refusés par le serveur, abandonnés : ${await reasonOf(res)}`);
-        settings.acknowledge(sent, {});
+        this.applySettings(() => settings.acknowledge(sent, {}));
         continue;
       }
       const answer = await this.json(res);
@@ -502,7 +517,7 @@ export class SyncClient {
       } catch (e) {
         throw new Refusal(messageOf(e));
       }
-      settings.acknowledge(sent, rows);
+      this.applySettings(() => settings.acknowledge(sent, rows));
     }
   }
 

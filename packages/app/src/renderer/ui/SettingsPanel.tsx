@@ -1,5 +1,5 @@
 import type { LatexStatus } from '@cirrus/core';
-import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, WORD } from '@cirrus/view';
+import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, sameSetting, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
 import type { SyncStatus } from '../../main/sync/client.ts';
 import type { FirstSyncChoice, PairResult, ServerInfo } from '../../main/sync/host.ts';
@@ -8,7 +8,6 @@ import { ServerBlock } from './settings/ServerBlock.tsx';
 import { type RubricView, settingsTree } from './settingsTree.ts';
 
 type Value = RenderParams[keyof RenderParams];
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** A number typed in a field: kept as text while it is being typed, applied once it parses. */
 function NumberField(props: { value: number; step?: number; onChange(v: number): void }) {
@@ -91,7 +90,7 @@ function Param(props: { spec: ParamSpec; params: RenderParams; onChange: Change 
     <div className="param">
       <span className="label">
         {s.label}
-        {!same(props.params[s.key], DEFAULT_PARAMS[s.key]) && (
+        {!sameSetting(props.params[s.key], DEFAULT_PARAMS[s.key]) && (
           <button className="reset" title="Valeur par défaut" aria-label={`Remettre « ${s.label} » par défaut`}
             onClick={(e) => { e.preventDefault(); props.onChange(s.key, DEFAULT_PARAMS[s.key]); }}>↺</button>
         )}
@@ -132,7 +131,11 @@ const advancedShown = new Set<string>();
  * begins with its block: pairing this PC, or its server and « Dissocier ce PC » (`server`).
  */
 export function SettingsPanel(props: {
-  params: RenderParams; onChange(p: RenderParams): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
+  /**
+   * One setting changed (its field, its ↺), key by key: never a whole map built from this render's `params`, which a
+   * batch received from the server may have outdated (review of task 6, Important 1). `onResetAll`: « Tout réinitialiser ».
+   */
+  params: RenderParams; onChange: Change; onResetAll(): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
   server: { info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>;
     onFirst(choice: FirstSyncChoice): Promise<PairResult>; onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
   };
@@ -140,7 +143,7 @@ export function SettingsPanel(props: {
   const [query, setQuery] = useState('');
   const [, refresh] = useState(0);
   const toggle = (set: Set<string>, title: string) => { if (!set.delete(title)) set.add(title); refresh((n) => n + 1); };
-  const set: Change = (key, v) => props.onChange({ ...props.params, [key]: v });
+  const set = props.onChange;
   const state = props.latex?.state;
   const tree = settingsTree(query);
   const latexSetup = (
@@ -181,7 +184,7 @@ export function SettingsPanel(props: {
             </section>
           );
         })}
-      <button className="reset-all" onClick={() => props.onChange({ ...DEFAULT_PARAMS })}>Tout réinitialiser</button>
+      <button className="reset-all" onClick={props.onResetAll}>Tout réinitialiser</button>
     </aside>
   );
 }
