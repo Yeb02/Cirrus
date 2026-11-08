@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **En attente de la relecture de l'utilisateur.** Rien n'est lancé.
+> **Approuvé par l'utilisateur le 2026-11-08** (« C'est bon »).
 
 **Goal :** plusieurs PC partagent une même base par un serveur, qui tourne pour l'instant sur le PC de l'utilisateur (spec 21, point 3). On peut :
 - jumeler un PC au serveur par un code affiché sur le serveur ;
