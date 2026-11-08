@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -104,10 +104,49 @@ test('seed : l’instantané, le journal par pages, puis done ; le serveur tient
   expect(existsSync(join(dir, 'serveur', 'seed')) ? readdirSync(join(dir, 'serveur', 'seed')) : []).toEqual([]);
   const next = a.unit(editNode(s, X, { title: 'X3' }));
   expect(await a.units([next])).toEqual([{ accepted: rows.length + 1 }]);
+  const inMemory = image(decodeState(await (await a.get('/snapshot')).arrayBuffer()));
   await running.pop()!.close();
   const again = await start();
   const b = new Client(again.url, a.token, 'pc-a');
   expect(await b.hello()).toMatchObject({ lastSeq: rows.length + 1, empty: false });
+  // Review of task 5, Minor 7: started again, the state loaded from the disk is the one it held in memory.
+  expect(image(decodeState(await (await b.get('/snapshot')).arrayBuffer()))).toBe(inMemory);
+});
+
+test('R19 : une base qui porte déjà une violation des règles du graphe s’envoie quand même ; done la compte et la signale, sans la refuser', async () => {
+  const { url } = await start();
+  const a = await paired(url, 'pc-a');
+  const { store, s } = pcBase('pc-a');
+  // A connection of one member, written as an older version of the app could have (commit checks records, not rules).
+  const one = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [{ node: [...s.nodes.keys()][0], role: 'source' as const }] };
+  const odd: Action = { id: 'a-seule', label: 'Connexion d’un seul membre', ops: [{ t: 'connection', before: null, after: one }] };
+  store.commit(odd);
+  applyOps(s, odd.ops);
+  const rows = store.changesSince(0);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
+  const done = await send(a, '/seed/done', { last: rows.length });
+  expect(done.status).toBe(200);
+  expect(image(decodeState(await (await a.get('/snapshot')).arrayBuffer()))).toBe(image(s));
+  expect(warn.mock.calls.some((c) => /1 violation/.test(String(c[0])))).toBe(true);
+  warn.mockRestore();
+});
+
+test('revue, Minors 5 et 7 : une écriture acceptée entre /seed et /seed/done rend le serveur non vide : done reçoit 409, et l’envoi partiel est effacé', async () => {
+  const { url } = await start();
+  const a = await paired(url, 'pc-a'), c = await paired(url, 'pc-c');
+  const { store, s } = pcBase('pc-a');
+  const rows = store.changesSince(0);
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
+  const t = emptyState(), lobby = createPlan(t, 'Lobby', 'lobby');
+  expect(await c.units([c.unit(lobby)])).toEqual([{ accepted: 1 }]);
+  const late = await send(a, '/seed/done', { last: rows.length });
+  expect(late.status).toBe(409);
+  expect(await errorOf(late)).toBe('Le serveur tient déjà une base : il ne reçoit celle d’un PC que vide.');
+  expect(readdirSync(join(dir, 'serveur', 'seed'))).toEqual([]);
+  expect((await a.hello()).lastSeq).toBe(1);
 });
 
 test('seed : refusé à un serveur qui n’est plus vide, sans rien écrire ; une base jamais écrite au journal (le banc) le rend non vide aussi', async () => {

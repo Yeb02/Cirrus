@@ -1,11 +1,11 @@
 import { type Action, transact } from './commands.ts';
 import { uuidv7 } from './ids.ts';
-import { invertOp } from './ops.ts';
+import { invertOp, truncateLabel } from './ops.ts';
 import { OpConflictError, type State } from './state.ts';
 
 /** Inverse operations in reverse order. Undoing appends this action to the journal; nothing is erased (spec 6.4). */
 export function invertAction(a: Action): Action {
-  return { id: uuidv7(), label: `Annuler : ${a.label}`, ops: [...a.ops].reverse().map(invertOp) };
+  return { id: uuidv7(), label: truncateLabel(`Annuler : ${a.label}`), ops: [...a.ops].reverse().map(invertOp) };
 }
 
 export class UndoConflictError extends Error {}
@@ -78,7 +78,7 @@ export class UndoStack {
     const a = this.undone.at(-1);
     if (!a) return null;
     dryRun(s, a, `Impossible de rétablir : « ${a.label} » a été modifié depuis.`);
-    return { id: uuidv7(), label: `Rétablir : ${a.label}`, ops: a.ops };
+    return { id: uuidv7(), label: truncateLabel(`Rétablir : ${a.label}`), ops: a.ops };
   }
 
   confirmRedo(): void {

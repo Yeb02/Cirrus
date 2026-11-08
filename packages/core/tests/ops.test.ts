@@ -2,7 +2,8 @@ import { expect, test } from 'vitest';
 import type { NodeRec } from '../src/model.ts';
 import { flowOf, invertOp, MAX_ID_CHARS, type Op, parseOp, plainName, SyncFormatError } from '../src/ops.ts';
 import { applyOp, emptyState, OpConflictError } from '../src/state.ts';
-import { MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, parseRemoteUnit, parseUnit, type Unit } from '../src/sync.ts';
+import { MAX_LABEL_CHARS } from '../src/ops.ts';
+import { MAX_OPS_PER_UNIT, parseRemoteUnit, parseUnit, type Unit } from '../src/sync.ts';
 
 test('créer puis modifier un nœud', () => {
   const s = emptyState();

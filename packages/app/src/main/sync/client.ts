@@ -1,7 +1,7 @@
 import { openAsBlob } from 'node:fs';
 import {
-  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION,
-  SyncDivergedError, type Unit, type UnitResult,
+  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit, SNAPSHOT_VERSION,
+  SYNC_PROTOCOL_VERSION, SyncDivergedError, truncateLabel, type Unit, type UnitResult,
 } from '@cirrus/core';
 import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
@@ -462,7 +462,8 @@ export class SyncClient {
    * for one write alone, a refusal, as the server would give it.
    */
   private async post(conn: Connection, batch: Unit[]): Promise<UnitResult[] | null> {
-    const body = JSON.stringify({ units: batch });
+    // A label past the bound, written before it was cut at its making, is cut as it leaves (R20): the server refuses it.
+    const body = JSON.stringify({ units: batch.map((u) => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u)) });
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
       if (batch.length > 1) conn.batchLimit = Math.max(1, Math.floor(batch.length / 2));
       else {

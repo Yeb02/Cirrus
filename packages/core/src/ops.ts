@@ -55,6 +55,21 @@ export class SyncFormatError extends Error {}
 /** The longest identifier parseOp accepts: a record's, a tag key, a PC's (uuidv7 gives 36 characters). */
 export const MAX_ID_CHARS = 128;
 
+/** A write's longest label, in UTF-16 units (a server bound, Global Constraints: packages/server/src/bounds.ts). */
+export const MAX_LABEL_CHARS = 500;
+
+/**
+ * An action's label within MAX_LABEL_CHARS (R20: a label is display metadata, and a long title must never block a
+ * sync): cut, ending with « … », never between the two halves of a character; as it is when it fits.
+ */
+export function truncateLabel(label: string): string {
+  if (label.length <= MAX_LABEL_CHARS) return label;
+  let end = MAX_LABEL_CHARS - 1;
+  const last = label.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end--;
+  return `${label.slice(0, end)}…`;
+}
+
 type Fields = Record<string, unknown>;
 const HASH = /^[0-9a-f]{64}$/;
 

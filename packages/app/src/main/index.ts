@@ -21,7 +21,7 @@ import { type FetchFn, importPublication, requestFetch } from './publications/fe
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings, writeSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
-import { stagedDir, swapStaged } from './sync/firstSync.ts';
+import { stagedDir, startBase } from './sync/firstSync.ts';
 import { SyncHost, watchWindow } from './sync/host.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
 
@@ -411,15 +411,17 @@ void app.whenReady().then(() => {
   // A base taken from the server by the last run (plan 5a, D7, R17), staged beside this one: swapped in before the base
   // opens, while no other instance holds it (the lock just taken, then let go for the renames: the lock file is inside
   // the folder). One stat when there is none.
+  // A swap that failed and left no base at its place stops the start, saying where the bases are: a new empty base is
+  // never opened there (review of task 5, Important 2). One that left the old base opens it; the interface says that a
+  // base waits (SyncHost.info).
   if (lock && existsSync(stagedDir(dir))) {
     lock.release();
-    try {
-      const done = swapStaged(dir);
-      if (done === 'swapped') console.log(`Base prise du serveur installée : ${dir}.`);
-      else console.warn(`Base prise du serveur incomplète (téléchargement interrompu) : effacée, ${dir} gardée.`);
-    } catch (e) {
-      console.error('Base prise du serveur non installée (elle le sera au prochain démarrage) :', e);
+    const start = startBase(dir);
+    if (!start.open) {
+      failOpen(new Error(start.message));
+      return;
     }
+    if (start.log) console.warn(start.log);
     try {
       lock = lockBase(dir);
     } catch (e) {

@@ -91,10 +91,13 @@ export class SyncSession {
   /**
    * The interface has opened its state: with a server paired, the session keeps the pending writes the base gave,
    * the veil rises for `timeoutMs` at most — the settings just loaded (review of task 4, Important 3) — and the
-   * synchronisation starts (the main process waits for this to reconcile anything).
+   * synchronisation starts (the main process waits for this to reconcile anything). `waiting`: a base taken from the
+   * server that could not be swapped in at the start, said in a notification.
    */
-  async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number }): Promise<void> {
+  async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number; waiting?: string }): Promise<void> {
     this.pc = o.pc;
+    // A base taken from the server waits beside this one, its swap failed at the start: said at once (review, Important 2).
+    if (o.waiting) this.deps.toast(o.waiting);
     // Without a server, nothing to show: the interface is as in plan 4c.
     if (!o.paired) return;
     await this.deps.session.follow(o.pc, async () => o.pending);

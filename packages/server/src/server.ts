@@ -204,10 +204,16 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
     },
     '/seed/done': {
       POST: async (req, res, _url, who) => {
-        fresh();
+        // A server no longer fresh will never take this seed: its staging (up to MAX_SEED_BYTES) goes now (review, Minor 5).
+        const stillFresh = () => {
+          if (canon.fresh()) return;
+          seeds.drop(who.tokenHash);
+          throw new HttpError(409, NOT_FRESH);
+        };
+        stillFresh();
         seeds.owned(who.tokenHash);
         const body = await readJson(req, MAX_BODY_BYTES);
-        fresh();
+        stillFresh();
         // From here to the answer, synchronous: no write comes in between.
         const taken = seeds.take(who.tokenHash, body);
         try {

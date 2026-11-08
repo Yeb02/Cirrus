@@ -131,9 +131,9 @@ export class Seeds {
 
   /**
    * POST /seed/done, `{ last }`: the owner's base, once every line up to `last` came — its snapshot decoded (its
-   * structure and checksum checked), the journal's lines after what it covers replayed on it, each "before" checked,
-   * and no rule of the graph broken, as after a command. A base that fails these is refused (400) and dropped: the PC
-   * starts again. Synchronous: no other request runs in between.
+   * structure and checksum checked), the journal's lines after what it covers replayed on it, each "before" checked. A
+   * base that fails these is refused (400) and dropped: the PC starts again. The rules of the graph it already breaks
+   * are counted and reported, never refused (R19). Synchronous: no other request runs in between.
    */
   take(tokenHash: string, body: unknown): Seeded {
     const a = this.owned(tokenHash);
@@ -164,8 +164,12 @@ export class Seeds {
     } catch (e) {
       return refuse(`Le journal de ce PC ne suit pas son instantané : ${e instanceof Error ? e.message : String(e)}`);
     }
-    const broken = checkState(state)[0];
-    if (broken) refuse(`La base de ce PC enfreint une règle du graphe : ${broken.message}`);
+    // R19: what the PC's base already carries is not refused (as addedViolation tolerates a violation already there);
+    // counted and reported. Every write after this one is checked as usual.
+    const broken = checkState(state);
+    if (broken.length > 0) {
+      console.warn(`Base reçue avec ${broken.length} violation${broken.length > 1 ? 's' : ''} des règles du graphe, déjà dans la base du PC (la première : ${broken[0].message}) : gardée telle quelle.`);
+    }
     return { state, last: a.rows, lines };
   }
 

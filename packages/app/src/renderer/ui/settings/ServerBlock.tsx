@@ -59,6 +59,8 @@ export function ServerBlock(props: {
   };
   if (!props.info) return null;
   const offer = props.info.offer;
+  // A base taken from the server that waits beside this one (its swap failed at the start): said above the rest.
+  const waiting = !paired && props.info.waiting ? <p className="server-error">{props.info.waiting}</p> : null;
   if (restarting) {
     return (
       <div className="param-group server-block">
@@ -78,11 +80,21 @@ export function ServerBlock(props: {
       </div>
     );
   }
-  if (offer && !paired) {
+  // A first sync under way (the panel opened again meanwhile): what it does, nothing to click (review, Minor 3).
+  if (props.info.busy) {
+    return (
+      <div className="param-group server-block">
+        {waiting}
+        <p className="server-state">{props.info.busy}</p>
+      </div>
+    );
+  }
+  if (offer) {
     const action = offerAction(offer.offer);
     const kept = offer.offer.kind === 'seed' ? null : offer.offer.archive;
     return (
       <div className="param-group server-block server-offer">
+        {waiting}
         <p className="server-state">{offer.message}</p>
         {kept && <p className="server-state">Elle sera gardée sous « {kept} », à côté de la base.</p>}
         <div className="server-actions">
@@ -95,6 +107,7 @@ export function ServerBlock(props: {
   const submit = () => run('Jumelage…', async () => outcome(await props.onPair(url, code, name)));
   return (
     <form className="param-group server-block" onSubmit={(e) => { e.preventDefault(); if (busy === null) submit(); }}>
+      {waiting}
       <label className="param">
         <span className="label">Adresse du serveur</span>
         <input type="text" className="list" value={url} spellCheck={false} onChange={(e) => setUrl(e.target.value)} />

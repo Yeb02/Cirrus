@@ -529,7 +529,7 @@ Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référenc
 - Ruling: **l'instantané envoyé est celui que la base garde, avec la ligne qu'il couvre ; le serveur rejoue sur lui les lignes suivantes**, chaque « avant » vérifié. Sans instantané de ce format, le principal construit l'état de ses tables (`loadState`, `encodeState`). Les deux se lisent d'un seul tenant, avec la dernière ligne du journal : une écriture faite pendant l'envoi reste en attente, et part une fois la synchro démarrée.
   - Options : toujours l'état des tables (plusieurs secondes et un second état dans le principal à 50 000 nœuds) ; l'état de l'interface (le principal ne peut pas le lui demander au milieu du jumelage).
   - Coût si faux : un instantané qui ne suivrait pas les tables. Le serveur le refuse alors, si son journal ne s'applique pas sur lui.
-- Ruling: **ce que `done` vérifie** : l'instantané décodé (sa structure, sa somme de contrôle, ses index), les lignes après lui rejouées, et aucune règle du graphe enfreinte (`checkState` entier, 0,37 s à 50 000 nœuds). Chaque ligne du journal passe `parseChangeRow`, donc `parseOp`, à son arrivée. Un refus de `done` abandonne l'envoi : le PC recommence.
+- Ruling: **ce que `done` vérifie** (révisée au tour 1 de la revue : R19, les violations déjà là ne sont plus refusées) : l'instantané décodé (sa structure, sa somme de contrôle, ses index), les lignes après lui rejouées, et aucune règle du graphe enfreinte (`checkState` entier, 0,37 s à 50 000 nœuds). Chaque ligne du journal passe `parseChangeRow`, donc `parseOp`, à son arrivée. Un refus de `done` abandonne l'envoi : le PC recommence.
   - Options : ne vérifier que l'instantané (un PC jumelé n'est pas un inconnu, mais « toute entrée est vérifiée ») ; refuser toute ligne d'un autre PC.
   - Coût si faux : une ligne ancienne que `parseOp` refuserait bloquerait l'envoi de sa base. Le message nomme la ligne (« Ligne n du journal de ce PC : … »).
 - Ruling: **les lignes envoyées gardent leur PC, leur genre et leur marque « remplacée »**, et le serveur les numérote lui-même (server_seq = local_seq, R6). Les lignes de la base de test sont signées `fixture` : les refuser bloquerait toute base faite par `make-fixture.ts`, ou copiée d'un autre PC.
@@ -545,7 +545,7 @@ Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référenc
 - Ruling: **la prise : les fichiers actuels des nœuds, ceux de la corbeille compris, sauf les PDF**. Un fichier que l'ancienne base a déjà est lié dans la nouvelle (un lien en dur ; copié s'il ne se peut pas : un fichier du magasin ne change jamais). Les autres sont téléchargés et vérifiés. Un fichier que le serveur n'a pas est laissé : son nœud le dira à l'ouverture. Les anciennes versions et les PDF viennent à l'ouverture (D6).
   - La base prise reçoit `pc.json` (l'identifiant de ce PC, celui du jeton, R17), `settings.json` (copié : les réglages de ce PC restent les siens jusqu'à la tâche 6) et `serveur.json` (le jeton chiffré, par `secretsAt`). Sa marque, `complete.json`, s'écrit en dernier, synchronisée sur le disque.
   - Coût si faux : nul.
-- Ruling: **l'échange au démarrage** (R17) :
+- Ruling: **l'échange au démarrage** (R17 ; ses renommages revus au tour 1 de la revue, R21) :
   - le verrou est pris, puis lâché le temps des renommages (son fichier est dans le dossier), puis repris ;
   - le nom de l'ancienne base est `<dossier>-avant-jumelage-AAAA-MM-JJ`, en heure locale, puis « (2) », « (3) »… s'il est pris. La base de l'utilisateur s'appelle `base` : c'est le nom de la spec ;
   - l'ancienne base perd `downloads.json` et `serveur.json` ;
@@ -557,7 +557,7 @@ Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référenc
   - Coût si faux : un serveur qui se fige au milieu d'un envoi laisse le bloc sur « Envoi de la base… » jusqu'à la fermeture.
 - Ruling: **`done` est synchrone au serveur** (décodage, rejeu, vérification, écriture en une transaction) : les autres requêtes attendent, 20 s à 50 000 nœuds. Un serveur qui ne tient aucune base ne sert encore aucun PC synchronisé. Les flux ouverts sont fermés après `done` : ils reprennent par le journal.
   - Coût si faux : 20 s d'attente pour un PC qui se jumellerait au même moment.
-- Ruling: **l'écriture en bloc n'est pas accélérée.** Elle fait 18,8 s des 20 s de l'envoi comme de la prise, à 50 000 nœuds et 1,18 million de branches.
+- Ruling: **l'écriture en bloc n'est pas accélérée** (confirmé par R22). Elle fait 18,8 s des 20 s de l'envoi comme de la prise, à 50 000 nœuds et 1,18 million de branches.
   - Options mesurées ou estimées : un cache SQLite de 256 Mo pendant l'import (−20 %, mesuré) ; la base prise écrite sans WAL ni synchronisation, comme celle du banc (−37 %, mesuré ; une marque protège déjà une base prise incomplète) ; les branches en `WITHOUT ROWID`, une migration de schéma (un arbre au lieu de deux) ; les insertions triées par clé.
   - Pourquoi pas maintenant : une opération faite une fois par PC, sur une base dix fois plus grande que la vraie (plan 3c clos), et chaque option ajoute une API ou une migration.
   - Coût si faux : 20 s une fois par PC à cette taille. Les options ci-dessus restent ouvertes si la vraie base grossit.
@@ -574,3 +574,50 @@ Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référenc
   - Coût si faux : un nombre.
 - Ruling: **un arrêt brutal pendant un envoi** laisse le PC inscrit au serveur (`pcs`) sans `serveur.json` : un orphelin, accepté. L'envoi partiel reste invisible ; il est effacé au démarrage suivant du serveur, ou au prochain envoi. Au jumelage suivant, le serveur est encore vide, et le PC envoie de nouveau.
   - Coût si faux : une ligne de trop dans `pcs`.
+
+### Correctifs de la revue (tâche 5, tour 1)
+
+Décisions du contrôleur : R19 (`done` ne refuse pas ce que la base du PC portait déjà), R20 (un libellé est coupé, jamais refusé à l'envoi), R21 (les bornes de l'échange restent fixes, allongées), R22 (les accélérations mesurées ne sont pas appliquées).
+
+- Ruling: **l'envoi lit et vérifie d'abord ce qu'il enverra, avant toute requête** (`prepareSeed`, Important 3) : la dernière ligne du journal ; chaque ligne telle qu'elle partira (son libellé coupé), vérifiée comme le serveur la vérifie (`parseChangeRow`, numérotée de 1 sans trou) ; l'instantané rangé, décodé (une copie) et la fin du journal rejouée sur lui, sinon l'état des tables (le repli est signalé dans la console). Une ligne vraiment mal formée arrête l'envoi là, dit en français (« Ligne n du journal de ce PC : … »), et seul le jeton est révoqué.
+  - Les règles du graphe ne sont pas jugées ici (R19).
+  - Coût : une lecture du journal et le décodage de l'instantané, une fois par envoi (0,27 s à 50 000 nœuds, plus 10 µs par ligne), dans le principal, d'un seul tenant.
+  - Coût si faux : nul.
+- Ruling: **les fichiers sont listés après cette lecture** (Important 1). Un fichier est rangé avant l'écriture qui le nomme : toute ligne envoyée trouve donc le sien dans la liste. Une écriture faite après reste en attente, et le client l'envoie avec son fichier. L'ordre des requêtes reste celui de la consigne (les fichiers, l'instantané, le journal, `done`).
+  - Options : lister deux fois et envoyer la différence (une seconde passe pour le même effet).
+  - Coût si faux : nul.
+- Ruling: **R19, mis en œuvre** : `done` vérifie encore la structure (chaque ligne à son arrivée, la fin du journal rejouée sur l'instantané). Les violations que l'état porte déjà sont comptées et signalées dans la console du serveur, et gardées. Remplace la décision « ce que `done` vérifie » sur ce point.
+- Ruling: **R20, mis en œuvre** :
+  - `truncateLabel` (cœur, `ops.ts`, avec `MAX_LABEL_CHARS`, qui y passe depuis `sync.ts` : `commands.ts` ne peut pas lire `sync.ts` sans cycle) coupe à 500 unités, finit par « … », et ne coupe jamais un caractère en deux ;
+  - `Draft.finish` coupe tout libellé ; `invertAction` et le rétablissement aussi : « Annuler : » ou « Rétablir : » devant un libellé de 500 unités le portaient à 510 (trouvé en écrivant le test) ;
+  - le client coupe le libellé d'une écriture en attente écrite avant la borne quand elle part (`POST /units`), et l'envoi celui de chaque ligne ;
+  - le serveur refuse toujours un libellé trop long.
+  - Coût si faux : un libellé coupé dans l'historique.
+- Ruling: **l'échange au démarrage, revu** (Important 2, R21) :
+  - chaque renommage est retenté 10 fois, la pause de 150 ms × l'essai, 7 s en tout : de quoi laisser un antivirus parcourir une base écrite juste avant. Ce sont des bornes fixes, documentées, pas des réglages : l'échange a lieu avant qu'aucune base, donc aucun réglage, ne soit ouverte (R21) ;
+  - l'ancienne base, quand la nouvelle n'a pas pu prendre sa place, est remise par le même renommage retenté ;
+  - `startBase` : si l'échange échoue en laissant une base à sa place, elle s'ouvre, et une base prise attend. S'il n'en laisse aucune, le démarrage s'arrête (`failOpen`), avec un message qui dit où est chaque base. `lockBase` et `openBase` ne créent jamais une base vide à la place de celle de l'utilisateur ;
+  - une base prise qui attend (sa marque est là) est dite par une notification à l'ouverture et dans le bloc « Serveur » (`ServerInfo.waiting`, un `stat` à chaque `info()`).
+  - Remplace le point « un renommage refusé un moment … 5 fois, 100 ms » de la décision « l'échange au démarrage ».
+- Ruling: **les fichiers de la base prise sont sur le disque avant sa marque** (Minor 1) : `pc.json` écrit et synchronisé ; `serveur.json` aussi, puisque `fileSecrets.write` synchronise maintenant son fichier temporaire avant de le renommer, au jumelage ordinaire comme à la prise.
+  - Coût : un `fsync` par écriture de `serveur.json`, une fois par jumelage.
+- Ruling: **un premier jumelage en cours se voit** (Minor 3) : `info()` le rend (`busy` : « Envoi de la base au serveur… » ou « Téléchargement de la base du serveur… »), et le bloc ne montre que cela, sans formulaire ni bouton.
+- Ruling: **un `done` refusé parce que le serveur n'est plus vide efface l'envoi partiel** de ce PC (Minor 5) : jusqu'à `MAX_SEED_BYTES` d'instantané ne restent plus sur le disque jusqu'au prochain envoi ou au redémarrage.
+- Ruling: **un arrêt brutal entre `done` et l'écriture de `serveur.json`** (Minor 6) laisse le serveur tenir la base de ce PC, et ce PC non jumelé, ses lignes numérotées (`numberSeeded` a lieu avant `serveur.json`). Au jumelage suivant, sa base compte comme pleine et le serveur aussi : seul le remplacement est proposé, et les écritures faites après l'envoi partent avec l'ancienne base, mise à part.
+  - Options : écrire `serveur.json` avant `done`. Un arrêt entre les deux laisserait alors une base jumelée dont la première synchro n'est pas réglée (contre R8), que le client enverrait écriture par écriture.
+  - La fenêtre dure quelques millisecondes, après un envoi réussi : accepté.
+  - Coût si faux : les écritures de quelques secondes à reprendre dans l'ancienne base.
+- Ruling: **R22, les accélérations mesurées de l'écriture en bloc ne sont pas appliquées** : ni la base prise sans WAL (−37 %), ni le cache de 256 Mo (−20 %). C'est une opération faite une fois, d'environ 2 s à la taille de la vraie base, et le travail sur les performances est clos tant qu'elle ne grossit pas (plan 3c). Confirme la décision « l'écriture en bloc n'est pas accélérée ».
+  - Coût si faux : environ 20 s, une fois, sur une base de 50 000 nœuds.
+- **Tests ajoutés :**
+  - cœur : le libellé coupé à la fin d'une commande, ainsi que pour annuler et rétablir ;
+  - serveur : une base qui porte déjà une violation s'envoie ; une écriture acceptée entre `/seed` et `/seed/done` fait recevoir 409 à `done` et efface l'envoi partiel ; après un envoi, le redémarrage relit l'état gardé en mémoire ;
+  - app :
+    - un fichier rangé pendant l'envoi arrive au serveur, et le bloc dit l'envoi en cours ;
+    - un libellé trop long et une violation déjà là ne bloquent pas l'envoi ;
+    - un instantané qui ne se rejoue pas fait prendre l'état des tables ;
+    - une ligne mal formée arrête l'envoi avant toute requête ;
+    - une écriture en attente au libellé trop long part coupée ;
+    - l'ancienne base est remise en réessayant ;
+    - sans base à sa place, le démarrage s'arrête ;
+    - une base qui attend est dite à l'ouverture et dans le bloc.

@@ -256,7 +256,7 @@ export function App() {
         setActive(current);
         setShown({ state: s, rev: 0, action: null });
         // The startup veil lasts the setting just read: the ref holds it only once rendered (review, Important 3).
-        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs })
+        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs, waiting: info.waiting })
           .catch((e: unknown) => console.error('Synchronisation :', e));
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

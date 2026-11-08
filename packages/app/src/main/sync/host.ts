@@ -6,7 +6,9 @@ import type { RenderParams } from '@cirrus/view';
 import { FORMAT, SyncClient, type SyncStatus } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
-import { adoptBase, type FirstSyncOffer, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir } from './firstSync.ts';
+import {
+  adoptBase, type FirstSyncOffer, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage,
+} from './firstSync.ts';
 
 // The synchronisation in the app's main process (plan 5a, task 4), without Electron (wire.ts binds it to IPC, the
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,
@@ -41,9 +43,13 @@ export type FirstSyncChoice = 'seed' | 'adopt' | 'cancel';
 /**
  * The block « Serveur » of the settings: the server paired, its address and this PC's name there; not paired, the name
  * to propose (the machine's) and no address (the interface proposes its own), or, a pairing awaiting its answer, its
- * server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is.
+ * server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is —, or a first sync
+ * under way (`busy`: what it does). Not paired, `waiting` says a base taken from the server waits beside this one, its
+ * swap failed at the start (review of task 5, Important 2).
  */
-export interface ServerInfo { paired: boolean; url: string; name: string; offer?: { message: string; offer: FirstSyncOffer } }
+export interface ServerInfo {
+  paired: boolean; url: string; name: string; offer?: { message: string; offer: FirstSyncOffer }; busy?: string; waiting?: string;
+}
 
 /** What a local write's commit gives the interface: its journal number, and its time, the server's clock's (D4). */
 export interface Committed { seq: number; at: number }
@@ -129,6 +135,8 @@ export class SyncHost {
   private offered: { config: ServerConfig; offer: FirstSyncOffer } | null = null;
   /** The first sync under way (seed, adopt): aborted if the app quits meanwhile. */
   private firstSync: AbortController | null = null;
+  /** The first sync under way, for the block (info): its server, and what it does (review of task 5, Minor 3). */
+  private working: { config: ServerConfig; busy: string } | null = null;
   /** start, stop, pairing, unpairing, waking: one at a time, in order (never a start while a stop runs). */
   private cycle: Promise<void> = Promise.resolve();
   private nextId = 0;
@@ -165,8 +173,11 @@ export class SyncHost {
 
   info(): ServerInfo {
     if (this.config) return { paired: true, url: this.config.url, name: this.config.name };
-    const o = this.offered;
-    return o ? { paired: false, url: o.config.url, name: o.config.name, offer: { message: offerMessage(o.offer), offer: o.offer } } : { paired: false, url: '', name: this.deps.machineName };
+    const waiting = stagedWaiting(this.deps.dir) ? { waiting: waitingMessage(this.deps.dir) } : {};
+    const w = this.working, o = this.offered;
+    if (w) return { paired: false, url: w.config.url, name: w.config.name, busy: w.busy, ...waiting };
+    if (o) return { paired: false, url: o.config.url, name: o.config.name, offer: { message: offerMessage(o.offer), offer: o.offer }, ...waiting };
+    return { paired: false, url: '', name: this.deps.machineName, ...waiting };
   }
 
   /** The pending writes, all of them, as JSON: the interface's list at pairing (in its queue: none is written meanwhile). */
@@ -441,6 +452,7 @@ export class SyncHost {
       return no('Ce choix n’est pas proposé : jumelage annulé, ce PC n’est pas jumelé.');
     }
     const abort = (this.firstSync = new AbortController());
+    this.working = { config, busy: choice === 'seed' ? 'Envoi de la base au serveur…' : 'Téléchargement de la base du serveur…' };
     try {
       if (choice === 'seed') {
         try {
@@ -463,6 +475,7 @@ export class SyncHost {
       return { ok: true, restarting: true };
     } finally {
       this.firstSync = null;
+      this.working = null;
     }
   }
 

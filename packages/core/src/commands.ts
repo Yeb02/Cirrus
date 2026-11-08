@@ -4,7 +4,7 @@ import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts'
 import type {
   Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue,
 } from './model.ts';
-import type { Op } from './ops.ts';
+import { type Op, truncateLabel } from './ops.ts';
 import { normalizeTag, TagError } from './registry.ts';
 import {
   applyKnown, applyOp, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf,
@@ -146,10 +146,10 @@ export class Draft {
   /**
    * The action of this draft's operations, its rules checked on what they touch (addedViolation): an action may not
    * add a violation. Outermost, the state is left as it was received; nested, the operations stay applied for the
-   * enclosing draft, and directly inside a combine the check is the combine's.
+   * enclosing draft, and directly inside a combine the check is the combine's. Its label within MAX_LABEL_CHARS (R20).
    */
   finish(label: string): Action {
-    const tx = this.tx, ops = tx.log.slice(this.mark), a: Action = { id: uuidv7(), label, ops };
+    const tx = this.tx, ops = tx.log.slice(this.mark), a: Action = { id: uuidv7(), label: truncateLabel(label), ops };
     this.finished = true;
     if (this.parent) {
       tx.made.add(a);

@@ -1,7 +1,8 @@
-import { closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openAsBlob, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openAsBlob, openSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
-  decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_SEED_BYTES, SNAPSHOT_VERSION, type State, SyncFormatError,
+  applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, type State,
+  SyncFormatError, truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, storedHashes } from '@cirrus/store';
 import { SERVER_FILE, type SecretStore, type ServerConfig } from './config.ts';
@@ -104,14 +105,56 @@ export async function revokeSelf(fetchFn: typeof fetch, config: ServerConfig, ms
   }
 }
 
+/** A journal line as a seed sends it: its label within MAX_LABEL_CHARS (R20: one written before the bound is cut). */
+const sentRow = (r: ChangeRow): ChangeRow => (r.label.length > MAX_LABEL_CHARS ? { ...r, label: truncateLabel(r.label) } : r);
+
+/** The journal's lines from `after`, `last` at most, by pages: each page to `each`. */
+function eachPage(store: LocalStore, after: number, last: number, each: (rows: ChangeRow[]) => void): void {
+  while (after < last) {
+    const rows = store.changesSince(after, Math.min(MAX_JOURNAL_PAGE, last - after));
+    if (rows.length === 0) throw new Error(`Le journal de ce PC s’arrête à la ligne ${after}, avant la ${last}.`);
+    each(rows);
+    after = rows.at(-1)!.localSeq;
+  }
+}
+
 /**
- * What a seed sends of the base, read in one go (nothing is written in between): its stored snapshot, when it is of
- * this format, and the journal line it covers — the server replays the lines after it —, or else the state of its
- * tables, covering the whole journal; and the journal's last line now. A write made later stays pending.
+ * What a seed sends of the base, read and checked here before any request (review of task 5, Important 3; R19, R20),
+ * in one go (nothing is written in between, so a write made later stays pending, and a file a line up to `last` names
+ * is in the store already: blobs are stored before their write):
+ * - the journal's last line, `last`;
+ * - every line up to it as it will be sent (its label cut, R20), checked as the server checks it (parseChangeRow,
+ *   numbered from 1 without a gap): a line the server would refuse stops the seed here, said in French;
+ * - the stored snapshot, when it is of this format and the journal's lines after it replay on it, each "before"
+ *   checked, and the line it covers (the server replays them too); otherwise — none, or one that does not replay
+ *   (reported) — the state of the tables, covering the whole journal.
+ * The rules of the graph are not judged: what the base already carries goes with it (R19). Costs a reading of the
+ * journal and, with a stored snapshot, its decoding: a seed's, once.
  */
-function capture(store: LocalStore): { data: ArrayBuffer; seq: number; last: number } {
-  const last = store.lastSeq(), snap = store.readSnapshot();
-  if (snap && snap.version === SNAPSHOT_VERSION && snap.seq <= last) return { data: snap.data, seq: snap.seq, last };
+export function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last: number } {
+  const last = store.lastSeq();
+  let expected = 1;
+  eachPage(store, 0, last, (rows) => {
+    for (const r of rows) {
+      try {
+        parseChangeRow(sentRow(r), expected++);
+      } catch (e) {
+        if (e instanceof SyncFormatError) throw new Error(`Ligne ${r.localSeq} du journal de ce PC : ${e.message}`);
+        throw e;
+      }
+    }
+  });
+  const snap = store.readSnapshot();
+  if (snap && snap.version === SNAPSHOT_VERSION && snap.seq <= last) {
+    try {
+      // A copy: a state decoded keeps views on its buffer, which the replay may write.
+      const s = decodeState(snap.data.slice(0));
+      eachPage(store, snap.seq, last, (rows) => applyOps(s, rows.map((r) => r.op)));
+      return { data: snap.data, seq: snap.seq, last };
+    } catch (e) {
+      console.warn(`Instantané de cette base inutilisable pour l’envoi (${messageOf(e)}) : l’état est relu de ses tables.`);
+    }
+  }
   return { data: encodeState(store.loadState()), seq: last, last };
 }
 
@@ -119,14 +162,19 @@ function capture(store: LocalStore): { data: ArrayBuffer; seq: number; last: num
 export interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; signal: AbortSignal }
 
 /**
- * Sends this PC's base to the server, which holds none (D7, R16), in the brief's order: every blob of its store (old
- * versions too) the server lacks; its snapshot (POST /seed, MAX_SEED_BYTES at most), which makes this PC the seed's
- * owner; its journal up to the snapshot's capture, by pages of MAX_JOURNAL_PAGE lines and MAX_BODY_BYTES at most; then
- * done, which makes the server not empty. Then this PC's lines up to there take their numbers (the server's are its
- * journal numbers): none is pending, and its stream resumes after them. Writes made meanwhile stay pending, sent
- * once the sync starts. Throws, in French: nothing written here then, the base as it was. Returns its last line sent.
+ * Sends this PC's base to the server, which holds none (D7, R16). First, before any request, what it sends is read
+ * and checked (prepareSeed): a seed bound to be refused stops there. Then, in the brief's order: every blob of its
+ * store (old versions too) the server lacks — listed after that reading, so that a file a sent line names is among
+ * them (review, Important 1) —; its snapshot (POST /seed, MAX_SEED_BYTES at most), which makes this PC the seed's
+ * owner; its journal up to the reading, by pages of MAX_JOURNAL_PAGE lines and MAX_BODY_BYTES at most, labels cut
+ * (R20); then done, which makes the server not empty. Then this PC's lines up to there take their numbers (the
+ * server's are its journal numbers): none is pending, and its stream resumes after them. Writes made meanwhile stay
+ * pending, sent once the sync starts, their files with them. Throws, in French: nothing written here then, the base as
+ * it was. Returns its last line sent.
  */
 export async function seedBase(o: SeedDeps): Promise<number> {
+  const { data, seq, last } = prepareSeed(o.store);
+  if (data.byteLength > MAX_SEED_BYTES) throw new Error(`La base de ce PC est trop grosse pour le serveur : son instantané fait ${data.byteLength} octets, ${MAX_SEED_BYTES} au plus.`);
   const { send, json } = requests(o.fetch, o.config, o.signal);
   const hashes = storedHashes(o.dir);
   for (let i = 0; i < hashes.length; i += MAX_HASHES_PER_REQUEST) {
@@ -141,12 +189,10 @@ export async function seedBase(o: SeedDeps): Promise<number> {
       await res.body?.cancel();
     }
   }
-  const { data, seq, last } = capture(o.store);
-  if (data.byteLength > MAX_SEED_BYTES) throw new Error(`La base de ce PC est trop grosse pour le serveur : son instantané fait ${data.byteLength} octets, ${MAX_SEED_BYTES} au plus.`);
   const sent = await send('/seed', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'Cirrus-Seq': String(seq) }, body: new Uint8Array(data) });
   await sent.body?.cancel();
   for (let after = 0; after < last; ) {
-    const rows = o.store.changesSince(after, Math.min(MAX_JOURNAL_PAGE, last - after));
+    const rows = o.store.changesSince(after, Math.min(MAX_JOURNAL_PAGE, last - after)).map(sentRow);
     if (rows.length === 0) throw new Error(`Le journal de ce PC s’arrête à la ligne ${after}, avant la ${last}.`);
     let n = rows.length, body = JSON.stringify({ rows });
     // A page within the body's bound: halved until it fits.
@@ -270,7 +316,8 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
       if (!res.body || !Number.isSafeInteger(length) || length < 0) throw new Error(`Réponse du serveur illisible à /files/${hash}.`);
       await receiveBlob(staged, hash, chunks(res.body), length);
     }
-    writeFileSync(join(staged, 'pc.json'), JSON.stringify({ id: o.pc }), 'utf8');
+    // On the disk before the mark (review, Minor 1): a power cut never leaves a complete base without its PC or its server.
+    writeSynced(join(staged, 'pc.json'), JSON.stringify({ id: o.pc }));
     if (existsSync(join(o.dir, 'settings.json'))) copyFileSync(join(o.dir, 'settings.json'), join(staged, 'settings.json'));
     o.secrets.write(o.config);
     writeSynced(join(staged, READY_FILE), JSON.stringify({ server: o.config.url, seq: last }));
@@ -283,18 +330,26 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
 
 /** The errors of a folder another program holds a moment (the antivirus scanning it): its rename is tried again. */
 const HELD = new Set(['EPERM', 'EBUSY', 'EACCES']);
-/** A folder's renames at most at the swap, and the pause before the next one, times the attempt (fixed bounds, as the store's). */
-const SWAP_TRIES = 5;
-const SWAP_PAUSE_MS = 100;
+/**
+ * A folder's renames at most at the swap, and the pause before the next one, times the attempt: 150 ms, 300 ms…, about
+ * 7 s in all, long enough for an antivirus to scan a base written seconds before. Fixed bounds, not settings (R21): the
+ * swap runs before any base, hence any setting, is open.
+ */
+const SWAP_TRIES = 10;
+const SWAP_PAUSE_MS = 150;
 
-function rename(from: string, to: string): void {
+/** How the swap retries a rename; `rename`, the system's, given otherwise by a test only. */
+export interface SwapRetry { tries: number; pauseMs: number; rename?: (from: string, to: string) => void }
+const SWAP_RETRY: SwapRetry = { tries: SWAP_TRIES, pauseMs: SWAP_PAUSE_MS };
+
+function rename(from: string, to: string, retry: SwapRetry): void {
   for (let attempt = 1; ; attempt++) {
     try {
-      renameSync(from, to);
+      (retry.rename ?? renameSync)(from, to);
       return;
     } catch (e) {
-      if (attempt >= SWAP_TRIES || !HELD.has((e as NodeJS.ErrnoException).code ?? '')) throw e;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, SWAP_PAUSE_MS * attempt);
+      if (attempt >= retry.tries || !HELD.has((e as NodeJS.ErrnoException).code ?? '')) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retry.pauseMs * attempt);
     }
   }
 }
@@ -305,14 +360,17 @@ function freeName(path: string): string {
   for (let i = 2; ; i++) if (!existsSync(`${path} (${i})`)) return `${path} (${i})`;
 }
 
+const RELAUNCH = 'Ferme ce qui la tient ouverte (l’antivirus, l’explorateur), puis relance Cirrus.';
+
 /**
  * At the start, before the base opens and nothing holds its folder (R17): a base taken from the server and staged by
  * the last run replaces it — the old one renamed `<base>-avant-jumelage-AAAA-MM-JJ` (« (2) », … when that name is
  * taken), without a list of downloads to do nor a server; one that is not complete (no mark: an interrupted adopt) is
  * removed. Costs one stat when there is none. A folder that holds no base (an interruption between the two renames)
- * is not archived.
+ * is not archived. Each rename retried (`retry`); the staged base refused its place, the old one is put back the same
+ * way. A failure throws, in French, naming where each base is.
  */
-export function swapStaged(dir: string, day = new Date()): 'none' | 'dropped' | 'swapped' {
+export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWAP_RETRY): 'none' | 'dropped' | 'swapped' {
   const staged = stagedDir(dir);
   if (!existsSync(staged)) return 'none';
   if (!existsSync(join(staged, READY_FILE))) {
@@ -322,18 +380,50 @@ export function swapStaged(dir: string, day = new Date()): 'none' | 'dropped' | 
   let archive: string | null = null;
   if (existsSync(join(dir, 'cirrus.db'))) {
     archive = freeName(join(dirname(resolve(dir)), archiveName(dir, day)));
-    rename(dir, archive);
+    try {
+      rename(dir, archive, retry);
+    } catch (e) {
+      throw new Error(`La base de ce PC n’a pas pu être mise de côté (${messageOf(e)}) : la base prise du serveur attend dans « ${staged} ».`);
+    }
   } else {
     rmSync(dir, { recursive: true, force: true });
   }
   try {
-    rename(staged, dir);
+    rename(staged, dir, retry);
   } catch (e) {
+    if (!archive) throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}) : elle attend dans « ${staged} ». ${RELAUNCH}`);
     // The old base put back: it opens, and the staged one waits for the next start.
-    if (archive) renameSync(archive, dir);
-    throw e;
+    try {
+      rename(archive, dir, retry);
+    } catch (back) {
+      throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}), ni celle de ce PC y revenir (${messageOf(back)}) : la base de ce PC est dans « ${archive} », celle du serveur attend dans « ${staged} ». ${RELAUNCH}`);
+    }
+    throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}) : elle attend dans « ${staged} ».`);
   }
   if (archive) for (const f of [DOWNLOADS_FILE, SERVER_FILE]) rmSync(join(archive, f), { force: true });
   rmSync(join(dir, READY_FILE), { force: true });
   return 'swapped';
 }
+
+/**
+ * The start's step before the base opens (index.ts): the swap (swapStaged), and what follows — the base opens, with
+ * what to report in the console; or, when the swap failed and left no base at its place, the start stops with the
+ * message, never opening a new empty base there (review of task 5, Important 2).
+ */
+export function startBase(dir: string, day = new Date(), retry: SwapRetry = SWAP_RETRY): { open: true; log: string | null } | { open: false; message: string } {
+  try {
+    const done = swapStaged(dir, day, retry);
+    if (done === 'none') return { open: true, log: null };
+    return { open: true, log: done === 'swapped' ? `Base prise du serveur installée : ${dir}.` : `Base prise du serveur incomplète (téléchargement interrompu) : effacée, ${dir} gardée.` };
+  } catch (e) {
+    if (existsSync(join(dir, 'cirrus.db'))) return { open: true, log: `Base prise du serveur non installée : ${messageOf(e)}` };
+    return { open: false, message: messageOf(e) };
+  }
+}
+
+/** Whether a base taken from the server, complete, waits beside this one (its swap failed at the start): one stat. */
+export const stagedWaiting = (dir: string): boolean => existsSync(join(stagedDir(dir), READY_FILE));
+
+/** What the interface says of a base that waits (stagedWaiting). */
+export const waitingMessage = (dir: string): string =>
+  `Une base prise du serveur attend dans « ${stagedDir(dir)} » : elle n’a pas pu prendre la place de celle-ci au démarrage. ${RELAUNCH}`;

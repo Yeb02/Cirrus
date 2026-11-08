@@ -7,7 +7,7 @@ import { ancestors, groupOf } from '../src/invariants.ts';
 import { DEFAULT_PREAMBLE } from '../src/latex.ts';
 import type { Id } from '../src/model.ts';
 import { invertAction } from '../src/history.ts';
-import { flowOf, subjectOf } from '../src/ops.ts';
+import { flowOf, MAX_LABEL_CHARS, subjectOf, truncateLabel } from '../src/ops.ts';
 import { applyOp, canonical, emptyState, layoutKey, OpConflictError, placementKey, preambleText, type State } from '../src/state.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
@@ -342,4 +342,27 @@ test('une opération de préambule au « avant » périmé, ou à l’enregistre
   expect(() => applyOp(s, { t: 'preamble', before: { text: 'A' }, after: { text: 3 } as never })).toThrow(/invalid/);
   expect(() => applyOp(s, { t: 'preamble', before: null, after: null })).toThrow(/empty/);
   expect(s.preamble).toEqual({ text: 'A' });
+});
+
+test('R20 : le libellé d’une action est coupé à MAX_LABEL_CHARS, terminé par « … », sans couper un caractère en deux', () => {
+  const { s, mk } = world();
+  const X = mk('X');
+  const a = editNode(s, X, { title: 'T'.repeat(MAX_LABEL_CHARS * 2) });
+  expect(a.label).toHaveLength(MAX_LABEL_CHARS);
+  expect(a.label.endsWith('…')).toBe(true);
+  expect(a.label.startsWith('Modifier « TTT')).toBe(true);
+  // A character outside the basic plane (two UTF-16 units) at the cut is not split.
+  const cut = truncateLabel(`${'a'.repeat(MAX_LABEL_CHARS - 2)}😀😀`);
+  expect(cut).toBe(`${'a'.repeat(MAX_LABEL_CHARS - 2)}…`);
+  expect(truncateLabel('court')).toBe('court');
+  expect(truncateLabel('x'.repeat(MAX_LABEL_CHARS))).toBe('x'.repeat(MAX_LABEL_CHARS));
+});
+
+test('R20 : annuler et rétablir une action au libellé le plus long gardent un libellé dans la borne', () => {
+  const { s, mk } = world();
+  const X = mk('X');
+  const a = run(s, editNode(s, X, { title: 'T'.repeat(MAX_LABEL_CHARS * 2) }));
+  const undo = invertAction(a);
+  expect(undo.label.length).toBeLessThanOrEqual(MAX_LABEL_CHARS);
+  expect(undo.label.startsWith('Annuler : Modifier')).toBe(true);
 });

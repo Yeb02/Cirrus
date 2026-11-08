@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { type Action, createNode, createPlan, editNode, encodeState, type FileRef, type Id, type State } from '@cirrus/core';
@@ -8,7 +8,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { READY_FILE, stagedDir, swapStaged } from '../src/main/sync/firstSync.ts';
+import { READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
 import { AppPc } from './support/appPc.ts';
 import { image, Lab, until } from './support/virtualPc.ts';
 
@@ -273,11 +273,175 @@ test.runIf(process.platform === 'win32')('au démarrage, la base prise ne peut p
   writeFileSync(join(staged, READY_FILE), '{}');
   const held = openSync(join(staged, 'cirrus.db'), 'r');
   try {
-    expect(() => swapStaged(dir, new Date(2026, 10, 8))).toThrow();
+    expect(() => swapStaged(dir, new Date(2026, 10, 8), QUICK)).toThrow();
     expect([readFileSync(join(dir, 'cirrus.db'), 'utf8'), existsSync(join(root, 'base-avant-jumelage-2026-11-08')), existsSync(join(staged, READY_FILE))]).toEqual(['ancienne', false, true]);
   } finally {
     closeSync(held);
   }
-  expect(swapStaged(dir, new Date(2026, 10, 8))).toBe('swapped');
+  expect(swapStaged(dir, new Date(2026, 10, 8), QUICK)).toBe('swapped');
   expect(readFileSync(join(dir, 'cirrus.db'), 'utf8')).toBe('prise');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Review of task 5, round 1.
+
+/** A gate on `pc`'s first request to `path`: `reached` once it waits there, `release` lets it go. */
+function holdFirst(pc: AppPc, path: string) {
+  let release!: () => void, entered!: () => void, first = true;
+  const held = new Promise<void>((r) => { release = r; }), reached = new Promise<void>((r) => { entered = r; });
+  pc.net.before = async (_method, p) => {
+    if (!first || p !== path) return;
+    first = false;
+    entered();
+    await held;
+  };
+  return { reached, release };
+}
+
+/** The files the server's state names that the server does not hold. */
+async function missingOnServer(l: Lab): Promise<FileRef[]> {
+  const s = await l.state();
+  return [...s.nodes.values()].flatMap((n) => n.files).filter((f) => !serverBlob(l, f));
+}
+
+test('revue, Important 1 : un fichier enregistré pendant l’envoi arrive au serveur ; pendant l’envoi, le bloc le dit (Minor 3)', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const { X, notes, pdf } = await fill(a);
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  const gate = holdFirst(a, '/files/missing');
+  const sending = a.sync.first('seed');
+  await gate.reached;
+  // Under way: the block shows it, and offers no new pairing.
+  expect(a.host.info()).toEqual({ paired: false, url: l.url, name: 'Portable', busy: 'Envoi de la base au serveur…' });
+  // A .tex saved meanwhile: its file stored, then the write that names it.
+  const tex = storeBytes(a.dir, 'pendant.tex', bytes('\\section{Écrit pendant l’envoi}'));
+  await run(a, (s) => editNode(s, X, { files: [notes, pdf, tex] }));
+  gate.release();
+  expect(await sending).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 5000, () => JSON.stringify(a.statuses));
+  expect((await l.state()).nodes.get(X)?.files.map((f) => f.name)).toEqual(['notes.txt', 'Article.pdf', 'pendant.tex']);
+  expect(await missingOnServer(l)).toEqual([]);
+});
+
+test('R19, R20 : une ligne au libellé trop long (écrite avant la borne) et une violation déjà dans la base n’empêchent pas l’envoi ; le libellé arrive coupé', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const { X } = await fill(a);
+  // As an older version wrote them: a label past the bound, a connection of one member (commit checks records, not rules).
+  await run(a, (s) => ({ ...editNode(s, X, { summary: 'Un résumé.' }), label: 'L'.repeat(800) }));
+  const lone = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [{ node: X, role: 'source' as const }] };
+  await run(a, () => ({ id: 'a-seule', label: 'Connexion d’un seul membre', ops: [{ t: 'connection', before: null, after: lone }] }));
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(await a.sync.first('seed')).toEqual({ ok: true });
+  expect(image(await l.state())).toBe(image(a.session.state));
+  const long = (await l.journal()).find((r) => r.label.startsWith('LLL'))!;
+  expect([long.label.length, long.label.endsWith('…')]).toEqual([500, true]);
+  // The server says what it kept (R19).
+  expect(warn.mock.calls.some((c) => /1 violation/.test(String(c[0])))).toBe(true);
+});
+
+test('revue, Important 3 : un instantané rangé qui ne se rejoue pas jusqu’au bout du journal : l’envoi prend l’état des tables', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  // The whole state, said to cover the first line only: the journal's tail does not replay on it.
+  a.store.dropSnapshot();
+  a.store.writeSnapshot(encodeState(a.session.state), 1);
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(await a.sync.first('seed')).toEqual({ ok: true });
+  expect(image(await l.state())).toBe(image(a.session.state));
+  expect(warn.mock.calls.some((c) => String(c[0]).startsWith('Instantané de cette base inutilisable pour l’envoi'))).toBe(true);
+});
+
+test('revue, Important 3 : une ligne vraiment mal formée arrête l’envoi avant toute requête, en le disant', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  // A plan of a type the model does not have: the store keeps it (it checks nodes and connections), parseOp does not.
+  a.store.commit({ id: 'a-abimee', label: 'Plan abîmé', ops: [{ t: 'plan', before: null, after: { id: 'p-abime', name: 'Abîmé', type: 'autre' as 'plan' } }] });
+  const line = a.store.lastSeq();
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  const before = a.net.requests.length;
+  const r = await a.sync.first('seed');
+  expect(r).toEqual({ ok: false, message: expect.stringMatching(new RegExp(`^Base non envoyée : Ligne ${line} du journal de ce PC : Opération mal formée : plan\\.after\\.type .* Ce PC n’est pas jumelé, et sa base reste telle quelle\\.$`)) });
+  // Nothing of the base was sent: only the revocation (R15).
+  expect(a.net.requests.slice(before)).toEqual([{ method: 'POST', path: '/unpair' }]);
+  expect(await l.lastSeq()).toBe(0);
+});
+
+test('R20 : une écriture en attente au libellé trop long (faite avant la borne) part coupée, et passe', async () => {
+  const l = (lab = await Lab.start());
+  const v = await l.pc('pc-v');
+  const u = v.act((s) => ({ ...createPlan(s, 'Thèse', 'plan'), label: 'L'.repeat(700) }));
+  await l.settle([v]);
+  const row = (await l.journal()).find((x) => x.unit === u!.unit);
+  expect([row?.label.length, row?.label.endsWith('…'), v.dropped]).toEqual([500, true, []]);
+});
+
+/** The swap's retries for the tests: two, a millisecond apart. */
+const QUICK = { tries: 2, pauseMs: 1 };
+
+/** The fake rename of the swap: the moves `fails` names refuse (EBUSY) so many times, then rename for real. */
+function flaky(fails: Map<string, number>) {
+  return (from: string, to: string) => {
+    const key = `${from} → ${to}`, left = fails.get(key) ?? 0;
+    if (left > 0) {
+      fails.set(key, left - 1);
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rename '${from}'`), { code: 'EBUSY' });
+    }
+    renameSync(from, to);
+  };
+}
+
+/** A base folder (`oldBase`: holding a base) and a complete staged one beside it. */
+function staging(oldBase: boolean) {
+  const root = mkdtempSync(join(tmpdir(), 'cirrus-echange-'));
+  dirs.push(root);
+  const dir = join(root, 'base'), staged = stagedDir(dir), archive = join(root, 'base-avant-jumelage-2026-11-08');
+  if (oldBase) {
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'cirrus.db'), 'ancienne');
+  }
+  mkdirSync(staged);
+  writeFileSync(join(staged, 'cirrus.db'), 'prise');
+  writeFileSync(join(staged, READY_FILE), '{}');
+  return { root, dir, staged, archive };
+}
+
+const DAY = new Date(2026, 10, 8, 12);
+
+test('revue, Important 2 : la base prise refusée à sa place, l’ancienne est remise en réessayant ; le démarrage ouvre l’ancienne, et une base attend', () => {
+  const { dir, staged, archive } = staging(true);
+  const rename = flaky(new Map([[`${staged} → ${dir}`, 99], [`${archive} → ${dir}`, 1]]));
+  expect(startBase(dir, DAY, { tries: 3, pauseMs: 1, rename })).toEqual({ open: true, log: expect.stringMatching(/attend dans « .*base-nouvelle »/) });
+  expect([readFileSync(join(dir, 'cirrus.db'), 'utf8'), existsSync(archive), existsSync(join(staged, READY_FILE))]).toEqual(['ancienne', false, true]);
+  expect(stagedWaiting(dir)).toBe(true);
+});
+
+test('revue, Important 2 : sans base à sa place après un échange manqué, le démarrage s’arrête et dit où sont les bases ; il n’en ouvre pas une neuve', () => {
+  // The old base could not be put back.
+  const one = staging(true);
+  const stuck = startBase(one.dir, DAY, { ...QUICK, rename: flaky(new Map([[`${one.staged} → ${one.dir}`, 99], [`${one.archive} → ${one.dir}`, 99]])) });
+  expect(stuck).toEqual({ open: false, message: expect.stringContaining(`« ${one.archive} »`) });
+  expect((stuck as { message: string }).message).toContain(`« ${one.staged} »`);
+  expect(existsSync(join(one.dir, 'cirrus.db'))).toBe(false);
+  // No old base (an earlier interruption), and the staged one cannot take its place.
+  const two = staging(false);
+  expect(startBase(two.dir, DAY, { ...QUICK, rename: flaky(new Map([[`${two.staged} → ${two.dir}`, 99]])) })).toEqual({ open: false, message: expect.stringContaining(`« ${two.staged} »`) });
+  // Nothing staged: open, nothing said.
+  expect(startBase(join(two.root, 'autre'), DAY)).toEqual({ open: true, log: null });
+});
+
+test('revue, Important 2 : une base prise qui attend est dite à l’ouverture (une notification) et dans le bloc « Serveur »', async () => {
+  const l = (lab = await Lab.start());
+  const staged = stagedDir(join(l.root, 'pc-a'));
+  mkdirSync(staged, { recursive: true });
+  writeFileSync(join(staged, READY_FILE), '{}');
+  const a = await app(l, 'pc-a');
+  expect(a.host.info()).toEqual({ paired: false, url: '', name: 'PORTABLE', waiting: expect.stringMatching(/^Une base prise du serveur attend dans « .*pc-a-nouvelle » .*relance Cirrus/) });
+  await until(() => a.toasts.length > 0);
+  expect(a.toasts).toEqual([a.host.info().waiting]);
 });

@@ -2,7 +2,7 @@ import { addedViolation } from './commands.ts';
 import { groupOf, type Violation } from './invariants.ts';
 import { rebaseUnit } from './merge.ts';
 import type { Id, NodeRec } from './model.ts';
-import { invertOp, MAX_ID_CHARS, type Op, parseOp, SyncFormatError } from './ops.ts';
+import { invertOp, MAX_ID_CHARS, MAX_LABEL_CHARS, type Op, parseOp, SyncFormatError } from './ops.ts';
 import { applyOp, canonical, rollback, type State } from './state.ts';
 
 // The synchronisation's model (plan 5a): the writes a PC sends, those the server relays, and the reconciliation that
@@ -50,8 +50,7 @@ export type UnitResult = { accepted: number } | { stale: number } | { refused: s
 /** The version of the protocol between a PC and its server (D10): /hello refuses another. */
 export const SYNC_PROTOCOL_VERSION = 1;
 
-/** A write's longest label, and its most operations (a server bound, Global Constraints: packages/server/src/bounds.ts). */
-export const MAX_LABEL_CHARS = 500;
+/** A write's most operations (a server bound, Global Constraints: packages/server/src/bounds.ts); its longest label is ops.ts's. */
 export const MAX_OPS_PER_UNIT = 200_000;
 
 /**

@@ -1,4 +1,4 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // The server a PC is paired with (plan 5a, D3): its address, the token it gave, this PC's name there — kept in
@@ -46,9 +46,15 @@ export function fileSecrets(dir: string, cipher: TokenCipher): SecretStore {
         return;
       }
       const stored: StoredConfig = { url: c.url, name: c.name, token: cipher.encrypt(c.token).toString('base64') };
-      // A temporary file renamed: a crash never leaves half a file.
-      const tmp = `${file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify(stored, null, 2), 'utf8');
+      // A temporary file, synced to the disk, renamed: neither a crash nor a power cut leaves half a file (a base taken
+      // from the server is marked complete only after it, task 5).
+      const tmp = `${file}.${process.pid}.tmp`, fd = openSync(tmp, 'w');
+      try {
+        writeFileSync(fd, JSON.stringify(stored, null, 2), 'utf8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       renameSync(tmp, file);
     },
   };

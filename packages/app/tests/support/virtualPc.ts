@@ -67,6 +67,8 @@ export class Net {
   readonly results: UnitResult[] = [];
   corruptBlobs = false;
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
+  /** Awaited before each request leaves (a test holds one: a seed at its first request, say). */
+  before: ((method: string, path: string) => Promise<void> | void) | null = null;
   private gate: Deferred | null = null;
   /** Holds the downloads (GET /files/<hash>) until released, or until their request is aborted. */
   private filesGate: Deferred | null = null;
@@ -98,6 +100,7 @@ export class Net {
   readonly fetch: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input)), method = init?.method ?? 'GET';
     this.requests.push({ method, path: url.pathname });
+    await this.before?.(method, url.pathname);
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
     if (method === 'GET' && url.pathname.startsWith('/files/')) {
       const signal = init?.signal ?? undefined;
