@@ -1,12 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOps, CommandError, type FileRef, invertAction, type State } from '@cirrus/core';
+import { applyOps, CommandError, createNode, createPlan, editNode, emptyState, type FileRef, invertAction, MAX_LABEL_CHARS, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { blobRequest, latexRequest } from '../src/main/files.ts';
-import { filesBuild, removeFileBuild, renameFileBuild } from '../src/renderer/actions.ts';
+import { filesBuild, removeFileBuild, renameFileBuild, texSaveBuild } from '../src/renderer/actions.ts';
 import { decodeText, delimiterFor, parseDelimited } from '../src/renderer/files/decode.ts';
 import { type FileKind, fileKind, fileUrl, formatSize, type ViewRef, viewKey } from '../src/renderer/files/kind.ts';
 import { checkFileName, mergeFiles, sameName } from '../src/renderer/files/merge.ts';
@@ -395,4 +395,19 @@ test('ViewStates : un stockage qui lève, absent ou abîmé ne casse rien', () =
     views.set(sha('1'), { line: 1 });
     expect(new ViewStates(storage, 3).get(sha('1'))).toEqual({ line: 1 });
   }
+});
+
+test('R20 : enregistrer un .tex au nom très long donne un libellé dans la borne, coupé comme à la création (revue de la tâche 5, tour 2)', () => {
+  const s = emptyState();
+  const plan = createPlan(s, 'Thèse', 'plan');
+  applyOps(s, plan.ops);
+  const P = (plan.ops[0].after as { id: string }).id;
+  const node = createNode(s, { plan: P, title: 'Chapitre', x: 0, y: 0, k: 0 });
+  applyOps(s, node.ops);
+  const X = (node.ops[0].after as { id: string }).id, name = `${'n'.repeat(600)}.tex`;
+  applyOps(s, editNode(s, X, { files: [{ name, hash: sha('a'), size: 1 }] }).ops);
+  const a = texSaveBuild(s, X, { name, hash: sha('b'), size: 2 })!(s);
+  expect(a.label).toHaveLength(MAX_LABEL_CHARS);
+  expect(a.label.startsWith('Modifier « nnn')).toBe(true);
+  expect(a.label.endsWith('…')).toBe(true);
 });

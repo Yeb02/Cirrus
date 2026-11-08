@@ -26,11 +26,13 @@ export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label
  * The head of the rubric « Serveur » (plan 5a, D3): not paired, the server's address, the pairing code its `jumeler`
  * shows, this PC's name there, and « Jumeler »; a refusal said under them. The first pairing's question (D7), in its
  * place while the main process holds it (`info.offer`: the panel closed and opened again shows it still): why, then its
- * button and « Annuler ». Paired, the server, the synchronisation's state, and « Dissocier ce PC ».
+ * button and « Annuler ». Paired, the server, the synchronisation's state, and « Dissocier ce PC ». `refresh` reads what the
+ * main process holds at each mounting (the panel opened, the rubric unfolded): a first sync under way then shows as
+ * such; until it answers, nothing can be clicked (review of task 5, round 2).
  */
 export function ServerBlock(props: {
   info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onFirst(choice: FirstSyncChoice): Promise<PairResult>;
-  onUnpair(): Promise<void>;
+  onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
 }) {
   const [url, setUrl] = useState(props.info?.url || DEFAULT_SERVER_URL);
   const [code, setCode] = useState('');
@@ -38,13 +40,21 @@ export function ServerBlock(props: {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
-  const paired = props.info?.paired === true;
-  // The proposals arrive with the information (the address by default, the machine's name), or after an unpairing.
+  // What the block was given may be stale (a first sync started since): read again at mounting, nothing clickable before.
+  const [fresh, setFresh] = useState(!props.refresh);
   useEffect(() => {
-    if (!props.info || props.info.paired) return;
-    setUrl(props.info.url || DEFAULT_SERVER_URL);
-    setName(props.info.name);
-  }, [props.info]);
+    if (props.refresh) void props.refresh().catch(() => {}).finally(() => setFresh(true));
+  }, []);
+  const paired = props.info?.paired === true;
+  // The proposals arrive with the information (the address by default, the machine's name), or after an unpairing; the
+  // same values read again leave what is typed.
+  const proposal = props.info && !props.info.paired ? props.info : null;
+  useEffect(() => {
+    if (!proposal) return;
+    setUrl(proposal.url || DEFAULT_SERVER_URL);
+    setName(proposal.name);
+  }, [proposal?.url, proposal?.name]);
+  const blocked = busy !== null || !fresh;
   const run = (label: string, job: () => Promise<void>) => {
     setBusy(label);
     setError(null);
@@ -75,7 +85,7 @@ export function ServerBlock(props: {
         <p className="server-state">Jumelé à <span className="server-url">{props.info.url}</span>, sous le nom « {props.info.name} ».</p>
         <p className="server-state">État : {state}</p>
         <div className="server-actions">
-          <button disabled={busy !== null} onClick={() => run('', props.onUnpair)}>Dissocier ce PC</button>
+          <button disabled={blocked} onClick={() => run('', props.onUnpair)}>Dissocier ce PC</button>
         </div>
       </div>
     );
@@ -98,15 +108,15 @@ export function ServerBlock(props: {
         <p className="server-state">{offer.message}</p>
         {kept && <p className="server-state">Elle sera gardée sous « {kept} », à côté de la base.</p>}
         <div className="server-actions">
-          <button disabled={busy !== null} onClick={() => run(action.busy, async () => outcome(await props.onFirst(action.choice)))}>{busy || action.label}</button>
-          <button disabled={busy !== null} onClick={() => run('', async () => outcome(await props.onFirst('cancel')))}>Annuler</button>
+          <button disabled={blocked} onClick={() => run(action.busy, async () => outcome(await props.onFirst(action.choice)))}>{busy || action.label}</button>
+          <button disabled={blocked} onClick={() => run('', async () => outcome(await props.onFirst('cancel')))}>Annuler</button>
         </div>
       </div>
     );
   }
   const submit = () => run('Jumelage…', async () => outcome(await props.onPair(url, code, name)));
   return (
-    <form className="param-group server-block" onSubmit={(e) => { e.preventDefault(); if (busy === null) submit(); }}>
+    <form className="param-group server-block" onSubmit={(e) => { e.preventDefault(); if (!blocked) submit(); }}>
       {waiting}
       <label className="param">
         <span className="label">Adresse du serveur</span>
@@ -121,7 +131,7 @@ export function ServerBlock(props: {
         <input type="text" className="list" value={name} spellCheck={false} onChange={(e) => setName(e.target.value)} />
       </label>
       <div className="server-actions">
-        <button type="submit" disabled={busy !== null}>{busy ?? 'Jumeler'}</button>
+        <button type="submit" disabled={blocked}>{busy ?? 'Jumeler'}</button>
       </div>
       {error && <p className="server-error">{error}</p>}
     </form>

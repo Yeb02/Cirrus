@@ -134,7 +134,7 @@ const advancedShown = new Set<string>();
 export function SettingsPanel(props: {
   params: RenderParams; onChange(p: RenderParams): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
   server: { info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>;
-    onFirst(choice: FirstSyncChoice): Promise<PairResult>; onUnpair(): Promise<void>;
+    onFirst(choice: FirstSyncChoice): Promise<PairResult>; onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
   };
 }) {
   const [query, setQuery] = useState('');

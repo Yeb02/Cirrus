@@ -1,7 +1,7 @@
 import {
   type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
   exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
-  removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, type Vec2,
+  removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, truncateLabel, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
@@ -395,7 +395,7 @@ export function filesBuild(s: State, node: Id, incoming: FileRef[]): Build {
 
 /**
  * A new version of a node's .tex, saved from its full screen (plan 4b, D6) and already in the store (`ref`, under the
- * file's name): filesBuild, which replaces it in its place, labelled « Modifier « name » ». Null when the node holds
+ * file's name): filesBuild, which replaces it in its place, labelled « Modifier « name » » (cut to MAX_LABEL_CHARS, R20). Null when the node holds
  * that very content already. Refused when the action is computed if the node is gone or in the trash, or the file no
  * longer in it: a save never brings back what was removed meanwhile (Review Focus 4).
  */
@@ -405,7 +405,7 @@ export function texSaveBuild(s: State, node: Id, ref: FileRef): Build {
   return (st) => {
     const why = texSaveRefusal(st, node, ref.name);
     if (why) throw new CommandError(why);
-    return { ...replace(st), label: `Modifier « ${ref.name} »` };
+    return { ...replace(st), label: truncateLabel(`Modifier « ${ref.name} »`) };
   };
 }
 

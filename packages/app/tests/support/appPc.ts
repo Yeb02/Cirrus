@@ -5,7 +5,7 @@ import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
 import { loadPayload, openBase, pcId } from '../../src/main/base.ts';
 import type { SyncStatus } from '../../src/main/sync/client.ts';
 import { fileSecrets, type TokenCipher } from '../../src/main/sync/config.ts';
-import { type HostWindow, type SyncIncoming, SyncHost } from '../../src/main/sync/host.ts';
+import { type HostWindow, type ServerInfo, type SyncIncoming, SyncHost } from '../../src/main/sync/host.ts';
 import { EditSession, openState } from '../../src/renderer/session.ts';
 import { type SyncBridge, SyncSession, type SyncView } from '../../src/renderer/sync/syncSession.ts';
 import { type Lab, Net, TEST_PARAMS } from './virtualPc.ts';
@@ -36,6 +36,8 @@ export class AppPc {
   readonly statuses: SyncStatus[] = [];
   readonly views: SyncView[] = [];
   readonly toasts: string[] = [];
+  /** What the session gave the interface of the server (App's state for the block « Serveur »), in order. */
+  readonly servers: ServerInfo[] = [];
   readonly incoming: SyncIncoming[] = [];
   veils = 0;
   /** The app's relaunches asked for (a base taken from the server, D7): the test restarts it itself. */
@@ -104,6 +106,7 @@ export class AppPc {
     this.session = new EditSession(opened.state, async (a, unit) => clone(this.host.commit(clone(a), unit)), () => {}, opened.seq);
     this.sync = new SyncSession({
       bridge: this.bridge, session: this.session, timeoutMs: () => this.params.syncConnectTimeoutMs, toast: (t) => this.toasts.push(t), onView: (v) => this.views.push(v),
+      onServer: (i) => { this.servers.push(i); },
       load: () => openState(this.load),
     });
     const info = await this.bridge.syncServer();

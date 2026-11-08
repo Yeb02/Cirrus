@@ -57,6 +57,8 @@ export interface SyncSessionDeps {
   timeoutMs(): number;
   toast(text: string): void;
   onView(v: SyncView): void;
+  /** What the block « Serveur » shows, as the main process holds it (server): App's state. */
+  onServer?(info: ServerInfo): void;
 }
 
 export class SyncSession {
@@ -119,7 +121,12 @@ export class SyncSession {
    * launch starts it — the main process never started the client, so there is no chip, and nothing to try again.
    */
   async pair(url: string, code: string, name: string): Promise<PairResult> {
-    return this.paired(await this.deps.bridge.syncPair(url, code, name));
+    try {
+      return this.paired(await this.deps.bridge.syncPair(url, code, name));
+    } finally {
+      // What the main process holds, whatever happened here (review of task 4, Minor 3).
+      await this.reread();
+    }
   }
 
   /**
@@ -127,7 +134,28 @@ export class SyncSession {
    * done; the server's taken, the app restarting on it (nothing more here); given up. The outcome, in French.
    */
   async first(choice: FirstSyncChoice): Promise<PairResult> {
-    return this.paired(await this.deps.bridge.syncFirst(choice));
+    try {
+      return this.paired(await this.deps.bridge.syncFirst(choice));
+    } finally {
+      await this.reread();
+    }
+  }
+
+  /**
+   * What the block « Serveur » shows, read again from the main process and given to onServer: at each mounting of the
+   * block — the settings panel opened, its rubric unfolded —, so that a first sync under way shows as such (`busy`)
+   * rather than the offer the interface last held (review of task 5, round 2); and after each pairing, answer and
+   * unpairing.
+   */
+  async server(): Promise<ServerInfo> {
+    const info = await this.deps.bridge.syncServer();
+    this.deps.onServer?.(info);
+    return info;
+  }
+
+  /** server(), its failure only reported: the block keeps what it had. */
+  private async reread(): Promise<void> {
+    await this.server().catch((e: unknown) => console.error('État du serveur non relu :', e));
   }
 
   /** A pairing the main process did (`ok`, not restarting): every pending write taken, then the sync started. */
@@ -150,6 +178,7 @@ export class SyncSession {
     await this.deps.session.unfollow();
     this.lower(false);
     this.setStatus({ state: 'off' });
+    await this.reread();
   }
 
   /** The chip's click: offline or refused, try again now. */

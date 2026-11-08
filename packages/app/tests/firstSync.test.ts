@@ -4,11 +4,15 @@ import { dirname, join } from 'node:path';
 import { type Action, createNode, createPlan, editNode, encodeState, type FileRef, type Id, type State } from '@cirrus/core';
 import { Tokens } from '@cirrus/server';
 import { filePath, storeBytes } from '@cirrus/store';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
 import { READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
+import type { ServerInfo } from '../src/main/sync/host.ts';
+import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 import { AppPc } from './support/appPc.ts';
 import { image, Lab, until } from './support/virtualPc.ts';
 
@@ -322,6 +326,35 @@ test('revue, Important 1 : un fichier enregistré pendant l’envoi arrive au se
   await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 5000, () => JSON.stringify(a.statuses));
   expect((await l.state()).nodes.get(X)?.files.map((f) => f.name)).toEqual(['notes.txt', 'Article.pdf', 'pendant.tex']);
   expect(await missingOnServer(l)).toEqual([]);
+});
+
+test('revue, tour 2, Minor 3 : le bloc « Serveur » remonté pendant un envoi (panneau rouvert, rubrique dépliée) relit l’état du principal : l’envoi en cours, aucun bouton ; à la fin, jumelé', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  // What the interface kept after the pairing (App's state): the offer.
+  const kept = a.servers.at(-1)!;
+  expect(kept.offer?.offer.kind).toBe('seed');
+  const gate = holdFirst(a, '/files/missing');
+  const sending = a.sync.first('seed');
+  await gate.reached;
+  const block = (info: ServerInfo) => renderToStaticMarkup(createElement(ServerBlock, {
+    info, status: { state: 'off' }, onPair: (u, c, n) => a.sync.pair(u, c, n), onFirst: (c) => a.sync.first(c), onUnpair: () => a.sync.unpair(), refresh: () => a.sync.server(),
+  }));
+  // Mounted again: until it has read the main process, nothing to click in the offer it was left with…
+  expect(block(kept)).toContain('Envoyer la base de ce PC au serveur');
+  expect(block(kept)).not.toMatch(/<button(?![^>]*disabled)/);
+  // …then its reading (the block's mounting): the seed under way, which the interface now holds; no button at all.
+  const now = await a.sync.server();
+  expect(now).toEqual({ paired: false, url: l.url, name: 'Portable', busy: 'Envoi de la base au serveur…' });
+  expect(a.servers.at(-1)).toEqual(now);
+  expect(block(now)).toContain('Envoi de la base au serveur…');
+  expect(block(now)).not.toContain('<button');
+  gate.release();
+  expect(await sending).toEqual({ ok: true });
+  // Done: the interface holds the server paired.
+  expect(a.servers.at(-1)).toMatchObject({ paired: true, url: l.url, name: 'Portable' });
 });
 
 test('R19, R20 : une ligne au libellé trop long (écrite avant la borne) et une violation déjà dans la base n’empêchent pas l’envoi ; le libellé arrive coupé', async () => {

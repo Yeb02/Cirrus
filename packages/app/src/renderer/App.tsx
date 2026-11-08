@@ -247,7 +247,7 @@ export function App() {
         // holds the pending writes; the state read again from the base when a reconciliation could not be written.
         sync.current = new SyncSession({
           bridge: window.cirrus, session: session.current, load: () => openState(window.cirrus.load), timeoutMs: () => paramsRef.current.syncConnectTimeoutMs,
-          toast: (text) => toast(text), onView: setSyncView,
+          toast: (text) => toast(text), onView: setSyncView, onServer: setServer,
         });
         setServer(info);
         mark('stateReady');
@@ -461,28 +461,17 @@ export function App() {
   };
   /** TinyTeX installed, the user having asked (the notice, the settings); how it goes is told by its state. */
   const installLatex = () => { window.cirrus.latexInstall().catch((e: unknown) => console.error('Installation de LaTeX :', e)); };
-  /** The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing, then what the main process now holds. */
+  /**
+   * The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing; what the main process holds comes
+   * through the session (onServer), after each of them and at each mounting of the block (refresh: review of task 5,
+   * round 2).
+   */
   const serverBlock = {
     info: server, status: syncView.status,
-    onPair: async (url: string, code: string, name: string) => {
-      try {
-        return await sync.current!.pair(url, code, name);
-      } finally {
-        // What the main process holds, whatever happened here (review, Minor 3).
-        setServer(await window.cirrus.syncServer());
-      }
-    },
-    onFirst: async (choice: FirstSyncChoice) => {
-      try {
-        return await sync.current!.first(choice);
-      } finally {
-        setServer(await window.cirrus.syncServer());
-      }
-    },
-    onUnpair: async () => {
-      await sync.current!.unpair();
-      setServer(await window.cirrus.syncServer());
-    },
+    onPair: (url: string, code: string, name: string) => sync.current!.pair(url, code, name),
+    onFirst: (choice: FirstSyncChoice) => sync.current!.first(choice),
+    onUnpair: () => sync.current!.unpair(),
+    refresh: () => sync.current!.server(),
   };
   const files: NodeFiles = {
     importInto: (node, paths, refused) => addFiles(node, paths.length > 0 ? window.cirrus.importFiles(paths) : Promise.resolve({ refs: [], refused: [] }), refused),
