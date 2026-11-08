@@ -21,7 +21,7 @@ import { type FetchFn, importPublication, requestFetch } from './publications/fe
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
-import { stagedDir, startBase } from './sync/firstSync.ts';
+import { quitsInsteadOfRelaunch, stagedDir, startBase } from './sync/firstSync.ts';
 import { SyncHost, watchWindow } from './sync/host.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
 
@@ -383,6 +383,17 @@ function failOpen(e: unknown): void {
   app.exit(2);
 }
 
+/**
+ * A base taken from the server (plan 5a, D7) makes the app start again on it. With CIRRUS_NO_RELAUNCH=1 it only quits
+ * (R27): the interface's checks (scripts/interface.mjs) start it again themselves, in their window out of the user's
+ * way, so that no instance escapes them. Taken only on a test base in such a window (quitsInsteadOfRelaunch); it can
+ * only turn a relaunch into a quit, and does nothing otherwise.
+ */
+const noRelaunch = quitsInsteadOfRelaunch(process.env, capture !== undefined);
+if (process.env.CIRRUS_NO_RELAUNCH && !noRelaunch) {
+  console.warn('CIRRUS_NO_RELAUNCH ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
+}
+
 void app.whenReady().then(() => {
   if (!first) return;
   if (benchBuild) {
@@ -487,9 +498,9 @@ void app.whenReady().then(() => {
     // Shared settings received (task 6): read again by what reads them here, and told to the interface.
     window: { ...appWindows, settings: (changes) => { latexParams = null; appWindows.settings(changes); } },
     // A base taken from the server (D7): the app quits as it does (the last snapshot, the sync stopped, the base closed),
-    // then starts again, and swaps it in before it opens.
+    // then starts again, and swaps it in before it opens; only quits for the interface's checks (noRelaunch, R27).
     relaunch: () => {
-      app.relaunch();
+      if (!noRelaunch) app.relaunch();
       app.quit();
     },
   });

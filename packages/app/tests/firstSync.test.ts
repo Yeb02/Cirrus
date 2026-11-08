@@ -10,7 +10,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
+import { quitsInsteadOfRelaunch, READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
 import type { ServerInfo } from '../src/main/sync/host.ts';
 import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 import { AppPc } from './support/appPc.ts';
@@ -477,4 +477,15 @@ test('revue, Important 2 : une base prise qui attend est dite à l’ouverture (
   expect(a.host.info()).toEqual({ paired: false, url: '', name: 'PORTABLE', waiting: expect.stringMatching(/^Une base prise du serveur attend dans « .*pc-a-nouvelle » .*relance Cirrus/) });
   await until(() => a.toasts.length > 0);
   expect(a.toasts).toEqual([a.host.info().waiting]);
+});
+
+test('R27 : CIRRUS_NO_RELAUNCH fait seulement quitter l’app après une prise, et seulement sur une base de test en arrière-plan ou en capture', () => {
+  const env = { CIRRUS_NO_RELAUNCH: '1', CIRRUS_DATA: 'D:\base-de-test' };
+  expect(quitsInsteadOfRelaunch({ ...env, CIRRUS_BACKGROUND: '1' }, false)).toBe(true);
+  expect(quitsInsteadOfRelaunch(env, true)).toBe(true);
+  // Inert by default, on the user's own base, in a window in front, or for another value.
+  expect(quitsInsteadOfRelaunch({}, false)).toBe(false);
+  expect(quitsInsteadOfRelaunch({ CIRRUS_NO_RELAUNCH: '1', CIRRUS_BACKGROUND: '1' }, true)).toBe(false);
+  expect(quitsInsteadOfRelaunch(env, false)).toBe(false);
+  expect(quitsInsteadOfRelaunch({ ...env, CIRRUS_NO_RELAUNCH: 'oui', CIRRUS_BACKGROUND: '1' }, false)).toBe(false);
 });

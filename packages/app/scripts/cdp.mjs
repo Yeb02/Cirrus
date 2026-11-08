@@ -1,5 +1,6 @@
-// The app's window driven by DevTools (CDP), out of the user's way: shared by the interface's checks (interface.mjs) and
-// the measures of plan 4c (mesures-annotations.mjs). Each launch takes a base and a profile of its own, never the user's.
+// The app's window driven by DevTools (CDP), out of the user's way: shared by the interface's checks (interface.mjs), the
+// measures of plans 4c and 5a (mesures-annotations.mjs, mesures-synchro.mjs) and the captures of a paired PC
+// (captures.mjs). Each launch takes a base and a profile of its own, never the user's.
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -32,6 +33,14 @@ export async function launch(data, profile, more = {}) {
   await new Promise((r) => ws.addEventListener('open', r));
   let next = 0;
   const pending = new Map();
+  /** The app gone (it quits by itself: plan 5a, a base taken from the server): what waits for an answer gets none. */
+  let gone = false;
+  const exited = new Promise((r) => (child.exitCode !== null ? r(child.exitCode) : child.once('exit', r)));
+  ws.addEventListener('close', () => {
+    gone = true;
+    for (const answer of pending.values()) answer({ error: { message: 'DevTools fermé' } });
+    pending.clear();
+  });
   /** DevTools' events by method: each waiter takes the next one. */
   const waiting = new Map();
   ws.addEventListener('message', (m) => {
@@ -44,7 +53,12 @@ export async function launch(data, profile, more = {}) {
     const timer = setTimeout(() => { waiting.delete(method); r(null); }, ms);
     waiting.set(method, (params) => { clearTimeout(timer); r(params); });
   });
-  const send = (method, params = {}) => new Promise((r) => { const id = ++next; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+  const send = (method, params = {}) => new Promise((r) => {
+    if (gone) return r({ error: { message: 'DevTools fermé' } });
+    const id = ++next;
+    pending.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
   const evaluate = async (expr) => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
   // The focus as if the window had it: its focus events, document.hasFocus() (the drawing pauses without it).
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -82,6 +96,12 @@ export async function launch(data, profile, more = {}) {
       return r;
     },
     async type(text) { await send('Input.insertText', { text }); await sleep(100); },
+    /** The window's content as a PNG (the captures of plan 5a, whose states need a server: captures.mjs). */
+    async screenshot() {
+      const r = await send('Page.captureScreenshot', { format: 'png' });
+      if (!r.result?.data) throw new Error(`Pas de capture : ${r.error?.message ?? 'réponse vide'}`);
+      return Buffer.from(r.result.data, 'base64');
+    },
     /** A key; `modifiers` as DevTools counts them: Alt 1, Ctrl 2, Meta 4, Maj 8. */
     async press(key, code = key, keyCode, modifiers = 0) {
       for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: keyCode, modifiers });
@@ -168,5 +188,23 @@ export async function launch(data, profile, more = {}) {
   // The graph drawn, then a moment for the first frames.
   for (let i = 0; i < 120 && !(await evaluate(`!!document.querySelector('.graph canvas')`)); i++) await sleep(250);
   await sleep(2000);
-  return { page, close: async () => { ws.close(); child.kill(); await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r))); } };
+  return {
+    page,
+    /** Resolves with the app's exit code once it has quit: by itself, or closed. */
+    exited,
+    /**
+     * Quits as the user does, by closing its window: the interface's last snapshot, the sync stopped, the base closed
+     * (src/main/index.ts). Killed if it is still there after `ms`. Whether it quit by itself.
+     */
+    async quit(ms = 20_000) {
+      void evaluate('window.close()');
+      const code = await Promise.race([exited, sleep(ms).then(() => null)]);
+      ws.close();
+      if (code !== null) return true;
+      child.kill();
+      await exited;
+      return false;
+    },
+    close: async () => { ws.close(); child.kill(); await exited; },
+  };
 }

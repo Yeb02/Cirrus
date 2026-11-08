@@ -80,9 +80,10 @@ export function ServerBlock(props: {
   }
   if (paired) {
     const state = chipOf(props.status, false)?.text ?? 'Synchronisation arrêtée';
+    // The address is not drawn in a capture (`volatile`): its port, a free one, changes from one run to the next (task 7).
     return (
       <div className="param-group server-block">
-        <p className="server-state">Jumelé à <span className="server-url">{props.info.url}</span>, sous le nom « {props.info.name} ».</p>
+        <p className="server-state">Jumelé à <span className="server-url volatile">{props.info.url}</span>, sous le nom « {props.info.name} ».</p>
         <p className="server-state">État : {state}</p>
         <div className="server-actions">
           <button disabled={blocked} onClick={() => run('', props.onUnpair)}>Dissocier ce PC</button>

@@ -7,11 +7,12 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { bibFileName } from '@cirrus/core';
-import { startServer, Tokens } from '@cirrus/server';
+import { bibFileName, editNode } from '@cirrus/core';
+import { storeBytes } from '@cirrus/store';
 import { appDir, launch, sleep } from './cdp.mjs';
+import { chipSays, localServer, pairThrough, serverField, TITLE_PROBE, virtualPc } from './serveur-local.mjs';
 
 // Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
 // wide enough to read it at about its real size beside its margin.
@@ -150,46 +151,203 @@ async function pickBibByMenu(page, at = SKY) {
 }
 
 // Plan 5a, task 4: a server of this machine, started by the scenario on 127.0.0.1 and a free port, its data in a
-// temporary folder (never %LOCALAPPDATA%\Cirrus); a pairing code made as `jumeler` makes it.
-async function localServer() {
-  const dir = mkdtempSync(join(tmpdir(), 'cirrus-interface-serveur-'));
-  const server = await startServer({ dataDir: dir, port: 0 });
-  return {
-    url: server.url,
-    code(name) {
-      const tokens = Tokens.open(dir);
-      try { return tokens.createCode(name, Date.now()).code; } finally { tokens.close(); }
-    },
-    /** The server's journal, its operations in order. */
-    journal() {
-      const db = new DatabaseSync(join(dir, 'base', 'cirrus.db'), { readOnly: true });
-      try { return db.prepare('SELECT op FROM changes ORDER BY local_seq').all().map((r) => JSON.parse(r.op)); } finally { db.close(); }
-    },
-    hasBlob: (hash) => existsSync(join(dir, 'base', 'files', hash.slice(0, 2), hash)),
-    /** Another PC paired with it (« Observateur »): its shared settings read and changed (task 6). */
-    async observer() {
-      const code = Tokens.open(dir);
-      let token;
-      try {
-        const body = JSON.stringify({ code: code.createCode('Observateur', Date.now()).code, pc: 'observateur', name: 'Observateur' });
-        token = (await (await fetch(`${server.url}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })).json()).token;
-      } finally {
-        code.close();
-      }
-      const call = async (method, body) => (await fetch(`${server.url}/settings`, {
-        method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body && JSON.stringify(body),
-      })).json();
-      return { settings: () => call('GET'), put: (changes) => call('POST', { changes }) };
-    },
-    async close() {
-      await server.close();
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
-    },
-  };
-}
-/** The centre of the `i`-th field of the block « Serveur ». */
-const serverField = (page, i) => page.evaluate(`(() => { const b = document.querySelectorAll('.server-block input')[${i}]?.getBoundingClientRect(); return b && { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+// temporary folder (never %LOCALAPPDATA%\Cirrus); a pairing code made as `jumeler` makes it; the block « Serveur »
+// driven as the user does (serveur-local.mjs).
 const chipText = (page) => page.evaluate(`document.querySelector('.tabs .sync-chip')?.textContent ?? null`);
+/** A base read by SQL, as the scenarios read theirs (the main process writes it). */
+const reader = (data) => (sql) => {
+  const db = new DatabaseSync(join(data, 'cirrus.db'), { readOnly: true });
+  try { return db.prepare(sql).all(); } finally { db.close(); }
+};
+/** « Nouveau nœud » from the menu of the background (opened at `menu`), put down at `at`, its title typed in place, Entrée. */
+async function newNode(page, at, title, menu = { x: at.x - 150, y: at.y + 50 }) {
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(menu.x, menu.y, 'right');
+  const item = await page.centre('.context-menu button', 'Nouveau nœud');
+  await page.click(item.x, item.y);
+  await page.move(at.x, at.y);
+  await page.click(at.x, at.y);
+  await page.type(title);
+  await page.press('Enter', 'Enter', 13);
+}
+const closeSettings = async (page) => {
+  const close = await page.centre('.settings .close', '×');
+  await page.click(close.x, close.y);
+};
+/** What the block says when pairing failed, for a failure's message. */
+const blockText = (page) => page.evaluate(`document.querySelector('.server-error')?.textContent ?? document.querySelector('.server-block')?.textContent ?? '(pas de bloc)'`);
+
+// Plan 5a, task 7: two PCs and a server, one Electron at a time (the user's machine: never two windows at once), each in
+// its window out of the user's way. The server is started by the suite (serveur-local.mjs), the pairing codes made as
+// `jumeler` makes them; the virtual PC (tests/support/virtualPc.ts) runs in this process, on Node's fetch.
+/** Both apps' view: the world's origin at the graph's centre, at zoom 1 — the node A puts down at NODE_AT, B shows there. */
+const SYNC_VIEW = { CIRRUS_VIEW: '0,0,1' };
+const NODE_AT = { x: 400, y: 800 };
+const A_TITLE = 'Nœud de A', A_FILE = 'notes_de_A.txt', A_TEXT = 'Écrit sur le PC A, lu sur le PC B.\n';
+const CHAPTER_PATH = join(appDir, '..', 'fixtures', 'assets', CHAPTER);
+const blobIn = (data, hash) => join(data, 'files', hash.slice(0, 2), hash);
+/** The node's pop-up, by a click on it, showing `title`. */
+async function openPopup(page, at, title) {
+  for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`, 1000)); i++) {
+    await page.click(at.x, at.y);
+  }
+  if (!(await page.evaluate(`document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`))) {
+    throw new Error(`pas de pop-up « ${title} » au clic sur le nœud`);
+  }
+}
+const TWO_PCS = {
+  name: 'synchronisation entre deux PC (plan 5a, tâche 7)',
+  async setup() {
+    const dirs = [];
+    const temp = (prefix) => { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; };
+    return {
+      server: await localServer(), dirs, temp,
+      a: { data: temp('cirrus-interface-a-'), profile: temp('cirrus-interface-profil-a-') },
+      b: { data: temp('cirrus-interface-b-'), profile: temp('cirrus-interface-profil-b-') },
+      app: null, virtual: null, node: null,
+    };
+  },
+  async teardown(ctx) {
+    await ctx.app?.close();
+    await ctx.virtual?.close();
+    await ctx.server.close();
+    // B's base taken from the server leaves its old one beside it (« …-avant-jumelage-… »), and a staged one if it failed.
+    const b = basename(ctx.b.data);
+    for (const name of readdirSync(tmpdir())) if (name.startsWith(`${b}-`)) ctx.dirs.push(join(tmpdir(), name));
+    for (const d of ctx.dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  },
+  steps: [
+    {
+      name: '1. A crée un nœud avec un .txt et quitte ; B, neuve, prend la base du serveur, redémarre sur elle, puis montre le nœud et son fichier (plan 5a)',
+      async run(ctx) {
+        const { server, a, b } = ctx;
+        // A: a new base paired with the empty server (both empty: the sync starts, A's lobby its first write).
+        ctx.app = await launch(a.data, a.profile, SYNC_VIEW);
+        let page = ctx.app.page;
+        await pairThrough(page, server.url, server.code('A'));
+        if (!(await chipSays(page, 'À jour'))) throw new Error(`A n’est pas jumelée : ${await blockText(page)} ; la pastille dit « ${await chipText(page)} »`);
+        await closeSettings(page);
+        await newNode(page, NODE_AT, A_TITLE);
+        const file = join(ctx.temp('cirrus-interface-depot-'), A_FILE), hash = createHash('sha256').update(A_TEXT).digest('hex');
+        writeFileSync(file, A_TEXT, 'utf8');
+        await page.dropFiles(NODE_AT, [file]);
+        const sent = () => server.hasBlob(hash) && server.journal().some((op) => op.t === 'node' && op.after?.title === A_TITLE && op.after.files.some((f) => f.hash === hash));
+        if (!(await until(sent, 10_000))) throw new Error(`le nœud de A et son fichier n’arrivent pas au serveur ; ${await toastsText(page)}`);
+        if (!(await chipSays(page, 'À jour'))) throw new Error(`la pastille de A dit « ${await chipText(page)} »`);
+        // A quits as the user does, by closing its window.
+        if (!(await ctx.app.quit())) throw new Error('A ne se ferme pas');
+        ctx.app = null;
+        // B: a new base; the server holds A's, so the pairing offers to take it (D7, R7).
+        const env = { ...SYNC_VIEW, CIRRUS_NO_RELAUNCH: '1' };
+        ctx.app = await launch(b.data, b.profile, env);
+        page = ctx.app.page;
+        await pairThrough(page, server.url, server.code('B'));
+        const label = 'Prendre la base du serveur (1 nœud)';
+        if (!(await page.until(`[...document.querySelectorAll('.server-offer button')].some((x) => x.textContent === ${JSON.stringify(label)})`, 10_000))) {
+          throw new Error(`pas d’offre « ${label} » : ${await blockText(page)}`);
+        }
+        const take = await page.centre('.server-offer button', '^Prendre la base du serveur');
+        await page.click(take.x, take.y);
+        // Taken, staged beside B's base; B quits instead of starting again (R27: the relaunch stays this script's).
+        const code = await Promise.race([ctx.app.exited, sleep(30_000).then(() => null)]);
+        if (code === null) throw new Error(`B ne quitte pas après la prise : ${await blockText(page)}`);
+        await ctx.app.close();
+        ctx.app = null;
+        const staged = `${b.data}-nouvelle`;
+        if (!existsSync(join(staged, 'complete.json'))) throw new Error('pas de base prise complète à côté de celle de B');
+        // B started again as the relaunch would (its profile, which holds the key of its token): the base taken swapped
+        // in before it opens, the old one kept beside it.
+        rmSync(join(b.profile, 'DevToolsActivePort'), { force: true });
+        ctx.app = await launch(b.data, b.profile, env);
+        page = ctx.app.page;
+        const kept = readdirSync(tmpdir()).filter((n) => n.startsWith(`${basename(b.data)}-avant-jumelage-`));
+        if (existsSync(staged) || kept.length !== 1 || !existsSync(join(tmpdir(), kept[0], 'cirrus.db'))) {
+          throw new Error(`l’échange n’a pas eu lieu : base prise ${existsSync(staged) ? 'encore à côté' : 'en place'}, ancienne gardée sous ${JSON.stringify(kept)}`);
+        }
+        if (!(await chipSays(page, 'À jour'))) throw new Error(`B ne se synchronise pas après la prise : la pastille dit « ${await chipText(page)} »`);
+        // The node and its file in B's base and store (taken with the base, D7), then shown: its pop-up, by a click where
+        // A put it down, lists the file; opened beside it, the file shows A's text.
+        const base = reader(b.data), node = titledIn(base, A_TITLE)[0];
+        if (!node?.files.some((f) => f.name === A_FILE && f.hash === hash) || !existsSync(blobIn(b.data, hash))) {
+          throw new Error(`B n’a pas le nœud de A, ou pas son fichier : ${JSON.stringify(node)}`);
+        }
+        ctx.node = node.id;
+        await openPopup(page, NODE_AT, A_TITLE);
+        const row = await page.centre(`.node-popup .file[data-name="${A_FILE}"]`, '');
+        await page.click(row.x, row.y);
+        if (!(await page.until(`(document.querySelector('.file-preview')?.textContent ?? '').includes(${JSON.stringify(A_TEXT.trim())})`, 10_000))) {
+          throw new Error('l’aperçu du fichier de A ne montre pas son texte');
+        }
+        const close = await page.centre('.file-preview .close', '×');
+        await page.click(close.x, close.y);
+      },
+    },
+    {
+      name: '2. B ouverte, un PC virtuel renomme le nœud : B montre le nouveau titre en moins d’une seconde (plan 5a)',
+      async run(ctx) {
+        const page = ctx.app.page;
+        ctx.virtual = await virtualPc(ctx.server, 'pc-virtuel');
+        const pc = ctx.virtual.pc;
+        if (!(await until(() => pc.s.nodes.get(ctx.node) !== undefined && pc.status?.state === 'live', 10_000))) throw new Error(`le PC virtuel ne rattrape pas le serveur : ${JSON.stringify(pc.status)}`);
+        const title = 'Renommé par le PC virtuel';
+        await page.evaluate(TITLE_PROBE(title));
+        const t0 = performance.timeOrigin + performance.now();
+        pc.act((s) => editNode(s, ctx.node, { title }));
+        const shown = await page.evaluate('window.__shown');
+        if (shown === null || shown === undefined) throw new Error('B ne montre pas le nouveau titre dans le pop-up du nœud');
+        console.log(`     nouveau titre montré par B ${Math.round(shown - t0)} ms après l’écriture du PC virtuel`);
+        if (shown - t0 >= 1000) throw new Error(`B montre le nouveau titre ${Math.round(shown - t0)} ms après l’écriture du PC virtuel`);
+        if (!(await until(() => titledIn(reader(ctx.b.data), title).length === 1))) throw new Error('le nouveau titre n’est pas dans la base de B');
+      },
+    },
+    {
+      name: '3. le serveur arrêté, la pastille de B dit « Hors ligne » ; B renomme le nœud, puis le serveur revient : l’action part, et le PC virtuel la reçoit (plan 5a)',
+      async run(ctx) {
+        const { server } = ctx, page = ctx.app.page, pc = ctx.virtual.pc, base = reader(ctx.b.data);
+        await server.stop();
+        if (!(await chipSays(page, 'Hors ligne'))) throw new Error(`la pastille dit « ${await chipText(page)} » une fois le serveur arrêté`);
+        // B acts: the node renamed in its pop-up, written here, pending.
+        const title = 'Renommé par B hors ligne';
+        const field = await page.centre('.node-popup input.title', '');
+        await page.click(field.x, field.y);
+        await page.press('a', 'KeyA', 65, 2);
+        await page.type(title);
+        await page.press('Enter', 'Enter', 13);
+        const pending = () => base(`SELECT count(*) AS n FROM changes WHERE server_seq IS NULL`)[0].n;
+        if (!(await until(() => titledIn(base, title).length === 1 && pending() > 0))) throw new Error('le renommage n’est pas dans la base de B, en attente');
+        if (server.journal().some((op) => op.after?.title === title)) throw new Error('le serveur arrêté a reçu le renommage');
+        if ((await chipText(page)) !== 'Hors ligne') throw new Error(`la pastille dit « ${await chipText(page)} » après l’action hors ligne`);
+        // The server back on its port: B's next attempt (syncRetryMinMs, doubling) sends the action; the virtual PC receives it.
+        await server.restart();
+        if (!(await until(() => server.journal().some((op) => op.t === 'node' && op.after?.title === title), 40_000))) throw new Error('le renommage hors ligne n’arrive pas au serveur');
+        if (!(await until(() => pc.s.nodes.get(ctx.node)?.title === title, 10_000))) throw new Error(`le PC virtuel ne reçoit pas le renommage : ${pc.s.nodes.get(ctx.node)?.title}`);
+        if (!(await chipSays(page, 'À jour')) || !(await until(() => pending() === 0))) throw new Error(`B ne revient pas à jour : « ${await chipText(page)} », ${pending()} lignes en attente`);
+      },
+    },
+    {
+      name: '4. un PDF ajouté par le PC virtuel arrive au nœud sans ses octets ; ouvert dans B, il est téléchargé, puis affiché (plan 5a)',
+      async run(ctx) {
+        const { server } = ctx, page = ctx.app.page, pc = ctx.virtual.pc, base = reader(ctx.b.data);
+        // The virtual PC adds the test base's chapter to the node: its bytes go to the server before the write (D6).
+        const ref = storeBytes(pc.dir, CHAPTER, readFileSync(CHAPTER_PATH));
+        pc.act((s) => editNode(s, ctx.node, { files: [...s.nodes.get(ctx.node).files, ref] }));
+        const listed = () => base(`SELECT json FROM nodes WHERE id = '${ctx.node}'`).map((r) => JSON.parse(r.json))[0]?.files.some((f) => f.hash === ref.hash);
+        if (!(await until(() => server.hasBlob(ref.hash) && listed(), 10_000))) throw new Error('le PDF n’arrive pas au serveur, ou son écriture pas à B');
+        // B has the write but not the PDF: a PDF waits for its first reading (D6), and its thumbnail downloads nothing.
+        if (!(await page.until(`!!document.querySelector('.node-popup .file[data-name="${CHAPTER}"]')`, 10_000))) throw new Error('le pop-up de B ne montre pas le PDF reçu');
+        await sleep(1500);
+        if (existsSync(blobIn(ctx.b.data, ref.hash))) throw new Error('B a téléchargé le PDF avant de l’ouvrir');
+        // Opened: downloaded, checked against its hash, kept, then shown — its first page's text.
+        const row = await page.centre(`.node-popup .file[data-name="${CHAPTER}"]`, '');
+        await page.click(row.x, row.y);
+        if (!(await page.until(`(document.querySelector('${PAGE_1}')?.textContent ?? '').includes('Kolmogorov')`, 20_000))) {
+          throw new Error(`le PDF ne s’affiche pas : ${await page.evaluate(`document.querySelector('.file-preview')?.textContent ?? '(pas d’aperçu)'`)}`);
+        }
+        const kept = blobIn(ctx.b.data, ref.hash);
+        if (!existsSync(kept) || createHash('sha256').update(readFileSync(kept)).digest('hex') !== ref.hash) throw new Error('le PDF affiché n’est pas gardé dans le magasin de B');
+      },
+    },
+  ],
+};
 
 /** A scenario: what it does in the page, then what it checks; a failure throws its reason, in French. */
 const SCENARIOS = [
@@ -1100,13 +1258,16 @@ const SCENARIOS = [
         if (existsSync(join(data, 'serveur.json'))) throw new Error('serveur.json reste après la dissociation');
         if (existsSync(join(data, 'settings-pending.json'))) throw new Error('settings-pending.json reste après la dissociation');
         if (local().toastMs !== 7000) throw new Error(`les réglages de ce PC ne restent pas après la dissociation : ${JSON.stringify(local())}`);
-        const lines = server.journal().length;
-        const field = await page.centre('.settings input.search', '');
-        await page.click(field.x, field.y);
-        await page.type('x');
-        await sleep(500);
-        if (server.journal().length !== lines) throw new Error('le serveur reçoit encore après la dissociation');
-        if (base(`SELECT count(*) AS n FROM nodes`)[0].n !== 1) throw new Error('la base locale a perdu son nœud');
+        // A real action after it (task 7, deferred minor of task 4): a node made by the menu, written here and left
+        // pending, never sent — the server's journal does not move.
+        const lines = server.journal().length, after = 'Nœud fait après la dissociation';
+        await closeSettings(page);
+        await newNode(page, { x: 400, y: 600 }, after);
+        const pending = () => base(`SELECT count(*) AS n FROM changes WHERE server_seq IS NULL`)[0].n;
+        if (!(await until(() => titledIn(base, after).length === 1 && pending() > 0))) throw new Error('le nœud fait après la dissociation n’est pas dans la base, en attente');
+        await sleep(2000);
+        if (server.journal().length !== lines || server.journal().some((op) => op.after?.title === after)) throw new Error('le serveur reçoit encore après la dissociation');
+        if (base(`SELECT count(*) AS n FROM nodes`)[0].n !== 2) throw new Error('la base locale a perdu son nœud');
       } finally {
         await server.close();
         rmSync(dropDir, { recursive: true, force: true, maxRetries: 5 });
@@ -1159,13 +1320,55 @@ const SCENARIOS = [
       }
     },
   },
+  TWO_PCS,
 ];
 
-// `node scripts/interface.mjs <texte>`: only the scenarios whose name holds that text.
+const reason = (e) => (e instanceof Error ? e.message : String(e));
+/**
+ * A suite (plan 5a, task 7): scenarios that follow one another on the same bases, apps and server, each launching the
+ * app itself, one at a time. Each step counts as a scenario; once one fails, the next ones are not played, and fail
+ * with it. The number of failures.
+ */
+async function runSuite(s) {
+  let failed = 0, broken = null, ctx = null;
+  try {
+    ctx = await s.setup();
+  } catch (e) {
+    broken = `la mise en place (${reason(e)})`;
+  }
+  try {
+    for (const [i, step] of s.steps.entries()) {
+      if (broken) {
+        failed++;
+        console.error(`ÉCHEC ${step.name} : non joué, après l’échec de ${broken}`);
+        continue;
+      }
+      try {
+        await step.run(ctx);
+        console.log(`ok   ${step.name}`);
+      } catch (e) {
+        failed++;
+        broken = `l’étape ${i + 1}`;
+        console.error(`ÉCHEC ${step.name} : ${reason(e)}`);
+      }
+    }
+  } finally {
+    if (ctx) await s.teardown(ctx);
+  }
+  return failed;
+}
+
+// `node scripts/interface.mjs <texte>`: only the scenarios whose name holds that text (a suite whole, for one of its steps).
 const only = process.argv[2];
-const chosen = only ? SCENARIOS.filter((s) => s.name.includes(only)) : SCENARIOS;
-let failed = 0;
+const chosen = only ? SCENARIOS.filter((s) => s.name.includes(only) || s.steps?.some((t) => t.name.includes(only))) : SCENARIOS;
+let failed = 0, total = 0;
 for (const s of chosen) {
+  if (s.steps) {
+    total += s.steps.length;
+    failed += await runSuite(s);
+    continue;
+  }
+  total++;
   const data = mkdtempSync(join(tmpdir(), 'cirrus-interface-'));
   const profile = mkdtempSync(join(tmpdir(), 'cirrus-interface-profil-'));
   let app = null;
@@ -1174,20 +1377,16 @@ for (const s of chosen) {
     if (!s.empty) execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
     app = await launch(data, profile, s.env);
-    const base = (sql) => {
-      const db = new DatabaseSync(join(data, 'cirrus.db'), { readOnly: true });
-      try { return db.prepare(sql).all(); } finally { db.close(); }
-    };
-    await s.run(app.page, base, data);
+    await s.run(app.page, reader(data), data);
     console.log(`ok   ${s.name}`);
   } catch (e) {
     failed++;
-    console.error(`ÉCHEC ${s.name} : ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`ÉCHEC ${s.name} : ${reason(e)}`);
   } finally {
     await app?.close();
     rmSync(data, { recursive: true, force: true, maxRetries: 5 });
     rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
   }
 }
-console.log(`${chosen.length - failed} scénarios sur ${chosen.length} réussis`);
+console.log(`${total - failed} scénarios sur ${total} réussis`);
 process.exit(failed > 0 ? 1 : 0);

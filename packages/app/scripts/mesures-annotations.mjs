@@ -1,4 +1,5 @@
 // The measures of plan 4c, task 7, in the app built: npm run mesures -w packages/app [-- bib|ouverture|defilement]
+// (`-- synchro …`: plan 5a's, mesures-synchro.mjs, in a process of its own with its collector exposed.)
 // Three passes each, on fresh artificial test bases (make-fixture.ts, then add-reading.ts: a PDF of 25 pages annotated
 // 50 times, and the same file in a node without annotations), in windows out of the user's way (cdp.mjs): never the
 // user's base nor profile, never the network.
@@ -9,13 +10,18 @@
 //   annotations for comparison;
 // - defilement: the preview scrolled from its first page to its last by the wheel (real input): the frames' intervals,
 //   the long animation frames, and at each frame the pages in view and those that hold highlights.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { parseBibtex } from '@cirrus/core';
 import { appDir, launch, sleep } from './cdp.mjs';
+
+if (process.argv[2] === 'synchro') {
+  const r = spawnSync(process.execPath, ['--expose-gc', join(appDir, 'scripts', 'mesures-synchro.mjs'), ...process.argv.slice(3)], { stdio: 'inherit' });
+  process.exit(r.status ?? 1);
+}
 
 const PASSES = 3;
 const fixtures = join(appDir, '..', 'fixtures');

@@ -37,6 +37,16 @@ export const stagedDir = (dir: string): string => `${resolve(dir)}-nouvelle`;
 /** A staged base's mark, written last: without it, the staged base is incomplete. */
 export const READY_FILE = 'complete.json';
 
+/**
+ * Whether a base taken from the server makes the app only quit, instead of starting again on it (R27):
+ * CIRRUS_NO_RELAUNCH=1, for the interface's checks (scripts/interface.mjs), which start the app again themselves in
+ * their window out of the user's way. Taken only on a test base in such a window — CIRRUS_DATA, and `capture` mode or
+ * CIRRUS_BACKGROUND=1 —, as CIRRUS_BIB_PICK; inert otherwise. It can only turn a relaunch into a quit.
+ */
+export function quitsInsteadOfRelaunch(env: Record<string, string | undefined>, capture: boolean): boolean {
+  return env.CIRRUS_NO_RELAUNCH === '1' && env.CIRRUS_DATA !== undefined && (capture || env.CIRRUS_BACKGROUND === '1');
+}
+
 /** The name the base's folder takes once a base taken from the server replaces it, on `day` (local time). */
 export function archiveName(dir: string, day: Date): string {
   const two = (n: number) => String(n).padStart(2, '0');
