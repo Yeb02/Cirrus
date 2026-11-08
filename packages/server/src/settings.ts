@@ -1,5 +1,5 @@
 import { isSettingTime } from '@cirrus/core';
-import { MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_PER_REQUEST } from './bounds.ts';
+import { MAX_SETTING_AHEAD_MS, MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_PER_REQUEST } from './bounds.ts';
 
 // The shared settings' requests (plan 5a, task 6, D9, R24): POST /settings { changes: { [key]: { value, at } } }, its
 // form checked whole before anything is written. The values are the PCs' business: each bounds what it receives.
@@ -18,10 +18,11 @@ const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
 /**
  * The changes of a POST /settings body, by key, or SettingsError for the first thing wrong: a body other than
  * `{ changes }`; more than MAX_SETTINGS_PER_REQUEST keys; a key that is not a plain identifier of MAX_SETTING_KEY_CHARS
- * at most; a change other than `{ value, at }`, its time not whole milliseconds from 0 to 2^53 − 1, its value's JSON
- * over MAX_SETTING_VALUE_BYTES. Costs the body's size.
+ * at most; a change other than `{ value, at }`, its time not whole milliseconds from 0 to 2^53 − 1, or past `latest`
+ * (the server's clock plus MAX_SETTING_AHEAD_MS, R26), its value's JSON over MAX_SETTING_VALUE_BYTES. Costs the body's
+ * size.
  */
-export function parseSettingChanges(body: unknown): Map<string, StoredChange> {
+export function parseSettingChanges(body: unknown, latest: number): Map<string, StoredChange> {
   const bad = (why: string): never => { throw new SettingsError(why); };
   if (!isObject(body) || !isObject(body.changes) || Object.keys(body).length !== 1) return bad('Corps attendu : { changes: { <réglage>: { value, at } } }.');
   const entries = Object.entries(body.changes);
@@ -33,6 +34,7 @@ export function parseSettingChanges(body: unknown): Map<string, StoredChange> {
     if (!isObject(change) || !('value' in change) || Object.keys(change).length !== 2) bad(`Réglage « ${name} » : { value, at } attendu.`);
     const { value, at } = change as { value: unknown; at: unknown };
     if (!isSettingTime(at)) bad(`Réglage « ${name} » : son heure n’est pas un nombre entier de millisecondes, de 0 à 2^53 − 1.`);
+    if ((at as number) > latest) bad(`Réglage « ${name} » : son heure est en avance de plus de ${MAX_SETTING_AHEAD_MS / 3_600_000} h sur celle du serveur.`);
     const json = value === null ? null : JSON.stringify(value);
     if (json !== null && Buffer.byteLength(json) > MAX_SETTING_VALUE_BYTES) bad(`Réglage « ${name} » : valeur de plus de ${MAX_SETTING_VALUE_BYTES} octets.`);
     out.set(key, { json, at: at as number });

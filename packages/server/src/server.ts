@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { encodeState, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
-import { MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_SEED_BYTES, MAX_UNITS_PER_REQUEST } from './bounds.ts';
+import {
+  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST,
+} from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
 import { SeedError, Seeds } from './seed.ts';
@@ -271,7 +273,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
     '/settings': {
       GET: (_req, res) => reply(res, 200, tokens.settings()),
       POST: async (req, res, _url, who) => {
-        const changes = parseSettingChanges(await readJson(req, MAX_BODY_BYTES));
+        const changes = parseSettingChanges(await readJson(req, MAX_BODY_BYTES), now() + MAX_SETTING_AHEAD_MS);
         const { rows, changed } = tokens.putSettings(changes, who.pc);
         if (Object.keys(changed).length > 0) hub.publishSettings(changed);
         reply(res, 200, { settings: rows });

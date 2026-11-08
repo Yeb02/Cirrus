@@ -17,7 +17,7 @@ import { LatexRegistry } from './latex/registry.ts';
 import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
 import { loadTexTexts, sameTexts } from './latex/texts.ts';
 import { quitInOrder, typedFields } from './quit.ts';
-import { applyReceived, keepUnsaved, localChanges, withSetting } from './settingChanges.ts';
+import { applyReceived, dueChanges, keepUnsaved, withSetting } from './settingChanges.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -291,10 +291,14 @@ export function App() {
 
   // Settings are written a moment after the last change (spec 19: outside the history and undo): only those changed
   // here, never one received meanwhile (with a server paired, each written one is shared: task 6).
+  // A batch received after the timer was set, and not rendered yet when it fires, stands it down (review of task 6,
+  // round 2): its render sets it again, over the received settings.
   useEffect(() => {
-    if (!state || !savedParams.current || params === savedParams.current) return;
+    const base = savedParams.current;
+    if (!state || !base || params === base) return;
     const timer = setTimeout(() => {
-      const changes = localChanges(savedParams.current!, params);
+      const changes = dueChanges(base, savedParams.current!, params);
+      if (!changes) return;
       savedParams.current = params;
       // The main process answers with what it wrote (review of task 6, Minor 2): a row received for one of these keys
       // while the save was on its way, told before the answer, gives way to it, as in settings.json.

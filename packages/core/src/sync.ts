@@ -73,6 +73,12 @@ export const MAX_SEED_BYTES = 2 * 2 ** 30;
  * to it): more than twice the settings there are.
  */
 export const MAX_SETTINGS_PER_REQUEST = 500;
+/**
+ * How far ahead of the server's clock a setting's time may be (task 6, R26): one day. The server refuses a change
+ * stamped later, so that no stamp can hold a setting for long against every other PC; the PC never stamps past it (its
+ * clock corrected by the server's, less its margin, syncClockSkewWarnMs).
+ */
+export const MAX_SETTING_AHEAD_MS = 24 * 3_600_000;
 
 /**
  * A shared setting's change as a PC sends it (POST /settings, task 6, D9): its value, JSON, null going back to the

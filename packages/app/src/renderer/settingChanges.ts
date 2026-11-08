@@ -25,6 +25,16 @@ export function localChanges(saved: RenderParams, now: RenderParams): Record<str
 }
 
 /**
+ * What App's save timer sends when it fires (review of task 6, round 2): the changes of `params`, those of the render
+ * that set the timer, over `saved` as it is now — or nothing (null) when `saved` is no longer `base`, the settings saved
+ * when the timer was set. A batch received meanwhile, not rendered yet, would otherwise be sent back with its old values;
+ * its render sets the timer again, over it.
+ */
+export function dueChanges(base: RenderParams, saved: RenderParams, params: RenderParams): Record<string, unknown> | null {
+  return saved === base ? localChanges(saved, params) : null;
+}
+
+/**
  * `saved` with a batch received (key: value, null back to the default), bounded as a settings file is read
  * (withOverrides); `saved` itself when the batch changes nothing (the usual answer to a save).
  */

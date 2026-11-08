@@ -265,7 +265,8 @@ export class SyncHost {
    */
   setSettings(changes: unknown): Record<string, unknown> {
     const paired = this.config !== null;
-    const written = this.settings.local(changes, paired ? this.deps.now() + this.client.clockOffset() : null);
+    const clock = paired ? { at: this.deps.now() + this.client.clockOffset(), latest: this.client.latestSettingTime() } : null;
+    const written = this.settings.local(changes, clock);
     if (paired) this.client.kick();
     return written;
   }

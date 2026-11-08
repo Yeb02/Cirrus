@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createNode, createPlan } from '@cirrus/core';
+import { createNode, createPlan, MAX_SETTING_AHEAD_MS, MAX_SETTINGS_PER_REQUEST } from '@cirrus/core';
+import { MAX_SETTINGS_KEPT } from '@cirrus/server';
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
 import { parseSettingRows, PENDING_SETTINGS_FILE, readSettings, SharedSettings, writeSettings } from '../src/main/settings.ts';
 import { swapStaged } from '../src/main/sync/firstSync.ts';
-import { applyReceived, keepUnsaved, localChanges, withSetting } from '../src/renderer/settingChanges.ts';
+import { applyReceived, dueChanges, keepUnsaved, localChanges, withSetting } from '../src/renderer/settingChanges.ts';
 import { AppPc } from './support/appPc.ts';
 import { created, Lab, T0, until } from './support/virtualPc.ts';
 
@@ -324,7 +325,7 @@ test('revue, Minor 5 : un changement local attend dans settings-pending.json ava
   try {
     // settings.json cannot be written (a folder holds its place).
     mkdirSync(join(dir, 'settings.json', 'bloque'), { recursive: true });
-    expect(() => new SharedSettings(dir, 'pc-a', () => {}).local({ factor: 3 }, T0)).toThrow();
+    expect(() => new SharedSettings(dir, 'pc-a', () => {}).local({ factor: 3 }, { at: T0, latest: T0 + MAX_SETTING_AHEAD_MS })).toThrow();
     expect(JSON.parse(readFileSync(join(dir, PENDING_SETTINGS_FILE), 'utf8'))).toEqual({ factor: { value: 3, at: T0 } });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -402,6 +403,50 @@ test('revue, Minor 2 : cirrus:settings:set rend les valeurs écrites, que l’in
   expect(readSettings(a.dir).factor).toBe(2.5);
 });
 
+test('revue, tour 2 (R26) : un PC qui a vu une heure très en avance change encore ce réglage, sans jamais envoyer une heure que le serveur refuse ; ses autres réglages partent', async () => {
+  const l = (lab = await Lab.start());
+  const a = await joined(l, 'pc-a');
+  const { pc: b } = await adopted(l, 'pc-b');
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  // Another PC's factor, as far ahead as the server takes (a clock gone wrong before its offset was known).
+  const ahead = l.clock + MAX_SETTING_AHEAD_MS;
+  await l.putSettings({ factor: { value: 3, at: ahead } });
+  await until(() => readSettings(a.dir).factor === 3);
+  // A changes it, with another setting: its time is held under the server's bound (less the clock margin), not past it.
+  const margin = a.params.syncClockSkewWarnMs;
+  a.host.setSettings({ factor: 2.5, toastMs: 9000 });
+  expect(pendingOf(a)).toEqual({ factor: { value: 2.5, at: ahead - margin }, toastMs: { value: 9000, at: l.clock } });
+  await converged(l, [a, b]);
+  // Older than the row it saw, the factor gives way for now; the other setting is taken; nothing was refused.
+  for (const pc of [a, b]) expect(readSettings(pc.dir)).toEqual({ factor: 3, toastMs: 9000 });
+  expect(warn).not.toHaveBeenCalled();
+  // Once the clock has passed the margin, A's change comes after the row, and wins everywhere.
+  l.clock += margin + 1;
+  a.host.setSettings({ factor: 2.5 });
+  await converged(l, [a, b]);
+  expect([readSettings(b.dir).factor, (await l.settings()).factor]).toEqual([2.5, { value: 2.5, at: ahead + 1, pc: pcId(a.dir) }]);
+});
+
+test('revue, tour 2 : une requête de réglages refusée ne perd pas ses voisins bien formés ; chacun repart seul, seul le refusé est abandonné', async () => {
+  const l = (lab = await Lab.start());
+  const a = await joined(l, 'pc-a', { factor: 3 });
+  await converged(l, [a]);
+  // The server full (a paired PC's keys, which no PC takes): the factor is kept there, the text scale would be one too many.
+  const junk = (from: number, n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${from + i}`, { value: 1, at: l.clock }]));
+  for (let n = 0; n < MAX_SETTINGS_KEPT - 1; n += MAX_SETTINGS_PER_REQUEST) await l.putSettings(junk(n, Math.min(MAX_SETTINGS_PER_REQUEST, MAX_SETTINGS_KEPT - 1 - n)));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const posts = a.net.count('POST', '/settings');
+  l.clock += 10;
+  a.host.setSettings({ factor: 2.5, textScale: 1.5 });
+  await until(() => nothingPending(a));
+  // Refused whole; then each alone: the factor taken, the text scale refused, dropped and said.
+  expect(a.net.count('POST', '/settings') - posts).toBe(3);
+  const kept = await l.settings();
+  expect([kept.factor, kept.textScale]).toEqual([{ value: 2.5, at: T0 + 10, pc: pcId(a.dir) }, undefined]);
+  expect(warn).toHaveBeenCalledWith(expect.stringMatching(/« textScale »/));
+  expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/« factor »/));
+});
+
 test('l’interface : seuls les réglages changés ici partent ; un lot reçu s’applique d’un coup, sans écraser un réglage changé ici et pas encore écrit', () => {
   const saved = withOverrides({ factor: 3, textScale: 1.5 });
   // Changed here: the factor back to its default, the box width; the rest as saved.
@@ -439,4 +484,18 @@ test('revue, Important 1 : une entrée du bandeau faite juste après un lot reç
   expect(localChanges(after, shown)).toEqual({ boxWidth: 300, factor: null });
   // A value is bounded as the panel's change always was.
   expect(withSetting('boxWidth', 10_000)(saved).boxWidth).toBe(400);
+});
+
+test('revue, tour 2 : la minuterie d’enregistrement n’envoie jamais une valeur qu’un lot reçu a remplacée', () => {
+  // The timer was set over `base` (the settings saved then) and the params of its render: the text scale changed here.
+  const base = withOverrides({ factor: 3 });
+  const params = { ...base, textScale: 1.5 };
+  expect(dueChanges(base, base, params)).toEqual({ textScale: 1.5 });
+  // A batch arrives before it fires, before React renders it: the factor replaced. Sending now would send factor 3 back.
+  const after = applyReceived(base, { factor: 2.5 });
+  expect(localChanges(after, params)).toEqual({ factor: 3, textScale: 1.5 });
+  // The timer stands down; the batch's render sets it again, over the received factor (keepUnsaved), the text scale kept.
+  expect(dueChanges(base, after, params)).toBeNull();
+  const next = keepUnsaved(params, base, after, ['factor']);
+  expect(dueChanges(after, after, next)).toEqual({ textScale: 1.5 });
 });

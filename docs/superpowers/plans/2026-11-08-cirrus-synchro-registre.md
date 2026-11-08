@@ -643,7 +643,7 @@ Décisions du contrôleur pour cette tâche : R23 (tous les réglages sont parta
   - `main/sync/firstSync.ts` : la prise écrit les réglages du serveur dans la base prise, et ne copie plus ceux du PC ;
   - `main/index.ts`, `wire.ts`, `preload`, `env.d.ts` : `cirrus:settings:set` reçoit les seuls réglages changés ; `cirrus:settings:changed` (`onSettingsChanged`) porte un lot reçu ;
   - l'interface : `renderer/settingChanges.ts` (`localChanges`, `applyReceived`, `keepUnsaved`), et `App.tsx` n'écrit que ce qui a changé ici et applique chaque lot reçu en un rendu.
-- **Tests :** `packages/server/tests/settings.test.ts` (3 après la revue), `packages/app/tests/sharedSettings.test.ts` (17 après la revue) ; `EventReader.next` et `settings` (support du serveur), `Lab.settings` et `Lab.putSettings`, `AppPc.settingsTold`.
+- **Tests :** `packages/server/tests/settings.test.ts` (3 après la revue), `packages/app/tests/sharedSettings.test.ts` (20 après le tour 2 de la revue) ; `EventReader.next` et `settings` (support du serveur), `Lab.settings` et `Lab.putSettings`, `AppPc.settingsTold`.
 - **Scénario de l'interface** (le 26e, « jumeler une base neuve… ») : un réglage changé par un autre PC arrive dans `settings.json` et dans le bandeau (le champ montre la valeur reçue) ; un réglage tapé dans le bandeau arrive au serveur, puis rien n'attend ; après « Dissocier ce PC », `settings-pending.json` n'est plus là et les réglages de ce PC restent.
 
 ### Décisions
@@ -701,3 +701,23 @@ Décision du contrôleur : R25 (la migration `upgrade` est retirée).
     - un changement local pendant que `GET /settings` est en cours ;
     - un objet reçu pour une liste ;
     - une clé qui n'est pas un réglage dans `keepUnsaved`.
+
+### Correctifs de la revue (tâche 6, tour 2)
+
+Décision du contrôleur : R26 (une heure trop en avance est refusée par le serveur, le PC n'en donne jamais, et la minuterie d'enregistrement ne renvoie jamais une valeur qu'un lot reçu a remplacée).
+
+- Ruling: **le serveur refuse un réglage dont l'heure dépasse la sienne de plus de `MAX_SETTING_AHEAD_MS`** (un jour, dans le cœur, que `bounds.ts` réexporte), avant toute écriture, avec les autres vérifications. Une heure trop avancée ne tient donc plus un réglage contre tous les PC qu'un jour au plus. Ce plafond remplace le cas limite de 2^53 − 1 : cette heure est maintenant refusée elle aussi. `isSettingTime` (entier de 0 à 2^53 − 1) reste vérifié.
+- Ruling: **le PC ne date jamais un réglage au-delà de ce que le serveur prend** (`SyncClient.latestSettingTime`) : son horloge corrigée de l'écart mesuré au `/hello`, plus `MAX_SETTING_AHEAD_MS`, moins `syncClockSkewWarnMs`.
+  - Cette marge est la dérive que le PC permet à son horloge corrigée pendant une connexion. Le réglage existant, l'écart au-delà duquel il avertit, la dit déjà : aucun réglage nouveau.
+  - La règle « 1 ms après la dernière heure vue » est plafonnée là, au moment du changement. Les réglages en attente sont aussi ramenés à ce plafond au moment de partir : un changement daté hors ligne, avant que le PC connaisse l'écart, ne part jamais trop en avance.
+  - Une ligne reçue très en avance garde son réglage jusqu'à ce que l'horloge rattrape son heure moins la marge, au plus `syncClockSkewWarnMs` après son acceptation. Ensuite, le changement de ce PC passe après elle.
+  - Coût si faux : un changement local qui perd, pendant au plus la marge, contre une heure très avancée.
+- Ruling: **une requête de réglages refusée (400, 413) repart réglage par réglage** ; seul un réglage refusé seul est abandonné, et dit dans la console avec son nom. Ses voisins bien formés ne sont donc jamais perdus. Cela ne coûte rien de plus quand rien n'est refusé. Remplace « des réglages refusés par le serveur sont abandonnés » de la décision sur la boucle d'envoi.
+  - Options : garder la requête refusée en attente (elle repartirait sans fin dans la même connexion) ; l'abandonner entière (le défaut relevé par la revue).
+- Ruling: **la minuterie d'enregistrement de l'interface s'efface si un lot reçu est arrivé depuis qu'elle est posée** (`dueChanges`). Elle compare les réglages enregistrés quand elle a été posée à ceux d'aujourd'hui. Le rendu du lot la pose de nouveau, par-dessus les réglages reçus. Avant, elle pouvait renvoyer l'ancienne valeur d'un réglage reçu, que les autres PC voyaient revenir le temps d'un délai d'enregistrement.
+- **Tests ajoutés :**
+  - serveur : une heure en avance de plus d'un jour (dans une requête avec un réglage valide) et 2^53 − 1 sont refusées, rien d'écrit ; une heure en avance d'un jour exactement est prise ;
+  - app :
+    - un PC qui a vu une heure aussi avancée que le serveur le permet : son changement reste sous le plafond, son autre réglage part, rien n'est refusé ; une fois la marge passée, son changement l'emporte partout ;
+    - une requête refusée (serveur plein) : le réglage déjà gardé repart seul et passe, seul le nouveau est abandonné, et nommé ;
+    - la minuterie : la logique de sa garde (`dueChanges`), sans DOM.

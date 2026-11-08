@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_KEPT, MAX_SETTINGS_PER_REQUEST } from '../src/bounds.ts';
+import { MAX_SETTING_AHEAD_MS, MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_KEPT, MAX_SETTINGS_PER_REQUEST } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Client, EventReader, newCode, pair, T0 } from './support.ts';
 
@@ -122,6 +122,9 @@ test('R24 : une requête abîmée ou hostile est refusée avant toute écriture,
     ['heure fractionnaire', { changes: { factor: { value: 1, at: T0 + 0.5 } } }],
     ['heure négative', { changes: { factor: { value: 1, at: -1 } } }],
     ['heure au-delà de 2^53', { changes: { factor: { value: 1, at: 2 ** 53 } } }],
+    // Review of task 6, round 2 (R26): more than MAX_SETTING_AHEAD_MS ahead of the server's clock (T0 here).
+    ['heure trop en avance', { changes: { factor: ok, textScale: { value: 1, at: T0 + MAX_SETTING_AHEAD_MS + 1 } } }],
+    ['heure de 2^53 − 1', { changes: { factor: { value: 1, at: 2 ** 53 - 1 } } }],
     ['valeur absente', { changes: { factor: { at: T0 } } }],
     ['un champ de trop dans un réglage', { changes: { factor: { value: 1, at: T0, pc: 'pc-b' } } }],
     ['réglage pas un objet', { changes: { factor: 3 } }],
@@ -148,7 +151,9 @@ test('R24 : une requête abîmée ou hostile est refusée avant toute écriture,
   expect(Object.keys(await put(a, most))).toHaveLength(MAX_SETTINGS_PER_REQUEST);
   const big = 'y'.repeat(MAX_SETTING_VALUE_BYTES - 2);
   expect(await put(a, { latexPackages: { value: big, at: T0 } })).toEqual({ latexPackages: { value: big, at: T0, pc: 'pc-a' } });
-  expect(await put(a, { factor: { value: 1, at: 2 ** 53 - 1 } })).toEqual({ factor: { value: 1, at: 2 ** 53 - 1, pc: 'pc-a' } });
+  // As far ahead as the server allows: taken.
+  const ahead = T0 + MAX_SETTING_AHEAD_MS;
+  expect(await put(a, { factor: { value: 1, at: ahead } })).toEqual({ factor: { value: 1, at: ahead, pc: 'pc-a' } });
 });
 
 test('revue de la tâche 6, Minor 3 : le serveur garde au plus MAX_SETTINGS_KEPT réglages ; une requête qui en ajouterait trop est refusée entière, rien d’écrit', async () => {

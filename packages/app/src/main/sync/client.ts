@@ -1,6 +1,6 @@
 import { openAsBlob } from 'node:fs';
 import {
-  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit,
+  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_SETTING_AHEAD_MS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit,
   type SettingChange, type SettingRow, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, SyncDivergedError, truncateLabel, type Unit, type UnitResult,
 } from '@cirrus/core';
 import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
@@ -65,8 +65,8 @@ export interface SyncDeps {
 
 /** What the client asks of this PC's shared settings (task 6, D9). */
 export interface SettingsSync {
-  /** The changes made here that the server has not answered for, by key. */
-  pending(): Record<string, SettingChange>;
+  /** The changes made here that the server has not answered for, by key, none stamped past `latest` (R26). */
+  pending(latest: number): Record<string, SettingChange>;
   /** Settings the server gave: `whole`, all it keeps (GET /settings); otherwise some (its stream). */
   receive(rows: Record<string, SettingRow>, whole: boolean): void;
   /** The server's answer to the changes `sent`: the setting as kept there now, for each key sent. */
@@ -493,32 +493,53 @@ export class SyncClient {
   }
 
   /**
-   * The shared settings changed here (task 6, D9): their latest values, MAX_SETTINGS_PER_REQUEST at most per POST
-   * /settings; the server's answer handed back (acknowledge), a change that lost giving way to the winner's. Changes the
-   * server refuses (400, 413: they would be refused again) are dropped, said in the console; any other failure ends the
-   * connection, and they go at the next one.
+   * The latest time the server takes for a setting changed here (R26): its clock, as measured at the hello, plus
+   * MAX_SETTING_AHEAD_MS, less syncClockSkewWarnMs — the margin this PC allows its corrected clock, which can drift from
+   * the server's while connected.
+   */
+  latestSettingTime(): number {
+    return this.deps.now() + this.offset + MAX_SETTING_AHEAD_MS - Math.max(0, this.deps.params().syncClockSkewWarnMs);
+  }
+
+  /**
+   * The shared settings changed here (task 6, D9): their latest values, none stamped past latestSettingTime (R26),
+   * MAX_SETTINGS_PER_REQUEST at most per POST /settings; the server's answer handed back (acknowledge), a change that
+   * lost giving way to the winner's. Any failure but a refusal ends the connection, and they go at the next one.
    */
   private async sendSettings(conn: Connection): Promise<void> {
     const settings = this.deps.settings;
     if (!settings) return;
-    const pending = settings.pending(), keys = Object.keys(pending);
+    const pending = settings.pending(this.latestSettingTime()), keys = Object.keys(pending);
     for (let i = 0; i < keys.length && !conn.closed; i += MAX_SETTINGS_PER_REQUEST) {
-      const sent = Object.fromEntries(keys.slice(i, i + MAX_SETTINGS_PER_REQUEST).map((k) => [k, pending[k]]));
-      const res = await this.request(conn, '/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
-      if (res.status === 400 || res.status === 413) {
-        console.warn(`Réglages refusés par le serveur, abandonnés : ${await reasonOf(res)}`);
-        this.applySettings(() => settings.acknowledge(sent, {}));
-        continue;
-      }
-      const answer = await this.json(res);
-      let rows: Record<string, SettingRow>;
-      try {
-        rows = parseSettingRows((answer as { settings?: unknown } | null)?.settings);
-      } catch (e) {
-        throw new Refusal(messageOf(e));
-      }
-      this.applySettings(() => settings.acknowledge(sent, rows));
+      await this.postSettings(conn, settings, Object.fromEntries(keys.slice(i, i + MAX_SETTINGS_PER_REQUEST).map((k) => [k, pending[k]])));
     }
+  }
+
+  /**
+   * One POST /settings of `sent`. The server refuses a request whole (400, 413) for one setting it will not take: then
+   * each setting goes again alone (review of task 6, round 2), so that its well-formed neighbours are never lost; one
+   * refused alone would be refused again, and is dropped, said in the console.
+   */
+  private async postSettings(conn: Connection, settings: SettingsSync, sent: Record<string, SettingChange>): Promise<void> {
+    const res = await this.request(conn, '/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
+    if (res.status === 400 || res.status === 413) {
+      const reason = await reasonOf(res), keys = Object.keys(sent);
+      if (keys.length === 1) {
+        console.warn(`Réglage « ${keys[0]} » refusé par le serveur, abandonné : ${reason}`);
+        this.applySettings(() => settings.acknowledge(sent, {}));
+        return;
+      }
+      for (const key of keys) if (!conn.closed) await this.postSettings(conn, settings, { [key]: sent[key] });
+      return;
+    }
+    const answer = await this.json(res);
+    let rows: Record<string, SettingRow>;
+    try {
+      rows = parseSettingRows((answer as { settings?: unknown } | null)?.settings);
+    } catch (e) {
+      throw new Refusal(messageOf(e));
+    }
+    this.applySettings(() => settings.acknowledge(sent, rows));
   }
 
   /**

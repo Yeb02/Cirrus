@@ -66,6 +66,12 @@ export function parseSettingRows(x: unknown): Record<string, SettingRow> {
 }
 
 /**
+ * The time of a change made here (`at`: this PC's clock corrected by the server's, D4), and the latest the server takes
+ * (R26: SyncClient.latestSettingTime).
+ */
+export interface SettingClock { at: number; latest: number }
+
+/**
  * This PC's settings and their sharing (task 6). Without a server paired, a change goes to settings.json only, as
  * before. Paired, it also waits in settings-pending.json (its value and time, the latest per key) until the server
  * answers for it; the client sends them (pending), and hands over what the server gives (receive, acknowledge).
@@ -95,25 +101,27 @@ export class SharedSettings {
    * Settings changed in Réglages (cirrus:settings:set): only those changed, key: value, null back to the default; a
    * key that is no setting is ignored, a value bounded as withOverrides reads it. Written to settings.json; with a
    * server paired (`at`: now, the server's clock, D4), each waits too, its latest value. Its time is later than the
-   * setting's last one here, its own or received: a change the user makes after seeing another comes after it.
+   * setting's last one here, its own or received: a change the user makes after seeing another comes after it — but
+   * never past `clock.latest`, the latest time the server takes (R26): a row seen far ahead then holds its setting
+   * until the clock has caught up, rather than a change refused.
    * settings-pending.json is written first (review of task 6, Minor 5): a stop between the two files leaves the change
    * to go, and the server's answer writes settings.json. Returns what is now written for each of these keys (null: the
    * default), which the interface adopts (review, Minor 2): a row received while the change was on its way may have
    * passed it.
    */
-  local(changes: unknown, at: number | null): Record<string, unknown> {
+  local(changes: unknown, clock: SettingClock | null): Record<string, unknown> {
     const written: Record<string, unknown> = {};
     if (!isObject(changes)) return written;
-    const overrides = readSettings(this.dir), pending = at === null ? null : this.pending();
+    const overrides = readSettings(this.dir), pending = clock === null ? null : this.pending();
     let changed = false;
     for (const [key, v] of Object.entries(changes)) {
       const value = v === null ? null : settingValue(key, v);
       if (value === undefined || !isSetting(key)) continue;
       changed = put(overrides, key, value) || changed;
       written[key] = has(overrides, key) ? overrides[key] : null;
-      if (pending && at !== null) {
+      if (pending && clock !== null) {
         const floor = Math.max(pending[key]?.at ?? -Infinity, this.seen.get(key)?.at ?? -Infinity);
-        pending[key] = { value: written[key], at: Math.max(at, floor + 1) };
+        pending[key] = { value: written[key], at: Math.min(Math.max(clock.at, floor + 1), clock.latest) };
         this.seen.delete(key);
       }
     }
@@ -122,9 +130,26 @@ export class SharedSettings {
     return written;
   }
 
-  /** The changes made here that the server has not answered for, by key (the client sends them). */
-  pending(): Record<string, SettingChange> {
-    if (this.waiting) return this.waiting;
+  /**
+   * The changes made here that the server has not answered for, by key (the client sends them). `latest`, as they are
+   * about to leave: none later than it (R26) — one stamped while this PC did not know the server's clock yet (offline
+   * since its start) is brought back to it, and waits so.
+   */
+  pending(latest?: number): Record<string, SettingChange> {
+    const waiting = (this.waiting ??= this.read());
+    if (latest === undefined) return waiting;
+    let clamped = false;
+    for (const [key, c] of Object.entries(waiting)) {
+      if (c.at <= latest) continue;
+      waiting[key] = { value: c.value, at: latest };
+      clamped = true;
+    }
+    if (clamped) this.savePending();
+    return waiting;
+  }
+
+  /** settings-pending.json: the well-formed changes it holds. */
+  private read(): Record<string, SettingChange> {
     let read: unknown = null;
     try {
       read = JSON.parse(readFileSync(join(this.dir, PENDING_SETTINGS_FILE), 'utf8'));
@@ -132,9 +157,9 @@ export class SharedSettings {
       // absent (nothing pending), or unreadable: nothing pending, the server's settings apply
     }
     const entries = isObject(read) ? Object.entries(read) : [];
-    return (this.waiting = Object.fromEntries(entries.flatMap(([key, c]): [string, SettingChange][] => (
+    return Object.fromEntries(entries.flatMap(([key, c]): [string, SettingChange][] => (
       isSetting(key) && isObject(c) && has(c, 'value') && isStamp(c) ? [[key, { value: c.value, at: c.at as number }]] : []
-    ))));
+    )));
   }
 
   /**
