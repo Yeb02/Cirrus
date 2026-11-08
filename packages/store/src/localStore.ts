@@ -285,7 +285,8 @@ export class LocalStore {
 
   /**
    * The pending writes (plan 5a): this PC's lines the server has not numbered and no reconciliation replaced, grouped by
-   * write, in order; at most `limit` writes.
+   * write, in order; at most `limit` writes, for a batch to send only — a reconciliation undoes them all, so the
+   * interface's list of them must be complete (applyReconciliation checks that it was).
    */
   pendingUnits(limit = Infinity): Unit[] {
     const units: Unit[] = [];

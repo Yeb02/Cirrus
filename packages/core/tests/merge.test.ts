@@ -154,6 +154,27 @@ const CASES: Case[] = [
     },
   },
   {
+    name: 'un .tex encore en conflit : la copie de ma version précédente, qui avait perdu, est celle du même conflit — remplacée, pas doublée',
+    check: ({ s, N }) => {
+      // My version a, pushed earlier, lost to the other PC's b there: its replay kept a beside b, as a copy.
+      run(s, editNode(s, N, { files: [file('note.tex', 'a')] }));
+      const earlier = `note (conflit du ${stamp(T0 - 3_600_000)}).tex`;
+      const theirs = editNode(s, N, { files: [file('note.tex', 'b'), file(earlier, 'a')] });
+      // Here, I went on from a.
+      const mine = editNode(s, N, { files: [file('note.tex', 'c')] });
+      const out = rebase(s, { mine, theirs, mineAt: T0, theirsAt: T0 + 60_000 });
+      expect(files(s, N)).toEqual(['note.tex=b', `note (conflit du ${stamp(T0)}).tex=c`]);
+      expect(out.conflictCopies).toEqual([`note (conflit du ${stamp(T0)}).tex`]);
+      const w = world();
+      run(w.s, editNode(w.s, w.N, { files: [file('note.tex', 'a')] }));
+      rebase(w.s, {
+        mine: editNode(w.s, w.N, { files: [file('note.tex', 'c')] }), theirs: editNode(w.s, w.N, { files: [file('note.tex', 'b'), file(earlier, 'a')] }),
+        mineAt: T0 + 120_000, theirsAt: T0 + 60_000,
+      });
+      expect(files(w.s, w.N)).toEqual(['note.tex=c', `note (conflit du ${stamp(T0 + 60_000)}).tex=b`]);
+    },
+  },
+  {
     name: 'un autre fichier changé des deux côtés : le plus récent gagne, sans copie ; les noms se comparent sans la casse ni la forme Unicode',
     check: ({ s, N }) => {
       const nfd = 'Énoncé.CSV', nfc = 'énoncé.csv';

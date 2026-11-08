@@ -1,7 +1,7 @@
 import { addedViolation } from './commands.ts';
 import { groupOf, type Violation } from './invariants.ts';
 import { rebaseUnit } from './merge.ts';
-import type { Id } from './model.ts';
+import type { Id, NodeRec } from './model.ts';
 import { invertOp, MAX_ID_CHARS, type Op, parseOp, SyncFormatError } from './ops.ts';
 import { applyOp, canonical, rollback, type State } from './state.ts';
 
@@ -137,6 +137,8 @@ export function reconcile(s: State, pending: readonly Unit[], incoming: readonly
     throw new SyncDivergedError(`La base de ce PC ne suit plus celle du serveur : ${e instanceof Error ? e.message : String(e)}`, { cause: e });
   }
   const received = new Set(later.map((u) => u.unit));
+  /** The conflict copies the replayed writes made, by node: a later write of the same .tex may replace one. */
+  const copies: { node: Id; name: string }[] = [];
   try {
     for (const u of rest) {
       // Accepted by the server after other writes: received above, as the server holds it.
@@ -157,11 +159,22 @@ export function reconcile(s: State, pending: readonly Unit[], incoming: readonly
         continue;
       }
       out.rebased.push(unit);
-      for (const name of conflictCopies) out.notices.push(`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`);
+      for (const name of conflictCopies) {
+        const op = unit.ops.find((o) => o.t === 'node' && o.after?.files.some((f) => f.name === name));
+        if (op) copies.push({ node: (op.after as NodeRec).id, name });
+      }
     }
   } catch (e) {
     rollback(s, log, 0);
     throw e;
+  }
+  // One notification per conflict: for each copy the replayed writes leave in the end.
+  const told = new Set<string>();
+  for (const { node, name } of copies) {
+    const key = `${node}\u0000${name}`;
+    if (told.has(key) || !s.nodes.get(node)?.files.some((f) => f.name === name)) continue;
+    told.add(key);
+    out.notices.push(`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`);
   }
   return out;
 }

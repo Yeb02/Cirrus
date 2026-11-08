@@ -211,10 +211,20 @@ function conflictName(name: string, at: number, taken: ReadonlySet<string>): str
   }
 }
 
+/** Whether `name` is a conflict copy's of the file named `key` (fileNameKey): « nom (conflit du AAAA-MM-JJ HHhMM).tex », maybe « (n) » after. */
+function isCopyOf(name: string, key: string): boolean {
+  const k = fileNameKey(name), dot = key.lastIndexOf('.'), head = `${key.slice(0, dot)} (conflit du `, ext = key.slice(dot);
+  return k.startsWith(head) && k.endsWith(ext) && /^\d{4}-\d{2}-\d{2} \d{2}h\d{2}\)( \(\d+\))?$/.test(k.slice(head.length, k.length - ext.length));
+}
+
 /**
  * Files (D4): by name (fileNameKey). Deleted on one side and changed on the other, the change wins. Changed on both: the
  * more recent wins; for a .tex with two contents both stay, the other one renamed as a conflict copy. In theirs' order,
  * then what only mine has, then the copies.
+ *
+ * One copy per conflict, holding the losing side's last version: a copy of the .tex's base version is the same
+ * conflict's earlier round — in theirs, my version that lost at an earlier write of this replay (or another PC's
+ * replay); in mine, their version that lost at an earlier replay of this write — and the new copy replaces it.
  */
 function mergeFiles(b: readonly FileRef[], t: readonly FileRef[], m: readonly FileRef[], c: Ctx): FileRef[] {
   const byName = (files: readonly FileRef[]) => {
@@ -223,7 +233,16 @@ function mergeFiles(b: readonly FileRef[], t: readonly FileRef[], m: readonly Fi
     return map;
   };
   const B = byName(b), T = byName(t), M = byName(m);
-  const out: FileRef[] = [], done = new Set<string>(), losers: { file: FileRef; at: number }[] = [];
+  // The .tex changed on both sides into two contents: the loser's version, and the earlier rounds' copies it replaces.
+  const losers: { file: FileRef; at: number }[] = [], replaced = new Set<string>();
+  for (const [k, mf] of M) {
+    const bf = B.get(k), tf = T.get(k);
+    if (!k.endsWith('.tex') || !bf || !tf || tf.hash === mf.hash || same(mf, bf) || same(tf, bf)) continue;
+    const stamp = c.stamps?.get(`file:${k}`), theirs = newer(stamp, c.mine);
+    losers.push(theirs ? { file: mf, at: c.mine.at } : { file: tf, at: stamp?.at ?? c.mine.at });
+    for (const [x, f] of [...T, ...M]) if (!B.has(x) && f.hash === bf.hash && isCopyOf(f.name, k)) replaced.add(x);
+  }
+  const out: FileRef[] = [], done = new Set<string>(replaced);
   const emit = (k: string) => {
     if (done.has(k)) return;
     done.add(k);
@@ -233,11 +252,7 @@ function mergeFiles(b: readonly FileRef[], t: readonly FileRef[], m: readonly Fi
     else if (same(tf, bf)) f = mf;
     else if (same(tf, mf) || !mf) f = tf;
     else if (!tf) f = mf;
-    else {
-      const stamp = c.stamps?.get(`file:${k}`), theirs = newer(stamp, c.mine);
-      f = theirs ? tf : mf;
-      if (tf.hash !== mf.hash && k.endsWith('.tex')) losers.push(theirs ? { file: mf, at: c.mine.at } : { file: tf, at: stamp?.at ?? c.mine.at });
-    }
+    else f = newer(c.stamps?.get(`file:${k}`), c.mine) ? tf : mf;
     if (f) out.push(f);
   };
   for (const f of t) emit(fileNameKey(f.name));

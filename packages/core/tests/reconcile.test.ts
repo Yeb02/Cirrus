@@ -139,6 +139,70 @@ test('reconcile : une opération reçue qui ne s’applique pas lève SyncDiverg
   expect(image(s)).toBe(before);
 });
 
+/** « AAAA-MM-JJ HHhMM » in this PC's local time, as a conflict copy's name gives it (R4). */
+const stamp = (at: number) => {
+  const d = new Date(at), p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}h${p(d.getMinutes())}`;
+};
+const MIN = 60_000;
+
+/**
+ * Node N with note.tex (version 0) in plan P, on a PC and on the server; the PC saves note.tex at each given time
+ * (versions 1, 2, 3…, one action, one write each: plan 4b, D5), the server takes version b from another PC at `theirsAt`.
+ */
+function texSaves(saves: number[], theirsAt: number) {
+  const s = emptyState();
+  const P = created(run(s, createPlan(s, 'P', 'plan')), 'plan'), N = created(run(s, createNode(s, { plan: P, title: 'N', x: 0, y: 0, k: 0 })), 'node');
+  const tex = (h: string) => ({ name: 'note.tex', hash: h.repeat(64), size: 1 });
+  run(s, editNode(s, N, { files: [tex('0')] }));
+  const server = copy(s);
+  let action: Id | undefined;
+  const pending = saves.map((at, i) => {
+    const a = run(s, editNode(s, N, { files: [tex(String(i + 1))] }));
+    action ??= a.id;
+    return { ...unitOf(a, 'pc-a', at), action };
+  });
+  const theirs = unitOf(run(server, editNode(server, N, { files: [tex('b')] })), 'pc-b', theirsAt);
+  const files = (x: State) => x.nodes.get(N)!.files.map((f) => `${f.name}=${f.hash[0]}`);
+  return { s, server, N, pending, theirs, tex, files };
+}
+
+test.each([
+  { name: 'le leur plus récent que tous : il garde le nom, la copie tient ma dernière version, datée de mon dernier enregistrement', theirsAt: 10 * MIN, kept: 'b', copy: '3', copyAt: 2 * MIN },
+  { name: 'le leur entre deux de mes enregistrements : mon dernier gagne, la copie tient la sienne, datée de son écriture', theirsAt: 1.5 * MIN, kept: '3', copy: 'b', copyAt: 1.5 * MIN },
+  { name: 'le leur plus ancien que tous : ma dernière version garde le nom, la copie tient la sienne', theirsAt: -60 * MIN, kept: '3', copy: 'b', copyAt: -60 * MIN },
+])('reconcile : plusieurs enregistrements en attente du même .tex contre un changement reçu, $name — une seule copie, une seule notification', ({ theirsAt, kept, copy: held, copyAt }) => {
+  const T = Date.UTC(2026, 10, 8, 9);
+  const { s, server, pending, theirs, files } = texSaves([T, T + MIN, T + 2 * MIN], T + theirsAt);
+  const r = reconcile(s, pending, [relayed(theirs, 1)], []);
+  const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
+  expect(files(s)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
+  expect(r.notices).toEqual([`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
+  expect(r.dropped).toEqual([]);
+  // The server takes the replayed writes as they come: it then holds what the PC holds.
+  for (const u of r.rebased) applyOps(server, wire(u).ops);
+  expect(image(s)).toBe(image(server));
+});
+
+test.each([
+  { name: 'ma version avait gagné, la leur change encore, plus récente : une seule copie, la mienne', secondAt: 30 * MIN, kept: 'c', copy: '1', copyAt: 0 },
+  { name: 'ma version avait gagné, la leur change encore, plus ancienne : une seule copie, leur dernière', secondAt: -30 * MIN, kept: '1', copy: 'c', copyAt: -30 * MIN },
+  { name: 'la leur avait gagné, elle change encore : la copie de la mienne reste seule', secondAt: 30 * MIN, firstAt: 10 * MIN, kept: 'c', copy: '1', copyAt: 0 },
+])('reconcile : une écriture qui porte déjà une copie de conflit, rejouée sur un nouveau changement du .tex — $name', ({ secondAt, firstAt, kept, copy: held, copyAt }) => {
+  const T = Date.UTC(2026, 10, 8, 9);
+  const { s, server, N, pending, theirs, tex, files } = texSaves([T], T + (firstAt ?? -60 * MIN));
+  const first = reconcile(s, pending, [relayed(theirs, 1)], []);
+  expect(first.notices).toHaveLength(1);
+  // Before the replayed write reaches the server, another change of the .tex arrives.
+  const again = unitOf(run(server, editNode(server, N, { files: [tex('c')] })), 'pc-b', T + secondAt);
+  const second = reconcile(s, first.rebased, [relayed(again, 2)], []);
+  const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
+  expect(files(s)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
+  expect(second.notices).toEqual(firstAt === undefined ? [`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`] : []);
+  for (const u of second.rebased) applyOps(server, wire(u).ops);
+  expect(image(s)).toBe(image(server));
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // The simulation (the test that counts): an in-memory sequencer applying the server's rules (D1), three virtual PCs,
 // random commands, deliveries delayed and interleaved at random; at rest, the four states are equal and valid.
@@ -246,7 +310,7 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
     const live = [...s.nodes.values()].filter((n) => n.trashedAt === undefined).map((n) => n.id);
     const placed = [...s.placements.values()].filter((p) => p.plan === plan).map((p) => p.node);
     const hot = (xs: Id[]) => (rand() < 0.7 ? [...xs].sort().slice(0, 6) : xs);
-    const r = rand() * 22;
+    const r = rand() * 24;
     if (r < 3) return createNode(s, { plan, title: pick(WORDS), x: Math.round(rand() * 1000), y: Math.round(rand() * 1000), k: 0 });
     if (r < 6) return editNode(s, pick(hot([...s.nodes.keys()])), { title: `${pick(WORDS)} ${Math.floor(rand() * 100)}` });
     if (r < 9) {
@@ -271,6 +335,11 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
     if (r < 20.5) {
       const c = s.connections.get(pick(hot([...s.connections.keys()])))!;
       return setRole(s, c.id, pick(c.members).node, pick(ROLES));
+    }
+    if (r >= 22) {
+      // An autosave of a node's .tex (plan 4b): each one a write of its own, often of the same file on several PCs.
+      const n = s.nodes.get(pick(hot([...s.nodes.keys()])))!, hash = Array.from({ length: 64 }, () => '0123456789abcdef'[Math.floor(rand() * 16)]).join('');
+      return editNode(s, n.id, { files: [...n.files.filter((f) => f.name !== 'note.tex'), { name: 'note.tex', hash, size: 1 }] });
     }
     const other = plan === P1 ? P2 : P1;
     return placeNode(s, other, pick(hot(live)), Math.round(rand() * 1000), 0, 0);
@@ -352,5 +421,6 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
   expect(stats.rewritten).toBeGreaterThan(0);
   expect(stats.dropped).toBeGreaterThan(0);
   expect(stats.stale).toBeGreaterThan(0);
-  console.log(`simulation : ${JSON.stringify(stats)} ; ${server.s.nodes.size} nœuds, ${server.s.connections.size} connexions, ${server.seq} lignes`);
+  // The same .tex saved on two PCs at once: conflict copies were made.
+  expect(stats.notices).toBeGreaterThan(0);
 }, 60_000);
