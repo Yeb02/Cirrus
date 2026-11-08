@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   type Action, type Anchor, applyOps, canonical, type ConnectionLayout, connect, createAnnotation, createNode, createPlan, DEFAULT_PREAMBLE, editNode,
-  emptyState, encodeState, type Id, type NodeRec, OpConflictError, type PhantomRec, preambleText, removeFromPlan, setPreamble, SNAPSHOT_VERSION, type State,
-  type TagKeyDef, toSnapshot,
+  emptyState, encodeState, fromSnapshot, type Id, type NodeRec, OpConflictError, type PhantomRec, preambleText, reconcile, type RemoteUnit, removeFromPlan,
+  setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot, type Unit, uuidv7,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
 
@@ -20,6 +20,10 @@ const write = (store: LocalStore, s: State, a: Action): number => { const seq = 
 const same = (a: State, b: State) => expect(canonical(sorted(a))).toBe(canonical(sorted(b)));
 const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)]));
 
+/** What schema 4 added (plan 5a), taken away: the journal as schema 3 left it, for the bases of earlier plans. */
+const BEFORE_V4 = `DROP INDEX changes_unit; DROP INDEX changes_pending; ALTER TABLE changes DROP COLUMN unit; ALTER TABLE changes DROP COLUMN kind;
+  ALTER TABLE changes DROP COLUMN superseded;`;
+
 function withPlan(store: LocalStore, s: State): Id {
   const a = createPlan(s, 'Thèse', 'plan');
   write(store, s, a);
@@ -32,7 +36,7 @@ test('ouvrir crée la base au schéma courant, avec les tables de l’instantan�
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
   for (const name of ['snapshot', 'preamble']) expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name), name).toBeDefined();
   db.close();
-  expect(SCHEMA_VERSION).toBe(3);
+  expect(SCHEMA_VERSION).toBe(4);
 });
 
 test('un fichier qui n’est pas une base : ouvrir échoue sans le garder ouvert (il s’efface aussitôt)', () => {
@@ -254,7 +258,7 @@ test('migration du schéma 1 au schéma 2 : additive, rien de perdu, sans instan
   store.close();
   // The base as plan 3b left it: schema 1, no snapshot table (nor the preamble's of schema 3).
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec('DROP TABLE snapshot; DROP TABLE preamble; PRAGMA user_version = 1;');
+  db.exec(`${BEFORE_V4} DROP TABLE snapshot; DROP TABLE preamble; PRAGMA user_version = 1;`);
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' });
   same(again.loadState(), s);
@@ -291,7 +295,7 @@ test('migration du schéma 2 au schéma 3 : la table du préambule ajoutée, rie
   store.close();
   // The base as plan 4a left it: schema 2, its snapshot, no preamble table.
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec('DROP TABLE preamble; PRAGMA user_version = 2;');
+  db.exec(`${BEFORE_V4} DROP TABLE preamble; PRAGMA user_version = 2;`);
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
   same(loaded, s);
@@ -302,8 +306,160 @@ test('migration du schéma 2 au schéma 3 : la table du préambule ajoutée, rie
   expect(again.loadState().preamble).toEqual({ text: 'nouveau' });
   again.close();
   const check = new DatabaseSync(join(dir, 'cirrus.db'));
-  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
   check.close();
+});
+
+// Plan 5a: the journal's writes (units), their kind, the lines a reconciliation replaced, the server's numbers.
+
+const wire = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+const T0 = Date.UTC(2026, 10, 8, 9);
+/** Commits `a` as one write of this PC (pc-a) and applies it to the interface's copy: the pending unit it keeps (task 4). */
+function commitUnit(store: LocalStore, s: State, a: Action, at = T0): Unit {
+  const unit = uuidv7();
+  store.commit(a, { unit, at });
+  applyOps(s, a.ops);
+  return { unit, action: a.id, label: a.label, at, pc: 'pc-a', ops: a.ops };
+}
+/** The tables' state rebuilt by replaying the whole journal, in local order, from an empty state. */
+function replayed(store: LocalStore): State {
+  const t = emptyState();
+  applyOps(t, store.changesSince(0).map((r) => r.op));
+  return t;
+}
+
+test('migration du schéma 3 au schéma 4 : chaque ligne devient l’écriture de son action, locale, en attente ; rien de perdu', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const plan = withPlan(store, s);
+  const a = createNode(s, { plan, title: 'Ancien', x: 0, y: 0, k: 0 });
+  write(store, s, a);
+  store.close();
+  // The base as plan 4c left it: schema 3, a journal without units, kinds or replaced lines.
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  db.exec(`${BEFORE_V4} PRAGMA user_version = 3;`);
+  db.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' });
+  same(again.loadState(), s);
+  const rows = again.changesSince(0);
+  expect(rows).toHaveLength(3);
+  expect(rows.every((r) => r.unit === r.actionId && r.kind === 'local' && !r.superseded && r.serverSeq === null)).toBe(true);
+  expect(again.pendingUnits().map((u) => [u.action, u.label, u.ops.length])).toEqual([[rows[0].actionId, 'Créer le plan « Thèse »', 1], [a.id, a.label, 2]]);
+  expect(again.lastServerSeq()).toBe(0);
+  again.close();
+  const check = new DatabaseSync(join(dir, 'cirrus.db'));
+  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  check.close();
+});
+
+test('commit : l’identifiant de l’écriture, son heure et son PC donnés ; pendingUnits rend les écritures en attente, dans l’ordre, bornées', () => {
+  const store = LocalStore.open(dir, { pc: 'pc-a' }), s = emptyState();
+  const p = createPlan(s, 'Thèse', 'plan');
+  store.commit(p, { unit: 'u1', at: 5 });
+  applyOps(s, p.ops);
+  const plan = (p.ops[0].after as { id: Id }).id;
+  const n = createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 });
+  expect(store.commit(n, { unit: 'u2', at: 6 })).toBe(3);
+  applyOps(s, n.ops);
+  const id = (n.ops[0].after as NodeRec).id;
+  // Two saves of a .tex: one action, two writes (D5).
+  const e1 = editNode(s, id, { title: 'A1' });
+  store.commit(e1);
+  applyOps(s, e1.ops);
+  const e2 = { ...editNode(s, id, { title: 'A2' }), id: e1.id };
+  store.commit(e2, { pc: 'pc-z' });
+  const units = store.pendingUnits();
+  expect(units.slice(0, 2)).toEqual([
+    { unit: 'u1', action: p.id, label: p.label, at: 5, pc: 'pc-a', ops: wire(p.ops) },
+    { unit: 'u2', action: n.id, label: n.label, at: 6, pc: 'pc-a', ops: wire(n.ops) },
+  ]);
+  expect(units.slice(2).map((u) => [u.action, u.pc])).toEqual([[e1.id, 'pc-a'], [e1.id, 'pc-z']]);
+  expect(units[2].unit).not.toBe(units[3].unit);
+  expect(store.pendingUnits(1).map((u) => u.unit)).toEqual(['u1']);
+  expect(store.pendingUnits(3).map((u) => u.unit)).toEqual(['u1', 'u2', units[2].unit]);
+  expect(store.changesSince(0).map((r) => r.unit)).toEqual(['u1', 'u2', 'u2', units[2].unit, units[3].unit]);
+  // A reading stopped early leaves nothing in progress: the next write goes through.
+  store.commit(createPlan(s, 'Autre', 'plan'), { unit: 'u5' });
+  expect(store.pendingUnits().map((u) => u.unit).at(-1)).toBe('u5');
+  store.close();
+});
+
+/**
+ * A PC (pc-a) wrote a plan, a node and its renaming, all pending; the server accepted the first two as they were, then
+ * a write of pc-b on the node, before the renaming came: what the PC receives.
+ */
+function scenario() {
+  const store = LocalStore.open(dir, { pc: 'pc-a' }), s = emptyState();
+  const u0 = commitUnit(store, s, createPlan(s, 'Thèse', 'plan'));
+  const plan = (u0.ops[0].after as { id: Id }).id;
+  const u1 = commitUnit(store, s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  const id = (u1.ops[0].after as NodeRec).id;
+  const u2 = commitUnit(store, s, editNode(s, id, { title: 'A2' }), T0 + 2);
+  const server = emptyState();
+  applyOps(server, wire([...u0.ops, ...u1.ops]));
+  const b = editNode(server, id, { summary: 'vu par B' });
+  applyOps(server, b.ops);
+  const incoming: RemoteUnit[] = [
+    { ...wire(u0), seq: 1 }, { ...wire(u1), seq: 3 }, { unit: 'ub', action: b.id, label: b.label, at: T0 + 1, pc: 'pc-b', ops: wire(b.ops), seq: 4 },
+  ];
+  return { store, s, server, id, u0, u1, u2, incoming };
+}
+
+test('applyReconciliation : accusés numérotés en place, inverses, reçues et rejouées écrites ; last_server_seq ; le journal rejoué redonne les tables', () => {
+  const { store, s, server, id, u0, u1, u2, incoming } = scenario();
+  expect(store.pendingUnits().map((u) => u.unit)).toEqual([u0.unit, u1.unit, u2.unit]);
+  const r = reconcile(s, store.pendingUnits(), incoming, []);
+  expect(r.acked).toEqual([u0.unit, u1.unit]);
+  expect(r.rewind).toHaveLength(1);
+  expect(store.applyReconciliation(r)).toBe(store.lastSeq());
+  same(store.loadState(), s);
+  same(replayed(store), store.loadState());
+  expect(store.lastServerSeq()).toBe(4);
+  expect(store.pendingUnits()).toEqual(wire(r.rebased));
+  expect(store.changesSince(0).map((x) => [x.kind, x.serverSeq, x.superseded, x.unit, x.pc])).toEqual([
+    ['local', 1, false, u0.unit, 'pc-a'], ['local', 2, false, u1.unit, 'pc-a'], ['local', 3, false, u1.unit, 'pc-a'],
+    ['local', null, true, u2.unit, 'pc-a'],
+    ['rewind', null, false, expect.any(String), 'pc-a'],
+    ['remote', 4, false, 'ub', 'pc-b'],
+    ['local', null, false, u2.unit, 'pc-a'],
+  ]);
+  // The history shows local and received lines (the node's creation and placement), the replaced one too, never the inverses.
+  expect(store.historyOf(id).map((x) => [x.kind, x.superseded])).toEqual([['local', false], ['local', false], ['local', true], ['remote', false], ['local', false]]);
+  // The server takes the replayed write: its echo is an acknowledgement, numbered in place.
+  applyOps(server, wire(r.rebased[0].ops));
+  const ack = reconcile(s, store.pendingUnits(), [{ ...wire(r.rebased[0]), seq: 5 }], []);
+  expect(ack.acked).toEqual([u2.unit]);
+  store.applyReconciliation(ack);
+  expect(store.pendingUnits()).toEqual([]);
+  expect(store.lastServerSeq()).toBe(5);
+  same(store.loadState(), server);
+  same(replayed(store), server);
+  store.close();
+  const again = LocalStore.open(dir, { pc: 'pc-a' });
+  expect(again.lastServerSeq()).toBe(5);
+  again.close();
+});
+
+test('applyReconciliation : tout ou rien — un « avant » périmé, un trou dans les numéros du serveur, la même réconciliation deux fois', () => {
+  const { store, s, incoming } = scenario();
+  const tables = () => canonical(sorted(store.loadState())), journal = () => JSON.stringify(store.changesSince(0));
+  const r = reconcile(fromSnapshot(toSnapshot(s)), store.pendingUnits(), incoming, []);
+  const before = [tables(), journal(), store.lastServerSeq()];
+  const n = r.remote[2].ops[0].before as NodeRec;
+  const stale = { ...r, remote: [r.remote[0], r.remote[1], { ...r.remote[2], ops: [{ ...r.remote[2].ops[0], before: { ...n, title: 'jamais vu' } }] as Op[] }] };
+  expect(() => store.applyReconciliation(stale)).toThrow(OpConflictError);
+  expect([tables(), journal(), store.lastServerSeq()]).toEqual(before);
+  const gap = { ...r, remote: [r.remote[0], r.remote[1], { ...r.remote[2], seq: 9 }] };
+  expect(() => store.applyReconciliation(gap)).toThrow(/numéro/);
+  expect([tables(), journal(), store.lastServerSeq()]).toEqual(before);
+  const m = r.rebased[0].ops[0].before as NodeRec;
+  const badRebased = { ...r, rebased: [{ ...r.rebased[0], ops: [{ ...r.rebased[0].ops[0], before: { ...m, title: 'autre' } }] as Op[] }] };
+  expect(() => store.applyReconciliation(badRebased)).toThrow(OpConflictError);
+  expect([tables(), journal(), store.lastServerSeq()]).toEqual(before);
+  store.applyReconciliation(r);
+  const after = [tables(), journal(), store.lastServerSeq()];
+  expect(() => store.applyReconciliation(r)).toThrow();
+  expect([tables(), journal(), store.lastServerSeq()]).toEqual(after);
+  store.close();
 });
 
 type Op = Action['ops'][number];

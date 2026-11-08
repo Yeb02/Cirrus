@@ -32,6 +32,18 @@ const MIGRATIONS: string[] = [
   /* v3 (plan 4b): the global LaTeX preamble, one row at most; none means DEFAULT_PREAMBLE. */ `
   CREATE TABLE preamble (id INTEGER PRIMARY KEY CHECK (id = 1), json TEXT NOT NULL);
   `,
+  /*
+   * v4 (plan 5a, D5): each line's write (unit: one commit; a line written before is its action's own), its kind (local,
+   * remote, rewind) and whether a reconciliation replaced it (superseded); the pending lines, indexed apart: a PC's
+   * whole journal is not read to find them.
+   */ `
+  ALTER TABLE changes ADD COLUMN unit TEXT;
+  ALTER TABLE changes ADD COLUMN kind TEXT NOT NULL DEFAULT 'local';
+  ALTER TABLE changes ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0;
+  UPDATE changes SET unit = action_id;
+  CREATE INDEX changes_unit ON changes (unit);
+  CREATE INDEX changes_pending ON changes (local_seq) WHERE kind = 'local' AND server_seq IS NULL AND superseded = 0;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

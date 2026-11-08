@@ -144,10 +144,9 @@ export class Draft {
     return this.tx.made.has(a);
   }
   /**
-   * The action of this draft's operations, its rules checked on what they touch: on the state with the operations
-   * applied, then, if that finds violations, on the state as it was once they are undone; an action may not add a
-   * violation (one already there is not its doing). Outermost, the state is left as it was received; nested, the
-   * operations stay applied for the enclosing draft, and directly inside a combine the check is the combine's.
+   * The action of this draft's operations, its rules checked on what they touch (addedViolation): an action may not
+   * add a violation. Outermost, the state is left as it was received; nested, the operations stay applied for the
+   * enclosing draft, and directly inside a combine the check is the combine's.
    */
   finish(label: string): Action {
     const tx = this.tx, ops = tx.log.slice(this.mark), a: Action = { id: uuidv7(), label, ops };
@@ -157,20 +156,32 @@ export class Draft {
       this.kept.push(a);
       if (this.parent.collects) return a;
     }
-    const touched = touchedBy(this.s, ops);
-    const after = checkState(this.s, touched);
-    if (after.length === 0) {
-      if (!this.parent) rollback(this.s, tx.log, 0);
-      return a;
-    }
-    rollback(this.s, tx.log, this.mark);
-    const known = new Set(checkState(this.s, touched).map(violationKey));
-    const added = after.find((v) => !known.has(violationKey(v)));
+    const added = addedViolation(this.s, ops);
     if (added) throw new CommandError(added.message);
-    // Nested (a preview, a dry run): applied again, for the enclosing draft.
-    if (this.parent) for (const op of ops) this.write(op);
+    if (!this.parent) rollback(this.s, tx.log, 0);
     return a;
   }
+}
+
+/**
+ * The rule every action is checked by: the violation that `ops`, just applied to `s` (the last operations written,
+ * nothing after them), add; null when they add none. Checked on what they touch: on the state with them, then, if that
+ * finds violations, on the state without them, undone and applied again — one already there is not their doing. `s` is
+ * left with the operations applied. A command's (Draft.finish), a write replayed by a reconciliation's and a write the
+ * server accepts' (plan 5a, D1 and D4).
+ */
+export function addedViolation(s: State, ops: readonly Op[]): Violation | null {
+  const touched = touchedBy(s, ops);
+  const after = checkState(s, touched);
+  if (after.length === 0) return null;
+  rollback(s, [...ops], 0);
+  let known: Set<string>;
+  try {
+    known = new Set(checkState(s, touched).map(violationKey));
+  } finally {
+    for (const op of ops) applyKnown(s, op);
+  }
+  return after.find((v) => !known.has(violationKey(v))) ?? null;
 }
 
 /**

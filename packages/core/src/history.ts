@@ -28,6 +28,8 @@ function dryRun(s: State, a: Action, message: string): void {
 export class UndoStack {
   private readonly done: Action[] = [];
   private readonly undone: Action[] = [];
+  /** The actions merged into a step that bears another identifier (extend): theirs → the step's. */
+  private readonly within = new Map<string, string>();
 
   record(a: Action): void {
     this.done.push(a);
@@ -43,7 +45,20 @@ export class UndoStack {
     if (!top || top.id !== id) { this.record(a); return false; }
     this.done[this.done.length - 1] = { ...top, ops: [...top.ops, ...a.ops] };
     this.undone.length = 0;
+    if (a.id !== id) this.within.set(a.id, id);
     return true;
+  }
+
+  /**
+   * Removes the step of action `action`, to undo or to redo (plan 5a, D5): an action a reconciliation rewrote or dropped
+   * can no longer be undone as it was recorded. A step completed by another action (extend) goes when either is named;
+   * an unknown identifier changes nothing.
+   */
+  forget(action: string): void {
+    const step = this.within.get(action) ?? action;
+    for (const stack of [this.done, this.undone]) {
+      for (let i = stack.length - 1; i >= 0; i--) if (stack[i].id === step) stack.splice(i, 1);
+    }
   }
 
   prepareUndo(s: State): Action | null {

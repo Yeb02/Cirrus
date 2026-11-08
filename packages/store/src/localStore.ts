@@ -3,11 +3,18 @@ import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, type Flow, flowOf, fromSnapshot, type Id, type NodeRec, type Op,
-  OpConflictError, type PhantomRec, type Placement, type PlanRec, type PreambleRec, snapshotVersion, type State, subjectOf, type TagKeyDef,
+  OpConflictError, type PhantomRec, type Placement, type PlanRec, type PreambleRec, type Reconciliation, type RemoteUnit, snapshotVersion, type State,
+  subjectOf, type TagKeyDef, type Unit, uuidv7,
 } from '@cirrus/core';
 import { migrate } from './schema.ts';
 
 export { SCHEMA_VERSION } from './schema.ts';
+
+/**
+ * A journal line's kind (plan 5a, D5): local, an action of this PC (pending until the server numbers it); remote, one
+ * received from the server; rewind, the inverse of a pending write a reconciliation undid, never sent.
+ */
+export type ChangeKind = 'local' | 'remote' | 'rewind';
 
 export interface ChangeRow {
   localSeq: number;
@@ -19,16 +26,30 @@ export interface ChangeRow {
   pc: string;
   subject: Id;
   op: Op;
+  /** The write it belongs to: one call to commit, or one write received. */
+  unit: Id;
+  kind: ChangeKind;
+  /** A local line a reconciliation replaced by its replayed version, or dropped (« écartée »). */
+  superseded: boolean;
 }
 
 /** The base's snapshot of the state (plan 3c, decision 4): its bytes, the last journal line it covers, its format. */
 export interface StoredSnapshot { data: ArrayBuffer; seq: number; version: number }
 
-interface ChangeDbRow { local_seq: number; server_seq: number | null; action_id: string; label: string; flow: string; at: number; pc: string; subject: string; op: string }
+interface ChangeDbRow {
+  local_seq: number; server_seq: number | null; action_id: string; label: string; flow: string; at: number; pc: string; subject: string; op: string; unit: string;
+  kind: string; superseded: number;
+}
 const toRow = (r: ChangeDbRow): ChangeRow => ({
   localSeq: r.local_seq, serverSeq: r.server_seq, actionId: r.action_id, label: r.label, flow: r.flow as Flow, at: r.at, pc: r.pc, subject: r.subject,
-  op: JSON.parse(r.op) as Op,
+  op: JSON.parse(r.op) as Op, unit: r.unit, kind: r.kind as ChangeKind, superseded: r.superseded !== 0,
 });
+
+/** Who wrote a group of journal lines: their write, action, label, time, PC and kind; the server's number of the first, if any. */
+interface Lines { unit: Id; action: Id; label: string; at: number; pc: string; kind: ChangeKind; serverSeq: number | null }
+
+/** The pending lines: this PC's, not numbered by the server, not replaced (the partial index changes_pending). */
+const PENDING = "kind = 'local' AND server_seq IS NULL AND superseded = 0";
 
 type Query = (sql: string) => StatementSync;
 
@@ -204,29 +225,113 @@ export class LocalStore {
   }
 
   /**
-   * Writes an action in one transaction: each operation's record checked as the state checks it (checkRecord) and its
-   * "before" against the row it replaces, then its "after" written and its journal line added. The first that fails
-   * throws (OpConflictError for a "before" that no longer matches) and nothing is written (ROLLBACK). Returns the
-   * journal number of the action's last line.
+   * Writes an action in one transaction, as one write (unit) of this PC, pending: each operation's record checked as the
+   * state checks it (checkRecord) and its "before" against the row it replaces, then its "after" written and its journal
+   * line added. The first that fails throws (OpConflictError for a "before" that no longer matches) and nothing is
+   * written (ROLLBACK). `opts`: the write's identifier (the interface's, plan 5a; uuidv7() otherwise), its time (now),
+   * its PC (this one; the server writes each PC's own, task 2). Returns the journal number of the action's last line.
    */
-  commit(a: Action): number {
-    const at = Date.now(), q = this.q;
-    const insert = q('INSERT INTO changes (server_seq, action_id, label, flow, at, pc, subject, op) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)');
+  commit(a: Action, opts: { at?: number; unit?: Id; pc?: string } = {}): number {
+    const lines: Lines = { unit: opts.unit ?? uuidv7(), action: a.id, label: a.label, at: opts.at ?? Date.now(), pc: opts.pc ?? this.pc, kind: 'local', serverSeq: null };
+    const seq = this.transaction(() => this.write(a.ops, lines));
+    return seq < 0 ? this.lastSeq() : seq;
+  }
+
+  /**
+   * Writes a reconciliation (plan 5a, D4 and D5) in one transaction, all or nothing, each "before" checked as commit
+   * checks it: the acknowledged writes' lines take their server numbers; when pending writes were undone, their lines
+   * are marked replaced and the inverses written (rewind); then each received write's lines, numbered (local when it is
+   * this PC's own, accepted after others), and the replayed pending writes; last_server_seq with them, so that a crash
+   * neither loses nor doubles anything. The server's numbers must follow last_server_seq without a gap or an overlap.
+   * Returns the journal number of the last line.
+   */
+  applyReconciliation(r: Reconciliation): number {
+    const q = this.q;
+    this.transaction(() => {
+      let next = this.lastServerSeq() + 1, i = 0;
+      /** The server's number of a received write's first line, checked to follow the last one. */
+      const firstOf = (u: RemoteUnit): number => {
+        const first = u.seq - u.ops.length + 1;
+        if (u.ops.length === 0 || first !== next) throw new Error(`Le serveur reprend au numéro ${first} ; ce PC attendait le ${next}.`);
+        next = u.seq + 1;
+        return first;
+      };
+      for (; i < r.acked.length; i++) {
+        const u = r.remote[i];
+        if (u?.unit !== r.acked[i]) throw new Error('Réconciliation incohérente : les écritures accusées ne sont pas en tête des reçues.');
+        const first = firstOf(u), lines = q(`SELECT local_seq FROM changes WHERE unit = ? AND ${PENDING} ORDER BY local_seq`).all(u.unit) as { local_seq: number }[];
+        if (lines.length !== u.ops.length) throw new OpConflictError(`L’écriture « ${u.label} » n’est plus en attente ici : la réconciliation ne s’applique plus.`);
+        lines.forEach((l, j) => q('UPDATE changes SET server_seq = ? WHERE local_seq = ?').run(first + j, l.local_seq));
+      }
+      if (r.rewind.length > 0) {
+        const replaced = Number(q(`UPDATE changes SET superseded = 1 WHERE ${PENDING}`).run().changes);
+        if (replaced !== r.rewind.length) throw new OpConflictError('Les écritures en attente ont changé depuis : la réconciliation ne s’applique plus.');
+        const id = uuidv7();
+        this.write(r.rewind, { unit: id, action: id, label: 'Défaire les écritures en attente (synchronisation)', at: Date.now(), pc: this.pc, kind: 'rewind', serverSeq: null });
+      }
+      for (; i < r.remote.length; i++) {
+        const u = r.remote[i];
+        this.write(u.ops, { unit: u.unit, action: u.action, label: u.label, at: u.at, pc: u.pc, kind: u.pc === this.pc ? 'local' : 'remote', serverSeq: firstOf(u) });
+      }
+      if (r.rewind.length > 0) {
+        for (const u of r.rebased) this.write(u.ops, { unit: u.unit, action: u.action, label: u.label, at: u.at, pc: u.pc, kind: 'local', serverSeq: null });
+      }
+      if (r.remote.length > 0) {
+        q("INSERT INTO meta (key, value) VALUES ('last_server_seq', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(next - 1));
+      }
+    });
+    return this.lastSeq();
+  }
+
+  /**
+   * The pending writes (plan 5a): this PC's lines the server has not numbered and no reconciliation replaced, grouped by
+   * write, in order; at most `limit` writes.
+   */
+  pendingUnits(limit = Infinity): Unit[] {
+    const units: Unit[] = [];
+    const rows = this.q(`SELECT unit, action_id, label, at, pc, op FROM changes WHERE ${PENDING} ORDER BY local_seq`).iterate() as Iterable<ChangeDbRow>;
+    for (const r of rows) {
+      const last = units.at(-1), op = JSON.parse(r.op) as Op;
+      if (last?.unit === r.unit) {
+        last.ops.push(op);
+        continue;
+      }
+      if (units.length >= limit) break;
+      units.push({ unit: r.unit, action: r.action_id, label: r.label, at: r.at, pc: r.pc, ops: [op] });
+    }
+    return units;
+  }
+
+  /** The server's number of the last line received (0: none yet): where its stream resumes. */
+  lastServerSeq(): number {
+    const row = this.q("SELECT value FROM meta WHERE key = 'last_server_seq'").get() as { value: string } | undefined;
+    return row ? Number(row.value) : 0;
+  }
+
+  /** Checks and writes `ops` into the tables, one journal line each, inside the caller's transaction; the last line's number (−1: none). */
+  private write(ops: readonly Op[], l: Lines): number {
+    const q = this.q, insert = q('INSERT INTO changes (server_seq, action_id, label, flow, at, pc, subject, op, unit, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     let seq = -1;
+    ops.forEach((op, i) => {
+      checkRecord(op);
+      checkBefore(q, op);
+      persistOp(q, op);
+      seq = Number(insert.run(l.serverSeq === null ? null : l.serverSeq + i, l.action, l.label, flowOf(op), l.at, l.pc, subjectOf(op), JSON.stringify(op), l.unit, l.kind).lastInsertRowid);
+    });
+    return seq;
+  }
+
+  /** `fn` in one write transaction: all of it, or nothing (ROLLBACK, and its error thrown). */
+  private transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const op of a.ops) {
-        checkRecord(op);
-        checkBefore(q, op);
-        persistOp(q, op);
-        seq = Number(insert.run(a.id, a.label, flowOf(op), at, this.pc, subjectOf(op), JSON.stringify(op)).lastInsertRowid);
-      }
+      const out = fn();
       this.db.exec('COMMIT');
+      return out;
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
     }
-    return seq < 0 ? this.lastSeq() : seq;
   }
 
   /** The journal number of the last line (0 for an empty journal). */
@@ -238,9 +343,12 @@ export class LocalStore {
     return (this.q('SELECT * FROM changes WHERE local_seq > ? ORDER BY local_seq').all(localSeq) as unknown as ChangeDbRow[]).map(toRow);
   }
 
-  /** Per-object history (spec 6.3). */
+  /**
+   * Per-object history (spec 6.3): the local and received lines, those a reconciliation replaced too (`superseded`: the
+   * losing change, « écartée », D5), never the inverses it wrote.
+   */
   historyOf(subject: Id): ChangeRow[] {
-    return (this.q('SELECT * FROM changes WHERE subject = ? ORDER BY local_seq').all(subject) as unknown as ChangeDbRow[]).map(toRow);
+    return (this.q("SELECT * FROM changes WHERE subject = ? AND kind != 'rewind' ORDER BY local_seq").all(subject) as unknown as ChangeDbRow[]).map(toRow);
   }
 
   /** The nodes in the trash, in the order they were created. */

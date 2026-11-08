@@ -103,3 +103,25 @@ test('un rétablissement refusé dit « rétablir » (M3 du plan 2)', () => {
   for (const op of a.ops) applyOp(s, op);
   expect(() => stack.redo(s)).toThrow(/rétablir/);
 });
+
+test('forget : une action réécrite ou écartée par une réconciliation quitte la pile, d’annulation comme de rétablissement (plan 5a, D5)', () => {
+  const { s, plan, stack } = setup();
+  const a = run(s, createNode(s, { plan, title: 'A', x: 0, y: 0, k: 0 }));
+  stack.record(a);
+  const b = run(s, createNode(s, { plan, title: 'B', x: 0, y: 0, k: 0 }));
+  stack.record(b);
+  stack.forget(a.id);
+  expect(stack.nextUndo).toBe(b.id);
+  run(s, stack.undo(s)!);
+  expect(stack.canUndo).toBe(false);
+  stack.forget(b.id);
+  expect(stack.canRedo).toBe(false);
+  stack.forget('inconnue');
+  // A step another action completed (extend) goes when either is named.
+  const c = run(s, createNode(s, { plan, title: 'C', x: 0, y: 0, k: 0 }));
+  stack.record(c);
+  const d = run(s, editNode(s, createdId(c), { title: 'C2' }));
+  expect(stack.extend(c.id, d)).toBe(true);
+  stack.forget(d.id);
+  expect(stack.canUndo).toBe(false);
+});

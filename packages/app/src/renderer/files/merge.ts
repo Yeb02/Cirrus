@@ -1,10 +1,13 @@
-import type { FileRef } from '@cirrus/core';
+import { type FileRef, fileNameKey } from '@cirrus/core';
 
 /** What a drop does to a node's files: the new list, and the names, as they read in it, added, replaced or left as they were. */
 export interface Merge { files: FileRef[]; added: string[]; replaced: string[]; unchanged: string[] }
 
-/** What two names are compared by: Unicode NFC (an « é » an archive decomposed is the composed one), then the case, the French way. */
-export const nameKey = (name: string): string => name.normalize('NFC').toLocaleLowerCase('fr');
+/**
+ * What two names are compared by: Unicode NFC (an « é » an archive decomposed is the composed one), then the case, the
+ * French way — the core's rule, which the synchronisation's merge of files shares (plan 5a, D4).
+ */
+export const nameKey = fileNameKey;
 
 /** Whether two names are one file's (Review Focus 1): Windows ignores the case, and the user sees no normalization. */
 export function sameName(a: string, b: string): boolean {

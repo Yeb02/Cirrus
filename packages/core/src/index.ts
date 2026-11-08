@@ -19,5 +19,7 @@ export * from './bibtex.ts';
 export * from './invariants.ts';
 export * from './commands.ts';
 export * from './history.ts';
+export * from './merge.ts';
+export * from './sync.ts';
 export * from './snapshot.ts';
 export * from './codec.ts';
