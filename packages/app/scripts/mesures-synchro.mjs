@@ -95,7 +95,8 @@ async function envoyer(url, dataDir, pcDir) {
   const nodes = store.nodeCount(), lines = store.lastSeq(), snap = store.readSnapshot();
   const snapshotMb = snap ? mb(snap.data.byteLength) : null;
   const times = {}, sampler = peakSampler(), t1 = performance.now();
-  await seedBase({ fetch: timedFetch(times), store, dir: pcDir, config, signal: new AbortController().signal });
+  // The pairing's time, kept with the seed (B1): the app takes it from /hello, of a server that runs here too.
+  await seedBase({ fetch: timedFetch(times), store, dir: pcDir, config, pairedAt: Date.now(), signal: new AbortController().signal });
   const seedMs = performance.now() - t1;
   store.close();
   console.log(JSON.stringify({ nodes, lines, snapshotMb, openMs: Math.round(openMs), seedMs: Math.round(seedMs), requests: rounded(times), peakMb: mb(sampler.stop()) }));

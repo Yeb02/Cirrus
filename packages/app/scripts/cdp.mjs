@@ -15,7 +15,7 @@ export const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); re
 
 /** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…). */
 export async function launch(data, profile, more = {}) {
-  // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/index.ts); the page is told it has it.
+  // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/window.ts); the page is told it has it.
   const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
   // Port 0: Chromium picks a free one, and writes it in the profile (DevToolsActivePort) — the file an earlier launch on
@@ -198,7 +198,7 @@ export async function launch(data, profile, more = {}) {
     exited,
     /**
      * Quits as the user does, by closing its window: the interface's last snapshot, the sync stopped, the base closed
-     * (src/main/index.ts). Killed if it is still there after `ms`. Whether it quit by itself.
+     * (src/main/window.ts, then src/main/index.ts). Killed if it is still there after `ms`. Whether it quit by itself.
      */
     async quit(ms = 20_000) {
       void evaluate('window.close()');
