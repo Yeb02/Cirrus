@@ -235,6 +235,11 @@ export interface RenderParams {
   latexLogMaxKb: number;
   /** A source changed is compiled once typing has paused this long; the labels' registry is rebuilt at most this often. */
   latexTypingPauseMs: number;
+  /**
+   * How many compilations a synchronisation asks for in the background wait at most (plan 5b, D1): the ones beyond are
+   * compiled when their view opens, as before. 0: none.
+   */
+  latexBackgroundMax: number;
   /** A .tex typed in its full screen is saved once typing has paused this long (D6), and at Ctrl+S and closing. */
   texSaveIdleMs: number;
   /** The LaTeX editor's suggestions of labels and keys: how many are drawn at most, and how long after a key they are asked. */
@@ -427,6 +432,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexCacheTrimPercent: 90,
   latexLogMaxKb: 256,
   latexTypingPauseMs: 300,
+  latexBackgroundMax: 300,
   texSaveIdleMs: 10_000,
   latexSuggestionsMax: 100,
   latexSuggestionDelayMs: 100,
@@ -636,6 +642,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexCacheTrimPercent', 'Taille du cache des PDF compilés après un nettoyage (% de son plafond)', A, 'Compilation', 50, 100, 1),
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'Compilation', 16, 4096, 16),
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'Compilation', 50, 3000, 10),
+  num('latexBackgroundMax', 'Recompilations en arrière-plan en attente au plus, après une synchronisation (0 : aucune)', A, 'Compilation', 0, 5000, 10),
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'Éditeur LaTeX', 1000, 600_000, 500),
   num('latexSuggestionsMax', 'Suggestions de labels et de clés montrées dans l’éditeur LaTeX', A, 'Éditeur LaTeX', 10, 1000, 10),
   num('latexSuggestionDelayMs', 'Délai avant les suggestions de l’éditeur LaTeX (ms)', A, 'Éditeur LaTeX', 0, 1000, 10),

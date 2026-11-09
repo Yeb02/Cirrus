@@ -243,6 +243,16 @@ test('pause de frappe avant de compiler : 300 ms, de 50 à 3000, réglage avanc�
   expect(withOverrides({ latexTypingPauseMs: 9000 }).latexTypingPauseMs).toBe(3000);
 });
 
+test('recompilations en arrière-plan après une synchronisation : 300 en attente au plus, de 0 à 5000, réglage avancé du groupe « Compilation » (plan 5b, D1)', () => {
+  expect(DEFAULT_PARAMS.latexBackgroundMax).toBe(300);
+  expect(PARAM_SPECS.find((s) => s.key === 'latexBackgroundMax')).toEqual({
+    key: 'latexBackgroundMax', label: 'Recompilations en arrière-plan en attente au plus, après une synchronisation (0 : aucune)', section: 'avancé',
+    group: 'Compilation', kind: 'number', min: 0, max: 5000, step: 10,
+  });
+  expect(withOverrides({ latexBackgroundMax: -1 }).latexBackgroundMax).toBe(0);
+  expect(withOverrides({ latexBackgroundMax: 9000 }).latexBackgroundMax).toBe(5000);
+});
+
 test('pause de frappe avant l’enregistrement d’un .tex : 10 s, de 1 s à 10 min, réglage avancé du groupe « Éditeur LaTeX » (plan 4b, tâche 5)', () => {
   expect(DEFAULT_PARAMS.texSaveIdleMs).toBe(10_000);
   expect(PARAM_SPECS.find((s) => s.key === 'texSaveIdleMs')).toEqual({
