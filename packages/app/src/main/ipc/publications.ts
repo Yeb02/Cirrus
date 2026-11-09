@@ -11,7 +11,7 @@ interface PublicationsDeps {
   dir(): string;
   /** The base, null until it is open. */
   store(): LocalStore | null;
-  /** The settings the import reads (publicationMaxKb, publicationTimeoutMs, maxImportMb). */
+  /** The settings the import reads (publicationMaxKb, publicationTimeoutMs, publicationPdfMaxMs, maxImportMb). */
   params(): RenderParams;
   /** A capture, whose base is a test copy. */
   capture: boolean;
@@ -36,16 +36,17 @@ export function wirePublications(deps: PublicationsDeps): void {
   // A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
   // network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
   // string of MAX_IDENTIFIER_CHARS at most: an identifier, a publisher's address, an address of the open web under its
-  // guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb, stored before any
-  // action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the dialog, task 5).
+  // guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb and
+  // publicationPdfMaxMs, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the
+  // dialog, task 5).
   ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown, options: unknown) => {
     if (!deps.store()) return { ok: false, message: 'La base n’est pas ouverte.' };
     const p = deps.params();
     const log = (m: string) => console.warn(m);
     return importPublication(text, {
       fetch: publicationsFetch, store: (name, bytes) => storeBytes(deps.dir(), name, bytes),
-      maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs, log,
-      open: { ...openNetwork, timeoutMs: p.publicationTimeoutMs, log },
+      maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log,
+      open: { ...openNetwork, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log },
     }, options);
   });
 }

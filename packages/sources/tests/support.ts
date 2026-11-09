@@ -1,7 +1,8 @@
 import { isIP } from 'node:net';
-// The DOM's BodyInit, which this package's Node-only typings name by undici's (whose fetch is Node's).
-import type { BodyInit } from 'undici-types';
 import type { ConnectRequest, OpenDeps } from '../src/guard.ts';
+
+/** What a Response is made of (the DOM's BodyInit, which this package's Node-only typings do not name). */
+export type BodyInit = ConstructorParameters<typeof Response>[0];
 
 /** What the tests of the open web share (plan 5b, D3): a fake web, its answers, bodies without end. Never the Internet. */
 
@@ -39,6 +40,7 @@ export function web(routes: Record<string, Route>, names: Record<string, string[
       return route(req);
     },
     timeoutMs: 2000,
+    pdfMaxMs: 60_000,
     ...more,
   };
   return { deps, resolved, connected };

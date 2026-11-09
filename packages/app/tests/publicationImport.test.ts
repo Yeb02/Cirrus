@@ -402,7 +402,7 @@ test('importByIdentifier : le livre, doublon par le titre et l’année, notifi�
 
 test('de bout en bout sur le rejeu : un DOI de Crossref (Shannon, 1948), du principal au nœud — sa clé, son mois en macro, son tiret', async () => {
   const main: PublicationDeps = {
-    fetch: replayFetch(DATA), store: () => { throw new Error('aucun PDF attendu'); }, maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000,
+    fetch: replayFetch(DATA), store: () => { throw new Error('aucun PDF attendu'); }, maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, pdfMaxMs: 60_000,
   };
   const { d, calls } = deps({ fetch: (text, options) => importPublication(text, main, options) });
   expect(await importByIdentifier('https://doi.org/10.1002/j.1538-7305.1948.tb01338.x', null, d)).toEqual({ kind: 'done', title: 'A Mathematical Theory of Communication', notice: null });

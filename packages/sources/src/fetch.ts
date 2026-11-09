@@ -1,9 +1,10 @@
 import type { FileRef } from '@cirrus/core';
 import { type Csl, cslToFields } from './csl.ts';
-import { MAX_REDIRECTS, mediaType, NOT_FOUND, OFFLINE, type OpenDeps, openFetch, REDIRECTS, seconds } from './guard.ts';
+import { type OpenDeps, openFetch } from './guard.ts';
 import { citationMeta } from './html.ts';
 import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
+import { duration, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer } from './transfer.ts';
 
 /**
  * A publication's import (plan 4c, D5, D6): its CSL-JSON and its BibTeX asked of its DOI's resolver (content
@@ -29,6 +30,8 @@ export interface PublicationDeps {
   maxPdfBytes: number;
   /** publicationTimeoutMs: a metadata exchange's whole delay; the PDF's wait for data. */
   timeoutMs: number;
+  /** publicationPdfMaxMs: a PDF's whole download at most, arXiv's as the open web's (review of task 2, I2). */
+  pdfMaxMs: number;
   /** Where the causes the user is not shown go (the console). */
   log?: (message: string) => void;
   sources?: PublicationSources;
@@ -67,9 +70,6 @@ const BIBTEX_TYPES = new Set(['application/x-bibtex', 'text/x-bibtex']);
 /** What a page's address is asked with: a page, else a PDF, else anything (the answer says what it is). */
 const PAGE_ACCEPT = 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8';
 
-/** A refusal, its message for the user, in French. */
-class Refusal extends Error {}
-
 /** Who answers, as the messages name it. */
 type Server = 'doi' | 'arxiv';
 const serverOf = (s: Server) => (s === 'doi' ? 'serveur de DOI' : 'serveur d’arXiv');
@@ -92,51 +92,38 @@ function permitted(href: string, hosts: readonly string[], from: string | null):
 
 /**
  * One answer to `href`: its media type and its body, `cap` bytes at most, read as they come and never further (the
- * declared length refused before any read). Redirects are followed by hand, each target checked first (permitted).
- * A 404 or 410 is `notFound`, another status than 200 an error with its code. The delay (`timeoutMs`): the whole
- * exchange's, or, with `stall`, the longest wait for data (re-armed at each piece; a PDF is larger than metadata).
- * Whatever the network does, the request is aborted once the answer is read, or given up. `cancel`: a refusal that
- * stops it at once (its sibling's, fetchPublication), which it then throws.
+ * declared length refused before any read), into one buffer (readBody). Redirects are followed by hand, each target
+ * checked first (permitted). A 404 or 410 is `notFound`, another status than 200 an error with its code. The delays
+ * (Transfer): the whole exchange's (`timeoutMs`); with `stall` (a PDF, larger than metadata), the longest wait for
+ * data instead, and publicationPdfMaxMs for the whole download (review of task 2, I2). Whatever the network does, the
+ * request is aborted once the answer is read, or given up. `cancel`: a refusal that stops it at once (its sibling's,
+ * fetchPublication), which it then throws.
  */
 async function exchange(
   deps: PublicationDeps, href: string, accept: string, cap: number, server: Server, notFound: string, tooBig: string, stall: boolean,
   cancel?: AbortSignal,
 ): Promise<{ type: string; bytes: Uint8Array }> {
   const hosts = (deps.sources ?? PUBLICATION_SOURCES).hosts;
-  const abort = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let expire: (e: Refusal) => void = () => {};
-  const expired = new Promise<never>((_resolve, reject) => { expire = reject; });
-  expired.catch(() => {});
-  /** Given up with `e`: the request aborted, and any step waiting on the network rejected (a fetch may ignore its signal). */
-  const stop = (e: Refusal) => {
-    abort.abort(e);
-    expire(e);
-  };
-  const arm = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => stop(new Refusal(`Le ${serverOf(server)} ne répond pas (délai de ${seconds(deps.timeoutMs)} dépassé).`)), deps.timeoutMs);
-  };
-  const cancelled = () => stop(cancel!.reason instanceof Refusal ? cancel!.reason : unexpected(server));
+  const t = new Transfer(deps, {
+    late: () => new Refusal(`Le ${serverOf(server)} ne répond pas (délai de ${seconds(deps.timeoutMs)} dépassé).`),
+    // Only a PDF's download is bounded so: arXiv's.
+    tooLong: () => new Refusal(`Le téléchargement du PDF d’arXiv a dépassé ${duration(deps.pdfMaxMs)} : arrêté.`),
+    offline: (e) => {
+      deps.log?.(`Publication, ${href} : ${messageOf(e)}`);
+      return new Refusal(server === 'doi' ? OFFLINE : 'Pas de connexion : le PDF d’arXiv n’a pas été téléchargé.');
+    },
+  });
+  const cancelled = () => t.stop(cancel!.reason instanceof Refusal ? cancel!.reason : unexpected(server));
   if (cancel?.aborted) cancelled();
   else cancel?.addEventListener('abort', cancelled, { once: true });
-  /** A step of the network, raced against the delay (a fetch may ignore its signal): its failure is the connection's. */
-  const network = async <T>(step: Promise<T>): Promise<T> => {
-    try {
-      return await Promise.race([step, expired]);
-    } catch (e) {
-      if (e instanceof Refusal) throw e;
-      if (abort.signal.reason instanceof Refusal) throw abort.signal.reason;
-      deps.log?.(`Publication, ${href} : ${e instanceof Error ? e.message : String(e)}`);
-      throw new Refusal(server === 'doi' ? OFFLINE : 'Pas de connexion : le PDF d’arXiv n’a pas été téléchargé.');
-    }
-  };
   const drop = (res: Response) => { void res.body?.cancel().catch(() => {}); };
+  const rule = { cap, tooBig: new Refusal(tooBig), stall };
   try {
-    arm();
+    if (stall) t.stall();
     let url = permitted(href, hosts, null);
     for (let redirects = 0; ; redirects++) {
-      const res = await network(deps.fetch(url.href, { headers: { Accept: accept }, redirect: 'manual', signal: abort.signal }));
+      const asked = url;
+      const res = await t.network(() => deps.fetch(asked.href, { headers: { Accept: accept }, redirect: 'manual', signal: t.signal }));
       if (REDIRECTS.has(res.status)) {
         drop(res);
         const location = res.headers.get('location');
@@ -149,39 +136,17 @@ async function exchange(
         }
         if (redirects >= MAX_REDIRECTS) throw new Refusal(`Trop de redirections depuis « ${url.host} ».`);
         url = permitted(next.href, hosts, url.host);
-        if (stall) arm();
+        t.touch();
         continue;
       }
       if (res.status === 404 || res.status === 410) { drop(res); throw new Refusal(notFound); }
       if (res.status !== 200) { drop(res); throw new Refusal(`Le ${serverOf(server)} a répondu par une erreur (HTTP ${res.status}).`); }
-      const declared = Number(res.headers.get('content-length') ?? Number.NaN);
-      if (declared > cap) { drop(res); throw new Refusal(tooBig); }
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      if (res.body) {
-        const reader = res.body.getReader();
-        try {
-          for (;;) {
-            const { done, value } = await network(reader.read());
-            if (done) break;
-            size += value.byteLength;
-            if (size > cap) throw new Refusal(tooBig);
-            chunks.push(value);
-            if (stall) arm();
-          }
-        } finally {
-          // Not waited for: a stalled source may never answer it.
-          void reader.cancel().catch(() => {});
-        }
-      }
-      const bytes = new Uint8Array(size);
-      for (let at = 0, i = 0; i < chunks.length; at += chunks[i].byteLength, i++) bytes.set(chunks[i], at);
+      const { bytes } = await readBody(res, t, () => rule);
       return { type: mediaType(res.headers.get('content-type')), bytes };
     }
   } finally {
-    clearTimeout(timer);
     cancel?.removeEventListener('abort', cancelled);
-    abort.abort();
+    t.close();
   }
 }
 

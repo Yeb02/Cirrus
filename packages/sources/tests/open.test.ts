@@ -43,7 +43,7 @@ function setup(routes: Parameters<typeof web>[0], names: Parameters<typeof web>[
   const logged: string[] = [];
   const deps: PublicationDeps = {
     fetch, store: (name, bytes) => { stored.push({ name, bytes }); return ref(name, bytes); },
-    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, log: (m) => logged.push(m), open: w.deps, ...more,
+    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, pdfMaxMs: 60_000, log: (m) => logged.push(m), open: w.deps, ...more,
   };
   return { deps, asked, stored, logged, resolved: w.resolved, connected: w.connected };
 }

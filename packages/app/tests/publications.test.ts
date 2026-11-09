@@ -37,7 +37,7 @@ function depsOf(fetch: FetchFn, more: Partial<PublicationDeps> = {}) {
       stored.push({ name, bytes });
       return { name, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
     },
-    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, log: (m) => logged.push(m), ...more,
+    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, pdfMaxMs: 60_000, log: (m) => logged.push(m), ...more,
   };
   return { deps, stored, logged };
 }
@@ -212,7 +212,7 @@ test('replayFetch et replayDirOf : les réponses enregistrées, seulement sur un
 
 test('replayOpen : le réseau ouvert rejoué (plan 5b, D3) — les noms et les réponses écrits, sous les gardes de @cirrus/sources, jamais le réseau', async () => {
   const LOCAL = { ok: false, message: 'Adresse refusée : elle mène à une machine du réseau local.' };
-  const open = { ...replayOpen(DATA), timeoutMs: 2000 };
+  const open = { ...replayOpen(DATA), timeoutMs: 2000, pdfMaxMs: 60_000 };
   const signal = new AbortController().signal;
   // A name: the addresses written for it, else as getaddrinfo fails.
   expect(await open.resolve('editeur.example')).toEqual([{ address: '93.184.215.14', family: 4 }]);

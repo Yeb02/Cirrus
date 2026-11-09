@@ -3,13 +3,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FileRef } from '@cirrus/core';
-// The DOM's BodyInit, which this package's Node-only typings name by undici's (whose fetch is Node's).
-import type { BodyInit } from 'undici-types';
 import { expect, test } from 'vitest';
 import { cslToFields } from '../src/csl.ts';
 import { type FetchFn, fetchPublication, importPublication, type PublicationDeps } from '../src/fetch.ts';
 import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
 import { IDENTIFIER_LINKS, PUBLICATION_SOURCES } from '../src/sources.ts';
+import type { BodyInit } from './support.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 /**
@@ -39,7 +38,7 @@ function depsOf(fetch: FetchFn, more: Partial<PublicationDeps> = {}) {
       stored.push({ name, bytes });
       return { name, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
     },
-    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, log: (m) => logged.push(m), ...more,
+    maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 2000, pdfMaxMs: 60_000, log: (m) => logged.push(m), ...more,
   };
   return { deps, stored, logged };
 }

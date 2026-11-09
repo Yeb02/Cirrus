@@ -15,6 +15,8 @@ test('isPublic : chaque plage de D3, à ses deux bouts, est refusée ; ses voisi
     ['224.0.0.0', '239.255.255.255'], ['240.0.0.0', '255.255.255.255'],
     ['::', '::'], ['::1', '::1'], ['fc00::', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'], ['fe80::', 'febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
     ['ff00::', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'], ['2001:db8::', '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff'], ['100::', '100::ffff:ffff:ffff:ffff'],
+    // Review of task 2: the local-use NAT64 prefix (RFC 8215), the deprecated site-local addresses.
+    ['64:ff9b:1::', '64:ff9b:1:ffff:ffff:ffff:ffff:ffff'], ['fec0::', 'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
   ];
   for (const [first, last] of blocked) {
     expect(isPublic(first), first).toBe(false);
@@ -25,8 +27,8 @@ test('isPublic : chaque plage de D3, à ses deux bouts, est refusée ; ses voisi
     '1.0.0.0', '9.255.255.255', '11.0.0.0', '100.63.255.255', '100.128.0.0', '126.255.255.255', '128.0.0.0', '169.253.255.255', '169.255.0.0',
     '172.15.255.255', '172.32.0.0', '192.0.1.0', '192.0.3.0', '192.167.255.255', '192.169.0.0', '198.17.255.255', '198.20.0.0', '198.51.99.255',
     '198.51.101.0', '203.0.112.255', '203.0.114.0', '223.255.255.255',
-    'fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe00::', 'fec0::', 'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db7:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db9::',
-    '100:0:0:1::', 'ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+    'fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe00::', 'fe00:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db7:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db9::',
+    '100:0:0:1::', 'ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '64:ff9b:0:ffff:ffff:ffff:ffff:ffff', '64:ff9b:2::', '64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff',
   ]) {
     expect(isPublic(a), a).toBe(true);
   }
@@ -43,6 +45,14 @@ test('isPublic : une IPv4 incluse dans une IPv6 est jugée comme son IPv4 ; ce q
     expect(isPublic(a), a).toBe(false);
   }
   for (const a of ['::ffff:8.8.8.8', '::ffff:808:808', '64:ff9b::808:808', '64:ff9b::93.184.215.14']) expect(isPublic(a), a).toBe(true);
+  // Review of task 2: 6to4 (2002::/16, its IPv4 in its bits 16 to 47) and SIIT (::ffff:0:0:0/96) judged by their IPv4.
+  for (const a of [
+    '2002:7f00:1::', '2002:7f00:1:ffff:ffff:ffff:ffff:ffff', '2002:c0a8:101::1', '2002:a00:5::', '2002:a9fe:a9fe::', '2002::', '2002:e000::',
+    '::ffff:0:7f00:1', '::ffff:0:a00:5', '0:0:0:0:ffff:0:c0a8:101', '::ffff:0:0:0', '::ffff:0:127.0.0.1',
+  ]) {
+    expect(isPublic(a), a).toBe(false);
+  }
+  for (const a of ['2002:808:808::', '2002:5db8:d70e::1', '::ffff:0:808:808', '::ffff:0:93.184.215.14']) expect(isPublic(a), a).toBe(true);
   // Not an address as a resolver writes one: refused, never guessed.
   for (const a of ['', 'localhost', 'example.org', '127.1', '0x7f.0.0.1', '2130706433', '017700000001', 'fe80::1%eth0', '::1%1', '[::1]', ' 8.8.8.8', '8.8.8.8 ', '1.2.3.4.5', ':::', 'fffff::']) {
     expect(isPublic(a), JSON.stringify(a)).toBe(false);
@@ -124,6 +134,41 @@ test('openFetch : la connexion reçoit l’adresse vérifiée, jamais le nom ; u
   const v6 = web({ 'v6.example/': () => html('ok') }, { 'v6.example': [PUBLIC6] });
   await openFetch('https://v6.example/', v6.deps, ACCEPT, CAPS);
   expect(v6.connected.map((c) => [c.address, c.family])).toEqual([[PUBLIC6, 6]]);
+});
+
+test('openFetch : une connexion qui échoue passe à l’adresse vérifiée suivante, jamais à une autre (relecture de la tâche 2)', async () => {
+  const fails = (bad: Set<string>, w: ReturnType<typeof web>) => {
+    w.deps.connect = async (req) => {
+      w.connected.push(req);
+      if (bad.has(req.address)) throw Object.assign(new Error(`connect ETIMEDOUT ${req.address}:443`), { code: 'ETIMEDOUT' });
+      return html('ok');
+    };
+  };
+  // The IPv4 first; it fails: the IPv6 of the same name.
+  const w = web({}, { 'double.example': [PUBLIC6, PUBLIC] });
+  fails(new Set([PUBLIC]), w);
+  expect((await openFetch('https://double.example/', w.deps, ACCEPT, CAPS)).ok).toBe(true);
+  expect(w.connected.map((c) => [c.address, c.hostname])).toEqual([[PUBLIC, 'double.example'], [PUBLIC6, 'double.example']]);
+  // All fail: as without a network, each tried once, the causes logged.
+  const logged: string[] = [];
+  const all = web({}, { 'double.example': [PUBLIC6, PUBLIC, '1.1.1.1'] }, { log: (m) => logged.push(m) });
+  fails(new Set([PUBLIC, PUBLIC6, '1.1.1.1']), all);
+  expect(await openFetch('https://double.example/', all.deps, ACCEPT, CAPS)).toEqual({ ok: false, message: 'Pas de connexion.' });
+  expect(all.connected.map((c) => c.address)).toEqual([PUBLIC, '1.1.1.1', PUBLIC6]);
+  expect(logged.filter((m) => m.includes('ETIMEDOUT'))).toHaveLength(3);
+  // An answer of the first, even an error, is final: the next is not asked.
+  const answered = web({ 'double.example/': () => html('', 503) }, { 'double.example': [PUBLIC, '1.1.1.1'] });
+  expect((await openFetch('https://double.example/', answered.deps, ACCEPT, CAPS)).ok).toBe(false);
+  expect(answered.connected.map((c) => c.address)).toEqual([PUBLIC]);
+});
+
+test('openFetch : une réponse dite application/pdf qui ne commence pas par %PDF- est lue comme une page, sous son plafond (relecture de la tâche 2)', async () => {
+  const body = endless(16 * 1024, Infinity, 0, new TextEncoder().encode('<html><body>Connectez-vous pour lire le PDF.'));
+  const w = web({ 'public.example/a.pdf': () => pdf(body.stream) }, { 'public.example': [PUBLIC] });
+  const r = await openFetch('https://public.example/a.pdf', w.deps, ACCEPT, { page: 64 * 1024, pdf: 2 ** 20 });
+  expect(r.ok && [r.pdf, r.bytes.length]).toEqual([false, 64 * 1024]);
+  expect(body.seen.pulls).toBeLessThanOrEqual(7);
+  expect(body.seen.cancelled).toBe(true);
 });
 
 test('openFetch : un nom dont la seconde résolution diffère — une seule résolution par adresse demandée, la connexion à celle-là', async () => {
