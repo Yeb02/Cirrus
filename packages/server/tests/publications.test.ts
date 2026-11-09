@@ -9,7 +9,8 @@ import type { FileRef } from '@cirrus/core';
 import type { FetchFn, OpenDeps, PublicationRequest, PublicationResult } from '@cirrus/sources';
 import { filePath } from '@cirrus/store';
 import {
-  MAX_FILE_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
+  MAX_ADDRESS_CHARS, MAX_FILE_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS,
+  MAX_PUBLICATION_TIMEOUT_MS,
 } from '../src/bounds.ts';
 import { nodeFetch, parsePublicationRequest } from '../src/publications.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
@@ -145,7 +146,25 @@ const refOf = (name: string, bytes: Uint8Array): FileRef => ({ name, hash: sha25
 
 test('bornes : celles des publications, nommées dans bounds.ts', () => {
   expect([MAX_PUBLICATION_BODY_BYTES, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_TIMEOUT_MS, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS])
-    .toEqual([4096, 2, 60_000, 8 * 2 ** 20, 600_000]);
+    .toEqual([16 * 1024, 2, 60_000, 8 * 2 ** 20, 600_000]);
+  // The text, an address of MAX_ADDRESS_CHARS at most (final review of plan 5b, M1), fits the body whatever its characters,
+  // each of them 6 bytes at most in JSON (« \u0001 »), with the PC's caps at their largest.
+  const worst = JSON.stringify({ text: '\u0001'.repeat(MAX_ADDRESS_CHARS), maxKb: Number.MAX_VALUE, maxPdfBytes: Number.MAX_VALUE, timeoutMs: Number.MAX_VALUE, pdfMaxMs: Number.MAX_VALUE });
+  expect(Buffer.byteLength(worst)).toBeLessThanOrEqual(MAX_PUBLICATION_BODY_BYTES);
+});
+
+test('un texte de MAX_ADDRESS_CHARS caractères est accepté (une adresse signée de plus de 1 000 caractères), pas au-delà ; même fait de caractères que JSON écrit en 6 octets', async () => {
+  expect(MAX_ADDRESS_CHARS).toBe(2048);
+  expect(parsePublicationRequest({ text: 'a'.repeat(MAX_ADDRESS_CHARS), ...CAPS }).text).toHaveLength(MAX_ADDRESS_CHARS);
+  expect(() => parsePublicationRequest({ text: 'a'.repeat(MAX_ADDRESS_CHARS + 1), ...CAPS })).toThrow(/^Demande d’import invalide : « text » attendu, une chaîne de 2048 caractères au plus/);
+  const net = fakeNetwork();
+  const { url } = await start(net);
+  const a = await paired(url);
+  // Read whole, then answered as the PC's own import answers it: no identifier, no address, nothing asked of the network.
+  expect(await imported(a, '\u0001'.repeat(MAX_ADDRESS_CHARS))).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
+  expect(await imported(a, '中'.repeat(MAX_ADDRESS_CHARS))).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
+  expect(net.asked).toEqual([]);
+  expect(net.resolved).toEqual([]);
 });
 
 test('un article d’arXiv importé par le réseau du serveur (rejoué) : son PDF gardé au magasin du serveur, sa référence rendue, puis servi par GET /files', async () => {
@@ -253,7 +272,7 @@ test('corps trop gros, mal formé, champ inconnu, nombre faux, texte trop long :
   const caps = JSON.stringify(CAPS).slice(1, -1);
   const malformed: string[] = [
     '[]', '"arXiv:1706.03762"', 'null', JSON.stringify(body({ autre: 1 })), `{"text":"x",${caps},"__proto__":{"pdf":false}}`, `{"text":"x",${caps},"constructor":1}`,
-    JSON.stringify({ text: 'arXiv:1706.03762' }), JSON.stringify(body({ text: 'a'.repeat(1001) })), JSON.stringify(body({ text: 42 })),
+    JSON.stringify({ text: 'arXiv:1706.03762' }), JSON.stringify(body({ text: 'a'.repeat(MAX_ADDRESS_CHARS + 1) })), JSON.stringify(body({ text: 42 })),
     JSON.stringify(body({ pdf: true })), JSON.stringify(body({ pdf: 'false' })), JSON.stringify(body({ pdf: null })),
     JSON.stringify(body({ maxKb: 0 })), JSON.stringify(body({ maxKb: -1 })), JSON.stringify(body({ maxPdfBytes: '1024' })), JSON.stringify(body({ timeoutMs: null })),
     `{"text":"x","maxKb":64,"maxPdfBytes":1048576,"timeoutMs":10000,"pdfMaxMs":1e400}`,

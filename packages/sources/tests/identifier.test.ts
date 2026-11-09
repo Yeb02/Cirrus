@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { isAddress, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
+import { isAddress, MAX_ADDRESS_CHARS, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
 
 /** Plan 5b, D4: the DOI an address of a publisher holds, read without any request. */
 test('parseIdentifier : les adresses de l’ACM, de Springer, de Wiley et de Taylor & Francis donnent leur DOI (D4)', () => {
@@ -62,6 +62,7 @@ test('parseIdentifier : une adresse sans DOI dans son chemin n’en donne aucun 
     'ftp://example.org/10.1000/x', 'file:///C:/10.1000/x',
     // A path that is no UTF-8 once decoded.
     'https://example.org/10.1000/%E0%A4%A',
+    // A DOI of more than MAX_IDENTIFIER_CHARS, though the address is within MAX_ADDRESS_CHARS.
     `https://example.org/10.1000/${'x'.repeat(MAX_IDENTIFIER_CHARS)}`,
   ]) {
     expect(parseIdentifier(text), text).toBeNull();
@@ -77,6 +78,29 @@ test('isAddress : un schéma, « // », puis une adresse que la plateforme lit ;
   ]) expect(isAddress(text), text).toBe(true);
   for (const text of [
     '', '   ', 'bonjour', '10.1007/978-0-387-49820-1', 'doi:10.1007/978-0-387-49820-1', 'arXiv:1706.03762', 'openreview.net/forum?id=x', 'mailto:moi@example.org',
-    'https://', 'https:///', '://example.org', '1http://example.org', `https://example.org/${'x'.repeat(MAX_IDENTIFIER_CHARS)}`,
+    'https://', 'https:///', '://example.org', '1http://example.org', `https://example.org/${'x'.repeat(MAX_ADDRESS_CHARS)}`,
   ]) expect(isAddress(text), text).toBe(false);
+});
+
+/** `head`, then « x » up to `n` characters. */
+const padded = (head: string, n: number) => `${head}${'x'.repeat(n - head.length)}`;
+
+// Final review of plan 5b, M1: a signed PDF link may pass 1 000 characters. An address has its own bound, 2 048, as
+// `citation_pdf_url` (html.ts); an identifier keeps 1 000, bare or held by an address.
+test('MAX_ADDRESS_CHARS : une adresse de 2 048 caractères en est une, pas au-delà ; un identifiant garde ses 1 000 caractères, seul ou dans une adresse', () => {
+  expect([MAX_IDENTIFIER_CHARS, MAX_ADDRESS_CHARS]).toEqual([1000, 2048]);
+  const signed = 'https://cdn.example.org/article.pdf?Expires=1762700000&Signature=';
+  expect(isAddress(padded(signed, MAX_IDENTIFIER_CHARS + 300))).toBe(true);
+  expect(isAddress(padded(signed, MAX_ADDRESS_CHARS))).toBe(true);
+  expect(isAddress(padded(signed, MAX_ADDRESS_CHARS + 1))).toBe(false);
+  // A publisher's address longer than MAX_IDENTIFIER_CHARS gives the DOI of its path; past MAX_ADDRESS_CHARS, none.
+  const springer = 'https://link.springer.com/content/pdf/10.1007/s10994-021-05946-3.pdf?token=';
+  expect(parseIdentifier(padded(springer, 1500))).toEqual({ doi: '10.1007/s10994-021-05946-3' });
+  expect(parseIdentifier(padded(springer, MAX_ADDRESS_CHARS))).toEqual({ doi: '10.1007/s10994-021-05946-3' });
+  expect(parseIdentifier(padded(springer, MAX_ADDRESS_CHARS + 1))).toBeNull();
+  // A DOI of more than MAX_IDENTIFIER_CHARS is none, bare or in a resolver's link; a text that is no address neither.
+  expect(parseIdentifier(padded('10.1234/', MAX_IDENTIFIER_CHARS))).toEqual({ doi: padded('10.1234/', MAX_IDENTIFIER_CHARS) });
+  expect(parseIdentifier(padded('10.1234/', MAX_IDENTIFIER_CHARS + 1))).toBeNull();
+  expect(parseIdentifier(padded('https://doi.org/10.1234/', MAX_IDENTIFIER_CHARS + 30))).toBeNull();
+  expect(parseIdentifier(padded('arXiv:', MAX_IDENTIFIER_CHARS + 1))).toBeNull();
 });

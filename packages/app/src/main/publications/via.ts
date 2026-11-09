@@ -1,6 +1,6 @@
 import { type FileRef, isObject, plainName } from '@cirrus/core';
 import {
-  type Csl, MAX_IDENTIFIER_CHARS, type PublicationFound, type PublicationId, type PublicationRequest, type PublicationResult,
+  type Csl, MAX_ADDRESS_CHARS, MAX_IDENTIFIER_CHARS, type PublicationFound, type PublicationId, type PublicationRequest, type PublicationResult,
 } from '@cirrus/sources';
 import type { RenderParams } from '@cirrus/view';
 import { messageOf, reasonOf } from '../sync/connection.ts';
@@ -87,7 +87,7 @@ function resultOf(x: unknown): PublicationResult | null {
 
 /** The import of `text` (the interface's, unchecked), by the server or by this PC: see above. */
 export async function importPublicationVia(text: unknown, options: unknown, deps: ViaDeps): Promise<PublicationResult> {
-  const server = typeof text === 'string' && text.length <= MAX_IDENTIFIER_CHARS ? deps.server() : null;
+  const server = typeof text === 'string' && text.length <= MAX_ADDRESS_CHARS ? deps.server() : null;
   if (server !== null && typeof text === 'string') {
     const p = deps.params();
     const request: PublicationRequest = {

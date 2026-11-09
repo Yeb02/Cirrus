@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createNode, type FileRef, type Id } from '@cirrus/core';
-import { importPublication } from '@cirrus/sources';
+import { importPublication, MAX_ADDRESS_CHARS } from '@cirrus/sources';
 import { filePath, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
 import { fileResponse } from '../src/main/files.ts';
@@ -211,10 +211,16 @@ test('un refus du serveur (« Publication introuvable. », une adresse du résea
   expect(await imp.run('https://interne.example/a.pdf')).toEqual({ ok: false, message: 'Adresse refusée : elle mène à une machine du réseau local.' });
   expect([imp.local, imp.logged]).toEqual([[], []]);
   expect(a.net.count('POST', '/publications')).toBe(2);
-  // Not a string, or too long: the PC refuses it itself, as in plan 4c, without asking the server.
+  // Not a string, or longer than an address may be (MAX_ADDRESS_CHARS, final review of plan 5b, M1): the PC refuses it
+  // itself, as in plan 4c, without asking the server.
   expect(await imp.run(42)).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
-  expect(await imp.run(`arXiv:${'1'.repeat(1000)}`)).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
+  expect(await imp.run(`https://cdn.example.org/a.pdf?${'x'.repeat(MAX_ADDRESS_CHARS)}`)).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
   expect(a.net.count('POST', '/publications')).toBe(2);
+  // Within it, though longer than an identifier: the server is asked, and says it as the PC would, the PC not asked.
+  const local = imp.local.length;
+  expect(await imp.run(`arXiv:${'1'.repeat(1500)}`)).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
+  expect(a.net.count('POST', '/publications')).toBe(3);
+  expect([imp.local.length, imp.logged]).toEqual([local, []]);
 });
 
 test('non jumelé : l’import se fait au PC, comme au plan 4c, sans aucune requête à un serveur', async () => {

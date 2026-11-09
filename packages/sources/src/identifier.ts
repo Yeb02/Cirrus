@@ -6,8 +6,14 @@ import { IDENTIFIER_LINKS } from './sources.ts';
  */
 export type PublicationId = { doi: string } | { arxiv: string };
 
-/** A longer text is no identifier (the IPC's bound too): no pattern runs on it. */
+/** A longer text is no identifier, bare or held by an address: no pattern runs on it. */
 export const MAX_IDENTIFIER_CHARS = 1000;
+/**
+ * A longer text is no address (final review of plan 5b, M1: a signed link to a PDF may pass 1 000 characters): the bound
+ * of the text the user gives the import, in the dialog, at the IPC and at the server, and of a page's `citation_pdf_url`
+ * (html.ts) — a URL's practical bound.
+ */
+export const MAX_ADDRESS_CHARS = 2048;
 
 /** arXiv's identifiers since 2007 (4 then 5 digits after the dot), then before: an archive, its class, 7 digits. */
 const NEW_ARXIV = /^\d{4}\.\d{4,5}(?:v\d+)?$/;
@@ -29,12 +35,12 @@ function arxivOf(s: string): PublicationId | null {
 }
 
 /**
- * A DOI, refused with a control character or a segment « . » or « .. » (which an address would resolve away). arXiv's
- * own DOI is its article: its PDF comes too (D6).
+ * A DOI, refused with a control character or a segment « . » or « .. » (which an address would resolve away), or longer
+ * than MAX_IDENTIFIER_CHARS (one an address holds). arXiv's own DOI is its article: its PDF comes too (D6).
  */
 function doiOf(s: string): PublicationId | null {
   const doi = s.trim();
-  if (!DOI.test(doi) || CONTROL.test(doi) || doi.split('/').some((seg) => seg === '.' || seg === '..')) return null;
+  if (doi.length > MAX_IDENTIFIER_CHARS || !DOI.test(doi) || CONTROL.test(doi) || doi.split('/').some((seg) => seg === '.' || seg === '..')) return null;
   const ax = ARXIV_DOI.exec(doi);
   return (ax && arxivOf(ax[1])) || { doi };
 }
@@ -88,12 +94,12 @@ const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 /**
  * Whether `text` is an address (plan 5b, D3 and D5), whatever its scheme: a scheme, « // », and an address the platform
- * parses, MAX_IDENTIFIER_CHARS at most. The one rule of the import's entry (importPublication) and of the dialog's check
+ * parses, MAX_ADDRESS_CHARS at most. The one rule of the import's entry (importPublication) and of the dialog's check
  * before the request (importByIdentifier), so the dialog never refuses an address the main process would take — and the
  * main process, not the dialog, says why one is refused (an address that is not https, a local machine).
  */
 export function isAddress(text: string): boolean {
-  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return false;
+  if (typeof text !== 'string' || text.length > MAX_ADDRESS_CHARS) return false;
   const t = text.trim();
   return ADDRESS.test(t) && URL.canParse(t);
 }
@@ -102,12 +108,13 @@ export function isAddress(text: string): boolean {
  * The identifier `text` gives (plan 4c, task 4), or null: a DOI, bare or after « doi: », or as a link to its resolver
  * or as a publisher's address holding it (plan 5b, D4); an arXiv identifier, new (`2401.01234v2`) or old
  * (`hep-th/9901001`), bare or after « arXiv: », or as a link to its abstract or its PDF. Blanks around are ignored, the
- * case of the prefixes too.
+ * case of the prefixes too. An address of MAX_ADDRESS_CHARS at most, any other text of MAX_IDENTIFIER_CHARS.
  */
 export function parseIdentifier(text: string): PublicationId | null {
-  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return null;
+  if (typeof text !== 'string' || text.length > MAX_ADDRESS_CHARS) return null;
   const t = text.trim();
   if (ADDRESS.test(t)) return fromLink(t);
+  if (text.length > MAX_IDENTIFIER_CHARS) return null;
   const ax = /^arxiv:(.*)$/is.exec(t);
   if (ax) return arxivOf(ax[1]);
   const doi = /^doi:(.*)$/is.exec(t);

@@ -14,7 +14,7 @@ export {
   type ConnectFn, type ConnectRequest, httpsConnect, isPublic, type OpenAnswer, type OpenCaps, type OpenDeps, openFetch, systemResolve,
 } from './guard.ts';
 export { type CitationMeta, citationMeta } from './html.ts';
-export { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
+export { arxivDoi, MAX_ADDRESS_CHARS, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 export { IDENTIFIER_LINKS, PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 export { OFFLINE, unreachable } from './transfer.ts';
 

@@ -7,7 +7,7 @@ import {
   type TagValue,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
-import { importPublication, type PublicationDeps, type PublicationFound } from '@cirrus/sources';
+import { importPublication, MAX_ADDRESS_CHARS, type PublicationDeps, type PublicationFound } from '@cirrus/sources';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene, type SceneItem } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
@@ -395,6 +395,24 @@ test('importByIdentifier (plan 5b, tâche 4, D3) : une adresse https d’un site
     expect(calls.stored, text).toEqual([]);
   }
   expect(s.nodes.size).toBe(before + 1);
+});
+
+// Final review of plan 5b, M1: the field no longer cuts what is pasted. An address of MAX_ADDRESS_CHARS (a signed link of
+// more than 1 000 characters) goes whole; a longer text is refused, said, without the network.
+test('importByIdentifier : une adresse de 2 048 caractères part entière ; au-delà, « Adresse trop longue (plus de 2 048 caractères). », sans réseau', async () => {
+  const head = 'https://cdn.example.org/article.pdf?Expires=1762700000&Signature=';
+  const signed = (n: number) => `${head}${'x'.repeat(n - head.length)}`;
+  const note: FileRef = { name: 'article.pdf', hash: 'e'.repeat(64), size: 640 };
+  const whole = deps({ fetch: async (text, options) => { whole.calls.fetch.push([text, options]); return { ok: true, kind: 'pdf', pdf: note }; } });
+  expect(await importByIdentifier(signed(MAX_ADDRESS_CHARS), null, whole.d)).toEqual({ kind: 'pdf', pdf: note });
+  expect(whole.calls.fetch).toEqual([[signed(MAX_ADDRESS_CHARS), { pdf: true }]]);
+  for (const text of [signed(MAX_ADDRESS_CHARS + 1), 'x'.repeat(5000)]) {
+    const { d, calls } = deps();
+    const r = await importByIdentifier(text, null, d);
+    expect(r).toEqual({ kind: 'failed', message: expect.stringMatching(/^Adresse trop longue \(plus de 2\s048 caractères\)\.$/) });
+    expect(calls.fetch).toEqual([]);
+    expect(calls.stored).toEqual([]);
+  }
 });
 
 test('importByIdentifier : un rejet de l’IPC ou du magasin devient un message français ; un BibTeX illisible refuse l’import', async () => {

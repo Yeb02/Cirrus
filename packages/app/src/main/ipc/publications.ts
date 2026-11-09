@@ -39,8 +39,8 @@ export function wirePublications(deps: PublicationsDeps): void {
   const openNetwork: Pick<OpenDeps, 'resolve' | 'connect'> = publicationsReplay ? replayOpen(publicationsReplay) : { resolve: systemResolve, connect: httpsConnect() };
   // A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
   // network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
-  // string of MAX_IDENTIFIER_CHARS at most: an identifier, a publisher's address, an address of the open web under its
-  // guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb and
+  // string of MAX_ADDRESS_CHARS at most: an identifier of MAX_IDENTIFIER_CHARS, a publisher's address, an address of the
+  // open web under its guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb and
   // publicationPdfMaxMs, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the
   // dialog, task 5). With a server paired and connected, the server makes it, and keeps the PDF (plan 5b, D2:
   // importPublicationVia); without one, or the server failing, this PC does. On the recorded answers, everything stays

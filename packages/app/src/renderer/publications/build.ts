@@ -4,7 +4,7 @@ import {
 } from '@cirrus/core';
 import type { PublicationFound, PublicationResult } from '@cirrus/sources';
 import { cslToFields } from '@cirrus/sources/csl';
-import { isAddress, parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
+import { isAddress, MAX_ADDRESS_CHARS, parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
 import type { ImportResult } from '../../main/files.ts';
 import { newNodeBuild } from '../actions.ts';
@@ -310,10 +310,16 @@ async function putDown(plan: PlannedPublication, files: FileRef[], deps: ImportD
 }
 
 /**
- * An import by identifier or by address (D5, D7; plan 5b, D3), the user having pressed « Importer »: `text` read by
- * parseIdentifier, else taken for an address of the open web if it is one (isAddress: the main process, which holds the
- * guards, says why one is refused — not https, a local machine — and stores nothing then), else refused without the
- * network; a publication already there by that DOI or arXiv identifier, refused before the network too (an address
+ * A text longer than any address (final review of plan 5b, M1): the dialog's field cuts nothing pasted into it, and says
+ * so rather than fetch a cut address.
+ */
+const TOO_LONG = `Adresse trop longue (plus de ${MAX_ADDRESS_CHARS.toLocaleString('fr-FR')} caractères).`;
+
+/**
+ * An import by identifier or by address (D5, D7; plan 5b, D3), the user having pressed « Importer »: a text longer than
+ * MAX_ADDRESS_CHARS refused (TOO_LONG); `text` read by parseIdentifier, else taken for an address of the open web if it
+ * is one (isAddress: the main process, which holds the guards, says why one is refused — not https, a local machine —
+ * and stores nothing then), else refused without the network; a publication already there by that DOI or arXiv identifier, refused before the network too (an address
  * has none to give yet: its duplicate is looked for in its answer); then the main process asked (the only step that
  * reaches it), its answer read, the duplicates looked for again (key, title and year), the .bib stored, and the node
  * put down, `dropped` among its files (arXiv's PDF then not asked for). An address that leads to a PDF without
@@ -323,6 +329,7 @@ async function putDown(plan: PlannedPublication, files: FileRef[], deps: ImportD
  * task 6, M6).
  */
 export async function importByIdentifier(text: string, dropped: FileRef | null, deps: ImportDeps): Promise<ImportOutcome> {
+  if (text.length > MAX_ADDRESS_CHARS) return { kind: 'failed', message: TOO_LONG };
   const id = parseIdentifier(text);
   if (id === null && !isAddress(text)) return { kind: 'failed', message: 'Identifiant non reconnu.' };
   const known = id === null ? null : PublicationIndex.of(deps.state()).duplicate(marksOfId(id));

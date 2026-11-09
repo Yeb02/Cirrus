@@ -1,5 +1,4 @@
 import type { FileRef } from '@cirrus/core';
-import { MAX_IDENTIFIER_CHARS } from '@cirrus/sources/identifier';
 import type { RenderParams } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
 import { carriesFiles, droppedPaths, pathName, refusalNotice } from '../files/nodeFiles.ts';
@@ -161,7 +160,9 @@ export function PublicationDialog(props: {
       <h3>Importer une publication</h3>
       <div className="identifier">
         <input
-          autoFocus value={text} maxLength={MAX_IDENTIFIER_CHARS} spellCheck={false} placeholder="DOI, identifiant arXiv ou adresse d’un article"
+          // No maxLength: the field cuts nothing pasted; an address too long is refused, said (importByIdentifier, final
+          // review of plan 5b, M1).
+          autoFocus value={text} spellCheck={false} placeholder="DOI, identifiant arXiv ou adresse d’un article"
           aria-label="DOI, identifiant arXiv ou adresse d’un article" onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
         />

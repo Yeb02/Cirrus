@@ -135,6 +135,10 @@ test('PublicationDialog (plan 5b, D5) : le champ accepte une adresse, « Choisir
   expect(markup).not.toMatch(/<button[^>]*disabled[^>]*>Choisir un PDF…/);
 });
 
+test('PublicationDialog (revue finale du plan 5b, M1) : le champ ne coupe rien de ce qui est collé (aucun maxlength) : une adresse trop longue est refusée, dite', () => {
+  expect(dialog()).not.toMatch(/maxlength/i);
+});
+
 test('PublicationDialog (plan 5b, D5) : ouvert par un PDF lâché sur le fond, il lit ce PDF d’emblée, comme un dépôt sur lui — rien d’autre à faire, rien à importer encore', () => {
   const idle = dialog();
   const opened = dialog('C:\\docs\\attention.pdf');

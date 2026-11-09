@@ -6,7 +6,7 @@ import type { FileRef } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { cslToFields } from '../src/csl.ts';
 import { type FetchFn, fetchPublication, importPublication, type PublicationDeps } from '../src/fetch.ts';
-import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
+import { arxivDoi, MAX_ADDRESS_CHARS, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
 import { IDENTIFIER_LINKS, PUBLICATION_SOURCES } from '../src/sources.ts';
 import type { BodyInit } from './support.ts';
 
@@ -340,6 +340,15 @@ test('importPublication : ce qui n’est pas un texte d’identifiant reconnu es
   }
   expect(calls).toEqual([]);
   expect(await importPublication(' doi:10.1234/essai ', depsOf(fetch).deps)).toEqual({ ok: true, id: ESSAI, csl: CSL_OK, bibtex: BIB_OK });
+});
+
+// Final review of plan 5b, M1: the text is an address of MAX_ADDRESS_CHARS at most (a signed link may pass 1 000).
+test('importPublication : une adresse d’éditeur de plus de 1 000 caractères donne le DOI de son chemin ; au-delà de MAX_ADDRESS_CHARS, rien n’est demandé', async () => {
+  const address = (n: number) => { const head = 'https://editeur.example/doi/10.1234/essai?jeton='; return `${head}${'x'.repeat(n - head.length)}`; };
+  const { fetch, calls } = essai();
+  expect(await importPublication(address(MAX_ADDRESS_CHARS + 1), depsOf(fetch).deps)).toEqual({ ok: false, message: 'Identifiant non reconnu.' });
+  expect(calls).toEqual([]);
+  expect(await importPublication(address(MAX_ADDRESS_CHARS), depsOf(fetch).deps)).toEqual({ ok: true, id: ESSAI, csl: CSL_OK, bibtex: BIB_OK });
 });
 
 test('cslToFields : titre, auteurs « Prénom Nom » et année, lus défensivement ; un champ inattendu est ignoré', () => {

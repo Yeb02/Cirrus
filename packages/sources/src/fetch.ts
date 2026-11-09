@@ -2,7 +2,7 @@ import type { FileRef } from '@cirrus/core';
 import { type Csl, cslToFields } from './csl.ts';
 import { type OpenDeps, openFetch } from './guard.ts';
 import { citationMeta } from './html.ts';
-import { arxivDoi, isAddress, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
+import { arxivDoi, isAddress, MAX_ADDRESS_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 import {
   duration, INVALID_DELAY, lateRefusal, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, Transfer, validLimits,
@@ -314,7 +314,8 @@ async function importOpen(href: string, deps: PublicationDeps, open: OpenDeps, p
 
 /**
  * The import's entry (the app's IPC `cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string
- * of MAX_IDENTIFIER_CHARS at most, or nothing is asked of the network. In this order (plan 5b):
+ * of MAX_ADDRESS_CHARS at most (an identifier, MAX_IDENTIFIER_CHARS: parseIdentifier), or nothing is asked of the
+ * network. In this order (plan 5b):
  * 1. an identifier, or a link to a DOI's resolver or an arXiv page (parseIdentifier): the metadata, as in plan 4c;
  * 2. a publisher's address holding a DOI (D4): that DOI, the same way, without asking the publisher;
  * 3. any other address, with `deps.open`: the open web, under its guards (importOpen, D3);
@@ -323,7 +324,7 @@ async function importOpen(href: string, deps: PublicationDeps, open: OpenDeps, p
  * plan 4c); anything else, the PDF is downloaded.
  */
 export async function importPublication(text: unknown, deps: PublicationDeps, options?: unknown): Promise<PublicationResult> {
-  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return { ok: false, message: UNRECOGNIZED };
+  if (typeof text !== 'string' || text.length > MAX_ADDRESS_CHARS) return { ok: false, message: UNRECOGNIZED };
   const pdf = !(typeof options === 'object' && options !== null && !Array.isArray(options) && Object.hasOwn(options, 'pdf') && (options as { pdf: unknown }).pdf === false);
   const id = parseIdentifier(text);
   if (id) return fetchPublication(id, deps, { pdf });

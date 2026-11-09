@@ -6,7 +6,7 @@ import {
 } from '@cirrus/sources';
 import { filePath, storeBytes } from '@cirrus/store';
 import {
-  MAX_FILE_BYTES, MAX_IDENTIFIER_CHARS, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
+  MAX_ADDRESS_CHARS, MAX_FILE_BYTES, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
 } from './bounds.ts';
 
 // A publication imported by the server for a paired PC (plan 5b, task 3, D2): the PC's own import (@cirrus/sources,
@@ -46,7 +46,7 @@ const BUSY = 'Le serveur importe déjà d’autres publications : réessaie dans
 
 /**
  * POST /publications's body, a PublicationRequest of @cirrus/sources exactly, `{ text, pdf?: false, maxKb, maxPdfBytes,
- * timeoutMs, pdfMaxMs }`: `text` a string of MAX_IDENTIFIER_CHARS at most, `pdf` false or absent, each cap a finite
+ * timeoutMs, pdfMaxMs }`: `text` a string of MAX_ADDRESS_CHARS at most, `pdf` false or absent, each cap a finite
  * positive number, no other field; else PublicationError (400). Read as the same shape, each cap brought under its bound
  * (bounds.ts): the PC's settings ask, the server decides.
  */
@@ -55,7 +55,7 @@ export function parsePublicationRequest(body: unknown): PublicationRequest {
   const unknown = Object.keys(body).find((k) => !FIELDS.has(k));
   if (unknown !== undefined) throw invalid(`champ inconnu « ${unknown.slice(0, 64)} »`);
   const { text } = body;
-  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) throw invalid(`« text » attendu, une chaîne de ${MAX_IDENTIFIER_CHARS} caractères au plus`);
+  if (typeof text !== 'string' || text.length > MAX_ADDRESS_CHARS) throw invalid(`« text » attendu, une chaîne de ${MAX_ADDRESS_CHARS} caractères au plus`);
   if (Object.hasOwn(body, 'pdf') && body.pdf !== false) throw invalid('« pdf » vaut false, ou est absent');
   for (const k of CAPS) {
     const v = body[k];

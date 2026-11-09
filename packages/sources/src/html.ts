@@ -1,5 +1,5 @@
 import { decodeEntities } from './csl.ts';
-import { MAX_IDENTIFIER_CHARS } from './identifier.ts';
+import { MAX_ADDRESS_CHARS, MAX_IDENTIFIER_CHARS } from './identifier.ts';
 
 /**
  * A page's citation tags (plan 5b, D3): the <meta> tags of the Highwire standard, which OpenReview, PMLR, NeurIPS's
@@ -19,8 +19,6 @@ export interface CitationMeta {
 
 /** A tag longer than this is none of ours (a long abstract in `citation_abstract`, or a trap): skipped whole. */
 const MAX_TAG_CHARS = 8192;
-/** An address of a PDF longer than this is none (a URL's practical bound). */
-const MAX_URL_CHARS = 2048;
 const NAMES = new Map<string, keyof CitationMeta>([['citation_doi', 'doi'], ['citation_arxiv_id', 'arxiv'], ['citation_pdf_url', 'pdfUrl']]);
 
 const blank = (c: string) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f';
@@ -64,7 +62,7 @@ function attributesOf(tag: string): Map<string, string> {
 
 /** The address of the page's PDF: resolved against the page, http made https, anything else dropped (never followed). */
 function pdfUrlOf(value: string, pageUrl: string | undefined): string | undefined {
-  if (value.length > MAX_URL_CHARS) return undefined;
+  if (value.length > MAX_ADDRESS_CHARS) return undefined;
   let url: URL;
   try {
     url = new URL(value, pageUrl);

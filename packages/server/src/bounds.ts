@@ -43,8 +43,10 @@ export const MAX_FILE_BYTES = 2 ** 30;
 /**
  * A publication imported by the server for a paired PC (plan 5b, task 3, D2: POST /publications), its network reached
  * only so, at the PC's explicit request:
- * - the request's body, MAX_PUBLICATION_BODY_BYTES at most: the text the user typed, MAX_IDENTIFIER_CHARS at most (the
- *   bound of @cirrus/sources, which the PC's own import holds to), and the PC's caps;
+ * - the request's body, MAX_PUBLICATION_BODY_BYTES at most: the text the user typed, MAX_ADDRESS_CHARS at most (the
+ *   bound of @cirrus/sources, which the PC's own import holds to; an identifier, MAX_IDENTIFIER_CHARS), and the PC's caps.
+ *   16 KiB holds the worst such body (final review of plan 5b, M1): each of the text's 2 048 UTF-16 units 6 bytes at most
+ *   once in JSON (« \u0001 », a lone surrogate), 12 288 bytes, and four caps of 23 characters each at most;
  * - the imports under way at once, all PCs together, MAX_PUBLICATION_FETCHES at most (a 503 beyond): each holds a
  *   PDF whole in memory until it is stored;
  * - the PC's caps, its shared settings, brought under the server's: a metadata answer, or a page, MAX_PUBLICATION_META_BYTES
@@ -52,8 +54,8 @@ export const MAX_FILE_BYTES = 2 ** 30;
  *   (publicationTimeoutMs); a PDF's whole download, MAX_PUBLICATION_PDF_MS (publicationPdfMaxMs); a PDF's size,
  *   MAX_FILE_BYTES (maxImportMb), as a file a PC sends.
  */
-export { MAX_IDENTIFIER_CHARS } from '@cirrus/sources';
-export const MAX_PUBLICATION_BODY_BYTES = 4096;
+export { MAX_ADDRESS_CHARS } from '@cirrus/sources';
+export const MAX_PUBLICATION_BODY_BYTES = 16 * 1024;
 export const MAX_PUBLICATION_FETCHES = 2;
 export const MAX_PUBLICATION_META_BYTES = 8 * 2 ** 20;
 export const MAX_PUBLICATION_TIMEOUT_MS = 60_000;
