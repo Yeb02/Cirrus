@@ -269,6 +269,21 @@ export class VirtualPc {
   }
 }
 
+/**
+ * The lab's own requests (its pairings, its reads): Node's fetch, sent again once when it went out on a connection kept
+ * alive that a server stopped meanwhile had reset (ECONNRESET, before any answer) — after a restart on the same port,
+ * the pool may still hold one for an instant (plan 5b, task 5: each PC's list of open .tex, sent at its connection,
+ * leaves one more there). The app's network, Chromium's, sends such a request again on its own.
+ */
+const labFetch: typeof fetch = async (input, init) => {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if ((e as { cause?: { code?: unknown } }).cause?.code !== 'ECONNRESET') throw e;
+    return fetch(input, init);
+  }
+};
+
 /** A server in the process and the virtual PCs paired with it; one clock for all, but each PC's skew. */
 export class Lab {
   readonly root = mkdtempSync(join(tmpdir(), 'cirrus-sync-'));
@@ -348,7 +363,7 @@ export class Lab {
 
   /** A code made as `jumeler` makes it, traded for a token as the app does (config.pair). */
   async pairing(name: string, pc: string): Promise<ServerConfig> {
-    return pair(fetch, this.url, this.code(name), pc, name);
+    return pair(labFetch, this.url, this.code(name), pc, name);
   }
 
   /** The names of the PCs paired now (`pcs`). */
@@ -385,7 +400,7 @@ export class Lab {
   }
 
   private get(path: string, headers: Record<string, string> = {}): Promise<Response> {
-    return fetch(this.url + path, { headers: { Authorization: `Bearer ${this.observer.token}`, ...headers } });
+    return labFetch(this.url + path, { headers: { Authorization: `Bearer ${this.observer.token}`, ...headers } });
   }
 
   async lastSeq(): Promise<number> {
@@ -419,7 +434,7 @@ export class Lab {
 
   /** Changes the server's shared settings as a PC of the lab (« observateur ») would: what the server kept, by key. */
   async putSettings(changes: Record<string, { value: unknown; at: number }>): Promise<Record<string, SettingRow>> {
-    const res = await fetch(`${this.url}/settings`, {
+    const res = await labFetch(`${this.url}/settings`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.observer.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ changes }),
     });
     if (res.status !== 200) throw new Error(`POST /settings : ${res.status} ${await res.text()}`);
