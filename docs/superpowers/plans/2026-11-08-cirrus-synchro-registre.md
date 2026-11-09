@@ -523,7 +523,7 @@ Méthode : `scripts/mesures-synchro.mjs`, sur une copie de la base de référenc
   - Le PC lit de même `/hello` : `lastSeq > 0` ou `empty` faux.
   - Options : le journal seul (le défaut ci-dessus) ; une marque dans `serveur.db` (une table de plus pour ce que l'état dit déjà).
   - Coût si faux : nul.
-- Ruling: **la base d'un PC est « vide » quand elle ne tient rien (`isEmpty`) et n'a jamais rien reçu d'un serveur** (`lastServerSeq() = 0`). Une base qui a déjà été jumelée compte donc comme pleine : elle s'envoie, ses lignes renumérotées par le nouveau serveur (`numberSeeded` efface les anciens numéros).
+- Ruling: **la base d'un PC est « vide » quand elle ne tient rien (`isEmpty`) et n'a jamais rien reçu d'un serveur** (`lastServerSeq() = 0`). Une base qui a déjà été jumelée compte donc comme pleine face à un **autre** serveur, ou à un serveur dont la base a changé : elle s'envoie, ses lignes renumérotées par le nouveau serveur (`numberSeeded` efface les anciens numéros). **Restreinte par R31** (revue finale) : face au serveur dont elle suit déjà la base (la même identité, `baseId`), ce n'est pas un premier jumelage mais une reprise, sans offre (voir « Revue finale »).
   - Options : la refuser, comme la tâche 4 (rien ne permettait alors de la renuméroter).
   - Coût si faux : nul.
 - Ruling: **l'instantané envoyé est celui que la base garde, avec la ligne qu'il couvre ; le serveur rejoue sur lui les lignes suivantes**, chaque « avant » vérifié. Sans instantané de ce format, le principal construit l'état de ses tables (`loadState`, `encodeState`). Les deux se lisent d'un seul tenant, avec la dernière ligne du journal : une écriture faite pendant l'envoi reste en attente, et part une fois la synchro démarrée.
@@ -603,10 +603,11 @@ Décisions du contrôleur : R19 (`done` ne refuse pas ce que la base du PC porta
   - Coût : un `fsync` par écriture de `serveur.json`, une fois par jumelage.
 - Ruling: **un premier jumelage en cours se voit** (Minor 3) : `info()` le rend (`busy` : « Envoi de la base au serveur… » ou « Téléchargement de la base du serveur… »), et le bloc ne montre que cela, sans formulaire ni bouton.
 - Ruling: **un `done` refusé parce que le serveur n'est plus vide efface l'envoi partiel** de ce PC (Minor 5) : jusqu'à `MAX_SEED_BYTES` d'instantané ne restent plus sur le disque jusqu'au prochain envoi ou au redémarrage.
-- Ruling: **un arrêt brutal entre `done` et l'écriture de `serveur.json`** (Minor 6) laisse le serveur tenir la base de ce PC, et ce PC non jumelé, ses lignes numérotées (`numberSeeded` a lieu avant `serveur.json`). Au jumelage suivant, sa base compte comme pleine et le serveur aussi : seul le remplacement est proposé, et les écritures faites après l'envoi partent avec l'ancienne base, mise à part.
+- Ruling: **un arrêt brutal entre `done` et l'écriture de `serveur.json`** (Minor 6) laisse le serveur tenir la base de ce PC, et ce PC non jumelé, ses lignes numérotées (`numberSeeded` a lieu avant `serveur.json`). **Réécrite par R31** (revue finale) : `numberSeeded` garde, dans la même transaction que les numéros, l'identité de la base que `done` rend. Au jumelage suivant, c'est donc une reprise : rien n'est proposé ni mis à part, et les écritures faites depuis partent. L'impasse d'avant (seul le remplacement proposé, ces écritures mises à part) n'existe plus.
+  - Ce qui reste : un arrêt entre la réponse de `done` et `numberSeeded`, une transaction locale de quelques millisecondes, laisse ce PC sans identité ni numéros : au jumelage suivant, deux bases pleines, et seul le remplacement est proposé, comme avant.
+  - Et les réglages : la reprise ne les date pas (R31). Après un tel arrêt, ceux de ce PC n'ont pas été envoyés, et le serveur n'en tient aucun : à la reprise, ce PC prend ceux du serveur, donc les défauts.
   - Options : écrire `serveur.json` avant `done`. Un arrêt entre les deux laisserait alors une base jumelée dont la première synchro n'est pas réglée (contre R8), que le client enverrait écriture par écriture.
-  - La fenêtre dure quelques millisecondes, après un envoi réussi : accepté.
-  - Coût si faux : les écritures de quelques secondes à reprendre dans l'ancienne base.
+  - Coût si faux : des réglages revenus aux défauts, après un arrêt brutal dans une fenêtre de quelques millisecondes.
 - Ruling: **R22, les accélérations mesurées de l'écriture en bloc ne sont pas appliquées** : ni la base prise sans WAL (−37 %), ni le cache de 256 Mo (−20 %). C'est une opération faite une fois, d'environ 2 s à la taille de la vraie base, et le travail sur les performances est clos tant qu'elle ne grossit pas (plan 3c). Confirme la décision « l'écriture en bloc n'est pas accélérée ».
   - Coût si faux : environ 20 s, une fois, sur une base de 50 000 nœuds.
 - **Tests ajoutés :**
@@ -802,3 +803,122 @@ Décisions du contrôleur : R29 (la recompilation des résumés en arrière-plan
 - **La spec** nomme celui qui coupe un libellé trop long, le PC, et dit que le serveur refuse toujours un libellé trop long qu'il reçoit (Minor 3).
 - **Les mesures** : la latence dit qu'elle s'arrête au rendu du pop-up, l'image du graphe non comptée, et que l'écriture de la base le précède (Minor 4) ; la réconciliation donne son p95, le plus grand des cinq tours à chaud (Minor 5).
 - **Les scripts** : une capture qui échoue garde le compte des images déjà prises (Minor 6) ; le premier scénario vérifie que A et B quittent avec le code 0 (Minor 7) ; `DevToolsActivePort` est effacé par `cdp.launch`, `closeSettings` et `typeInBlock` sont dans `serveur-local.mjs`, et `quantile` dans `cdp.mjs` (Minor 8) ; le test de `quitsInsteadOfRelaunch` n'a plus de `\b` dans son chemin (Minor 9).
+
+## Revue finale
+
+La revue de tout le plan (`.superpowers/sdd/2026-11-08-cirrus-synchro/final-review.md`) a conclu « avec correctifs » : aucun Critique, deux Importants, sept Minors. Décisions du contrôleur :
+
+- **R31** : la base du serveur a une identité, et jumeler de nouveau un PC avec le serveur dont il suit la base est une reprise ;
+- **R32** : une base ne tient jamais une écriture que le contrôle du serveur refuserait, et un historique ancien s'envoie quand même ;
+- le Minor 1 est relevé Important : ce qu'une écriture écartée avait créé ne revient pas par une écriture suivante.
+
+Le passage de correctifs couvre aussi les Minors 2 (par R31), 3, 4 et les tests du Minor 7. Les Minors 5 et 6 restent reportés, et les points que la revue n'a pas jugés restent tranchés au journal du contrôleur.
+
+### Fait
+
+- **R31, l'identité de la base du serveur :**
+  - au serveur, `Canon.baseId` : un uuidv7 gardé dans la méta de sa base (`base_id`). Il est créé avec elle, à sa première ouverture, et une base d'avant R31 en reçoit un de même. Une remise à zéro de `serveur.db` le garde. Un envoi de base le remplace, dans la transaction de `Canon.seed` ;
+  - `/hello` le rend (`baseId`), et `/seed/done` aussi, avec le dernier numéro ;
+  - au magasin : `LocalStore.baseId()` et `setBaseId()`, la même clé de méta des deux côtés. `numberSeeded(last, baseId)` l'écrit avec les numéros, dans la même transaction ;
+  - le PC le garde à son premier jumelage :
+    - à l'envoi de sa base (`seedBase`), celui que rend `done` ;
+    - à la prise de celle du serveur (`adoptBase`), celui de `/hello`, dans la base prise, avant sa marque ;
+    - au jumelage de deux bases vides (`SyncHost.joined`), celui de `/hello` ;
+  - **la reprise** (`SyncHost.pairNow`) : l'identité gardée est celle de `/hello`, et ce PC n'a rien reçu de plus que le serveur (`lastServerSeq() ≤ lastSeq`). Le PC est alors jumelé tout de suite, sans offre. Ses réglages ne sont pas redatés (`pairedAt` n'est pas appelé). Ses écritures en attente partent par le client, comme toute écriture en attente : celles faites pendant qu'il était dissocié, refusé ou hors ligne ;
+  - **le client** (`SyncClient.session`) : à chaque `/hello`, avant d'ouvrir le flux, une identité qui n'est pas celle que ce PC suit l'arrête, refusé, sans nouvel essai : « Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau. ». Rien n'est reçu de l'autre base, même si son journal est plus long (Minor 2). Un PC jumelé sans identité, avant R31, prend celle du serveur.
+- **R32, le contrôle des écritures :**
+  - `parseTag` refuse une clé de plus de `MAX_ID_CHARS` (128) caractères : « Le nom d'un tag compte 128 caractères au plus (ici n). » ;
+  - `writeRefusal` (`main/sync/client.ts`) : ce que le serveur refuserait d'une écriture, dans son ordre :
+    - plus de `MAX_OPS_PER_UNIT` opérations : « Action refusée : elle compte n opérations, et le serveur en prend 200 000 au plus. Fais-la en plusieurs fois. » ;
+    - sa forme et celle de chaque opération (`parseUnit`, celui de `POST /units`) : « Action refusée : Opération mal formée : … » ;
+    - le corps qui l'envoie seule (`unitsBody`, celui du client) au-delà de `MAX_BODY_BYTES` : « Action refusée : elle fait plus de 64 Mio, ce que le serveur ne prend pas. » ;
+  - `SyncHost.commit` le demande avant `store.commit`, jumelé ou non. Toute écriture locale passe par là (`cirrus:commit`). Une action refusée n'est ni écrite ni appliquée, et l'interface montre le message ;
+  - `parseOp(x, history)` (cœur) :
+    - ce qu'une écriture ajoute est tenu aux bornes de contenu d'aujourd'hui : un nom de fichier simple, et une clé de tag (ou de registre) de 1 à 128 caractères ;
+    - ce que son « avant » tient, et que son « après » garde, n'est pas rejugé ;
+    - `history` : une ligne d'historique n'est pas tenue à ces bornes, mais l'est toujours à sa forme ;
+  - `parseChangeRow(x, n, history)` (magasin) le transmet ;
+  - l'envoi :
+    - au serveur, `Seeds.page` lit en historique une ligne que l'instantané couvre, et en écriture une ligne de la fin du journal ;
+    - au PC, `prepareSeed` vérifie de même. Si une ligne de la fin du journal ne passe pas le contrôle entier, l'état des tables part, comme quand l'instantané ne se rejoue pas : le journal n'a plus de fin, et tout est de l'historique ;
+  - la prise : `adoptBase` lit chaque ligne du serveur en historique (`adoptedRow`).
+- **Minor 1, relevé Important** :
+  - `reconcile` garde ce que chaque écriture écartée avait créé (`gone` : l'enregistrement d'une opération sans « avant », ou une branche ajoutée), par la clé de `recordKey`, désormais exportée de `merge.ts` ;
+  - `rebaseUnit(s, u, reçues, gone)` ne réécrit pas un enregistrement de `gone` que l'écriture trouvait (son « avant ») et qui est absent maintenant. Elle garde le reste, et dit ce qu'elle a perdu (`lost`) ;
+  - la notification de l'écriture écartée nomme ces écritures : « « Mettre « X » dans « G » » écartée : « X » est déjà dans le groupe « H », depuis un autre PC. Ce que « Modifier une connexion » changeait à ce qu'elle avait créé est écarté avec elle. ».
+- **Minor 3** : `bounds.ts` nomme et documente toutes les bornes du serveur :
+  - `MAX_PAIR_CODE_CHARS` (64) ;
+  - `SERVER_DB_BUSY_MS` (5 000, l'ancien `BUSY_MS` de `tokens.ts`) ;
+  - `MAX_ID_CHARS` et `MAX_LABEL_CHARS`, repris du cœur.
+
+  `tokens.ts` les prend de là.
+- **Minor 4** :
+  - `Downloads.download` rend son issue : « fait », « manqué » (le réseau, le serveur, des octets faux) ou « non enregistré ». Une erreur du disque pendant l'écriture des octets est dite dans la console avec sa cause : « Fichier <empreinte> reçu du serveur, mais non enregistré dans la base : … ». Une panne de lecture du réseau est marquée comme telle (`NetworkFailure`) ;
+  - `Downloads.fetch`, et donc `SyncClient.fetchBlob`, rejette alors avec le code `NOT_STORED`. `cirrus-file:` répond 507, au lieu de 503 ;
+  - le lecteur (`readHead`, `blobSize`) et l'ouverture par le système (`openFailure`) disent « PDF non enregistré sur ce PC : le disque est plein, ou Windows y refuse l'écriture. » (« « nom » non enregistré … » pour un autre fichier) ;
+  - « serveur injoignable » reste pour le réseau. Un téléchargement en fond qui échoue ainsi est retenté à la connexion suivante.
+- **Tests ajoutés :**
+  - cœur :
+    - la clé de tag ajoutée est bornée, celle d'un « avant » ne l'est pas ;
+    - l'historique est lu sans les bornes de contenu, mais avec sa forme ;
+    - les deux cas du Minor 1 : l'écriture écartée par une violation, et l'écriture refusée par le serveur suivie d'une écriture qui touche aussi autre chose ;
+  - magasin : `numberSeeded` garde l'identité ;
+  - serveur :
+    - l'identité rendue par `/hello`, gardée après la remise à zéro de `serveur.db`, remplacée par un envoi et rendue par `done`, autre pour un dossier de base neuf ;
+    - une ligne à clé longue dans l'historique s'envoie, numérotée comme chez le PC, mais refusée dans la fin du journal ;
+    - une écriture qui ajoute une telle clé est refusée, une qui modifie le nœud passe ;
+    - le code de jumelage borné (400, aucun essai compté) ;
+    - les bornes de `bounds.ts` ;
+  - app :
+    - la reprise après « Dissocier ce PC », après une révocation, et après la remise à zéro de `serveur.db` ;
+    - un PC face à une base remplacée, au journal plus long, s'arrête ;
+    - une base déjà numérotée par un serveur s'envoie à un serveur neuf (l'offre de D7) ;
+    - un historique à clé longue s'envoie puis se prend, que l'instantané le couvre ou non, la numérotation égale des trois côtés ;
+    - une action trop grosse ou mal formée est refusée avant d'être écrite, jumelé ou non ;
+    - un nœud ancien à clé longue reste modifiable ;
+    - le Minor 1 avec deux PC virtuels et le serveur ;
+    - le disque qui refuse un PDF reçu ;
+    - `parseTag`.
+
+### Décisions
+
+- Ruling: **la tolérance de l'historique (R32) est une lecture « historique » des lignes que l'instantané couvre** (`parseOp(x, history)`). Une telle ligne est vérifiée sur sa forme : ses champs et leur type, les identifiants de ses enregistrements, ses énumérations, ses nombres. Elle ne l'est pas sur les bornes de contenu d'aujourd'hui : la longueur d'une clé de tag, et la forme simple d'un nom de fichier ajouté. Elle est gardée telle quelle, avec son numéro : les trois côtés (le PC qui envoie, le serveur, le PC qui prend) ont le même journal, ligne à ligne.
+  - Seules les lignes que l'on applique comme des écritures passent le contrôle entier : la fin du journal d'un envoi, que le serveur rejoue sur l'instantané, et les écritures envoyées ou reçues. Le contrôle n'est pas relâché pour elles.
+  - Options :
+    - **couper la clé trop longue**, comme R20 coupe un libellé. Écartée : la ligne ne serait plus l'histoire exacte des tables (D5). L'« avant » de la ligne suivante, qui tient la clé entière, ne la suivrait plus ;
+    - **retirer la ligne** : la numérotation serait rompue ;
+    - **refuser l'envoi** : le défaut relevé par la revue, contre R19.
+  - Coût : aucun de plus que la lecture actuelle ; un paramètre.
+  - Coût si faux : une ligne d'une version ancienne gardée telle quelle dans l'historique du serveur.
+- Ruling: **le contrôle juge ce qu'une écriture ajoute, pas ce que son « avant » tient** (R32). La règle des noms de fichier (`parseOp`, plan 5a) s'étend aux clés de tag et de registre : une clé que l'« avant » tient, et que l'« après » garde, n'est pas rejugée.
+  - Pourquoi : le contrôle s'applique maintenant à toute écriture locale, même sans serveur. Sans cette règle, un nœud qu'une version plus ancienne a laissé avec une clé trop longue ne pourrait plus être renommé, ni perdre ce tag : chaque écriture serait refusée. Cela vaudrait chez ce PC comme au serveur, après l'envoi de sa base.
+  - Sûreté : un « avant » doit être exactement l'enregistrement du serveur, sinon l'écriture est « en retard ». Rien n'entre donc dans l'état du serveur par un « avant ».
+  - Coût si faux : nul.
+- Ruling: **une fin de journal qui ne passe pas le contrôle entier fait partir l'état des tables** (`prepareSeed`), comme un instantané qui ne se rejoue pas. Toutes les lignes sont alors de l'historique, et l'envoi d'une base que l'app ouvre et modifie normalement réussit toujours (R19).
+  - Coût : l'état relu des tables et encodé, une fois, seulement dans ce cas. Une ligne vraiment mal formée arrête encore l'envoi.
+- Ruling: **le contrôle des écritures est celui du serveur, au principal** (`writeRefusal`, dans `SyncHost.commit`) :
+  - le nombre d'opérations, d'abord, pour un message qui dit quoi faire ;
+  - puis `parseUnit` ;
+  - puis la taille du corps que le client enverrait, son libellé coupé comme il partira (R20).
+
+  Une action qui ne change rien (aucune opération) n'est pas jugée : elle n'écrit aucune ligne.
+  - Coût : la lecture et une sérialisation de l'écriture, proportionnelles à elle, jamais à la base.
+  - Options : un contrôle dans l'interface (le principal doit vérifier de toute façon ce qu'il écrit) ; dans le magasin (le serveur s'en sert aussi, et il a déjà son contrôle).
+  - Coût si faux : une sérialisation de plus par écriture.
+- Ruling: **une clé du registre** : l'app n'en crée aucune (seule la liste de la base de test en crée). Le contrôle des écritures borne celle qu'une écriture créerait, comme `parseOp` : 128 caractères.
+- Ruling: **un envoi de base remplace l'identité du serveur** (la suggestion de la revue). Un PC jumelé au serveur encore vide, deux bases vides, garde l'identité de cette base vide. Si un autre PC envoie la sienne avant que ce lobby parte, le premier PC s'arrête avec le message, au lieu d'apporter un second lobby.
+  - Coût si faux : nul. Une base n'est envoyée qu'à un serveur vide.
+- Ruling: **la reprise demande aussi `lastServerSeq() ≤ lastSeq`** (la condition de la revue). Un PC qui a reçu plus que le serveur tient (un serveur restauré d'une copie ancienne de sa base) n'est pas repris : le flux le refuserait aussitôt (409). L'offre de D7 lui est faite, le remplacement, avec son explication actuelle.
+  - Coût si faux : l'explication du remplacement parle de deux bases, quand c'est la même, plus ancienne au serveur.
+- Ruling: **la reprise ne redate pas les réglages** (R31). Ceux du serveur s'appliquent à la connexion. Un réglage changé ici pendant que ce PC était dissocié ne part pas, et revient à la valeur du serveur.
+  - Conséquence : après une remise à zéro de `serveur.db`, le serveur ne garde aucun réglage. Le premier PC repris revient donc aux défauts.
+  - Options : dater les réglages à la reprise (ils passeraient au-dessus des changements plus récents des autres PC : ce que la revue écarte) ; ne les dater que quand le serveur n'en garde aucun (une requête de plus au jumelage ; hors du périmètre de R31).
+  - Coût si faux : des réglages à refaire après la perte de `serveur.db`.
+- Ruling: **un PC refusé par son jeton se dissocie d'abord, puis se jumelle de nouveau** : le bloc « Serveur » d'un PC jumelé n'offre que « Dissocier ce PC ». Le message du serveur (« jumelle ce PC de nouveau ») reste juste : la reprise ne demande qu'un code.
+- Ruling (Minor 1) : **seules les opérations sur ce que l'écriture écartée créait sont retirées** de l'écriture suivante, qui garde le reste.
+  - Un enregistrement compte quand l'écriture le trouvait (un « avant ») et qu'il est absent maintenant. Une opération d'une écriture qui le recréerait elle-même n'est pas touchée.
+  - La notification de l'écriture écartée nomme les écritures suivantes, une ou plusieurs (« … et … »).
+  - Options : écarter toute l'écriture suivante (elle perdrait ses autres changements).
+  - Coût si faux : nul.
+- Ruling (Minor 4) : **507 pour un fichier reçu que le disque de ce PC n'a pas gardé**, que le lecteur dit à part. Un téléchargement en fond ainsi manqué est retenté à la connexion suivante, comme une panne du réseau : le disque peut avoir de la place d'ici là.
+  - Coût si faux : un essai de plus par connexion tant que le disque refuse.
