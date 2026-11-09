@@ -1,5 +1,5 @@
 import type { RenderParams } from '@cirrus/view';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 /** A notification; `closable`: a .bib's import (plan 4c), which a click on it or Escape closes before its time. */
 export interface Toast { id: number; text: string; closable?: boolean }
@@ -13,6 +13,28 @@ export const toastMsFor = (closable: boolean, p: Pick<RenderParams, 'toastMs' | 
 export const toastClicked = (shown: Toast[], id: number): Toast[] => (shown.some((t) => t.id === id && t.closable) ? shown.filter((t) => t.id !== id) : shown);
 /** The notifications once an Escape that nothing took closed the closable ones: the same list when there is none. */
 export const toastsEscaped = (shown: Toast[]): Toast[] => (shown.some((t) => t.closable) ? shown.filter((t) => !t.closable) : shown);
+
+/** App's notifications (Toasts), `paramsRef` holding toastMs and bibNoticeMs. */
+export function useToasts(paramsRef: { readonly current: Pick<RenderParams, 'toastMs' | 'bibNoticeMs'> }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  /**
+   * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
+   * Escape that nothing took closes it sooner (review of task 6, I1).
+   */
+  const toast = (text: string, closable = false) => {
+    const id = Math.random();
+    setToasts((t) => [...t, closable ? { id, text, closable } : { id, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), toastMsFor(closable, paramsRef.current));
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) setToasts(toastsEscaped); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  /** A click on the notification `id`: closed if it is closable. */
+  const closeToast = (id: number) => setToasts((t) => toastClicked(t, id));
+  return { toasts, toast, closeToast };
+}
 
 /**
  * Notifications: refused edits, undo steps in another plan (spec 6.4); `children` above them (LaTeX's notice, task 7).

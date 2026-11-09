@@ -6,13 +6,13 @@ import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
-import { loading, viewsSettled } from './files/read.ts';
+import { loading } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
 import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { withSetting } from './settingChanges.ts';
-import { liveTabs } from './tabs.ts';
+import { liveTabs, loadTabs, saveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { LatexNotice } from './ui/latex/LatexNotice.tsx';
@@ -28,12 +28,12 @@ import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
 import { SyncVeil } from './ui/SyncVeil.tsx';
 import { Tabs } from './ui/Tabs.tsx';
-import { type Toast, toastClicked, Toasts, toastMsFor, toastsEscaped } from './ui/Toasts.tsx';
+import { Toasts, useToasts } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
 import { useSync } from './sync/useSync.ts';
 import { useSettings } from './useSettings.ts';
+import { replayLaunch } from './visualChecks.ts';
 
-const TABS_KEY = 'cirrus.tabs';
 const NODE_GONE = 'Ce nœud n’existe plus.';
 /** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
@@ -43,18 +43,6 @@ const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.laun
 // nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
 
-/** Open tabs are a per-PC convenience: kept in localStorage, which may be unavailable. */
-function loadTabs(): Id[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(TABS_KEY) ?? '[]');
-    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-function saveTabs(tabs: Id[]): void {
-  try { localStorage.setItem(TABS_KEY, JSON.stringify(tabs)); } catch { /* not kept */ }
-}
 /**
  * Where the files' views were left (« au même endroit »): a per-PC convenience, in localStorage, which may be
  * unavailable. Bench and captures keep none: a capture shows a view as it opens, whatever an earlier run left.
@@ -82,7 +70,6 @@ export function App() {
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [toasts, setToasts] = useState<Toast[]>([]);
   const readySent = useRef(false);
   const session = useRef<EditSession | null>(null);
   const saver = useRef<SnapshotSaver | null>(null);
@@ -95,20 +82,8 @@ export function App() {
   /** The last annotation index built (plan 4c): the next one reads again only what changed. */
   const builtAnnotations = useRef<AnnotationIndex | null>(null);
 
-  /**
-   * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
-   * Escape that nothing took closes it sooner (review of task 6, I1).
-   */
-  const toast = (text: string, closable = false) => {
-    const id = Math.random();
-    setToasts((t) => [...t, closable ? { id, text, closable } : { id, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), toastMsFor(closable, paramsRef.current));
-  };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) setToasts(toastsEscaped); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  /** Notifications (ui/Toasts.tsx): `toast(text, closable)`. */
+  const { toasts, toast, closeToast } = useToasts(paramsRef);
   /** Reports a refused edit, or names the plan an undone step changed if it is not the one on screen (spec 6.4). */
   const report = (r: Result, verb?: string) => {
     if (!r.ok) { toast(r.message); return; }
@@ -249,35 +224,8 @@ export function App() {
     if (readySent.current) return;
     readySent.current = true;
     saver.current?.start();
-    // Visual checks: CIRRUS_IMPORT="sx,sy|path" drops that file at that point of the graph, by the drop's own path
-    // (captures only); then CIRRUS_CLICK=".gear" clicks those elements — an entry "type:<text>" types that text where
-    // the focus is, as the keyboard would (an editor: plan 4b, task 8) —, CIRRUS_KEYS="ctrl+z,Delete" presses those keys;
-    // the capture waits for the files' views they opened to settle (their file read, their code and language loaded).
-    const [at, ...dropped] = (window.cirrus.launch.import ?? '').split('|').filter(Boolean);
-    const clicks = (window.cirrus.launch.click ?? '').split(',').filter(Boolean);
-    const keys = (window.cirrus.launch.keys ?? '').split(',').filter(Boolean);
-    void (async () => {
-      if (dropped.length > 0) {
-        const [sx, sy] = at.split(',').map(Number);
-        await graph.current?.dropFilesAt(sx, sy, dropped);
-      }
-      // Each click waits for what the views it opened load (a PDF's reader, its pages, a compilation): the next one
-      // acts on them.
-      for (const sel of clicks) {
-        if (sel.startsWith('type:')) document.execCommand('insertText', false, sel.slice(5));
-        else document.querySelector<HTMLElement>(sel)?.click();
-        await new Promise((r) => setTimeout(r, 300));
-        await viewsSettled();
-      }
-      for (const combo of keys) {
-        const parts = combo.split('+');
-        const key = parts.pop()!;
-        window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: parts.includes('ctrl'), shiftKey: parts.includes('shift'), altKey: parts.includes('alt') }));
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      await viewsSettled();
-      window.cirrus.ready();
-    })();
+    // The visual checks' drops, clicks and keys (visualChecks.ts), then the page says it is ready.
+    void replayLaunch(graph);
   };
   useEffect(() => { if (error) firstFrame(); }, [error]);
 
@@ -400,7 +348,7 @@ export function App() {
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
           onDeleteAnnotation={(node) => deleteAnnotation(node, false)}
         />
-        <Toasts toasts={toasts} onClose={(id) => setToasts((t) => toastClicked(t, id))}>
+        <Toasts toasts={toasts} onClose={closeToast}>
           <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />
         </Toasts>
       </div>

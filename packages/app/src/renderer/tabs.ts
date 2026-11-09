@@ -1,5 +1,20 @@
 import type { Id, PlanRec } from '@cirrus/core';
 
+const TABS_KEY = 'cirrus.tabs';
+
+/** Open tabs are a per-PC convenience: kept in localStorage, which may be unavailable. */
+export function loadTabs(): Id[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(TABS_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+export function saveTabs(tabs: Id[]): void {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify(tabs)); } catch { /* not kept */ }
+}
+
 /**
  * The open tabs and the active one, once the plans they show may be gone (an undone plan creation, plan 5's changes from
  * elsewhere): a tab whose plan no longer exists is dropped, and the active tab falls back to the lobby (F4 of the final
