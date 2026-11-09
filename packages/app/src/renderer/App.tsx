@@ -2,7 +2,6 @@ import { type Action, type Anchor, annotationTitle, createAnnotation, type FileR
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import type { FirstSyncChoice, ServerInfo } from '../main/sync/protocol.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
@@ -31,7 +30,7 @@ import { SyncVeil } from './ui/SyncVeil.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, toastClicked, Toasts, toastMsFor, toastsEscaped } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
-import { SyncSession, type SyncView } from './sync/syncSession.ts';
+import { useSync } from './sync/useSync.ts';
 
 const TABS_KEY = 'cirrus.tabs';
 const NODE_GONE = 'Ce nœud n’existe plus.';
@@ -39,8 +38,6 @@ const NODE_GONE = 'Ce nœud n’existe plus.';
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
-/** Without a server paired (plan 5a, D8): no veil, no chip. */
-const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null };
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
 // nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
@@ -135,10 +132,6 @@ export function App() {
   const builtAnnotations = useRef<AnnotationIndex | null>(null);
   /** The steps made in the full screen open (its annotations): the only ones its Ctrl+Z and Ctrl+Y undo and redo. */
   const fullSteps = useRef(new Set<Id>());
-  /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
-  const [syncView, setSyncView] = useState<SyncView>(NO_SYNC);
-  const [server, setServer] = useState<ServerInfo | null>(null);
-  const sync = useRef<SyncSession | null>(null);
 
   /**
    * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
@@ -163,6 +156,8 @@ export function App() {
       toast(`${verb} dans ${elsewhere.length > 1 ? 'les plans' : 'le plan'} ${names} : ${r.action.label}`);
     }
   };
+  /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
+  const sync = useSync(toast, paramsRef);
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field, or a LaTeX field being edited, they
   // belong to the text (spec 6.4: textOwnsKeys). Not under the preamble's full screen; under a file's, only for the
@@ -225,18 +220,15 @@ export function App() {
   }), []);
 
   useEffect(() => {
-    // What the main process says of the server after its answer below, until the session listens: a pairing or a first
-    // sync that ends while this page loads, reloaded meanwhile (short review after plan 5a, B2). Messages arrive in the
-    // order they were sent: one before the answer is older than it, and dropped.
-    const told: { info: ServerInfo | null } = { info: null };
-    const early = window.cirrus.onSyncServer((i) => { told.info = i; });
+    // What the main process says of the server, heard from now until the sync session listens (B2: sync/useSync.ts).
+    const startup = sync.starting();
     void (async () => {
       try {
         // The snapshot and the journal after it (plan 3c); the tables when the snapshot cannot be used. With a server
         // paired, the pending writes too (plan 5a). The server asked first: paired then, it is when the state is read,
         // whose pending writes are then all of them (B2).
         const load = (fromTables: boolean) => window.cirrus.load(fromTables).then((l) => { mark('dataReceived'); return l; });
-        const asked = window.cirrus.syncServer().then((i) => { told.info = null; return i; });
+        const asked = startup.ask();
         const [opened, settings, info] = await Promise.all([openState(load), window.cirrus.getSettings(), asked]);
         if (opened.fallback) console.warn(`Instantané de la base inutilisable (${opened.fallback}) : état relu dans ses tables.`);
         const s = opened.state;
@@ -257,25 +249,17 @@ export function App() {
           saver.current?.applied();
         }, opened.seq);
         if (!measuring) saver.current = new SnapshotSaver(session.current, (data, seq) => window.cirrus.saveSnapshot(data, seq), () => paramsRef.current, opened.stale);
-        // The synchronisation (plan 5a): with a server paired, the veil, then the client started once the session
-        // holds the pending writes; the state read again from the base when a reconciliation could not be written.
-        sync.current = new SyncSession({
-          bridge: window.cirrus, session: session.current, load: () => openState(window.cirrus.load), timeoutMs: () => paramsRef.current.syncConnectTimeoutMs,
-          toast: (text) => toast(text), onView: setSyncView, onServer: setServer,
-        });
-        early();
-        const since = told.info ?? undefined;
-        setServer(since ?? info);
+        // The synchronisation (plan 5a): its session made, then started once the state is shown.
+        const startSync = startup.attach(session.current, info);
         mark('stateReady');
         setParams(p);
         setTabs(open);
         setActive(current);
         setShown({ state: s, rev: 0, action: null });
         // The startup veil lasts the setting just read: the ref holds it only once rendered (review, Important 3).
-        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs, waiting: info.waiting, since })
-          .catch((e: unknown) => console.error('Synchronisation :', e));
+        startSync(opened, p.syncConnectTimeoutMs);
       } catch (e) {
-        early();
+        startup.stop();
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
@@ -435,18 +419,6 @@ export function App() {
     }
     for (const notice of await addImported(session.current!, node, { refs: r.refs, refused: [...refused, ...r.refused] })) toast(notice);
   };
-  /**
-   * The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing; what the main process holds comes
-   * through the session (onServer), after each of them and at each mounting of the block (refresh: review of task 5,
-   * round 2).
-   */
-  const serverBlock = {
-    info: server, status: syncView.status,
-    onPair: (url: string, code: string, name: string) => sync.current!.pair(url, code, name),
-    onFirst: (choice: FirstSyncChoice) => sync.current!.first(choice),
-    onUnpair: () => sync.current!.unpair(),
-    refresh: () => sync.current!.server(),
-  };
   const files: NodeFiles = {
     importInto: (node, paths, refused) => addFiles(node, paths.length > 0 ? window.cirrus.importFiles(paths) : Promise.resolve({ refs: [], refused: [] }), refused),
     pickInto: (node) => addFiles(node, window.cirrus.pickFiles()),
@@ -473,7 +445,7 @@ export function App() {
         }}
         settingsOpen={panel}
         onSettings={() => setPanel((o) => !o)}
-        chip={syncView.chip && <SyncChip chip={syncView.chip} onRetry={() => sync.current?.retry()} />}
+        chip={sync.view.chip && <SyncChip chip={sync.view.chip} onRetry={sync.retry} />}
       />
       <div className="main">
         <GraphBoundary plan={active}>
@@ -489,7 +461,7 @@ export function App() {
             // Key by key, from the latest settings (review of task 6, Important 1); « Tout réinitialiser »: every default.
             params={params} onChange={(key, v) => setParams(withSetting(key, v))} onResetAll={() => setParams(withOverrides({}))}
             onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
-            onEditPreamble={() => setPreambleOpen(true)} server={serverBlock}
+            onEditPreamble={() => setPreambleOpen(true)} server={sync.serverBlock}
           />
         )}
         <Panels
@@ -527,7 +499,7 @@ export function App() {
           </Suspense>
         </PanelBoundary>
       )}
-      {syncView.veil && <SyncVeil />}
+      {sync.view.veil && <SyncVeil />}
     </div>
   );
 }
