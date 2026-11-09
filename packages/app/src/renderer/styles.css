@@ -275,6 +275,10 @@ button, input, select { font: inherit; color: var(--ink); }
 .node-popup .file span.thumb { display: inline-block; }
 .node-popup .file .thumb.icon { color: var(--muted); }
 .node-popup .file .rename { padding: 0 4px; font: inherit; }
+.node-popup .file .compare {
+  flex: none; padding: 0 8px; font-size: 12px; border-radius: 5px; background: var(--sky2); border: 1px solid var(--edge); color: var(--ink); cursor: pointer;
+}
+.node-popup .file .compare:hover { border-color: var(--accent); }
 .node-popup .add-files { margin-top: 6px; padding: 2px 0; border: none; background: none; color: var(--accent); cursor: pointer; font-size: 12.5px; }
 /* Files dragged over a pop-up that takes them. */
 .panel.dropping { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 12px 32px rgba(2, 6, 16, 0.6); }
@@ -489,6 +493,24 @@ button, input, select { font: inherit; color: var(--ink); }
 .tex-source { border-right: 1px solid rgba(143, 184, 255, 0.18); }
 .latex-editor { flex: 1; min-height: 0; }
 .latex-editor .cm-editor { height: 100%; }
+/*
+ * A .tex compared with its conflict copy (plan 5b, D7): the preamble's header buttons, a note over each side, then the
+ * merge view, whose one scroller holds both editors and the arrows between them.
+ */
+.compare-view > header .save { border-color: var(--accent); }
+.compare-view > header .system:disabled { opacity: 0.6; cursor: default; }
+.compare-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.compare-sides {
+  flex: none; display: flex; height: 24px; align-items: center; font-size: 12.5px; color: var(--muted);
+  border-bottom: 1px solid rgba(143, 184, 255, 0.14); user-select: none;
+}
+.compare-sides span { flex: 1 1 0; min-width: 0; padding: 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-host { flex: 1; min-height: 0; position: relative; }
+.compare-host .cm-mergeView { height: 100%; overflow: auto; }
+.compare-host .cm-merge-revert button { color: var(--accent); font-size: 16px; }
+.compare-host .cm-merge-revert button:hover { color: var(--ink); background: rgba(143, 184, 255, 0.14); }
+.compare-view .compare-host .cm-merge-a .cm-changedLine { background-color: rgba(255, 170, 153, 0.12); }
+.compare-view .compare-host .cm-merge-b .cm-changedLine { background-color: rgba(136, 255, 136, 0.1); }
 .compile-log {
   position: absolute; inset: 8px 8px 8px auto; width: min(560px, calc(100% - 16px)); z-index: 5; display: flex; flex-direction: column; outline: none;
   background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); border-radius: 8px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);

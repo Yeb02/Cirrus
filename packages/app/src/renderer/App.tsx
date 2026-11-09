@@ -16,6 +16,7 @@ import { liveTabs, loadTabs, saveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { LatexNotice } from './ui/latex/LatexNotice.tsx';
+import { reconcileTex } from './ui/latex/compare.ts';
 import { saveTex } from './ui/latex/saveScheduler.ts';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
@@ -38,6 +39,8 @@ import { replayLaunch } from './visualChecks.ts';
 const NODE_GONE = 'Ce nœud n’existe plus.';
 /** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
+/** The comparison of a .tex with its conflict copy (plan 5b, D7), with @codemirror/merge, in its own chunk too. */
+const CompareView = lazy(() => loading(import('./ui/latex/CompareView.tsx')).then((m) => ({ default: m.CompareView })));
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
 // nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
@@ -350,13 +353,13 @@ export function App() {
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
-          onDeleteAnnotation={(node) => deleteAnnotation(node, false)}
+          onDeleteAnnotation={(node) => deleteAnnotation(node, false)} onCompare={(node, original, copy) => setFull({ kind: 'compare', node, original, copy })}
         />
         <Toasts toasts={toasts} onClose={closeToast}>
           <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />
         </Toasts>
       </div>
-      {fullNow?.file && (
+      {fullNow?.file && !fullNow.copy && (
         // A full screen that fails says so over the window, which stays (PanelBoundary); closed, it is tried again next time.
         <PanelBoundary
           what={`Plein écran de « ${fullNow.file.name} »`} fallback={<FullScreenFailed name={fullNow.file.name} onClose={() => setFull(null)} />}
@@ -370,6 +373,23 @@ export function App() {
               onSave: (text, base) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text, base),
             }}
           />
+        </PanelBoundary>
+      )}
+      {fullNow?.copy && (
+        // The comparison of a .tex with its conflict copy (plan 5b, D7): over the window as a file's full screen is.
+        <PanelBoundary
+          what={`Comparaison de « ${fullNow.file.name} »`} fallback={<FullScreenFailed name={`Comparaison de « ${fullNow.file.name} »`} onClose={() => setFull(null)} />}
+        >
+          <Suspense fallback={null}>
+            <CompareView
+              ref={workbench} node={fullNow.node} original={fullNow.file} copy={fullNow.copy} params={params} onNotice={(text) => toast(text)}
+              onSave={(text, base, removeCopy) => reconcileTex(
+                session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file.name, text,
+                { removeCopy: removeCopy ? fullNow.copy!.name : undefined, base },
+              )}
+              onClose={() => setFull(null)}
+            />
+          </Suspense>
         </PanelBoundary>
       )}
       {preambleOpen && (

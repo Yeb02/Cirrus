@@ -8,7 +8,7 @@ import type { HistorySummary } from '../../main/files.ts';
 import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type AnnotationEntry, type AnnotationIndex, type AnnotationSource, annotationSource, titleChars } from '../files/annotations.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
-import { checkFileName } from '../files/merge.ts';
+import { checkFileName, conflictOriginal } from '../files/merge.ts';
 import { absentVersion, blobSize, loading } from '../files/read.ts';
 import {
   droppedPaths, dropRoute, type FileAction, fileClick, fileDoubleClick, fileMenu, type NodeFiles, systemOnClick, thumbFor,
@@ -306,7 +306,8 @@ function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; tit
  * The node's files (spec 12; plan 4a, tasks 4 to 6): name, kind, size, an image's thumbnail (thumbPx, read only once
  * in view, and only up to thumbMaxMb: thumbFor), a PDF's first page (PdfThumb, at most thumbMaxMb read). A click on
  * a file opens its preview, a double-click its full screen (`onOpen`); a click on a file Cirrus has no view for opens
- * it with the system (fileClick). A right click opens the file's menu (fileMenu): full screen, open it with the
+ * it with the system (fileClick). A conflict copy of a .tex whose original is in the node offers « Comparer »
+ * (`onCompare`, conflictOriginal: plan 5b, D7). A right click opens the file's menu (fileMenu): full screen, open it with the
  * system's application, rename it in place, take it out of the node (its copy stays in the store). The click that
  * closes the menu does nothing else: the click guard swallows it (clickGuard.ts). « Ajouter des fichiers… » takes
  * files chosen in the system's dialog; files dropped on the pop-up come in too (NodePopup). A new name is checked on
@@ -315,7 +316,7 @@ function Annotations(props: { s: State; entries: readonly AnnotationEntry[]; tit
  */
 function Files(props: {
   id: Id; files: FileRef[]; thumbPx: number; thumbMaxMb: number; pdfDocsKept: number; actions: NodeFiles; onOpen: OpenFile;
-  onEdit(build: Build): Promise<boolean>;
+  onCompare(original: string, copy: string): void; onEdit(build: Build): Promise<boolean>;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number; file: FileRef } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -339,7 +340,7 @@ function Files(props: {
       {props.files.length === 0 ? <p className="dim">Aucun fichier.</p> : (
         <ul className="files">
           {props.files.map((f) => {
-            const system = systemOnClick(f.name), thumb = thumbFor(f, props.thumbMaxMb);
+            const system = systemOnClick(f.name), thumb = thumbFor(f, props.thumbMaxMb), original = conflictOriginal(props.files, f);
             return (
               <li
                 key={f.name} className={`file${system ? ' system' : ''}${thumb ? ' with-thumb' : ''}`} data-name={f.name}
@@ -388,6 +389,15 @@ function Files(props: {
                 )}
                 <span className="kind">{KIND[fileKind(f.name)]}</span>
                 <span className="size">{formatSize(f.size)}</span>
+                {original && (
+                  // A conflict copy whose original is in the node (plan 5b, D7): its comparison, not the row's own click.
+                  <button
+                    className="compare" title={`Comparer avec « ${original.name} »`}
+                    onClick={(e) => { e.stopPropagation(); props.onCompare(original.name, f.name); }} onDoubleClick={(e) => e.stopPropagation()}
+                  >
+                    Comparer
+                  </button>
+                )}
               </li>
             );
           })}
@@ -419,7 +429,7 @@ function Files(props: {
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile;
+  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile; onCompare(original: string, copy: string): void;
   registry: LatexRegistry | null; onNodeLink(node: Id): void; annotations: AnnotationIndex | null; onReveal: RevealAnnotation;
   onDeleteAnnotation(node: Id): void;
 }) {
@@ -495,7 +505,7 @@ export function NodePopup(props: {
         <h4>Fichiers</h4>
         <Files
           id={id} files={n.files} thumbPx={props.params.thumbPx} thumbMaxMb={props.params.thumbMaxMb} pdfDocsKept={props.params.pdfDocsKept}
-          actions={props.files} onOpen={props.onOpenFile} onEdit={props.onEdit}
+          actions={props.files} onOpen={props.onOpenFile} onCompare={props.onCompare} onEdit={props.onEdit}
         />
         {annotations.length > 0 && (
           <>

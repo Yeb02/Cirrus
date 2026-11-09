@@ -443,6 +443,72 @@ const TWO_PCS = {
         if (others?.length !== 0) throw new Error(`le PC virtuel apprend encore que B a ouvert le .tex : ${JSON.stringify(others)}`);
       },
     },
+    {
+      // The conflict copy step 6 left in the node is the one compared: made by the sync itself, as the user meets it.
+      name: '7. la copie de conflit du pas 6 comparée à son original : « Comparer » sur elle seule, les deux textes côte à côte, un bloc repris et un mot tapé, Échap qui demande « Abandonner la réconciliation ? », « Enregistrer et retirer la copie » écrit en une action ; la copie n’est plus au nœud, son blob reste, le PC virtuel reçoit (plan 5b, D7)',
+      async run(ctx) {
+        const page = ctx.app.page, pc = ctx.virtual.pc, base = reader(ctx.b.data);
+        const copyRow = `.node-popup .file[data-name^="note (conflit du"]`;
+        // « Comparer » is on the copy's row, not on note.tex's.
+        if (!(await page.until(`!!document.querySelector('${copyRow} .compare')`, 10_000))) throw new Error('le pop-up ne propose pas « Comparer » sur la copie de conflit');
+        if (await page.evaluate(`!!document.querySelector('.node-popup .file[data-name="${TEX_NAME}"] .compare')`)) throw new Error('« Comparer » est offert sur l’original');
+        const copyName = await page.evaluate(`document.querySelector('${copyRow}').dataset.name`);
+        const copyRef = pc.s.nodes.get(ctx.node).files.find((f) => f.name === copyName);
+        await page.evaluate(`document.querySelector('${copyRow}').scrollIntoView({ block: 'center' })`);
+        const open = await page.centre(`${copyRow} .compare`, 'Comparer');
+        await page.click(open.x, open.y);
+        /** The text of one side of the comparison (`a`: the original, `b`: the copy), its lines joined by « \n ». */
+        const side = (s) => `[...document.querySelectorAll('.compare-view .cm-merge-${s} .cm-line')].map((l) => l.textContent).join('\\n')`;
+        if (!(await page.until(`(${side('a')}).includes('version 1')`, 15_000))) throw new Error(`la comparaison ne s’ouvre pas : « ${await page.evaluate(`document.querySelector('.compare-view')?.textContent ?? '(pas de plein écran)'`)} »`);
+        const title = await page.evaluate(`document.querySelector('.compare-view > header .name').textContent`);
+        if (title !== `Comparer « ${TEX_NAME} » et « ${copyName} »`) throw new Error(`l’en-tête dit « ${title} »`);
+        // The original on the left, with what B typed; the copy on the right, read-only, with version 2.
+        if (!(await page.evaluate(`(${side('a')}).includes('version 1} % tapé dans B')`)) || !(await page.evaluate(`(${side('b')}).includes('version 2')`))) {
+          throw new Error(`les côtés ne montrent pas les deux versions : « ${await page.evaluate(side('a'))} » | « ${await page.evaluate(side('b'))} »`);
+        }
+        if (!(await page.evaluate(`document.querySelector('.compare-view .cm-merge-b .cm-content').getAttribute('aria-readonly') === 'true'`))) throw new Error('le côté de la copie n’est pas en lecture seule');
+        if (await page.evaluate(`document.querySelector('.compare-view .cm-merge-a .cm-content').getAttribute('aria-readonly') === 'true'`)) throw new Error('le côté de l’original est en lecture seule');
+        // The block of the copy taken by its arrow, then a word typed after it.
+        // The notifications of the earlier steps stand over the middle of the window, where the arrow is: the offer to install
+        // LaTeX put away, the others waited out.
+        if (await page.evaluate(`!!document.querySelector('.toast .later')`)) {
+          const later = await page.centre('.toast .later', 'Plus tard');
+          await page.click(later.x, later.y);
+        }
+        if (!(await page.until(`!document.querySelector('.toast')`, 20_000))) throw new Error(`des notifications couvrent la comparaison : ${await toastsText(page)}`);
+        const arrow = await page.centre('.compare-view .cm-merge-revert button', '');
+        await page.click(arrow.x, arrow.y);
+        if (!(await page.until(`(${side('a')}).includes('version 2') && !(${side('a')}).includes('version 1')`, 5000))) throw new Error(`la flèche ne reprend pas le bloc : « ${await page.evaluate(side('a'))} »`);
+        const line = await page.centre('.compare-view .cm-merge-a .cm-line', 'version 2');
+        await page.click(line.x, line.y);
+        await page.press('End', 'End', 35);
+        await page.type(' % repris');
+        // Escape asks, « Annuler » having the focus; it keeps the comparison and what was taken.
+        await page.press('Escape', 'Escape', 27);
+        if (!(await page.until(`(document.querySelector('.compare-view .ask')?.textContent ?? '').includes('Abandonner la réconciliation ?')`, 5000))) throw new Error('Échap, avec des changements, ne pose pas la question');
+        if (!(await page.evaluate(`document.activeElement?.classList.contains('cancel') && document.activeElement.textContent === 'Annuler'`))) throw new Error('« Annuler » n’a pas le focus');
+        const cancel = await page.centre('.compare-view .ask .cancel', 'Annuler');
+        await page.click(cancel.x, cancel.y);
+        if (await page.evaluate(`!document.querySelector('.compare-view') || !!document.querySelector('.compare-view .ask')`)) throw new Error('« Annuler » ne laisse pas la comparaison ouverte');
+        if (!(await page.evaluate(`(${side('a')}).includes('version 2} % repris')`))) throw new Error(`le texte repris est perdu : « ${await page.evaluate(side('a'))} »`);
+        // Saved and the copy taken out: one action, « Réconcilier « note.tex » ».
+        const before = base(`SELECT max(local_seq) AS n FROM changes`)[0].n;
+        const save = await page.centre('.compare-view > header button', '^Enregistrer et retirer la copie$');
+        await page.click(save.x, save.y);
+        if (!(await page.until(`!document.querySelector('.compare-view')`, 10_000))) throw new Error(`la comparaison ne se ferme pas : « ${await page.evaluate(`document.querySelector('.compare-view .viewer-banner')?.textContent ?? ''`)} »`);
+        const text = texVersion(2).replace('}\n', '} % repris\n'), hash = createHash('sha256').update(text).digest('hex');
+        const lines = () => base(`SELECT label, op FROM changes WHERE local_seq > ${before} ORDER BY local_seq`);
+        if (!(await until(() => lines().length === 1 && lines()[0].label === `Réconcilier « ${TEX_NAME} »`, 10_000))) throw new Error(`l’enregistrement n’est pas une seule écriture « Réconcilier » : ${JSON.stringify(lines())}`);
+        const files = JSON.parse(lines()[0].op).after.files;
+        if (files.some((f) => f.name === copyName) || files.find((f) => f.name === TEX_NAME)?.hash !== hash) throw new Error(`les fichiers du nœud sont ${JSON.stringify(files)}`);
+        // The copy's blob stays in B's store; the virtual PC receives the same files.
+        if (!existsSync(blobIn(ctx.b.data, copyRef.hash))) throw new Error('le blob de la copie n’est plus dans le magasin de B');
+        if (!(await until(() => { const f = pc.s.nodes.get(ctx.node).files; return !f.some((x) => x.name === copyName) && f.find((x) => x.name === TEX_NAME)?.hash === hash; }, 10_000))) {
+          throw new Error('le PC virtuel ne reçoit pas la réconciliation');
+        }
+        if (await page.evaluate(`!!document.querySelector('${copyRow}')`)) throw new Error('le pop-up montre encore la copie');
+      },
+    },
   ],
 };
 

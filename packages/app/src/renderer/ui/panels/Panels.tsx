@@ -185,7 +185,8 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * `annotations`), and a passage selected in it is annotated by `onAnnotate`. An annotation clicked in a pop-up (a PDF's
  * list, an annotation's own line) opens its PDF's preview beside that pop-up, showing it (withFile's `reveal`) once
  * (withoutReveal, final review I1). An annotation's line, in a preview's margin or a pop-up's list, has its menu (final
- * review, I2): its node's pop-up beside that panel (`onNodeLink`, as a link), its deletion (`onDeleteAnnotation`).
+ * review, I2): its node's pop-up beside that panel (`onNodeLink`, as a link), its deletion (`onDeleteAnnotation`). A
+ * conflict copy of a .tex, in a pop-up, is compared with its original in full screen (`onCompare`, plan 5b, D7).
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -194,7 +195,7 @@ export function Panels(props: {
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
   onNodeLink(node: Id, near: Rect): void; covered?: boolean; annotations: AnnotationIndex | null; onAnnotate(a: Anchor): boolean;
-  onDeleteAnnotation(node: Id): void;
+  onDeleteAnnotation(node: Id): void; onCompare(node: Id, original: string, copy: string): void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -311,6 +312,7 @@ export function Panels(props: {
               state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
               files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
+              onCompare={(original, copy) => props.onCompare(node, original, copy)}
               annotations={props.annotations} onReveal={(pdf, name, anchor) => openFile(pdf, name, p.rect, anchor)}
               onDeleteAnnotation={props.onDeleteAnnotation}
             />
