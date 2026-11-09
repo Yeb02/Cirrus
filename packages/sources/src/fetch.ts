@@ -2,7 +2,7 @@ import type { FileRef } from '@cirrus/core';
 import { type Csl, cslToFields } from './csl.ts';
 import { type OpenDeps, openFetch } from './guard.ts';
 import { citationMeta } from './html.ts';
-import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
+import { arxivDoi, isAddress, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 import {
   duration, INVALID_DELAY, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer, validLimits,
@@ -312,9 +312,6 @@ async function importOpen(href: string, deps: PublicationDeps, open: OpenDeps, p
   return { ...r, ...(await pagePdf(deps, open, meta.pdfUrl, id)) };
 }
 
-/** An address, as a user pastes one: a scheme, then « // » (« doi: » or « arXiv: » are not). */
-const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
-
 /**
  * The import's entry (the app's IPC `cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string
  * of MAX_IDENTIFIER_CHARS at most, or nothing is asked of the network. In this order (plan 5b):
@@ -331,6 +328,6 @@ export async function importPublication(text: unknown, deps: PublicationDeps, op
   const id = parseIdentifier(text);
   if (id) return fetchPublication(id, deps, { pdf });
   const address = text.trim();
-  if (!deps.open || !ADDRESS.test(address) || !URL.canParse(address)) return { ok: false, message: UNRECOGNIZED };
+  if (!deps.open || !isAddress(address)) return { ok: false, message: UNRECOGNIZED };
   return importOpen(address, deps, deps.open, pdf);
 }

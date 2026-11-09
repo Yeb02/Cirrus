@@ -83,6 +83,21 @@ function fromLink(text: string): PublicationId | null {
   return publisherDoi(path);
 }
 
+/** An address, as a user pastes one: a scheme, then « // » (« doi: » or « arXiv: » are not). */
+const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * Whether `text` is an address (plan 5b, D3 and D5), whatever its scheme: a scheme, « // », and an address the platform
+ * parses, MAX_IDENTIFIER_CHARS at most. The one rule of the import's entry (importPublication) and of the dialog's check
+ * before the request (importByIdentifier), so the dialog never refuses an address the main process would take — and the
+ * main process, not the dialog, says why one is refused (an address that is not https, a local machine).
+ */
+export function isAddress(text: string): boolean {
+  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return false;
+  const t = text.trim();
+  return ADDRESS.test(t) && URL.canParse(t);
+}
+
 /**
  * The identifier `text` gives (plan 4c, task 4), or null: a DOI, bare or after « doi: », or as a link to its resolver
  * or as a publisher's address holding it (plan 5b, D4); an arXiv identifier, new (`2401.01234v2`) or old
@@ -92,7 +107,7 @@ function fromLink(text: string): PublicationId | null {
 export function parseIdentifier(text: string): PublicationId | null {
   if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return null;
   const t = text.trim();
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return fromLink(t);
+  if (ADDRESS.test(t)) return fromLink(t);
   const ax = /^arxiv:(.*)$/is.exec(t);
   if (ax) return arxivOf(ax[1]);
   const doi = /^doi:(.*)$/is.exec(t);

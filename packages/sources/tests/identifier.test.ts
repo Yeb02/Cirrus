@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
+import { isAddress, MAX_IDENTIFIER_CHARS, parseIdentifier } from '../src/identifier.ts';
 
 /** Plan 5b, D4: the DOI an address of a publisher holds, read without any request. */
 test('parseIdentifier : les adresses de l’ACM, de Springer, de Wiley et de Taylor & Francis donnent leur DOI (D4)', () => {
@@ -66,4 +66,17 @@ test('parseIdentifier : une adresse sans DOI dans son chemin n’en donne aucun 
   ]) {
     expect(parseIdentifier(text), text).toBeNull();
   }
+});
+
+/** Plan 5b, task 4 (D3, D5): what the interface pre-checks before asking the main process for an address of the open web. */
+test('isAddress : un schéma, « // », puis une adresse que la plateforme lit ; un identifiant ou un mot n’en est pas une', () => {
+  for (const text of [
+    'https://openreview.net/forum?id=YicbFdNTTy', '  https://proceedings.mlr.press/v139/radford21a.html  ', 'HTTPS://EXAMPLE.ORG/a.pdf',
+    // Any scheme is an address: the main process refuses what is not https, in French (D3).
+    'http://example.org/a.pdf', 'ftp://example.org/a.pdf',
+  ]) expect(isAddress(text), text).toBe(true);
+  for (const text of [
+    '', '   ', 'bonjour', '10.1007/978-0-387-49820-1', 'doi:10.1007/978-0-387-49820-1', 'arXiv:1706.03762', 'openreview.net/forum?id=x', 'mailto:moi@example.org',
+    'https://', 'https:///', '://example.org', '1http://example.org', `https://example.org/${'x'.repeat(MAX_IDENTIFIER_CHARS)}`,
+  ]) expect(isAddress(text), text).toBe(false);
 });
