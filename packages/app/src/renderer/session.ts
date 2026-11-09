@@ -4,8 +4,6 @@ import {
 } from '@cirrus/core';
 import type { Committed } from '../main/sync/protocol.ts';
 
-export type { Committed };
-
 export type Result = { ok: true; action: Action; plans: Id[] } | { ok: false; message: string };
 
 /** The plans an action changes the layout of (content changes concern every plan). */
