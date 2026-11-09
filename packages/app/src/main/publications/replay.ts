@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { basename, join } from 'node:path';
 import type { ConnectRequest, FetchFn, OpenDeps } from '@cirrus/sources';
+import { testPickOf } from '../pick.ts';
 
 /**
  * Recorded answers instead of the network (plan 4c, task 4): the tests', and the built app's on a test base (the
@@ -75,11 +76,8 @@ export function replayOpen(dir: string): Pick<OpenDeps, 'resolve' | 'connect'> {
 
 /**
  * The replay's folder, CIRRUS_PUBLICATIONS_REPLAY, taken only on a test base in a window out of the user's way: with
- * CIRRUS_DATA, and in capture mode or with CIRRUS_BACKGROUND=1 (scripts/interface.mjs). Never on the user's own base:
- * there, the network (null).
+ * CIRRUS_DATA, and in capture mode or with CIRRUS_BACKGROUND=1 (scripts/interface.mjs) — testPickOf's rule, written
+ * once for every test hook (final review of plan 5b, M4). Never on the user's own base: there, the network (null).
  */
-export function replayDirOf(env: Record<string, string | undefined>, capture: boolean): string | null {
-  const dir = env.CIRRUS_PUBLICATIONS_REPLAY;
-  if (!dir || !env.CIRRUS_DATA || !(capture || env.CIRRUS_BACKGROUND === '1')) return null;
-  return dir;
-}
+export const replayDirOf = (env: Record<string, string | undefined>, capture: boolean): string | null =>
+  testPickOf(env, 'CIRRUS_PUBLICATIONS_REPLAY', capture);

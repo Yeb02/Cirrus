@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { FileRef } from '@cirrus/core';
 import { cslToFields, type FetchFn, fetchPublication, importPublication, type PublicationDeps, PUBLICATION_SOURCES } from '@cirrus/sources';
 import { expect, test } from 'vitest';
+import { testPickOf } from '../src/main/pick.ts';
 import { replayDirOf, replayFetch, replayOpen } from '../src/main/publications/replay.ts';
 import { requestFetch } from '../src/main/publications/request.ts';
 
@@ -208,6 +209,10 @@ test('replayFetch et replayDirOf : les réponses enregistrées, seulement sur un
   expect(replayDirOf({ ...env, CIRRUS_BACKGROUND: '0' }, false)).toBeNull();
   expect(replayDirOf({ CIRRUS_DATA: 'D:\\base-de-test', CIRRUS_BACKGROUND: '1' }, true)).toBeNull();
   expect(replayDirOf({ ...env, CIRRUS_PUBLICATIONS_REPLAY: '', CIRRUS_BACKGROUND: '1' }, false)).toBeNull();
+  // The pickers' one rule (testPickOf), not a copy of it (final review of plan 5b, M4).
+  for (const e of [env, { ...env, CIRRUS_BACKGROUND: '1' }, { CIRRUS_PUBLICATIONS_REPLAY: 'D:\\rejeu' }, {}]) {
+    for (const capture of [false, true]) expect(replayDirOf(e, capture)).toBe(testPickOf(e, 'CIRRUS_PUBLICATIONS_REPLAY', capture));
+  }
 });
 
 test('replayOpen : le réseau ouvert rejoué (plan 5b, D3) — les noms et les réponses écrits, sous les gardes de @cirrus/sources, jamais le réseau', async () => {
