@@ -13,7 +13,8 @@ import type { Id, Reconciliation, RemoteUnit } from '@cirrus/core';
  * - offline: the server lost, tried again at growing intervals (syncRetryMinMs to syncRetryMaxMs);
  * - refused: the server refuses (a token, a format, data replaced: its reason), or a write received does not apply here
  *   (`diverged`: this PC's state no longer follows the server's); not tried again until start().
- * `clockWarning` (D4), once the server's time is known, when this PC's clock differs from it by more than syncClockSkewWarnMs.
+ * `clockWarning` (D4), once the server's time is known, when this PC's clock differs from it by more than
+ * syncClockSkewWarnMs.
  */
 export type SyncStatus = (
   | { state: 'off' }

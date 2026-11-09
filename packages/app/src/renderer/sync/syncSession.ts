@@ -100,8 +100,8 @@ export class SyncSession {
 
   /**
    * The main process's word on the pairing (cirrus:sync:server; short review after plan 5a, B2): given to the block
-   * (onServer); paired while this session does not follow — a page that opened while a pairing or a first sync was under
-   * way (reloaded meanwhile, Ctrl+R): it follows and starts now, as a pairing done here would.
+   * (onServer); paired while this session does not follow — a page that opened while a pairing or a first sync was
+   * under way (reloaded meanwhile, Ctrl+R): it follows and starts now, as a pairing done here would.
    */
   private heard(info: ServerInfo): void {
     this.deps.onServer?.(info);
@@ -111,10 +111,10 @@ export class SyncSession {
   /**
    * The interface has opened its state: with a server paired, the session keeps the pending writes the base gave,
    * the veil rises for `timeoutMs` at most — the settings just loaded (review of task 4, Important 3) — and the
-   * synchronisation starts (the main process waits for this to reconcile anything). `paired`: the main process's answer,
-   * asked before the state, so that the pending writes given are all of them. `since`: its word since that answer, while
-   * the page loaded (short review after plan 5a, B2), taken as if it came now. `waiting`: a base taken from the server
-   * that could not be swapped in at the start, said in a notification.
+   * synchronisation starts (the main process waits for this to reconcile anything). `paired`: the main process's
+   * answer, asked before the state, so that the pending writes given are all of them. `since`: its word since that
+   * answer, while the page loaded (short review after plan 5a, B2), taken as if it came now. `waiting`: a base taken
+   * from the server that could not be swapped in at the start, said in a notification.
    */
   async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number; waiting?: string; since?: ServerInfo }): Promise<void> {
     this.pc = o.pc;
@@ -184,14 +184,14 @@ export class SyncSession {
     await this.server().catch((e: unknown) => console.error('État du serveur non relu :', e));
   }
 
-  /** A pairing the main process did (`ok`, not restarting): followed and started (follow), unless its message came first. */
+  /** A pairing the main process did (`ok`, not restarting): followed and started, unless its word came first. */
   private async paired(r: PairResult): Promise<PairResult> {
     if (!r.ok || r.restarting) return r;
     await (this.following ?? this.follow());
     return r;
   }
 
-  /** Every pending write taken, then the sync started; once per pairing (`following`). A failure is said, never thrown. */
+  /** Every pending write taken, then the sync started, once per pairing (`following`); a failure said, not thrown. */
   private follow(): Promise<void> {
     const { bridge, session } = this.deps;
     this.following = (async () => {

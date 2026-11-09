@@ -9,8 +9,8 @@ export const DEFAULT_SERVER_URL = 'http://127.0.0.1:7310';
 const count = (n: number, noun: string) => `${n} ${noun}${n > 1 ? 's' : ''}`;
 
 /**
- * D7's offer (task 5): its button — the brief's words, with the counts. The others cancel. What it does while it runs is
- * the main process's to say (ServerInfo.busy: short review after plan 5a, D4).
+ * D7's offer (task 5): its button — the brief's words, with the counts. The others cancel. What it does while it runs
+ * is the main process's to say (ServerInfo.busy: short review after plan 5a, D4).
  */
 export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label: string } {
   switch (o.kind) {
@@ -59,7 +59,10 @@ export function ServerBlock(props: {
     setError(null);
     void job().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(null));
   };
-  /** A pairing's outcome: paired, or a restart under way (the block turns with `info`); or why not. D7's question comes with `info`. */
+  /**
+   * A pairing's outcome: paired, or a restart under way (the block turns with `info`), or why not; D7's offer comes
+   * with `info`.
+   */
   const outcome = (r: PairResult) => {
     if (r.ok) setCode('');
     else if (!r.offer) setError(r.message);
