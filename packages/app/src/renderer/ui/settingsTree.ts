@@ -1,10 +1,7 @@
-import { PARAM_RUBRICS, PARAM_SPECS, type ParamSpec } from '@cirrus/view';
+import { fold, PARAM_RUBRICS, PARAM_SPECS, type ParamSpec } from '@cirrus/view';
 
 /** A rubric of the settings panel, its groups in order, each with its main settings and its advanced ones. */
 export interface RubricView { title: string; groups: { name: string; main: ParamSpec[]; advanced: ParamSpec[] }[] }
-
-/** Lower case, without accents nor extra spaces: what a search compares. */
-const fold = (text: string): string => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
 /**
  * The settings panel's tree (PARAM_RUBRICS): every setting under its rubric and group. A search keeps the settings whose

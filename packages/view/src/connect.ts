@@ -38,7 +38,15 @@ export function otherPlans(s: State, plan: Id, nodes: Id[], connection?: Id): Id
     .map((p) => p.id);
 }
 
-const fold = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+/** The two French ligatures, which NFD keeps whole: « œ » and « æ » are typed « oe » and « ae » on a French keyboard. */
+const LIGATURES = /[œæ]/g;
+
+/**
+ * Text as a search compares it, without case or accents: NFD, the marks dropped, lower case, and « œ », « æ » as their
+ * two letters (plan 6a, D1: « noeud » finds « Nœud »). One for the app: the node suggestions, the settings' search and
+ * the search of Ctrl+K.
+ */
+export const fold = (t: string): string => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(LIGATURES, (l) => (l === 'œ' ? 'oe' : 'ae'));
 
 /**
  * Nodes whose title contains what is typed, without accents or case (the « + » of a connection's pop-up, spec 11.2):

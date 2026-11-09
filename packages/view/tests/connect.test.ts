@@ -1,7 +1,7 @@
 import type { State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { connectTarget, nodeSuggestions, otherPlans } from '../src/connect.ts';
+import { connectTarget, fold, nodeSuggestions, otherPlans } from '../src/connect.ts';
 import { sampleBranch } from '../src/geometry/ribbon.ts';
 import { simpleMarker } from '../src/geometry/simple.ts';
 import { CURVE_AT, CURVE_FLOATS, SIMPLE_INTS } from '../src/instances.ts';
@@ -116,4 +116,11 @@ test('un appui sur une amorce dit son nœud, sa connexion et son titre ; sur un 
   expect(h).toMatchObject({ kind: 'stub', connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: 'Entropie de Shannon' });
   const mdl = these.items[these.byId.get(ids.nodes.mdl)!];
   expect(hits.hit(mdl.x, mdl.y, cam.zoom)).toEqual({ kind: 'item', item: these.byId.get(ids.nodes.mdl), id: ids.nodes.mdl });
+});
+
+test('fold : sans casse ni accents, les ligatures en deux lettres (plan 6a, D1 : « noeud » trouve « Nœud »)', () => {
+  expect(fold('Énoncé de la Complexité')).toBe('enonce de la complexite');
+  expect(fold('Nœud, ŒUVRE et Æther')).toBe('noeud, oeuvre et aether');
+  // A decomposed accent (NFD typed or pasted) folds as a composed one.
+  expect(fold('été')).toBe(fold('été'));
 });
