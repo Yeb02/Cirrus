@@ -7,7 +7,7 @@ export * from './ops.ts';
 // and the accessors of state.ts; writes go through applyOp.
 export { INCLUSION, KNOWLEDGE, NO_RECORD, ROLES, SOURCE, STRUCTURE } from './tables.ts';
 export {
-  applyOp, applyOps, branchNodes, canonical, checkRecord, connectionOfRow, connId, connKind, connRelation, connRow, connRowCount, connTitle, connTrashed, directGroup,
+  applyOp, applyOps, branchNodes, canonical, checkRecord, connectionOfRow, connId, connKind, connRelation, connRow, connRowCount, connTags, connTitle, connTrashed, directGroup,
   emptyState, formerConnRow, formerNodeRow, groupMembers, hasBranch, layoutKey, memberAt, memberCount, memberOf, memberOfAt, memberOfCount, nodeAt, nodeId, nodeRow, OpConflictError, phantomsIn, phantomsOf,
   placedIn, placementKey, placementOf, placementsIn, planId, planRow, preambleText, relationRows, type State,
 } from './state.ts';

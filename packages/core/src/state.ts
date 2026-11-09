@@ -116,6 +116,8 @@ export const connRowCount = (s: State): number => dataOf(s).tables.conns.rows.en
 export const connKind = (s: State, row: number): number => dataOf(s).tables.conns.kind[row];
 export const connTitle = (s: State, row: number): string => dataOf(s).tables.conns.title[row];
 export const connRelation = (s: State, row: number): string => dataOf(s).tables.conns.relation[row];
+/** Its tags, as stored (one shared empty array for the many without): the search reads them without a record (plan 6a, D1). */
+export const connTags = (s: State, row: number): readonly TagValue[] => dataOf(s).tables.conns.tags[row];
 /**
  * The rows of the connections whose relation is not empty, trash included, in row order: the LaTeX registry reads them
  * without visiting every row (half a million in the bench's base) through the accessors.
