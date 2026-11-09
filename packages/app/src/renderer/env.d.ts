@@ -68,6 +68,12 @@ export interface CirrusBridge {
    */
   pickBib(): Promise<BibFile | null>;
   /**
+   * « Choisir un PDF… » (plan 5b, D5): the system's dialog, filtered on PDF; the path chosen, which importFiles then takes
+   * as a dropped file's, or null when none is chosen. In a test's window (CIRRUS_BACKGROUND, captures) the dialog never
+   * opens: CIRRUS_PDF_PICK names the PDF, on a test base only.
+   */
+  pickPdf(): Promise<string | null>;
+  /**
    * Opens a file with the system's application, on a read-only copy; a program or a script is shown in the explorer
    * instead (`shown: 'folder'`). `message`, in French and naming the file, says why it could not be.
    */

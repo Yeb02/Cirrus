@@ -4,6 +4,7 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { bibPickOf, readBib } from '../bib.ts';
 import { importPaths, openFailure, openTargetFetched, storeText, storeTexts } from '../files.ts';
 import { externalUrlAllowed } from '../navigation.ts';
+import { pdfPickOf } from '../pick.ts';
 import type { SyncHost } from '../sync/host.ts';
 
 /** What the files' calls read when the interface makes them: by then, the base is open (index.ts). */
@@ -65,6 +66,27 @@ export function wireFiles(deps: FilesDeps): void {
     const win = BrowserWindow.fromWebContents(e.sender);
     const chosen = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
     return chosen.canceled || chosen.filePaths.length === 0 ? null : readBib(chosen.filePaths[0]);
+  });
+  /**
+   * « Choisir un PDF… » in the import dialog (plan 5b, D5): the system's dialog, filtered on PDF, its path given back —
+   * the interface stores it as a dropped file (importFiles), so the main process reads nothing here. On a test base out
+   * of the user's way, CIRRUS_PDF_PICK names the PDF chosen (the same rule as CIRRUS_BIB_PICK: pdfPickOf), and in a
+   * test's window the dialog never opens (the user, 2026-11-07: nothing in front of the user's work).
+   */
+  const pdfPick = pdfPickOf(process.env, deps.capture);
+  if (process.env.CIRRUS_PDF_PICK && !pdfPick) {
+    console.warn('CIRRUS_PDF_PICK ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
+  }
+  ipcMain.handle('cirrus:pdf:pick', async (e) => {
+    if (pdfPick) return pdfPick;
+    if (deps.background) {
+      console.warn('Sélecteur de fichiers non ouvert dans une fenêtre de test : CIRRUS_PDF_PICK nomme le PDF à choisir.');
+      return null;
+    }
+    const options = { title: 'Choisir un PDF', properties: ['openFile' as const], filters: [{ name: 'PDF', extensions: ['pdf'] }] };
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const chosen = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
+    return chosen.canceled || chosen.filePaths.length === 0 ? null : chosen.filePaths[0];
   });
   // A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
   // instead, never run (plan 4a, D5). With a server paired, a file the store lacks is downloaded first (plan 5a, R14).

@@ -61,6 +61,14 @@ contextBridge.exposeInMainWorld('cirrus', {
     ? ipcRenderer.invoke('cirrus:bib:read', path)
     : Promise.resolve({ refused: `« ${nameOf(path).slice(0, 80)} » n’a pas été déposé : il n’est pas lu.` })),
   pickBib: () => ipcRenderer.invoke('cirrus:bib:pick'),
+  // « Choisir un PDF… » (plan 5b, D5): the path the system's dialog gave (the main process opened it, no script of the
+  // page chose it), which importFiles then takes as it takes a dropped file's; null when none is chosen.
+  pickPdf: async () => {
+    const path: unknown = await ipcRenderer.invoke('cirrus:pdf:pick');
+    if (typeof path !== 'string' || path === '') return null;
+    dropped.add(path);
+    return path;
+  },
   openFile: (ref: unknown) => ipcRenderer.invoke('cirrus:files:open', ref),
   openUrl: (url: string) => ipcRenderer.invoke('cirrus:open-url', url),
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),

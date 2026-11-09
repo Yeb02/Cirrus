@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { basename } from 'node:path';
 import { BIB_MAX_BYTES, bibShort } from '@cirrus/core';
+import { testPickOf } from './pick.ts';
 
 /** A .bib read by the main process (plan 4c, D9, task 6): its name and bytes, or why it is not read, in French. */
 export type BibFile = { name: string; bytes: Uint8Array } | { refused: string };
@@ -47,9 +48,6 @@ export function readBib(path: unknown, maxBytes = BIB_MAX_BYTES): BibFile {
  * CIRRUS_BIB_PICK, the .bib « Importer un fichier .bib… » takes instead of opening the system's dialog: taken only on
  * a test base in a window out of the user's way — with CIRRUS_DATA, and in capture mode or with CIRRUS_BACKGROUND=1
  * (scripts/interface.mjs, the captures), as CIRRUS_PUBLICATIONS_REPLAY (replayDirOf). Never on the user's own base.
+ * The rule is testPickOf's, shared with CIRRUS_PDF_PICK (plan 5b, D5).
  */
-export function bibPickOf(env: Record<string, string | undefined>, capture: boolean): string | null {
-  const path = env.CIRRUS_BIB_PICK;
-  if (!path || !env.CIRRUS_DATA || !(capture || env.CIRRUS_BACKGROUND === '1')) return null;
-  return path;
-}
+export const bibPickOf = (env: Record<string, string | undefined>, capture: boolean): string | null => testPickOf(env, 'CIRRUS_BIB_PICK', capture);
