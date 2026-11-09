@@ -96,8 +96,13 @@ export function useLatexRegistry(state: State | null, rev: number | undefined, p
       const r = LatexRegistry.build(state, texts.byHash, previous ?? undefined);
       built.current = { registry: r, at: performance.now() };
       setRegistry(r);
-      const p = paramsRef.current, origins = synced.take(previous, r, state, texts.byHash).slice(0, p.latexBackgroundMax);
-      if (origins.length > 0) window.cirrus.latexBackground(backgroundRequests(origins, state, r, p.latexSnippetWidthCm));
+      // A failure is said, never thrown: the build's wait still ends (done), and the changes taken are not tried again.
+      try {
+        const p = paramsRef.current, origins = synced.take(previous, r, state, texts.byHash).slice(0, p.latexBackgroundMax);
+        if (origins.length > 0) window.cirrus.latexBackground(backgroundRequests(origins, state, r, p.latexSnippetWidthCm));
+      } catch (e) {
+        console.error('Compilations LaTeX de fond :', e);
+      }
     };
     const wait = built.current.at + params.latexTypingPauseMs - performance.now();
     if (wait <= 0) {

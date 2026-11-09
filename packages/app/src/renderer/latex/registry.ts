@@ -1,4 +1,4 @@
-import { CITE_KEY_TAG, connId, connRelation, connTitle, connTrashed, type FileRef, type Id, LABEL_TAG, type NodeRec, relationRows, type State } from '@cirrus/core';
+import { CITE_KEY_TAG, connId, connRelation, connTitle, connTrashed, type Id, LABEL_TAG, type NodeRec, relationRows, type State, type TagValue } from '@cirrus/core';
 import { fileKind } from '../files/kind.ts';
 import { scanTex, type TexMark, type TexScan } from './scan.ts';
 
@@ -40,18 +40,38 @@ export function shortCitation(n: NodeRec): string {
   return year === '' ? who : `${who}, ${year}`;
 }
 
-/** A source as the registry analysed it; `refs`, `cites`: the labels and keys it cites, each once. */
-interface Source { origin: Origin; text: string; scan: TexScan; refs: string[]; cites: string[] }
+/** A tag's name as a label or a key: its value, trimmed; '' for none. */
+export const tagName = (t: TagValue): string => (t.value === undefined ? '' : String(t.value).trim());
 
-const namesOf = (marks: TexMark[]) => [...new Set(marks.map((m) => m.name))];
-const NO_LABELS: ReadonlySet<string> = new Set();
+/** A source as the registry analysed it. */
+interface Source { origin: Origin; text: string; scan: TexScan }
 
-/** `origin` among the citers of each of `names`. */
-function cite(index: Map<string, Origin[]>, names: string[], origin: Origin): void {
-  for (const name of names) {
-    const list = index.get(name);
-    if (list) list.push(origin);
-    else index.set(name, [origin]);
+/** The sources citing each label (`labels`) and each key (`keys`), plan 5b, D1. */
+interface Citers { labels: Map<string, Origin[]>; keys: Map<string, Origin[]> }
+
+const namesOf = (marks: TexMark[]) => new Set(marks.map((m) => m.name));
+
+/** The source among the citers of each label and key it cites, once each. */
+function cite(c: Citers, src: Source): void {
+  for (const [index, marks] of [[c.labels, src.scan.refs], [c.keys, src.scan.cites]] as const) {
+    for (const name of namesOf(marks)) {
+      const list = index.get(name);
+      if (list) list.push(src.origin);
+      else index.set(name, [src.origin]);
+    }
+  }
+}
+
+/** The source no longer among the citers of what it cites. */
+function uncite(c: Citers, src: Source): void {
+  for (const [index, marks] of [[c.labels, src.scan.refs], [c.keys, src.scan.cites]] as const) {
+    for (const name of namesOf(marks)) {
+      const list = index.get(name);
+      const i = list ? list.indexOf(src.origin) : -1;
+      if (i < 0) continue;
+      list!.splice(i, 1);
+      if (list!.length === 0) index.delete(name);
+    }
   }
 }
 
@@ -70,10 +90,10 @@ const placedOrder = (a: Placed, b: Placed) => compare(a.id, b.id) || a.rank - b.
  * analysis (`previous`): only what changed is read again. What it gives is what it read at its build: the state,
  * changed in place since, is not read again.
  *
- * For what a synchronisation changed (plan 5b, D1), it also keeps the sources citing each label and each key (`citers`,
- * `citersOfKey`), from the names each source cites, kept with its analysis; the labels each node or connection defines;
- * and the files of each node that has a source (its compilations' resources): the sources a change touches are found
- * without going through every source.
+ * For what a synchronisation changed (plan 5b, D1), it gives the sources citing a label or a key (`citers`,
+ * `citersOfKey`) without going through every source: an index made whole the first time it is asked for, then handed
+ * from each registry to the next one built from it, which corrects it for the sources whose analysis changed or that
+ * are gone. A build costs nothing more until a synchronisation asks for it.
  */
 export class LatexRegistry {
   private readonly sources = new Map<string, Source>();
@@ -81,13 +101,8 @@ export class LatexRegistry {
   private readonly keys = new Map<string, Id[]>();
   /** The records of the nodes holding a key, as they were at the build (their short citation). */
   private readonly cited = new Map<Id, NodeRec>();
-  /** The sources citing each label, and each key, in the order of the build. */
-  private readonly citing = new Map<string, Origin[]>();
-  private readonly citingKeys = new Map<string, Origin[]>();
-  /** The labels each node or connection defines, by its identifier (its title's tag, its sources). */
-  private readonly owned = new Map<Id, Set<string>>();
-  /** The files of each node that has a source. */
-  private readonly files = new Map<Id, readonly FileRef[]>();
+  /** The citers' index, once made; handed to the next registry built from this one, which then holds it alone. */
+  private index: Citers | null = null;
   private all: LabelDef[] | null = null;
   private citations: { key: string; node: Id; text: string }[] | null = null;
   private readonly analyse: (text: string) => TexScan;
@@ -99,35 +114,32 @@ export class LatexRegistry {
   /** `analyse`: how a source is read, scanTex (a test counts its calls). */
   static build(s: State, texts: ReadonlyMap<string, string>, previous?: LatexRegistry, analyse: (text: string) => TexScan = scanTex): LatexRegistry {
     const r = new LatexRegistry(analyse), placed = new Map<string, Placed[]>();
+    // The citers' index of `previous`, if made, is corrected for the sources analysed again and those gone (plan 5b, D1).
+    const index = previous?.index ?? null, changed: [Source | undefined, Source][] = [];
+    /** The sources of `previous` found again. */
+    let found = 0;
     const define = (p: Placed) => {
       const list = placed.get(p.def.label);
       if (list) list.push(p);
       else placed.set(p.def.label, [p]);
-      const own = r.owned.get(p.id);
-      if (own) own.add(p.def.label);
-      else r.owned.set(p.id, new Set([p.def.label]));
     };
     const source = (fresh: Origin, text: string, title: string, node: Id | null, id: Id, rank: number) => {
       const slot = slotOf(fresh), old = previous?.sources.get(slot);
       // The same slot is the same origin: its object is kept too.
       const kept = old !== undefined && old.text === text;
-      let src: Source;
-      if (kept) src = old;
-      else {
-        const scan = analyse(text);
-        src = { origin: old?.origin ?? fresh, text, scan, refs: namesOf(scan.refs), cites: namesOf(scan.cites) };
-      }
+      const src: Source = kept ? old : { origin: old?.origin ?? fresh, text, scan: analyse(text) };
+      const size = r.sources.size;
       r.sources.set(slot, src);
+      if (old !== undefined && r.sources.size > size) found++;
+      if (index && !kept) changed.push([old, src]);
       for (const m of src.scan.labels) define({ def: { label: m.name, origin: src.origin, line: m.line, title, node }, id, rank, at: m.from });
-      cite(r.citing, src.refs, src.origin);
-      cite(r.citingKeys, src.cites, src.origin);
     };
     for (const n of s.nodes.values()) {
       if (n.trashedAt !== undefined) continue;
       const title = shown(n.title);
       for (const t of n.tags) {
-        if (t.value === undefined || (t.key !== LABEL_TAG && t.key !== CITE_KEY_TAG)) continue;
-        const name = String(t.value).trim();
+        if (t.key !== LABEL_TAG && t.key !== CITE_KEY_TAG) continue;
+        const name = tagName(t);
         if (name === '') continue;
         if (t.key === LABEL_TAG) define({ def: { label: name, origin: { kind: 'title', node: n.id }, line: 0, title, node: n.id }, id: n.id, rank: 0, at: 0 });
         else {
@@ -137,15 +149,11 @@ export class LatexRegistry {
           r.cited.set(n.id, n);
         }
       }
-      let sourced = n.summary !== '';
-      if (sourced) source({ kind: 'summary', node: n.id }, n.summary, title, n.id, n.id, 1);
+      if (n.summary !== '') source({ kind: 'summary', node: n.id }, n.summary, title, n.id, n.id, 1);
       n.files.forEach((f, k) => {
         const text = fileKind(f.name) === 'tex' ? texts.get(f.hash) : undefined;
-        if (!text) return;
-        source({ kind: 'file', node: n.id, name: f.name }, text, title, n.id, n.id, 2 + k);
-        sourced = true;
+        if (text) source({ kind: 'file', node: n.id, name: f.name }, text, title, n.id, n.id, 2 + k);
       });
-      if (sourced) r.files.set(n.id, n.files);
     }
     for (const row of relationRows(s)) {
       if (connTrashed(s, row)) continue;
@@ -154,6 +162,16 @@ export class LatexRegistry {
     }
     for (const [label, list] of placed) r.defs.set(label, (list.length > 1 ? list.sort(placedOrder) : list).map((p) => p.def));
     for (const nodes of r.keys.values()) nodes.sort(compare);
+    if (index && previous) {
+      for (const [old, src] of changed) {
+        if (old) uncite(index, old);
+        cite(index, src);
+      }
+      // Sources gone: looked for only when some of `previous` were not found again.
+      if (found < previous.sources.size) for (const [slot, old] of previous.sources) if (!r.sources.has(slot)) uncite(index, old);
+      previous.index = null;
+      r.index = index;
+    }
     return r;
   }
 
@@ -196,24 +214,12 @@ export class LatexRegistry {
 
   /** The sources that cite `label`, each once (plan 5b, D1). */
   citers(label: string): Origin[] {
-    return this.citing.get(label) ?? [];
+    return this.citersIndex().labels.get(label) ?? [];
   }
 
   /** The sources that cite the key `key`, each once (plan 5b, D1). */
   citersOfKey(key: string): Origin[] {
-    return this.citingKeys.get(key) ?? [];
-  }
-
-  /** The labels the node or connection `id` defines: its title's tag, its summary or relation, its .tex. */
-  labelsOf(id: Id): ReadonlySet<string> {
-    return this.owned.get(id) ?? NO_LABELS;
-  }
-
-  /** The keys the node `id` holds. */
-  keysOf(id: Id): string[] {
-    const n = this.cited.get(id);
-    if (!n) return [];
-    return n.tags.flatMap((t) => (t.key === CITE_KEY_TAG && t.value !== undefined && String(t.value).trim() !== '' ? [String(t.value).trim()] : []));
+    return this.citersIndex().keys.get(key) ?? [];
   }
 
   /** The short citation of the node `id`, if it holds a key: as it was at the build. */
@@ -222,8 +228,13 @@ export class LatexRegistry {
     return n && shortCitation(n);
   }
 
-  /** The files of the node `id` when it has a source, which compiles with them; undefined otherwise. */
-  filesOf(id: Id): readonly FileRef[] | undefined {
-    return this.files.get(id);
+  /** The citers' index: made whole from every source if this registry holds none (the first asked, or handed on). */
+  private citersIndex(): Citers {
+    if (!this.index) {
+      const c: Citers = { labels: new Map(), keys: new Map() };
+      for (const src of this.sources.values()) cite(c, src);
+      this.index = c;
+    }
+    return this.index;
   }
 }

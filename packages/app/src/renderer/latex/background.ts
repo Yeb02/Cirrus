@@ -4,7 +4,7 @@ import {
 } from '@cirrus/core';
 import { fileKind } from '../files/kind.ts';
 import { isSynced } from '../session.ts';
-import { AUTHOR_TAG, DATE_TAG, type LatexRegistry, type Origin, slotOf } from './registry.ts';
+import { AUTHOR_TAG, DATE_TAG, type LatexRegistry, type Origin, slotOf, tagName } from './registry.ts';
 import { buildRequest } from './request.ts';
 import { knownLabels } from './scheduler.ts';
 
@@ -13,8 +13,12 @@ import { knownLabels } from './scheduler.ts';
 // finds the sources whose compile request changed (backgroundOrigins) and sends their requests to the main process,
 // which compiles them when the user's compilations leave it room: a view opened later finds its PDF in the cache.
 
-/** What a synchronisation changed that a compilation reads: nodes, connections, the preamble. */
-export interface SyncChange { nodes: Set<Id>; connections: Set<Id>; preamble: boolean }
+/**
+ * What a synchronisation changed that a compilation reads: the nodes, each with its record before the change (null: it
+ * did not exist), whose files and tags tell what it defined and held; the connections, whose relation is one source,
+ * read as it was in the registry before; whether the preamble changed.
+ */
+export interface SyncChange { nodes: Map<Id, NodeRec | null>; connections: Set<Id>; preamble: boolean }
 
 /** The tags a compilation reads: a title's label, a citation key, and what a key's short citation shows. */
 const READ_TAGS: ReadonlySet<string> = new Set([LABEL_TAG, CITE_KEY_TAG, AUTHOR_TAG, DATE_TAG]);
@@ -23,6 +27,8 @@ const sameList = <T>(a: readonly T[], b: readonly T[], same: (x: T, y: T) => boo
 const sameFile = (a: FileRef, b: FileRef) => a.name === b.name && a.hash === b.hash;
 const readTags = (n: NodeRec) => n.tags.filter((t) => READ_TAGS.has(t.key));
 const trashed = (r: { trashedAt?: number }) => r.trashedAt !== undefined;
+/** A record the registry read: there, and outside the trash. */
+const live = <T extends { trashedAt?: number }>(r: T | null | undefined): r is T => r !== null && r !== undefined && !trashed(r);
 
 /** Whether two versions of a node compile the same: its summary, files, title, trash, and the tags a compilation reads. */
 function sameNode(a: NodeRec | null, b: NodeRec | null): boolean {
@@ -63,8 +69,8 @@ export function changedBySync(a: Action): SyncChange {
       else preamble = [op.before, op.after];
     }
   }
-  const out: SyncChange = { nodes: new Set(), connections: new Set(), preamble: preamble !== null && preambleOf(preamble[0]) !== preambleOf(preamble[1]) };
-  for (const [id, [before, after]] of nodes) if (!sameNode(before, after)) out.nodes.add(id);
+  const out: SyncChange = { nodes: new Map(), connections: new Set(), preamble: preamble !== null && preambleOf(preamble[0]) !== preambleOf(preamble[1]) };
+  for (const [id, [before, after]] of nodes) if (!sameNode(before, after)) out.nodes.set(id, before);
   for (const [id, [before, after]] of connections) if (!sameConnection(before, after)) out.connections.add(id);
   return out;
 }
@@ -81,6 +87,28 @@ function citation(r: LatexRegistry, key: string): string {
   return nodes.length === 0 ? '' : `${nodes.join(' ')}\n${r.citationOf(nodes[0])}`;
 }
 
+/** The names of the node's tags `key` (a title's label, a citation key), as the registry reads them. */
+function tagNames(n: NodeRec, key: string, out: Set<string>): void {
+  for (const t of n.tags) {
+    if (t.key !== key) continue;
+    const name = tagName(t);
+    if (name !== '') out.add(name);
+  }
+}
+
+/** The labels the source `o` defined when `r` was built: its analysis there. */
+function labelsIn(r: LatexRegistry, o: Origin, out: Set<string>): void {
+  const text = r.textOf(o);
+  if (text !== undefined) for (const m of r.scanOf(o, text).labels) out.add(m.name);
+}
+
+/** The labels the node `n` defines in `r`: its title's tag, its summary, its .tex. */
+function nodeLabels(r: LatexRegistry, n: NodeRec, out: Set<string>): void {
+  tagNames(n, LABEL_TAG, out);
+  labelsIn(r, { kind: 'summary', node: n.id }, out);
+  for (const f of n.files) if (fileKind(f.name) === 'tex') labelsIn(r, { kind: 'file', node: n.id, name: f.name }, out);
+}
+
 /**
  * The sources whose compile request a synchronisation changed (D1): `previous`, the registry built before it; `next`,
  * the one built after, from the state `s` and the texts `texts` of its .tex. Each once, the summaries and relations
@@ -88,7 +116,8 @@ function citation(r: LatexRegistry, key: string): string {
  * - a changed node's summary and .tex, and a changed connection's relation, when their text or the node's files (their
  *   resources) changed: a title alone leaves its own sources as they were;
  * - the sources citing a label whose definitions changed (a title, a source, the trash), or a key whose holders or first
- *   short citation changed, found by the registry's citers, never by going through every source;
+ *   short citation changed. The labels and keys come from the records before and after the change, and the analyses
+ *   the two registries made of their sources; their citers, from `next`'s index: never by going through every source;
  * - every source when the preamble changed, but a standalone .tex, compiled without it.
  * A summary or a relation of blanks is left out: its view does not compile it.
  */
@@ -101,10 +130,18 @@ export function backgroundOrigins(change: SyncChange, previous: LatexRegistry, n
     else if (text.trim() !== '') snippets.set(slotOf(o), o);
   };
   if (change.preamble) for (const o of next.origins()) if (o.kind !== 'file' || !next.scanOf(o, next.textOf(o)!).standalone) add(o);
-  for (const id of change.nodes) {
+  // The labels and keys the changed nodes and connections defined or held, before or after.
+  const labels = new Set<string>(), keys = new Set<string>();
+  for (const [id, before] of change.nodes) {
+    if (live(before)) {
+      nodeLabels(previous, before, labels);
+      tagNames(before, CITE_KEY_TAG, keys);
+    }
     const n = s.nodes.get(id);
-    if (!n || trashed(n)) continue;
-    const before = previous.filesOf(id), files = before === undefined || !sameList(before, n.files, sameFile);
+    if (!live(n)) continue;
+    nodeLabels(next, n, labels);
+    tagNames(n, CITE_KEY_TAG, keys);
+    const files = !live(before) || !sameList(before.files, n.files, sameFile);
     const summary: Origin = { kind: 'summary', node: id };
     if (files || previous.textOf(summary) !== n.summary) add(summary);
     for (const f of n.files) {
@@ -115,15 +152,9 @@ export function backgroundOrigins(change: SyncChange, previous: LatexRegistry, n
   }
   for (const id of change.connections) {
     const relation: Origin = { kind: 'relation', connection: id };
+    labelsIn(previous, relation, labels);
+    labelsIn(next, relation, labels);
     if (previous.textOf(relation) !== next.textOf(relation)) add(relation);
-  }
-  // The labels and keys the changed nodes and connections defined or held, before or after.
-  const labels = new Set<string>(), keys = new Set<string>();
-  for (const id of [...change.nodes, ...change.connections]) {
-    for (const r of [previous, next]) {
-      for (const label of r.labelsOf(id)) labels.add(label);
-      for (const key of r.keysOf(id)) keys.add(key);
-    }
   }
   for (const label of labels) if (!sameDefinitions(previous.definitions(label), next.definitions(label))) for (const o of next.citers(label)) add(o);
   for (const key of keys) if (citation(previous, key) !== citation(next, key)) for (const o of next.citersOfKey(key)) add(o);
@@ -132,9 +163,9 @@ export function backgroundOrigins(change: SyncChange, previous: LatexRegistry, n
 
 /** Whether the .tex of the changed nodes are read: the registry built with `texts` knows their labels and citations. */
 function texRead(change: SyncChange, s: State, texts: ReadonlyMap<string, string>): boolean {
-  for (const id of change.nodes) {
+  for (const id of change.nodes.keys()) {
     const n = s.nodes.get(id);
-    if (n && !trashed(n) && n.files.some((f) => fileKind(f.name) === 'tex' && !texts.has(f.hash))) return false;
+    if (live(n) && n.files.some((f) => fileKind(f.name) === 'tex' && !texts.has(f.hash))) return false;
   }
   return true;
 }
@@ -163,7 +194,8 @@ export class SyncedChanges {
       this.change = c;
       return;
     }
-    for (const id of c.nodes) this.change.nodes.add(id);
+    // Each subject keeps its record before the first change noted.
+    for (const [id, before] of c.nodes) if (!this.change.nodes.has(id)) this.change.nodes.set(id, before);
     for (const id of c.connections) this.change.connections.add(id);
     this.change.preamble ||= c.preamble;
   }
@@ -171,18 +203,18 @@ export class SyncedChanges {
   /**
    * At a build of the registry, `previous` the one before and `next` the new one: the sources to compile in the
    * background. None until the .tex of the changed nodes are read (`texts`): the changes are kept, compared still with
-   * the registry built before the first of them. Without a registry before it (the start), none.
+   * the registry built before the first of them. Without a registry before it (the start), none. Taken, the changes
+   * are forgotten, even if the computation fails: it is never tried again at each build.
    */
   take(previous: LatexRegistry | null, next: LatexRegistry, s: State, texts: ReadonlyMap<string, string>): Origin[] {
-    if (!this.change) return [];
+    const change = this.change;
+    if (!change) return [];
     this.before ??= previous;
-    if (this.before === null || texRead(this.change, s, texts)) {
-      const origins = this.before === null ? [] : backgroundOrigins(this.change, this.before, next, s, texts);
-      this.change = null;
-      this.before = null;
-      return origins;
-    }
-    return [];
+    const before = this.before;
+    if (before !== null && !texRead(change, s, texts)) return [];
+    this.change = null;
+    this.before = null;
+    return before === null ? [] : backgroundOrigins(change, before, next, s, texts);
   }
 }
 

@@ -1,23 +1,23 @@
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, applyOps, CITE_KEY_TAG, type CompileAnswer, type CompileRequest, DEFAULT_PREAMBLE, editConnection, editNode, type FileRef, LABEL_TAG,
+  type Action, applyOps, CITE_KEY_TAG, type CompileAnswer, type CompileRequest, DEFAULT_PREAMBLE, deleteEverywhere, editConnection, editNode, type FileRef, LABEL_TAG,
   setPreamble, type State, type TagValue, uuidv7,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { PdfCache } from '../src/main/latex/cache.ts';
 import { LatexService } from '../src/main/latex/compiler.ts';
 import { findBinaries, type TexBinaries } from '../src/main/latex/tinytex.ts';
-import { backgroundOrigins, changedBySync, SyncedChanges } from '../src/renderer/latex/background.ts';
+import { backgroundOrigins, changedBySync, type SyncChange, SyncedChanges } from '../src/renderer/latex/background.ts';
 import { LatexRegistry, type Origin, slotOf } from '../src/renderer/latex/registry.ts';
 import { EditSession } from '../src/renderer/session.ts';
-import { texTexts, until } from './support/latex.ts';
+import { sleep, texTexts, until } from './support/latex.ts';
 
 // Plan 5b, D1: what a synchronisation changed is compiled in the background. The interface's side (what changed, the
 // sources it touches), then the main process's queue.
@@ -67,7 +67,9 @@ const run = (s: State, a: Action): Action => {
 const joined = (...actions: Action[]): Action => ({ id: uuidv7(), label: 'Synchronisation', ops: actions.flatMap((a) => a.ops) });
 const slots = (origins: Origin[]) => origins.map(slotOf);
 const summaries = (...nodes: string[]) => nodes.map((n) => `summary:${n}`).sort();
-const NONE = { nodes: new Set(), connections: new Set(), preamble: false };
+const NONE = { nodes: [], connections: [], preamble: false };
+/** A change as its subjects' identifiers. */
+const shape = (c: SyncChange) => ({ nodes: [...c.nodes.keys()], connections: [...c.connections], preamble: c.preamble });
 
 /** Occam's title defines the label occam:rasoir, and it has a summary; three summaries cite it. */
 function citedByThree(s: State) {
@@ -94,22 +96,26 @@ function synced(s: State) {
 
 test('changedBySync : un résumé changé', () => {
   const s = store.loadState();
-  expect(changedBySync(editNode(s, ids.nodes.entropie, { summary: 'Autre.' }))).toEqual({ ...NONE, nodes: new Set([ids.nodes.entropie]) });
+  const { entropie } = ids.nodes;
+  const c = changedBySync(editNode(s, entropie, { summary: 'Autre.' }));
+  expect(shape(c)).toEqual({ ...NONE, nodes: [entropie] });
+  // With its record before the change: what it defined and held there.
+  expect(c.nodes.get(entropie)).toEqual(s.nodes.get(entropie));
   // A tag that LaTeX does not read changes nothing for it.
-  expect(changedBySync(editNode(s, ids.nodes.entropie, { tags: [kv('statut_epistémique', 'plausible')] }))).toEqual(NONE);
+  expect(shape(changedBySync(editNode(s, entropie, { tags: [kv('statut_epistémique', 'plausible')] })))).toEqual(NONE);
 });
 
 test('changedBySync : une relation changée', () => {
   const s = store.loadState();
   const c = ids.connections.mdlSolomonoff;
-  expect(changedBySync(editConnection(s, c, { relation: 'Un analogue.' }))).toEqual({ ...NONE, connections: new Set([c]) });
+  expect(shape(changedBySync(editConnection(s, c, { relation: 'Un analogue.' })))).toEqual({ ...NONE, connections: [c] });
 });
 
 test('changedBySync : un fichier ajouté à un nœud', () => {
   const s = store.loadState();
   const { occam, mdl } = ids.nodes;
   const png = s.nodes.get(mdl)!.files[0];
-  expect(changedBySync(editNode(s, occam, { files: [...s.nodes.get(occam)!.files, png] }))).toEqual({ ...NONE, nodes: new Set([occam]) });
+  expect(shape(changedBySync(editNode(s, occam, { files: [...s.nodes.get(occam)!.files, png] })))).toEqual({ ...NONE, nodes: [occam] });
 });
 
 test('changedBySync : un résumé changé puis rendu à son texte dans la même réconciliation ne change rien', () => {
@@ -119,13 +125,13 @@ test('changedBySync : un résumé changé puis rendu à son texte dans la même 
   const text = s.nodes.get(entropie)!.summary;
   const there = run(s, editNode(s, entropie, { summary: 'Brouillon.' }));
   const back = run(s, editNode(s, entropie, { summary: text }));
-  expect(changedBySync(joined(there, back))).toEqual(NONE);
+  expect(shape(changedBySync(joined(there, back)))).toEqual(NONE);
 });
 
 test('changedBySync : le préambule', () => {
   const s = store.loadState();
   const there = run(s, setPreamble(s, `${DEFAULT_PREAMBLE}\\usepackage{xcolor}\n`));
-  expect(changedBySync(there)).toEqual({ ...NONE, preamble: true });
+  expect(shape(changedBySync(there))).toEqual({ ...NONE, preamble: true });
   // Changed, then written back as the default one, which a base without any has: nothing.
   const back = run(s, setPreamble(s, DEFAULT_PREAMBLE));
   expect(changedBySync(joined(there, back)).preamble).toBe(false);
@@ -198,6 +204,32 @@ test('backgroundOrigins : une action de ce PC ne compile rien en fond ; la même
   expect(rebuild()).toEqual([]);
 });
 
+test('registre : l’index des citeurs, passé d’un registre au suivant et corrigé, est celui d’un registre neuf', () => {
+  const s = store.loadState();
+  const { occam, monde, biais, kolmogorov } = ids.nodes;
+  for (const n of [occam, monde]) run(s, editNode(s, n, { summary: 'Voir \\ref{solomonoff} et \\cite{li2008}.' }));
+  const texts = texTexts(s, dir);
+  /** The sources citing what the base cites, by slot. */
+  const citedBy = (r: LatexRegistry) => ({
+    labels: ['solomonoff', 'mdl:enonce', 'ent:def', 'kc:def', 'absent:label'].map((l) => slots(r.citers(l)).sort()),
+    keys: slots(r.citersOfKey('li2008')).sort(),
+  });
+  let r = LatexRegistry.build(s, texts);
+  expect(citedBy(r).keys).toEqual([...summaries(occam, monde), `file:${kolmogorov}:complexité.tex`].sort());
+  // A summary cites something else, another is emptied, a node and its .tex go to the trash, a summary and a relation
+  // start citing.
+  run(s, editNode(s, occam, { summary: 'Voir \\ref{kc:def}.' }));
+  run(s, editNode(s, monde, { summary: '' }));
+  run(s, deleteEverywhere(s, kolmogorov));
+  run(s, editNode(s, biais, { summary: '\\cite{li2008}' }));
+  run(s, editConnection(s, ids.connections.mdlSolomonoff, { relation: 'Voir \\ref{solomonoff}.' }));
+  r = LatexRegistry.build(s, texts, r);
+  expect(citedBy(r)).toEqual(citedBy(LatexRegistry.build(s, texts)));
+  expect(citedBy(r).keys).toEqual(summaries(biais));
+  // Nothing changed: the same again.
+  expect(citedBy(LatexRegistry.build(s, texts, r))).toEqual(citedBy(LatexRegistry.build(s, texts)));
+});
+
 test('SyncedChanges : un .tex reçu attend que son texte soit lu, comparé au registre d’avant la synchronisation', async () => {
   const s = store.loadState();
   const { monde } = ids.nodes;
@@ -219,126 +251,171 @@ test('SyncedChanges : un .tex reçu attend que son texte soit lu, comparé au re
 
 // --- the main process's queue (LatexService.background) ---
 
-let base: string;
-let svc: LatexService | null = null;
-let cache: PdfCache;
-/** The settings of the service started last: a test may change them while it runs. */
-let params: RenderParams = DEFAULT_PARAMS;
-beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), 'cirrus-é-fond-'));
-  spawned.length = 0;
-  cwdOf.clear();
-});
-afterEach(async () => {
-  await svc?.dispose();
-  svc = null;
-  rmSync(base, { recursive: true, force: true, maxRetries: 10 });
-  vi.restoreAllMocks();
-});
+describe('le principal : la file de fond (LatexService.background)', () => {
+  let base: string;
+  let svc: LatexService | null = null;
+  let cache: PdfCache;
+  /** The settings of the service started last: a test may change them while it runs. */
+  let params: RenderParams = DEFAULT_PARAMS;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'cirrus-é-fond-'));
+    spawned.length = 0;
+    cwdOf.clear();
+  });
+  afterEach(async () => {
+    await svc?.dispose();
+    svc = null;
+    rmSync(base, { recursive: true, force: true, maxRetries: 10 });
+    vi.restoreAllMocks();
+  });
 
-function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBinaries | null> = async () => bins): LatexService {
-  params = { ...DEFAULT_PARAMS, ...over };
-  cache = new PdfCache(join(base, 'latex', 'cache'), () => params.latexCacheMb * 2 ** 20);
-  svc = new LatexService({ binaries, root: join(base, 'latex'), store: base, params: () => params, cache });
-  return svc;
-}
+  function start(over: Partial<RenderParams> = {}, binaries: () => Promise<TexBinaries | null> = async () => bins): LatexService {
+    params = { ...DEFAULT_PARAMS, ...over };
+    cache = new PdfCache(join(base, 'latex', 'cache'), () => params.latexCacheMb * 2 ** 20);
+    svc = new LatexService({ binaries, root: join(base, 'latex'), store: base, params: () => params, cache });
+    return svc;
+  }
 
-const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
-  slot: 'summary:n1', mode: 'snippet', source: 'Fond.', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [],
-  doubledCites: [], unknownCites: [], known: [], resources: [], widthCm: DEFAULT_PARAMS.latexSnippetWidthCm, ...over,
-});
-/** Whether the request's PDF is in the cache's folder. */
-const inCache = (r: CompileRequest) => existsSync(join(base, 'latex', 'cache', `${cache.key(r, bins!.version)}.pdf`));
-const alive = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
-function ok(a: CompileAnswer): Extract<CompileAnswer, { status: 'ok' }> {
-  if (a.status !== 'ok') throw new Error(`compilation : ${JSON.stringify(a).slice(0, 3000)}`);
-  return a;
-}
-/** TeX waiting, in a loop, until `file`.tex is in its folder. */
-const waitFor = (name: string, file: string) =>
-  `\\newread\\${name}\\def\\${name}w{\\openin\\${name}=${file} \\ifeof\\${name}\\expandafter\\${name}w\\fi}\\${name}w\\closein\\${name} `;
-/** Writes `file` into the folder of every pdfLaTeX alive. */
-const touch = (file: string) => { for (const p of spawned.filter(alive)) writeFileSync(join(cwdOf.get(p)!, file), ''); };
-/** A request of the user waiting for pdfLaTeX, its search held until `open()`: the background waits behind it. */
-function held() {
-  let open!: () => void;
-  const gate = new Promise<void>((resolve) => { open = resolve; });
-  return { open, binaries: async () => { await gate; return bins; } };
-}
-
-test('une demande de fond déjà en cache ne lance aucun pdfLaTeX', async () => {
-  const fake: TexBinaries = { root: base, pdflatex: join(base, 'absent', 'pdflatex.exe'), tlmgr: join(base, 'absent', 'tlmgr.bat'), version: 'pdfTeX factice' };
-  const s = start({}, async () => fake);
-  const r = req();
-  writeFileSync(join(base, 'job.pdf'), 'pdf');
-  cache.put(cache.key(r, fake.version), join(base, 'job.pdf'), { pages: 1, labels: [], log: '', passes: 1 });
-  s.background([r]);
-  await s.backgroundIdle();
-  expect(spawned).toEqual([]);
-  // One that is not starts one (which fails here: this pdfLaTeX does not exist).
-  vi.spyOn(console, 'error').mockImplementation(() => {});
-  s.background([req({ slot: 'summary:n2', source: 'Autre.' })]);
-  await s.backgroundIdle();
-  expect(spawned.length).toBeGreaterThan(0);
-});
-
-texTest('une demande de l’utilisateur arrivée pendant une compilation de fond passe d’abord ; la demande de fond reprend après', async () => {
-  // One prepared pdfLaTeX, which loads its preamble only once gate.tex is in its folder: the test decides when one is
-  // free. The background's source runs until go.tex is in its folder.
-  const preamble = `${DEFAULT_PREAMBLE}${waitFor('cirrusgate', 'gate')}\n`;
-  const s = start({ latexWarmProcesses: 1, latexTimeoutMs: 60_000 });
-  s.warm(preamble);
-  await until(() => spawned.length === 1);
-  touch('gate.tex');
-  const bg = req({ slot: 'summary:fond', preamble, source: `${waitFor('cirrusgo', 'go')}Fond.` });
-  s.background([bg]);
+  const req = (over: Partial<CompileRequest> = {}): CompileRequest => ({
+    slot: 'summary:n1', mode: 'snippet', source: 'Fond.', preamble: DEFAULT_PREAMBLE, refs: [], broken: [], doubled: [], cites: [],
+    doubledCites: [], unknownCites: [], known: [], resources: [], widthCm: DEFAULT_PARAMS.latexSnippetWidthCm, ...over,
+  });
+  /** Whether the request's PDF is in the cache's folder. */
+  const inCache = (r: CompileRequest) => existsSync(join(base, 'latex', 'cache', `${cache.key(r, bins!.version)}.pdf`));
+  const alive = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
+  /** Whether the pdfLaTeX `p` was given a job: its source is written in its folder. */
   const running = (p: ChildProcess) => existsSync(join(cwdOf.get(p)!, `job-${basename(cwdOf.get(p)!).slice(1)}-src.tex`));
-  await until(() => spawned.some(running));
-  const first = spawned.find(running)!;
-  // The user's request finds no free pdfLaTeX (the next one waits for its gate): the background's compilation stops.
-  const user = s.compile(req({ slot: 'summary:utilisateur', preamble, source: 'Utilisateur.' }));
-  await until(() => !alive(first));
-  touch('gate.tex');
-  ok(await user);
-  expect(inCache(bg)).toBe(false);
-  // Then the background's request starts again, and lands in the cache.
-  let idle = false;
-  void s.backgroundIdle().then(() => { idle = true; });
-  await until(() => {
+  function ok(a: CompileAnswer): Extract<CompileAnswer, { status: 'ok' }> {
+    if (a.status !== 'ok') throw new Error(`compilation : ${JSON.stringify(a).slice(0, 3000)}`);
+    return a;
+  }
+  /** TeX waiting, in a loop, until `file`.tex is in its folder. */
+  const waitFor = (name: string, file: string) =>
+    `\\newread\\${name}\\def\\${name}w{\\openin\\${name}=${file} \\ifeof\\${name}\\expandafter\\${name}w\\fi}\\${name}w\\closein\\${name} `;
+  /** A preamble loaded only once gate.tex is in the process's folder: the test decides when a pdfLaTeX is ready. */
+  const GATED = `${DEFAULT_PREAMBLE}${waitFor('cirrusgate', 'gate')}\n`;
+  /** Writes `file` into the folder of every pdfLaTeX alive. */
+  const touch = (file: string) => { for (const p of spawned.filter(alive)) writeFileSync(join(cwdOf.get(p)!, file), ''); };
+  /** Resolves once the background is idle, opening meanwhile every gate and letting every source go on. */
+  async function drain(s: LatexService): Promise<void> {
+    let idle = false;
+    void s.backgroundIdle().then(() => { idle = true; });
+    await until(() => {
+      touch('gate.tex');
+      touch('go.tex');
+      return idle;
+    }, 30_000);
+  }
+  /** A request of the user waiting for pdfLaTeX, its search held until `open()`: the background waits behind it. */
+  function held() {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    return { open, binaries: async () => { await gate; return bins; } };
+  }
+
+  test('une demande de fond déjà en cache ne lance aucun pdfLaTeX, et laisse son entrée telle quelle (PdfCache.has, pas get)', async () => {
+    const fake: TexBinaries = { root: base, pdflatex: join(base, 'absent', 'pdflatex.exe'), tlmgr: join(base, 'absent', 'tlmgr.bat'), version: 'pdfTeX factice' };
+    const s = start({}, async () => fake);
+    const r = req(), key = cache.key(r, fake.version), pdf = join(base, 'latex', 'cache', `${key}.pdf`);
+    writeFileSync(join(base, 'job.pdf'), 'pdf');
+    cache.put(key, join(base, 'job.pdf'), { pages: 1, labels: [], log: '', passes: 1 });
+    const old = new Date(2020, 0, 1);
+    utimesSync(pdf, old, old);
+    s.background([r]);
+    await s.backgroundIdle();
+    expect(spawned).toEqual([]);
+    // Neither read nor made the one used last: a get would have dated its PDF now.
+    expect(statSync(pdf).mtimeMs).toBe(old.getTime());
+    // One that is not in the cache starts one (which fails here: this pdfLaTeX does not exist).
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    s.background([req({ slot: 'summary:n2', source: 'Autre.' })]);
+    await s.backgroundIdle();
+    expect(spawned.length).toBeGreaterThan(0);
+  });
+
+  texTest('une demande de l’utilisateur arrivée pendant une compilation de fond passe d’abord ; la demande de fond reprend après', async () => {
+    // One prepared pdfLaTeX, which loads only once its gate is open. The background's source runs until go.tex is there.
+    const s = start({ latexWarmProcesses: 1, latexTimeoutMs: 60_000 });
+    s.warm(GATED);
+    await until(() => spawned.length === 1);
     touch('gate.tex');
-    touch('go.tex');
-    return idle;
-  }, 30_000);
-  expect(inCache(bg)).toBe(true);
-});
+    const bg = req({ slot: 'summary:fond', preamble: GATED, source: `${waitFor('cirrusgo', 'go')}Fond.` });
+    s.background([bg]);
+    await until(() => spawned.some(running));
+    const first = spawned.find(running)!;
+    // The user's request finds no free pdfLaTeX (the next one waits for its gate): the background's compilation stops.
+    const user = s.compile(req({ slot: 'summary:utilisateur', preamble: GATED, source: 'Utilisateur.' }));
+    await until(() => !alive(first));
+    touch('gate.tex');
+    ok(await user);
+    expect(inCache(bg)).toBe(false);
+    // Then the background's request starts again, and lands in the cache.
+    await drain(s);
+    expect(inCache(bg)).toBe(true);
+  });
 
-texTest('la file de fond ne garde jamais plus de latexBackgroundMax demandes en attente, et 0 n’en garde aucune', async () => {
-  const h = held();
-  const s = start({ latexBackgroundMax: 2 }, h.binaries);
-  const user = s.compile(req({ slot: 'summary:utilisateur', source: 'Utilisateur.' }));
-  const [a, b, c] = ['A', 'B', 'C'].map((x) => req({ slot: `summary:${x}`, source: `${x}.` }));
-  s.background([a, b]);
-  s.background([c]);
-  h.open();
-  ok(await user);
-  await s.backgroundIdle();
-  expect([a, b, c].map(inCache)).toEqual([true, true, false]);
-  params.latexBackgroundMax = 0;
-  const d = req({ slot: 'summary:D', source: 'D.' });
-  s.background([d]);
-  await s.backgroundIdle();
-  expect(inCache(d)).toBe(false);
-});
+  texTest('une demande de fond qui attend un pdfLaTeX préparé cède sa place à une demande de l’utilisateur arrivée après elle', async () => {
+    const s = start({ latexWarmProcesses: 1, latexTimeoutMs: 60_000 });
+    s.warm(GATED);
+    await until(() => spawned.length === 1);
+    // No pdfLaTeX ready (its gate is closed): the background's request waits for one.
+    const bg = req({ slot: 'summary:fond', preamble: GATED });
+    s.background([bg]);
+    await sleep(300);
+    const user = s.compile(req({ slot: 'summary:utilisateur', preamble: GATED, source: 'Utilisateur.' }));
+    await sleep(300);
+    // One opens: whichever waits first takes it, the other waits for the next, whose gate stays closed.
+    const background = until(() => inCache(bg), 15_000).then(() => 'fond', () => 'jamais');
+    touch('gate.tex');
+    expect(await Promise.race([user.then(ok).then(() => 'utilisateur'), background])).toBe('utilisateur');
+    await drain(s);
+    expect(await background).toBe('fond');
+  });
 
-texTest('une demande de fond nouvelle pour un même créneau remplace celle qui attend, même la file pleine', async () => {
-  const h = held();
-  const s = start({ latexBackgroundMax: 1 }, h.binaries);
-  const user = s.compile(req({ slot: 'summary:utilisateur', source: 'Utilisateur.' }));
-  const old = req({ slot: 'summary:n', source: 'Avant.' }), fresh = req({ slot: 'summary:n', source: 'Après.' });
-  s.background([old]);
-  s.background([fresh]);
-  h.open();
-  ok(await user);
-  await s.backgroundIdle();
-  expect([inCache(old), inCache(fresh)]).toEqual([false, true]);
+  texTest('une demande de l’utilisateur pour la source que le fond compile l’arrête, même un pdfLaTeX préparé libre', async () => {
+    const s = start({ latexTimeoutMs: 60_000 });
+    ok(await s.compile(req({ slot: 'chauffe' })));
+    await sleep(1500); // the pool prepared again: two pdfLaTeX free
+    const bg = req({ slot: 'summary:x', source: `${waitFor('cirrusgo', 'go')}Même source.` });
+    s.background([bg]);
+    await until(() => spawned.some((p) => alive(p) && running(p)));
+    const first = spawned.find((p) => alive(p) && running(p))!;
+    // The same source, under its view's slot: the background's copy of it stops, and is not taken up again.
+    const user = s.compile(bg);
+    await until(() => !alive(first));
+    await drain(s);
+    ok(await user);
+    expect(inCache(bg)).toBe(true);
+  });
+
+  texTest('la file de fond ne garde jamais plus de latexBackgroundMax demandes en attente, et 0 n’en garde aucune', async () => {
+    const h = held();
+    const s = start({ latexBackgroundMax: 2 }, h.binaries);
+    const user = s.compile(req({ slot: 'summary:utilisateur', source: 'Utilisateur.' }));
+    const [a, b, c] = ['A', 'B', 'C'].map((x) => req({ slot: `summary:${x}`, source: `${x}.` }));
+    s.background([a, b]);
+    s.background([c]);
+    h.open();
+    ok(await user);
+    await s.backgroundIdle();
+    expect([a, b, c].map(inCache)).toEqual([true, true, false]);
+    params.latexBackgroundMax = 0;
+    const d = req({ slot: 'summary:D', source: 'D.' });
+    s.background([d]);
+    await s.backgroundIdle();
+    expect(inCache(d)).toBe(false);
+  });
+
+  texTest('une demande de fond nouvelle pour un même créneau remplace celle qui attend, même la file pleine', async () => {
+    const h = held();
+    const s = start({ latexBackgroundMax: 1 }, h.binaries);
+    const user = s.compile(req({ slot: 'summary:utilisateur', source: 'Utilisateur.' }));
+    const old = req({ slot: 'summary:n', source: 'Avant.' }), fresh = req({ slot: 'summary:n', source: 'Après.' });
+    s.background([old]);
+    s.background([fresh]);
+    h.open();
+    ok(await user);
+    await s.backgroundIdle();
+    expect([inCache(old), inCache(fresh)]).toEqual([false, true]);
+  });
 });
