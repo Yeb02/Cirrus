@@ -60,12 +60,12 @@ export interface ConnectionLayout {
  * node: the far node of a split arm, drawn near the bundle; center: the connection's centre, drawn near that far
  * node (node = the far node whose arm was split); absent: a member not in the plan.
  */
-export type PhantomOf = { kind: 'node'; node: Id } | { kind: 'center'; node: Id } | { kind: 'absent'; node: Id };
+type PhantomOf = { kind: 'node'; node: Id } | { kind: 'center'; node: Id } | { kind: 'absent'; node: Id };
 
 /** Fixed in its plan, placed by the user, may sit in a group like a node (spec 8.5). */
 export interface PhantomRec { id: Id; plan: Id; connection: Id; of: PhantomOf; x: number; y: number; k: number; group?: Id }
 
-export type TagType = 'word' | 'number' | 'enum' | 'date' | 'text';
+type TagType = 'word' | 'number' | 'enum' | 'date' | 'text';
 
 export interface TagKeyDef {
   key: string;

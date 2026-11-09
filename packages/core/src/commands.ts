@@ -33,7 +33,7 @@ const stale = (what: string) => new OpConflictError(`${what} a changé depuis : 
  * finishes stays applied until the outermost one ends. Every action is checked once: directly inside a combine, by the
  * combine's own `finish`; otherwise by its own.
  */
-export class Draft {
+class Draft {
   readonly s: State;
   private readonly tx: Transaction;
   /** Where this draft's operations begin in the transaction's log. */

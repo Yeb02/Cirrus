@@ -1,4 +1,4 @@
-import type { BranchRec, ConnectionRec, Id, Member, NodeRec, Placement, PlanRec, TagValue } from './model.ts';
+import type { BranchRec, ConnectionRec, Id, Member, Placement, TagValue } from './model.ts';
 import { KINDS, NO_RECORD, ROLES, type Rows, type Tables } from './tables.ts';
 
 // Read-only views of the tables as Maps and a Set (plan 3c, decision 1): readers keep the Map interface, writes go
@@ -53,8 +53,6 @@ export class RecordFacade<V> extends Facade<Id, V> {
     for (let r = 0; r < recs.length; r++) { const v = recs[r]; if (v !== undefined) yield v; }
   }
 }
-export type NodesFacade = RecordFacade<NodeRec>;
-export type PlansFacade = RecordFacade<PlanRec>;
 
 /** The record of connection row `r` (which has one), built from its columns: a new object at each call. */
 export function connectionAt(t: Tables, r: number): ConnectionRec {
@@ -70,7 +68,7 @@ export function connectionAt(t: Tables, r: number): ConnectionRec {
   return c;
 }
 
-/** Connections: `get` and iteration build each record from the columns (prefer connRow and membersOf on hot paths). */
+/** Connections: `get` and iteration build each record from the columns (prefer connRow, memberCount and memberAt on hot paths). */
 export class ConnectionsFacade extends Facade<Id, ConnectionRec> {
   private readonly t: Tables;
   constructor(t: Tables) { super(); this.t = t; }

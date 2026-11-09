@@ -10,7 +10,7 @@ import {
 } from './tables.ts';
 
 /** The direct groups of one plan (spec 10), by node row. */
-export interface PlanGroups {
+interface PlanGroups {
   /** The direct group's node row, −1 for none; with several, the one through the inclusion of smallest identifier. */
   group: Int32Array;
   /** Nodes with several direct groups (rule twoGroups): all of them, `group` first, by inclusion identifier. */
@@ -62,7 +62,7 @@ export interface State {
 }
 
 /** Core's own view of a state: the façades plus the tables and indices behind them (not exported from @cirrus/core). */
-export interface StateData extends State {
+interface StateData extends State {
   readonly tables: Tables;
   readonly index: Indices;
 }
@@ -128,8 +128,6 @@ export function relationRows(s: State): number[] {
 export const connTrashed = (s: State, row: number): boolean => !Number.isNaN(dataOf(s).tables.conns.trashedAt[row]);
 /** The record of connection row `row` (which has one), built from its columns. */
 export const connectionOfRow = (s: State, row: number): ConnectionRec => connectionAt(dataOf(s).tables, row);
-/** The members of connection row `row`, node row × 4 + role (memberNode, memberRole), as a copy. */
-export const membersOf = (s: State, row: number): Int32Array => dataOf(s).tables.conns.members.view(row).slice();
 /** Without a copy, for hot loops: the number of members of connection row `row`, and member `i` (node row × 4 + role). */
 export const memberCount = (s: State, row: number): number => dataOf(s).tables.conns.members.len[row];
 export const memberAt = (s: State, row: number, i: number): number => {

@@ -108,7 +108,7 @@ export function isStandalone(source: string): boolean {
 
 // The compile IPC (tasks 3 to 7).
 
-export type CompileMode = 'snippet' | 'page';
+type CompileMode = 'snippet' | 'page';
 /** A label of another source: its node's title is shown, linked to the node (D7). */
 export interface InjectedRef { label: string; title: string; node: Id | null }
 /** A label of this very source, from its last compile's .aux: its number, page and hyperref anchor. */

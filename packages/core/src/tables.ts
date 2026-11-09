@@ -29,7 +29,6 @@ export function roleCode(role: Role): number {
 /** A member in the pool: node row × 4 + role. */
 export const memberCode = (nodeRow: number, role: number): number => nodeRow * 4 + role;
 export const memberNode = (m: number): number => m >> 2;
-export const memberRole = (m: number): number => m & 3;
 
 /** A copy of `a` of length `n` (at least a.length), its new part filled with `fill`. */
 function resized<T extends Int32Array | Float64Array | Uint8Array>(a: T, n: number, fill = 0): T {
@@ -324,7 +323,7 @@ export class Pool {
   }
 }
 
-export class NodeTable {
+class NodeTable {
   readonly rows: Rows;
   /** The record of each row; undefined for a row held by references only, or free. */
   readonly recs: (NodeRec | undefined)[];
@@ -350,7 +349,7 @@ export class NodeTable {
   }
 }
 
-export class PlanTable {
+class PlanTable {
   readonly rows: Rows;
   readonly recs: (PlanRec | undefined)[];
   /** Per plan row, its placements by node row. */

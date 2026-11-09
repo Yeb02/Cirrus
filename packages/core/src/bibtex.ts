@@ -67,7 +67,7 @@ export function repeatedKeyMessage(e: BibEntry): string {
  * autres problèmes. » counts; `stopped`, why the reading stopped before the end of the text if it did (too large, too
  * many entries, too broken), the last of the problems too.
  */
-export interface BibRead { entries: BibEntry[]; problems: BibProblem[]; omitted: number; stopped: BibProblem | null }
+interface BibRead { entries: BibEntry[]; problems: BibProblem[]; omitted: number; stopped: BibProblem | null }
 
 /** A value longer than this, its macros resolved, is refused: its entry set aside (a fixed bound of security). */
 export const BIB_MAX_VALUE_CHARS = 1 << 20;
@@ -555,7 +555,7 @@ export function latexToUnicode(s: string): string {
 // Names (D7: a tag `auteur` each, « Prénom Nom »).
 
 /** A name's parts, in Unicode: first names, particles (von), family name, suffix (Jr.). */
-export interface BibName { first: string; von: string; last: string; jr: string }
+interface BibName { first: string; von: string; last: string; jr: string }
 
 /** Whether a word of a name starts in lower case, as BibTeX reads it: a braced word does not, unless it is an accent's (`{\'e}cole`). */
 function lowerWord(w: string): boolean {
