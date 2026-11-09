@@ -16,3 +16,12 @@ export {
 export { type CitationMeta, citationMeta } from './html.ts';
 export { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 export { IDENTIFIER_LINKS, PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
+export { OFFLINE, unreachable } from './transfer.ts';
+
+/**
+ * A publication's import asked of the server by a paired PC (POST /publications, plan 5b, task 3, D2), as it travels:
+ * the text typed; `pdf: false` for a PDF dropped, whose node keeps it (its PDF not asked); the PC's caps — its settings
+ * publicationMaxKb, maxImportMb in bytes, publicationTimeoutMs, publicationPdfMaxMs —, which the server brings under its
+ * bounds. The PC sends it (app, main/publications/via.ts), the server reads it (server, publications.ts).
+ */
+export interface PublicationRequest { text: string; pdf?: false; maxKb: number; maxPdfBytes: number; timeoutMs: number; pdfMaxMs: number }

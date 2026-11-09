@@ -1,7 +1,7 @@
 import { type Id, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
+import type { PublicationRequest } from '@cirrus/sources';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
-import type { PublicationRequest } from '../publications/via.ts';
 import type { SecretStore } from './config.ts';
 import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
 import { Downloads, filesToFetch, isHash } from './downloads.ts';

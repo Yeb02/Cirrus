@@ -1,5 +1,7 @@
 import { type FileRef, isObject, plainName } from '@cirrus/core';
-import { type Csl, MAX_IDENTIFIER_CHARS, type PublicationFound, type PublicationId, type PublicationResult } from '@cirrus/sources';
+import {
+  type Csl, MAX_IDENTIFIER_CHARS, type PublicationFound, type PublicationId, type PublicationRequest, type PublicationResult,
+} from '@cirrus/sources';
 import type { RenderParams } from '@cirrus/view';
 import { messageOf, reasonOf } from '../sync/connection.ts';
 
@@ -12,14 +14,13 @@ import { messageOf, reasonOf } from '../sync/connection.ts';
  *   lacks (uploads.ts), and it holds this one. The PC's settings are the caps; the server brings them under its bounds.
  * - The server's answer a PublicationResult (a 200): the import's outcome, a refusal included (« Publication
  *   introuvable. », an address of the local network), said as it is and never made again here.
- * - Anything else — the network failing, an answer other than a 200 (busy, 503; an older server without the route, 404;
- *   a request refused, 4xx; its own failure, 5xx), an answer this PC cannot read —: the server did not import it, and
- *   this PC does, as in plan 4c, one line in the console saying why.
+ * - Anything else — the network failing, an answer other than a 200 (the server's own network not reached, 502, review
+ *   of task 3, I1; busy, 503; an older server without the route, 404; a request refused, 4xx, a token revoked among
+ *   them; its own failure, 5xx), an answer this PC cannot read —: the server did not import it, and this PC does, as in
+ *   plan 4c, one line in the console saying why.
  * - Not paired, not connected, or a text that is no request (not a string, or too long): this PC, as in plan 4c.
+ * What the PC sends is a PublicationRequest of @cirrus/sources, the shape the server reads.
  */
-
-/** What the PC asks of the server (POST /publications): the text, `pdf: false` for a PDF dropped, its settings as the caps. */
-export interface PublicationRequest { text: string; pdf?: false; maxKb: number; maxPdfBytes: number; timeoutMs: number; pdfMaxMs: number }
 
 /** The server's import (SyncHost.publicationImporter): its answer as it comes; rejects when the network fails. */
 export type ServerImport = (request: PublicationRequest) => Promise<Response>;

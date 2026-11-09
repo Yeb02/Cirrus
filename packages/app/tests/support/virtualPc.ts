@@ -278,6 +278,8 @@ export class Lab {
    * (tests/data/publications, replay.ts), never the Internet.
    */
   readonly serverAsked: string[] = [];
+  /** The server's network failing (review of task 3, I1): every request and resolution fails, as without a connection. */
+  serverNetworkDown = false;
 
   private constructor() {}
 
@@ -295,9 +297,10 @@ export class Lab {
   /** Starts the server, on the port it had before if it ran already (the PCs keep its address). */
   async startServer(): Promise<void> {
     const replayed = replayFetch(PUBLICATIONS_DATA), open = replayOpen(PUBLICATIONS_DATA);
+    const down = () => Promise.reject(new TypeError('fetch failed: le réseau du serveur ne passe pas'));
     const sources = {
-      fetch: ((url, init) => { this.serverAsked.push(url); return replayed(url, init); }) as FetchFn,
-      open: { resolve: (host: string) => { this.serverAsked.push(host); return open.resolve(host); }, connect: open.connect },
+      fetch: ((url, init) => { this.serverAsked.push(url); return this.serverNetworkDown ? down() : replayed(url, init); }) as FetchFn,
+      open: { resolve: (host: string) => { this.serverAsked.push(host); return this.serverNetworkDown ? down() : open.resolve(host); }, connect: open.connect },
     };
     this.server = await startServer({ dataDir: this.dataDir, port: this.port, now: () => this.clock, sources });
     this.port = Number(new URL(this.server.url).port);

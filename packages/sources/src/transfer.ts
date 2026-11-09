@@ -11,6 +11,18 @@ export class Refusal extends Error {}
 
 export const OFFLINE = 'Pas de connexion.';
 export const NOT_FOUND = 'Publication introuvable.';
+/** The end of every `late` refusal (fetch.ts, guard.ts): « Le … ne répond pas (délai de 20 s dépassé). », its delay by `seconds`. */
+const LATE = / ne répond pas \(délai de [^()]+ dépassé\)\.$/;
+
+/**
+ * Whether an import's refusal says that the network was not reached, rather than what it answered (plan 5b, task 3,
+ * review I1): no connection (OFFLINE: a name not resolved, a connection refused, cut or its TLS refused), or no answer
+ * within the delay (a `late` refusal, LATE). Another network may still reach it: the server's import failing so is the
+ * PC's to make, by its own (Electron's: its proxy, its certificates). Anything else — not found, an address refused,
+ * an answer unexpected or too large — is what the network said, the same from anywhere.
+ */
+export const unreachable = (message: string): boolean => message === OFFLINE || LATE.test(message);
+
 export const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 /** The redirects followed at most, per request (a DOI resolver's chains take one or two). A fixed bound, as browsers have one. */
 export const MAX_REDIRECTS = 5;

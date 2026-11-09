@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
+import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
   MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS,
@@ -302,9 +303,12 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
      * A publication imported for this PC (plan 5b, task 3, D2): its body, MAX_PUBLICATION_BODY_BYTES at most, checked whole
      * (parsePublicationRequest: its text, the PC's caps brought under the server's bounds) before anything is asked;
      * MAX_PUBLICATION_FETCHES imports at once, 503 beyond; the import made by the server's network, under D3's guards,
-     * its PDF into the server's store. Its answer, the PublicationResult the PC's own import would give, a refusal of the
-     * network included (`{ ok: false, message }`, a 200 too). The PC gone, or the server stopping, the import is aborted,
-     * and answers no one.
+     * its PDF into the server's store. Its answer, the PublicationResult the PC's own import would give, what the
+     * network answered included (`{ ok: false, message }`, a 200 too: not found, an address refused). The server's own
+     * network not reached — no connection, no answer within the delay (`unreachable` of @cirrus/sources) —: 502, its
+     * reason as the error, and the PC imports it by its own network (review of task 3, I1: a proxy, a TLS inspection
+     * that Electron passes and Node does not). The PC gone, or the server stopping, the import is aborted, and answers
+     * no one.
      */
     '/publications': {
       POST: async (req, res) => {
@@ -312,7 +316,9 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         const gone = new AbortController();
         res.on('close', () => { if (!res.writableEnded) gone.abort(new Error('Demande d’import abandonnée.')); });
         const result = await imports.run(request, gone.signal);
-        if (!gone.signal.aborted) reply(res, 200, result);
+        if (gone.signal.aborted) return;
+        if (!result.ok && unreachable(result.message)) throw new HttpError(502, result.message);
+        reply(res, 200, result);
       },
     },
     '/snapshot': {

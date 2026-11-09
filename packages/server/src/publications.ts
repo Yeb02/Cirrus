@@ -1,5 +1,7 @@
 import { isObject } from '@cirrus/core';
-import { type FetchFn, httpsConnect, importPublication, type OpenDeps, type PublicationResult, systemResolve } from '@cirrus/sources';
+import {
+  type FetchFn, httpsConnect, importPublication, type OpenDeps, type PublicationRequest, type PublicationResult, systemResolve,
+} from '@cirrus/sources';
 import { storeBytes } from '@cirrus/store';
 import {
   MAX_FILE_BYTES, MAX_IDENTIFIER_CHARS, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
@@ -35,18 +37,16 @@ export class PublicationError extends Error {
   }
 }
 
-/** A request read: the text, whether the PDF is wanted (`pdf: false` sent: not), the caps brought under the bounds. */
-export interface PublicationRequest { text: string; pdf: boolean; maxKb: number; maxPdfBytes: number; timeoutMs: number; pdfMaxMs: number }
-
 const FIELDS = new Set(['text', 'pdf', 'maxKb', 'maxPdfBytes', 'timeoutMs', 'pdfMaxMs']);
 const CAPS = ['maxKb', 'maxPdfBytes', 'timeoutMs', 'pdfMaxMs'] as const;
 const invalid = (why: string) => new PublicationError(400, `Demande d’import invalide : ${why}.`);
 const BUSY = 'Le serveur importe déjà d’autres publications : réessaie dans un instant.';
 
 /**
- * POST /publications's body, `{ text, pdf?: false, maxKb, maxPdfBytes, timeoutMs, pdfMaxMs }` exactly: `text` a string
- * of MAX_IDENTIFIER_CHARS at most, `pdf` false or absent, each cap a finite positive number, no other field; else
- * PublicationError (400). Each cap brought under its bound (bounds.ts): the PC's settings ask, the server decides.
+ * POST /publications's body, a PublicationRequest of @cirrus/sources exactly, `{ text, pdf?: false, maxKb, maxPdfBytes,
+ * timeoutMs, pdfMaxMs }`: `text` a string of MAX_IDENTIFIER_CHARS at most, `pdf` false or absent, each cap a finite
+ * positive number, no other field; else PublicationError (400). Read as the same shape, each cap brought under its bound
+ * (bounds.ts): the PC's settings ask, the server decides.
  */
 export function parsePublicationRequest(body: unknown): PublicationRequest {
   if (!isObject(body)) throw invalid('un objet { text, pdf?: false, maxKb, maxPdfBytes, timeoutMs, pdfMaxMs } attendu');
@@ -61,7 +61,7 @@ export function parsePublicationRequest(body: unknown): PublicationRequest {
   }
   const cap = (k: (typeof CAPS)[number], bound: number) => Math.min(body[k] as number, bound);
   return {
-    text, pdf: body.pdf !== false,
+    text, ...(body.pdf === false ? { pdf: false as const } : {}),
     maxKb: cap('maxKb', MAX_PUBLICATION_META_BYTES / 1024), maxPdfBytes: cap('maxPdfBytes', MAX_FILE_BYTES),
     timeoutMs: cap('timeoutMs', MAX_PUBLICATION_TIMEOUT_MS), pdfMaxMs: cap('pdfMaxMs', MAX_PUBLICATION_PDF_MS),
   };
@@ -117,7 +117,7 @@ export class PublicationImports {
       return await importPublication(request.text, {
         fetch: net.fetch, store: (name, bytes) => storeBytes(this.storeDir, name, bytes), maxKb, maxPdfBytes, timeoutMs, pdfMaxMs, log,
         open: net.open && { ...net.open, timeoutMs, pdfMaxMs, log },
-      }, request.pdf ? undefined : { pdf: false });
+      }, request.pdf === false ? { pdf: false } : undefined);
     } finally {
       this.active--;
     }

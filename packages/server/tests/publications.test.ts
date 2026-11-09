@@ -6,7 +6,7 @@ import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FileRef } from '@cirrus/core';
-import type { FetchFn, OpenDeps, PublicationResult } from '@cirrus/sources';
+import type { FetchFn, OpenDeps, PublicationRequest, PublicationResult } from '@cirrus/sources';
 import { filePath } from '@cirrus/store';
 import {
   MAX_FILE_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
@@ -265,9 +265,11 @@ test('corps trop gros, mal formé, champ inconnu, nombre faux, texte trop long :
 });
 
 test('les plafonds du PC ramenés sous les bornes du serveur : métadonnées, PDF, délais', async () => {
-  // At the parse: each cap at most its bound; a lower one kept.
-  expect(parsePublicationRequest({ text: 'x', maxKb: 1e9, maxPdfBytes: 1e15, timeoutMs: 1e9, pdfMaxMs: 1e9 })).toEqual({
-    text: 'x', pdf: true, maxKb: MAX_PUBLICATION_META_BYTES / 1024, maxPdfBytes: MAX_FILE_BYTES, timeoutMs: MAX_PUBLICATION_TIMEOUT_MS, pdfMaxMs: MAX_PUBLICATION_PDF_MS,
+  // At the parse: each cap at most its bound; a lower one kept. The request read has the shape sent (PublicationRequest
+  // of @cirrus/sources), its caps brought under the bounds.
+  const read: PublicationRequest = parsePublicationRequest({ text: 'x', maxKb: 1e9, maxPdfBytes: 1e15, timeoutMs: 1e9, pdfMaxMs: 1e9 });
+  expect(read).toStrictEqual({
+    text: 'x', maxKb: MAX_PUBLICATION_META_BYTES / 1024, maxPdfBytes: MAX_FILE_BYTES, timeoutMs: MAX_PUBLICATION_TIMEOUT_MS, pdfMaxMs: MAX_PUBLICATION_PDF_MS,
   });
   expect(parsePublicationRequest({ text: 'x', pdf: false, ...CAPS })).toEqual({ text: 'x', pdf: false, ...CAPS });
   // At the route: a metadata answer announced over 8 Mio is refused, as the bound says it; a PDF over MAX_FILE_BYTES
@@ -294,6 +296,38 @@ test('les plafonds du PC ramenés sous les bornes du serveur : métadonnées, PD
   expect(await imported(a, 'https://grosse.example/page', unbounded)).toEqual({ ok: false, message: 'Cette page ne mène à aucun PDF.' });
   expect(huge.seen.cancelled).toBe(true);
   expect(stored()).toEqual([]);
+});
+
+test('relecture, I1 : le réseau du serveur qui n’aboutit pas (pas de connexion, nom non résolu, délai dépassé) : 502, sa raison en erreur, rien d’écrit — le PC importe alors lui-même ; un refus de la publication reste un 200', async () => {
+  // An answer that never comes, but stops with its request.
+  const never: Answer = (signal) => new Promise<Response>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  const net = fakeNetwork({
+    ...ROUTES,
+    [`${CSL_TYPE} https://doi.org/10.1000/lent`]: never,
+    [`${BIB_TYPE} https://doi.org/10.1000/lent`]: never,
+    'https://editeur.example/lent.pdf': never,
+  });
+  const { url } = await start(net);
+  const a = await paired(url);
+  const quick = { timeoutMs: 200 };
+  const late = `délai de ${(0.2).toLocaleString('fr-FR')} s dépassé`;
+  const cases: [string, string][] = [
+    // No answer recorded: the network fails as without a connection.
+    ['10.1000/sans-reseau', 'Pas de connexion.'],
+    // A name the server's resolver does not know.
+    ['https://inconnu.example/note.pdf', 'Pas de connexion.'],
+    ['10.1000/lent', `Le serveur de DOI ne répond pas (${late}).`],
+    ['https://editeur.example/lent.pdf', `Le site « editeur.example » ne répond pas (${late}).`],
+  ];
+  for (const [text, message] of cases) {
+    const res = await ask(a, text, quick);
+    expect(res.status, text).toBe(502);
+    expect(await res.json(), text).toEqual({ error: message });
+  }
+  expect(stored()).toEqual([]);
+  // What the network answered stays the import's answer, a 200: the PC says it, and does not import it again.
+  expect(await imported(a, '10.1007/cirrus-introuvable')).toEqual({ ok: false, message: 'Publication introuvable.' });
+  expect(await imported(a, 'https://interne.example/a.pdf')).toEqual({ ok: false, message: LOCAL });
 });
 
 /** A network whose metadata of `10.1000/lent-<n>` waits for `release`, or for its request to be aborted. */

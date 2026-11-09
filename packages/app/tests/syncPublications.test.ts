@@ -173,6 +173,36 @@ test('le serveur perdu pendant la demande, en erreur (5xx, 503 occupé), qui ref
   expect(l.serverAsked).toEqual([]);
 });
 
+test('relecture, I1 : le réseau du serveur qui ne passe pas (un proxy, une inspection TLS qu’Electron sait traverser) : le serveur répond 502, le PC importe lui-même, une ligne dans la console', async () => {
+  const l = (lab = await Lab.start());
+  const a = await pairedApp(l);
+  const imp = importer(a);
+  l.serverNetworkDown = true;
+  expect(await imp.run(BOOK)).toMatchObject({ ok: true, id: { doi: BOOK } });
+  // An address of the open web: the server's resolver fails, the PC's answers.
+  expect(await imp.run('https://editeur.example/papiers/note.pdf')).toMatchObject({ ok: true, kind: 'pdf', pdf: { name: 'note.pdf' } });
+  expect(imp.local).toEqual([BOOK, 'https://editeur.example/papiers/note.pdf']);
+  expect(imp.logged).toEqual([expect.stringMatching(/Pas de connexion\./), expect.stringMatching(/Pas de connexion\./)]);
+  expect(a.net.count('POST', '/publications')).toBe(2);
+  expect(l.serverAsked.length).toBeGreaterThan(0);
+});
+
+test('relecture, mineur 3 : un jeton révoqué au serveur — l’import se fait au PC (401), une ligne dans la console ; le statut de la synchro n’en bouge pas', async () => {
+  const l = (lab = await Lab.start());
+  const a = await pairedApp(l);
+  const imp = importer(a);
+  const statuses = a.statuses.length;
+  l.revoke('Portable');
+  expect(await imp.run(BOOK)).toMatchObject({ ok: true, id: { doi: BOOK } });
+  expect(imp.local).toEqual([BOOK]);
+  expect(imp.logged).toEqual([expect.stringMatching(/révoqué/)]);
+  expect(a.net.count('POST', '/publications')).toBe(1);
+  // The import's refusal is not the connection's: the client goes on as it was, until its stream learns of the token.
+  expect(a.statuses.length).toBe(statuses);
+  expect(a.status?.state).toBe('live');
+  expect(l.serverAsked).toEqual([]);
+});
+
 test('un refus du serveur (« Publication introuvable. », une adresse du réseau local) est dit tel quel, sans être refait au PC ; un texte qui n’est pas une demande ne part pas', async () => {
   const l = (lab = await Lab.start());
   const a = await pairedApp(l);
