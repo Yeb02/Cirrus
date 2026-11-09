@@ -113,14 +113,20 @@ export class SyncSession {
    * the veil rises for `timeoutMs` at most — the settings just loaded (review of task 4, Important 3) — and the
    * synchronisation starts (the main process waits for this to reconcile anything). `paired`: the main process's
    * answer, asked before the state, so that the pending writes given are all of them. `since`: its word since that
-   * answer, while the page loaded (short review after plan 5a, B2), taken as if it came now. `waiting`: a base taken
-   * from the server that could not be swapped in at the start, said in a notification.
+   * answer, while the page loaded (short review after plan 5a, B2), newer: it decides instead, before anything is
+   * awaited, as if it came now — paired, the pending writes read again —, so that a word heard meanwhile is never
+   * overwritten; App gave it to the block already (re-review of the fixes, N3). `waiting`: a base taken from the
+   * server that could not be swapped in at the start, said in a notification.
    */
   async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number; waiting?: string; since?: ServerInfo }): Promise<void> {
     this.pc = o.pc;
     this.opened = true;
     // A base taken from the server waits beside this one, its swap failed at the start: said at once (review, Important 2).
     if (o.waiting) this.deps.toast(o.waiting);
+    if (o.since) {
+      if (o.since.paired) await this.follow();
+      return;
+    }
     // Without a server, nothing to show: the interface is as in plan 4c — until the main process says it is paired.
     if (o.paired) {
       this.following = (async () => {
@@ -130,7 +136,6 @@ export class SyncSession {
       })();
       await this.following;
     }
-    if (o.since) this.heard(o.since);
   }
 
   /** The synchronisation started; its status as the main process answers, unless a newer one came meanwhile. */

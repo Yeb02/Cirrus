@@ -260,7 +260,7 @@ test('la pastille : rien sans serveur ; « À jour », « Envoi de n actions… 
 });
 
 /** A bridge as the preload gives it, its calls recorded; the main process's messages sent by the test. */
-function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; tellOnPair?: ServerInfo } = {}) {
+function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; tellOnPair?: ServerInfo; tellOnStart?: ServerInfo } = {}) {
   const calls: string[] = [];
   const reconciled: { id: number; outcome: unknown }[] = [];
   const listeners = {
@@ -272,7 +272,12 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult
   };
   let seq = 100;
   const bridge: SyncBridge = {
-    syncStart: async () => { calls.push('start'); return { state: 'connecting' }; },
+    syncStart: async () => {
+      calls.push('start');
+      // A word of the main process while the start runs (a pairing changed meanwhile).
+      if (o.tellOnStart) for (const fn of listeners.server) fn(o.tellOnStart);
+      return { state: 'connecting' };
+    },
     syncRetry: () => { calls.push('retry'); },
     syncReconciled: async (id, outcome) => { reconciled.push({ id, outcome }); return 'reconciliation' in outcome ? ++seq : null; },
     syncPending: async () => { calls.push('pending'); return JSON.stringify(o.pending ?? []); },
@@ -300,7 +305,7 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult
 }
 
 /** The interface's SyncSession over a session of world(), its views and toasts recorded. */
-function syncing(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; timeoutMs?: number; tellOnPair?: ServerInfo } = {}) {
+function syncing(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; timeoutMs?: number; tellOnPair?: ServerInfo; tellOnStart?: ServerInfo } = {}) {
   const w = world();
   const fake = fakeBridge(o);
   const views: SyncView[] = [], toasts: string[] = [], servers: ServerInfo[] = [];
@@ -439,6 +444,29 @@ test('revue courte du plan 5a, B2 : ouverte non jumelée (la page rechargée pen
   p.server({ paired: true, url, name: 'Portable' });
   await vi.waitFor(() => expect(p.calls.slice(-2)).toEqual(['pending', 'start']));
   expect(p.session.pending).toEqual([lobby]);
+});
+
+test('relecture des corrections du plan 5a, N3 : ouverte avec ce que le principal a dit depuis sa réponse (since), la session le suit avant toute attente, sans le redonner au bloc (App le tient) ; un mot plus récent dit pendant le démarrage n’est pas écrasé', async () => {
+  const lobby: Unit = { unit: 'u-lobby', action: 'a-lobby', label: 'Créer le plan « Lobby »', at: 1, pc: 'pc-a', ops: [] };
+  const url = 'http://127.0.0.1:7310';
+  // Unpaired at the answer, paired since (a pairing ended while the page loaded): followed, the list read again, started once.
+  const w = syncing({ pending: [lobby] });
+  await w.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000, since: { paired: true, url, name: 'Portable' } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(w.calls).toEqual(['pending', 'start']);
+  expect(w.session.pending).toEqual([lobby]);
+  expect(w.servers).toEqual([]);
+  // A newer word while the start runs: the block keeps it, not the older `since`.
+  const newer: ServerInfo = { paired: true, url, name: 'Portable renommé' };
+  const n = syncing({ pending: [lobby], tellOnStart: newer });
+  await n.sync.open({ paired: true, pc: 'pc-a', pending: [lobby], timeoutMs: 4000, since: { paired: true, url, name: 'Portable' } });
+  expect(n.calls.filter((c) => c === 'start')).toEqual(['start']);
+  expect(n.servers).toEqual([newer]);
+  // Paired at the answer, unpaired since: nothing followed, nothing started.
+  const u = syncing({ pending: [lobby] });
+  await u.sync.open({ paired: true, pc: 'pc-a', pending: [lobby], timeoutMs: 4000, since: { paired: false, url: '', name: 'PORTABLE' } });
+  await new Promise((r) => setTimeout(r, 10));
+  expect([u.calls, u.session.pending, u.servers, u.view()?.veil ?? false]).toEqual([[], [], [], false]);
 });
 
 test('le bloc « Serveur » : non jumelé, l’adresse, le code, le nom de ce PC et « Jumeler » ; jumelé, l’état et « Dissocier ce PC »', () => {
