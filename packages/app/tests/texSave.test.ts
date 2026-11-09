@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deleteEverywhere, type FileRef, type Id, moveNodes, type State } from '@cirrus/core';
-import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
+import { buildFixture } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';

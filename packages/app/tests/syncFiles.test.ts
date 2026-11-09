@@ -12,7 +12,7 @@ import { absentVersion, blobSize, NotDownloadedError, ReadError, readHead } from
 import { readFileSync } from 'node:fs';
 import { createNode, createPlan } from '@cirrus/core';
 import { storeBytes } from '@cirrus/store';
-import { created, Lab, PLAIN, TEST_PARAMS, until } from './support/virtualPc.ts';
+import { created, Lab, PLAIN, TEST_PARAMS } from './support/virtualPc.ts';
 
 // cirrus-file: with a server (plan 5a, task 4, D6): a blob absent from the store — a PDF at its first reading — is
 // fetched from the server (SyncClient.fetchBlob), checked against its hash, kept, then served; offline, 503; a

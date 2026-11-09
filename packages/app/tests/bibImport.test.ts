@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  type Action, applyOps, BIB_MAX_PROBLEMS, BIB_NAME_CHARS, CITE_KEY_TAG, CommandError, editNode, type FileRef, groupOf, invertAction, parseBibtex, placementKey, type State,
+  type Action, applyOps, BIB_MAX_PROBLEMS, BIB_NAME_CHARS, CITE_KEY_TAG, CommandError, editNode, type FileRef, groupOf, invertAction, placementKey, type State,
   type TagValue,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
