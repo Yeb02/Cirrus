@@ -133,6 +133,10 @@ export class LatexService {
   private backgroundJob: Job | null = null;
   /** A start of the background's next job is scheduled (a request of the user just settled). */
   private resuming = false;
+  /** When the user's last request came (performance.now()): the background starts nothing for latexBackgroundPauseMs after. */
+  private lastUserRequest = -Infinity;
+  /** The end of that pause: one timer, cleared and set again (pump). */
+  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly idleWaiters: (() => void)[] = [];
 
   constructor(opts: LatexServiceOptions) {
@@ -156,6 +160,7 @@ export class LatexService {
   compile(req: CompileRequest): Promise<CompileAnswer> {
     const t0 = performance.now();
     if (this.disposed) return Promise.resolve({ status: 'cancelled' });
+    this.lastUserRequest = t0;
     this.cancel(req.slot);
     return new Promise<CompileAnswer>((resolve) => {
       this.launch(req, t0, resolve, false);
@@ -176,9 +181,11 @@ export class LatexService {
    * nowhere: their PDFs land in the cache, where a view opened later finds them. The snippets (summaries, relations)
    * first, then the pages (.tex), each in order of arrival; a request of a slot already waiting takes its place. At most
    * latexBackgroundMax are kept, the one running included: the others are compiled when their views open, as before.
-   * They run one at a time, on the prepared pdfLaTeX as the user's do, and only while none of the user's runs or waits
-   * (pump); one of the user's that finds no prepared pdfLaTeX free stops the one running (yieldTo). One already in the
-   * cache is skipped without compiling (PdfCache.has).
+   * They run one at a time, on the prepared pdfLaTeX as the user's do, and only while none of the user's runs or waits;
+   * none starts for latexBackgroundPauseMs after a request of the user (pump), and none takes the last prepared pdfLaTeX
+   * ready (dispatch, the reserve): the preview typed keeps its latency (after task 8). One of the user's that finds no
+   * prepared pdfLaTeX free stops the one running (yieldTo). One already in the cache is skipped without compiling
+   * (PdfCache.has).
    */
   background(reqs: CompileRequest[]): void {
     if (this.disposed) return;
@@ -218,8 +225,9 @@ export class LatexService {
   }
 
   /**
-   * The background's next request started (D1): when none runs, and none of the user's runs or waits; with none left,
-   * backgroundIdle's waiters are told.
+   * The background's next request started (D1): when none runs, none of the user's runs or waits, and the user's last
+   * request is latexBackgroundPauseMs old at least — otherwise, once it is (one timer, set again at each call, so that the
+   * queue goes on by itself after a pause with no new request); with none left, backgroundIdle's waiters are told.
    */
   private pump(): void {
     if (this.disposed || this.backgroundJob) return;
@@ -229,6 +237,15 @@ export class LatexService {
       return;
     }
     if (this.userBusy()) return;
+    const wait = this.lastUserRequest + this.opts.params().latexBackgroundPauseMs - performance.now();
+    if (wait > 0) {
+      if (this.pauseTimer) clearTimeout(this.pauseTimer);
+      this.pauseTimer = setTimeout(() => {
+        this.pauseTimer = null;
+        this.pump();
+      }, Math.ceil(wait));
+      return;
+    }
     const req = next.value;
     this.queueOf(req).delete(req.slot);
     const job = this.launch(req, performance.now(), (a) => this.backgroundDone(job, a), true);
@@ -309,6 +326,8 @@ export class LatexService {
    */
   async dispose(): Promise<void> {
     this.disposed = true;
+    if (this.pauseTimer) clearTimeout(this.pauseTimer);
+    this.pauseTimer = null;
     for (const job of [...this.jobs.values()]) this.settle(job, { status: 'cancelled' });
     this.snippets.clear();
     this.pages.clear();
@@ -498,9 +517,10 @@ export class LatexService {
 
   /**
    * Gives each waiter, in order, a ready process of its preamble: the one started for it alone (a waiter queued before
-   * the preamble changed), once ready, whatever the pool's preamble has become since; else the pool's. Then tops the pool
-   * up to latexWarmProcesses, at the next turn of the event loop: starting a process takes about 10 ms of this thread,
-   * which the job just given should not wait for (measured).
+   * the preamble changed), once ready, whatever the pool's preamble has become since; else the pool's, which the
+   * background's job takes only when another stays ready (spare). Then tops the pool up to latexWarmProcesses, at the next
+   * turn of the event loop: starting a process takes about 10 ms of this thread, which the job just given should not wait
+   * for (measured).
    */
   private dispatch(): void {
     if (this.disposed) return;
@@ -508,7 +528,7 @@ export class LatexService {
       let warm: Warm | null = w.own?.ready ? w.own : null;
       if (!warm && w.preamble === this.preamble) {
         const i = this.idle.findIndex((x) => x.ready);
-        if (i >= 0) warm = this.idle.splice(i, 1)[0];
+        if (i >= 0 && (!w.job.background || this.spare(i))) warm = this.idle.splice(i, 1)[0];
       } else if (!warm && !w.own && this.bins) {
         w.own = this.start(this.bins, w.preamble, w);
         if (!w.own) {
@@ -524,6 +544,16 @@ export class LatexService {
       this.filling = false;
       this.fill();
     });
+  }
+
+  /**
+   * Whether the background's job may take the pool's ready process `i` (the reserve, after task 8): only if another stays
+   * ready, so that a request of the user never waits for a pdfLaTeX to be prepared — the cause of the typed preview's
+   * latency measured at task 8. With latexWarmProcesses at 1 there is none to keep: the pause (pump) alone holds the
+   * background back.
+   */
+  private spare(i: number): boolean {
+    return this.opts.params().latexWarmProcesses < 2 || this.idle.some((x, j) => j !== i && x.ready);
   }
 
   /** Gives `warm` to the waiter. Its own process, if it got another, is stopped and detached: it is nobody's any more. */

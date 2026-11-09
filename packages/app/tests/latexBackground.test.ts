@@ -388,6 +388,69 @@ describe('le principal : la file de fond (LatexService.background)', () => {
     expect(inCache(bg)).toBe(true);
   });
 
+  // After task 8 (the typed preview under the background's queue): a prepared pdfLaTeX always left ready to the user, and
+  // the background silent for latexBackgroundPauseMs after each of the user's requests.
+
+  texTest('avec deux pdfLaTeX préparés, le fond en laisse toujours un prêt : la demande de l’utilisateur le prend aussitôt, sans attendre qu’un autre se prépare', async () => {
+    // Two prepared pdfLaTeX, ready once their gate is open; those started after them keep theirs closed: never ready.
+    const s = start({ latexTimeoutMs: 60_000 });
+    s.warm(GATED);
+    await until(() => spawned.length === 2);
+    touch('gate.tex');
+    const [a, b] = ['A', 'B'].map((x) => req({ slot: `summary:${x}`, preamble: GATED, source: `${x}.` }));
+    s.background([a, b]);
+    // The first takes one of the two, the other staying ready; the second would take the last one ready: it waits.
+    await until(() => inCache(a), 15_000);
+    await sleep(1000);
+    expect(inCache(b)).toBe(false);
+    // The user's request takes the one left ready at once: no other has its gate open.
+    const user = s.compile(req({ slot: 'summary:utilisateur', preamble: GATED, source: 'Utilisateur.' }));
+    const late = sleep(10_000).then(() => 'attente d’un pdfLaTeX neuf');
+    expect(await Promise.race([user.then(ok).then(() => 'utilisateur'), late])).toBe('utilisateur');
+    await drain(s);
+    expect(inCache(b)).toBe(true);
+  });
+
+  texTest('après une demande de l’utilisateur, le fond ne commence rien pendant latexBackgroundPauseMs, chaque demande la faisant repartir ; la file reprend seule ensuite', async () => {
+    const PAUSE = 1500;
+    const s = start({ latexBackgroundPauseMs: PAUSE });
+    ok(await s.compile(req({ slot: 'chauffe', source: 'Chauffe.' })));
+    await sleep(PAUSE + 500); // the pool prepared again, the pause over
+    const u = req({ slot: 'summary:utilisateur', source: 'Utilisateur.' }), a = req({ slot: 'summary:A', source: 'A.' });
+    ok(await s.compile(u));
+    s.background([a]);
+    await sleep(800);
+    expect(inCache(a)).toBe(false);
+    // Another request of the user, its PDF in the cache: the pause starts again from it.
+    const t = performance.now();
+    expect(ok(await s.compile(u)).cached).toBe(true);
+    await sleep(PAUSE - 300);
+    expect(inCache(a)).toBe(false);
+    // Nothing more asked: the queue goes on by itself, once the pause is over.
+    await until(() => inCache(a), 15_000);
+    expect(performance.now() - t).toBeGreaterThanOrEqual(PAUSE);
+    await s.backgroundIdle();
+  });
+
+  texTest('latexBackgroundPauseMs à 0 : le fond repart dès que l’utilisateur n’a plus rien en vol, comme avant, et garde la réserve', async () => {
+    const s = start({ latexBackgroundPauseMs: 0, latexTimeoutMs: 60_000 });
+    s.warm(GATED);
+    await until(() => spawned.length === 2);
+    touch('gate.tex');
+    const t = performance.now();
+    ok(await s.compile(req({ slot: 'summary:utilisateur', preamble: GATED, source: 'Utilisateur.' })));
+    // One of the two is left ready, the one started since keeps its gate closed: the background waits for a second one.
+    const a = req({ slot: 'summary:A', preamble: GATED, source: 'A.' });
+    s.background([a]);
+    await sleep(600);
+    expect(inCache(a)).toBe(false);
+    // Its gate open, two are ready: no pause, the background takes one at once.
+    touch('gate.tex');
+    await until(() => inCache(a), 15_000);
+    expect(performance.now() - t).toBeLessThan(DEFAULT_PARAMS.latexBackgroundPauseMs);
+    await s.backgroundIdle();
+  });
+
   texTest('la file de fond ne garde jamais plus de latexBackgroundMax demandes en attente, et 0 n’en garde aucune', async () => {
     const h = held();
     const s = start({ latexBackgroundMax: 2 }, h.binaries);
