@@ -1,6 +1,6 @@
 import {
-  type Action, addMember, combine, CommandError, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, type FileRef, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
+  type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
+  exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
   removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, truncateLabel, type Vec2,
 } from '@cirrus/core';
 import {
@@ -398,15 +398,42 @@ export function filesBuild(s: State, node: Id, incoming: FileRef[]): Build {
  * file's name): filesBuild, which replaces it in its place, labelled « Modifier « name » » (cut to MAX_LABEL_CHARS, R20). Null when the node holds
  * that very content already. Refused when the action is computed if the node is gone or in the trash, or the file no
  * longer in it: a save never brings back what was removed meanwhile (Review Focus 4).
+ *
+ * `keepTheirs` (plan 5b, D6): the version that came from elsewhere while the full screen held text not yet saved. The
+ * version the node holds under that name when the action is computed — `keepTheirs`, or newer still: the one this save
+ * replaces — stays, under its conflict name (texConflictName, at `at`, now by default), in the same action, after the
+ * node's files: one undo step gives both files back as they were. None when that version is the saved text's own.
  */
-export function texSaveBuild(s: State, node: Id, ref: FileRef): Build {
+export function texSaveBuild(s: State, node: Id, ref: FileRef, opts: { keepTheirs?: FileRef; at?: number } = {}): Build {
+  const label = truncateLabel(`Modifier « ${ref.name} »`);
+  if (opts.keepTheirs) {
+    const at = opts.at ?? Date.now();
+    return (st) => {
+      const why = texSaveRefusal(st, node, ref.name);
+      if (why) throw new CommandError(why);
+      const n = nodeRec(st, node), theirs = n.files.find((f) => sameName(f.name, ref.name))!;
+      const copy = theirs.hash === ref.hash ? [] : [{ ...theirs, name: texConflictName(n.files, ref.name, at) }];
+      const m = mergeFiles(n.files, [ref, ...copy]);
+      if (!changes(m)) throw new CommandError(UP_TO_DATE);
+      return combine(st, label, [(x) => editNode(x, node, { files: m.files })]);
+    };
+  }
   const replace = filesBuild(s, node, [ref]);
   if (!replace) return null;
   return (st) => {
     const why = texSaveRefusal(st, node, ref.name);
     if (why) throw new CommandError(why);
-    return { ...replace(st), label: truncateLabel(`Modifier « ${ref.name} »`) };
+    return { ...replace(st), label };
   };
+}
+
+/**
+ * The name the version from elsewhere of the .tex `name` is kept under by a save at `at` (plan 5b, D6): the core's
+ * conflictName, « nom (conflit du AAAA-MM-JJ HHhMM).tex » in this PC's time, numbered after it when `files` hold that
+ * name already — the copies the synchronisation's merge makes are named so too.
+ */
+export function texConflictName(files: readonly FileRef[], name: string, at: number): string {
+  return conflictName(name, at, new Set(files.map((f) => fileNameKey(f.name))));
 }
 
 /** Why the .tex `name` of `node` cannot be saved in `s`, in French: the node gone or in the trash, the file no longer in it; null when it can. */

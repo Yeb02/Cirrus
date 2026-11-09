@@ -59,7 +59,7 @@ const lineStartIn = (state: EditorState, line: number) => state.doc.line(Math.mi
  * in red, once they belong to the text the editor has. Ctrl+S calls `onSave`. Its keys stay its own: the app's
  * shortcuts (Delete, Ctrl+Z…) skip an editable field, and Escape is left to the full screen or the panel, unless the
  * suggestions or a panel of the editor take it. `value` is the text: one that is not what the editor last told
- * (`onChange`) replaces its text. `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
+ * (`onChange`) replaces its text, the cursor kept on its line and column, clamped. `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
  * are drawn, and how soon, are settings (`params`: suggestionOptions). `autoFocus`: the focus at once, the cursor at
  * the end of the text when `compact` (a summary, a relation: task 6). `focusSeq`: the focus back, the cursor where it
  * was, at each new value.
@@ -146,12 +146,17 @@ export function LatexEditor(props: {
     if (v && s) v.dispatch({ effects: s.compartment.reconfigure(s.of(props.params)) });
   }, [latexSuggestionsMax, latexSuggestionDelayMs]);
 
-  // A text given from outside (not the one the editor told): the whole text replaced.
+  // A text given from outside (not the one the editor told): the whole text replaced, the cursor kept as well as it can
+  // be — on its line, at its column, each clamped to the new text (plan 5b, D6: a .tex's version from elsewhere loaded).
   useEffect(() => {
     const v = view.current;
     if (!v || props.value === told.current) return;
     told.current = props.value;
-    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: props.value }, annotations: fromOutside.of(true) });
+    const head = v.state.selection.main.head, line = v.state.doc.lineAt(head), doc = v.state.toText(props.value);
+    const at = doc.line(Math.min(line.number, doc.lines));
+    v.dispatch({
+      changes: { from: 0, to: v.state.doc.length, insert: doc }, selection: { anchor: at.from + Math.min(head - line.from, at.length) }, annotations: fromOutside.of(true),
+    });
   }, [props.value]);
 
   // The diagnostics, once they are those of the editor's text (the owner computes them from the text it was told).

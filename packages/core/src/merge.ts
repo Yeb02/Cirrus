@@ -202,9 +202,10 @@ function beforeExtension(name: string, x: string): string {
 
 /**
  * The name of a .tex conflict copy (D4, R4): « nom (conflit du AAAA-MM-JJ HHhMM).tex », from the losing write's time
- * in this PC's local time; « (2) », « (3) »… after it when a file of the node already has that name, as on reimport.
+ * in this PC's local time; « (2) », « (3) »… after it when a file of the node already has that name (`taken`, by
+ * fileNameKey), as on reimport. A full screen's save keeps the version from elsewhere under it too (plan 5b, D6).
  */
-function conflictName(name: string, at: number, taken: ReadonlySet<string>): string {
+export function conflictName(name: string, at: number, taken: ReadonlySet<string>): string {
   const d = new Date(at), p = (n: number) => String(n).padStart(2, '0');
   const copy = beforeExtension(name, `(conflit du ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}h${p(d.getMinutes())})`);
   if (!taken.has(fileNameKey(copy))) return copy;
@@ -215,7 +216,7 @@ function conflictName(name: string, at: number, taken: ReadonlySet<string>): str
 }
 
 /** Whether `name` is a conflict copy's of the file named `key` (fileNameKey): « nom (conflit du AAAA-MM-JJ HHhMM).tex », maybe « (n) » after. */
-function isCopyOf(name: string, key: string): boolean {
+export function isCopyOf(name: string, key: string): boolean {
   const k = fileNameKey(name), dot = key.lastIndexOf('.'), head = `${key.slice(0, dot)} (conflit du `, ext = key.slice(dot);
   return k.startsWith(head) && k.endsWith(ext) && /^\d{4}-\d{2}-\d{2} \d{2}h\d{2}\)( \(\d+\))?$/.test(k.slice(head.length, k.length - ext.length));
 }

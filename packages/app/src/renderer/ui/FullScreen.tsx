@@ -15,9 +15,13 @@ import { Viewer } from './viewers/Viewer.tsx';
 /** The .tex workbench, with CodeMirror and pdf.js, in its own chunk (as the views are: Viewer.tsx). */
 const TexWorkbench = lazy(() => loading(import('./latex/TexWorkbench.tsx')).then((m) => ({ default: m.TexWorkbench })));
 
-/** What the full screen of a .tex needs (plan 4b, task 5): the state and the registry for its compilation, its save, its handle for App. */
+/**
+ * What the full screen of a .tex needs (plan 4b, task 5): the state and the registry for its compilation, its save (from
+ * the version its text was made from: plan 5b, D6), its handle for App, and the notifications it gives (D6).
+ */
 interface TexContext {
-  state: State; registry: LatexRegistry | null; onSave(text: string): Promise<SaveAnswer>; workbench: RefObject<WorkbenchHandle | null>;
+  state: State; registry: LatexRegistry | null; onSave(text: string, base: string | null): Promise<SaveAnswer>; workbench: RefObject<WorkbenchHandle | null>;
+  onNotice(text: string): void;
 }
 
 /**
@@ -134,7 +138,7 @@ export function FullScreen(props: {
           <Suspense fallback={<Notice text="Lecture…" />}>
             <TexWorkbench
               ref={tex.workbench} node={node} file={file} state={tex.state} registry={tex.registry} params={props.params} views={props.views}
-              onSave={tex.onSave} onClose={props.onClose} onNodeLink={onNodeLink}
+              onSave={tex.onSave} onNotice={tex.onNotice} onClose={props.onClose} onNodeLink={onNodeLink}
             />
           </Suspense>
         )}

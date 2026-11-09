@@ -16,7 +16,9 @@ import { TextViewer } from '../viewers/TextViewer.tsx';
 import { CompileLog, errorText } from './CompileLog.tsx';
 import { diagnosticsFor, lineStartOf } from './editorLogic.ts';
 import { LatexEditor } from './LatexEditor.tsx';
-import { type SaveAnswer, SaveScheduler, type SaveState, unsavedQuestion } from './saveScheduler.ts';
+import {
+  changedElsewhere, keptNotice, openedElsewhere, reloadedNotice, type SaveAnswer, SaveScheduler, type SaveState, unsavedQuestion,
+} from './saveScheduler.ts';
 
 /** What App and FullScreen ask of the workbench open: whether its text is unsaved, its last save (closing the window), its leaving. */
 export interface WorkbenchHandle {
@@ -31,26 +33,46 @@ const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms),
 /** The file as it opened: its text to edit; too long, shown without being editable; binary or unreadable, why. */
 type Opened = { text: string } | { tooLong: string } | { message: string };
 
+/** The file read by readHead and decoded, its line breaks as the editor reads them (« \n »); cut by `maxMb`, or binary, why. */
+async function readOpened(file: FileRef, maxMb: number, signal: AbortSignal): Promise<Opened> {
+  const { bytes, truncated } = await readHead(file, maxMb * MB, signal);
+  const d = decodeText(bytes, truncated);
+  if ('binary' in d) return { message: BINARY };
+  if (truncated) return { tooLong: `Plus de ${maxMb.toLocaleString('fr-FR')} Mo : ce fichier ne se modifie pas dans Cirrus.` };
+  return { text: d.text.replace(/\r\n?/g, '\n') };
+}
+
 /**
  * A .tex in full screen (plan 4b, D6; spec 12): the LaTeX editor on the left, the compiled preview on the right — the
  * last good PDF (PdfViewer, live), compiled as typed under its own slot (`draft:<slot>`, so that it never cancels the
  * saved source's views), at the typing pause —, a banner over them: the compilation (« Compilation… », « Erreur ligne
  * 12 : … ») and the save (« Enregistré », « Non enregistré : … »), and « Journal », which opens CompileLog (a click on
- * the error takes the editor to its line). The file is read once by readHead and decoded, its line breaks as the
+ * the error takes the editor to its line). The file is read by readHead and decoded (readOpened: at opening, and for a
+ * version from elsewhere), its line breaks as the
  * editor reads them (« \n »): a text cut by textViewMaxMb, or a binary, is shown without being editable, with why.
  * The text is saved by `onSave` (SaveScheduler: at the pause of texSaveIdleMs, Ctrl+S, closing); leaving goes through
  * requestClose, and App flushes it before the window closes. A link to a node clicked in the preview goes to
  * `onNodeLink` (the full screen's: plan 4b, task 6). The preview is given the same props while the text is typed, so
  * that typing does not draw it again (task 5 review).
+ *
+ * Elsewhere (plan 5b, D6): opened, the .tex is told to the main process (texOpened, then texClosed as it goes), and
+ * another PC that has it open is said in the banner (« Ce .tex est ouvert sur « Portable » depuis 14h32 : … »; offline,
+ * nothing). Its file as the state holds it (`file`, followed by name) is watched (SaveScheduler.arrived): a version from
+ * elsewhere is read again and replaces the text when nothing is unsaved, the cursor kept, with a notification
+ * (`onNotice`); with unsaved text, the text stays, the banner says that version will be kept under its conflict name,
+ * and the next save does so (saveTex, from the version the text was made from), which a notification says too.
  */
 export function TexWorkbench(props: {
   node: NodeRec; file: FileRef; state: State; registry: LatexRegistry; params: RenderParams; views: ViewStates;
-  onSave(text: string): Promise<SaveAnswer>; onClose(): void; onNodeLink?(node: Id): void; ref?: Ref<WorkbenchHandle>;
+  onSave(text: string, base: string | null): Promise<SaveAnswer>; onNotice(text: string): void; onClose(): void; onNodeLink?(node: Id): void;
+  ref?: Ref<WorkbenchHandle>;
 }) {
   const { node, file, params, registry } = props;
   const [opened, setOpened] = useState<Opened | null>(null);
   const [text, setText] = useState<string | null>(null);
-  const [saving, setSaving] = useState<SaveState>({ dirty: false, saving: false, saved: false, failure: null });
+  const [saving, setSaving] = useState<SaveState>({ dirty: false, saving: false, saved: false, failure: null, elsewhere: false });
+  /** Another PC that has this .tex open, as the banner says it (D6). */
+  const [presence, setPresence] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [jump, setJump] = useState<{ line: number; seq: number } | undefined>(undefined);
   const [asking, setAsking] = useState(false);
@@ -66,21 +88,20 @@ export function TexWorkbench(props: {
     const stop = new AbortController();
     void loading((async () => {
       try {
-        const maxMb = latest.current.params.textViewMaxMb;
-        const { bytes, truncated } = await readHead(file, maxMb * MB, stop.signal);
+        const o = await readOpened(file, latest.current.params.textViewMaxMb, stop.signal);
         if (stop.signal.aborted) return;
-        const d = decodeText(bytes, truncated);
-        if ('binary' in d) { setOpened({ message: BINARY }); return; }
-        if (truncated) {
-          setOpened({ tooLong: `Plus de ${maxMb.toLocaleString('fr-FR')} Mo : ce fichier ne se modifie pas dans Cirrus.` });
-          return;
-        }
-        const t = d.text.replace(/\r\n?/g, '\n');
-        const s = new SaveScheduler(t, (x) => latest.current.onSave(x), timers, () => latest.current.params.texSaveIdleMs);
+        if (!('text' in o)) { setOpened(o); return; }
+        // Each save from the version the text was made from (D6); one that kept the version from elsewhere says so.
+        const save = async (x: string, base: string | null) => {
+          const r = await latest.current.onSave(x, base);
+          if (r.kept !== undefined) latest.current.onNotice(keptNotice(latest.current.file.name, r.kept));
+          return r;
+        };
+        const s = new SaveScheduler(o.text, save, timers, () => latest.current.params.texSaveIdleMs, file.hash);
         scheduler.current = s;
         s.onState(setSaving);
-        setText(t);
-        setOpened({ text: t });
+        setText(o.text);
+        setOpened(o);
       } catch (e) {
         if (!stop.signal.aborted) setOpened({ message: readFailure(file.name, e) });
       }
@@ -96,6 +117,53 @@ export function TexWorkbench(props: {
       }
     };
   }, []);
+
+  // Opened here, told to the main process, which answers with another PC that has it open (D6); closed as it goes.
+  useEffect(() => {
+    let live = true;
+    const id = node.id, name = file.name;
+    window.cirrus.texOpened(id, name).then(
+      (o) => { if (live && o) setPresence(openedElsewhere(o.pc, o.since, Date.now())); },
+      (e: unknown) => console.warn(`Présence de « ${name} » :`, e),
+    );
+    return () => {
+      live = false;
+      window.cirrus.texClosed(id, name);
+    };
+  }, []);
+
+  // The file as the state holds it, at each new version, and once a save ends (D6): a version from elsewhere is read
+  // again when nothing is unsaved (SaveScheduler.arrived), then replaces the text, unless something was typed meanwhile
+  // — the next pass then keeps it for the save. Binary or too long now, it is shown as it would open.
+  useEffect(() => {
+    const s = scheduler.current;
+    if (!s || s.arrived(file) !== 'reload') return;
+    const stop = new AbortController(), name = file.name, hash = file.hash;
+    void (async () => {
+      let o: Opened;
+      try {
+        o = await readOpened(file, latest.current.params.textViewMaxMb, stop.signal);
+      } catch (e) {
+        // Not read (its bytes not to be had now): the text stays, and a save made from it keeps that version beside it.
+        if (stop.signal.aborted) return;
+        console.error(`Lecture de « ${name} » :`, e);
+        latest.current.onNotice(`« ${name} » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.`);
+        return;
+      }
+      if (stop.signal.aborted || scheduler.current !== s) return;
+      if (!('text' in o)) {
+        if (s.dirty) return;
+        scheduler.current = null;
+        s.dispose();
+        setOpened(o);
+        return;
+      }
+      if (!s.reloaded(o.text, hash)) return;
+      setText(o.text);
+      latest.current.onNotice(reloadedNotice(name));
+    })();
+    return () => stop.abort();
+  }, [file.hash, opened, saving.saving, saving.dirty]);
 
   const requestClose = async () => {
     if (askingNow.current || leaving.current === 'flushing') return;
@@ -151,6 +219,8 @@ export function TexWorkbench(props: {
   }
   const compile = view.unavailable ? view.unavailable.message : view.pending ? 'Compilation…' : view.error ? errorText(view.error) : '';
   const saved = saving.failure !== null ? `Non enregistré : ${saving.failure}` : saving.saving ? 'Enregistrement…' : saving.saved && !saving.dirty ? 'Enregistré' : '';
+  // What another PC has to do with it (D6): open there, changed there while the text here is unsaved.
+  const elsewhere = [presence, saving.elsewhere ? changedElsewhere(file.name) : null].filter((x): x is string => x !== null);
   return (
     <div className="tex-workbench">
       <div className="tex-status" role="status">
@@ -159,6 +229,7 @@ export function TexWorkbench(props: {
         <span className={`save${saving.failure !== null ? ' bad' : ''}`}>{saved}</span>
         <button className={logOpen ? 'log on' : 'log'} title="Journal de compilation" onClick={() => setLogOpen((o) => !o)}>Journal</button>
       </div>
+      <Banner lines={elsewhere} />
       <div className="tex-panes">
         <div className="tex-source">
           <LatexEditor

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deleteEverywhere, type FileRef, type Id, moveNodes, type State } from '@cirrus/core';
+import { deleteEverywhere, type FileRef, type Id, isCopyOf, moveNodes, type State } from '@cirrus/core';
 import { buildFixture } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
@@ -17,7 +17,10 @@ import { LatexRegistry } from '../src/renderer/latex/registry.ts';
 import { buildRequest } from '../src/renderer/latex/request.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
-import { saveTex, SaveScheduler, texMergeKey, unsavedQuestion } from '../src/renderer/ui/latex/saveScheduler.ts';
+import { filesBuild } from '../src/renderer/actions.ts';
+import {
+  changedElsewhere, keptNotice, openedElsewhere, reloadedNotice, saveTex, type SaveAnswer, SaveScheduler, type SaveState, texMergeKey, unsavedQuestion,
+} from '../src/renderer/ui/latex/saveScheduler.ts';
 import { readPdf } from './latexPdf.ts';
 
 const MAX = 200 * 2 ** 20;
@@ -89,7 +92,7 @@ test('SaveScheduler : Ctrl+S enregistre aussitôt, flush enregistre ce qui reste
   expect(s.dirty).toBe(false);
   await vi.advanceTimersByTimeAsync(20_000);
   expect(saves).toHaveLength(2);
-  expect(states.at(-1)).toEqual({ dirty: false, saving: false, saved: true, failure: null });
+  expect(states.at(-1)).toEqual({ dirty: false, saving: false, saved: true, failure: null, elsewhere: false });
 });
 
 test('SaveScheduler : un refus garde dirty et le dit ; le suivant réessaie', async () => {
@@ -101,13 +104,104 @@ test('SaveScheduler : un refus garde dirty et le dit ; le suivant réessaie', as
   await vi.advanceTimersByTimeAsync(10_000);
   expect(saves).toEqual(['v1']);
   expect(s.dirty).toBe(true);
-  expect(last).toEqual({ dirty: true, saving: false, saved: false, failure: 'Ce nœud n’existe plus.' });
+  expect(last).toEqual({ dirty: true, saving: false, saved: false, failure: 'Ce nœud n’existe plus.', elsewhere: false });
   // No retry on its own: the next save does.
   await vi.advanceTimersByTimeAsync(60_000);
   expect(saves).toHaveLength(1);
   await s.flush();
   expect(saves).toEqual(['v1', 'v1']);
-  expect(last).toEqual({ dirty: false, saving: false, saved: true, failure: null });
+  expect(last).toEqual({ dirty: false, saving: false, saved: true, failure: null, elsewhere: false });
+});
+
+// --- A .tex changed elsewhere while its full screen is open (plan 5b, task 5, D6)
+
+const ref = (hash: string, name = 'x.tex'): FileRef => ({ name, hash, size: 1 });
+
+/** A scheduler over `v0` of hash h0, its saves recorded with the base they were made from, answered by `answer`. */
+function following(answer: (text: string, base: string | null) => SaveAnswer = (text) => ({ ok: true, hash: `h:${text}` })) {
+  const saves: { text: string; base: string | null }[] = [];
+  let release: (() => void) | null = null;
+  let hold = false;
+  const timers = { set: (fn: () => void, ms: number) => setTimeout(fn, ms), clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
+  const s = new SaveScheduler('v0', async (text, base) => {
+    saves.push({ text, base });
+    if (hold) await new Promise<void>((r) => { release = r; });
+    return answer(text, base);
+  }, timers, () => 10_000, 'h0');
+  let state: SaveState | null = null;
+  s.onState((st) => { state = st; });
+  return { s, saves, state: () => state!, hold: (on: boolean) => { hold = on; }, release: () => release?.() };
+}
+
+test('D6, SaveScheduler : rien de non enregistré, une autre version dans l’état se recharge ; la même, ou la sienne, ne fait rien', () => {
+  const { s, state } = following();
+  expect(s.arrived(ref('h0'))).toBeNull();
+  expect(s.arrived(ref('h1'))).toBe('reload');
+  // Read: the text replaced, nothing unsaved, that version the base now.
+  expect(s.reloaded('v1', 'h1')).toBe(true);
+  expect([s.dirty, state().elsewhere]).toEqual([false, false]);
+  expect(s.arrived(ref('h1'))).toBeNull();
+  // Typed while it was read: not replaced, and told so (the caller asks again, and the version is kept on save).
+  expect(s.arrived(ref('h2'))).toBe('reload');
+  s.edit('v1 tapé');
+  expect(s.reloaded('v2', 'h2')).toBe(false);
+  expect(s.dirty).toBe(true);
+  expect(s.arrived(ref('h2'))).toBeNull();
+  expect(state().elsewhere).toBe(true);
+});
+
+test('D6, SaveScheduler : avec du texte non enregistré, le texte reste et `elsewhere` le dit ; l’enregistrement part de l’ancienne base, puis la sienne la remplace', async () => {
+  const { s, saves, state } = following((text) => ({ ok: true, hash: `h:${text}`, kept: 'x (conflit du 2026-11-09 14h32).tex' }));
+  s.edit('v0 tapé');
+  expect(s.arrived(ref('h1'))).toBeNull();
+  expect([s.dirty, state().elsewhere]).toEqual([true, true]);
+  await s.flush();
+  expect(saves).toEqual([{ text: 'v0 tapé', base: 'h0' }]);
+  expect([s.dirty, state().elsewhere]).toEqual([false, false]);
+  // Its own version in the state: nothing to do; the next save starts from it.
+  expect(s.arrived(ref('h:v0 tapé'))).toBeNull();
+  s.edit('v0 tapé encore');
+  await s.flush();
+  expect(saves.at(-1)).toEqual({ text: 'v0 tapé encore', base: 'h:v0 tapé' });
+  // Typed back to the text saved, a version from elsewhere known: nothing unsaved any more, so it is loaded.
+  s.edit('autre');
+  expect(s.arrived(ref('h3'))).toBeNull();
+  s.edit('v0 tapé encore');
+  expect(s.arrived(ref('h3'))).toBe('reload');
+});
+
+test('D6, SaveScheduler : pendant un enregistrement, la version qui arrive est la sienne, ou l’enregistrement l’a gardée : rien avant sa fin', async () => {
+  const f = following();
+  f.s.edit('v1');
+  f.hold(true);
+  const saving = f.s.saveNow();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(f.s.arrived(ref('h:v1'))).toBeNull();
+  expect(f.s.arrived(ref('h9'))).toBeNull();
+  expect(f.state().elsewhere).toBe(false);
+  f.release();
+  await saving;
+  expect(f.s.arrived(ref('h:v1'))).toBeNull();
+  // A refused save keeps the base it had: the next one starts from it still.
+  const r = following(() => ({ ok: false, message: 'Ce nœud n’existe plus.' }));
+  r.s.edit('v1');
+  await r.s.flush();
+  r.s.edit('v2');
+  await r.s.flush();
+  expect(r.saves.map((x) => x.base)).toEqual(['h0', 'h0']);
+  // Without a base (a scheduler of before plan 5b), nothing arrives.
+  expect(scheduling().s.arrived(ref('h1'))).toBeNull();
+});
+
+test('D6 : les textes du bandeau et des notifications', () => {
+  const at = new Date(2026, 10, 9, 14, 32).getTime(), morning = new Date(2026, 10, 9, 9, 5).getTime();
+  expect(openedElsewhere('Portable', at, new Date(2026, 10, 9, 18, 0).getTime())).toBe('Ce .tex est ouvert sur « Portable » depuis 14h32 : sa dernière version y est peut-être restée.');
+  expect(openedElsewhere('Portable', morning, at)).toBe('Ce .tex est ouvert sur « Portable » depuis 09h05 : sa dernière version y est peut-être restée.');
+  expect(openedElsewhere('Bureau', new Date(2026, 10, 8, 14, 32).getTime(), at)).toBe('Ce .tex est ouvert sur « Bureau » depuis le 2026-11-08 à 14h32 : sa dernière version y est peut-être restée.');
+  expect(changedElsewhere('x.tex')).toBe('« x.tex » a aussi été modifié sur un autre PC : à l’enregistrement, cette version-là sera gardée sous « x (conflit du … ).tex ».');
+  expect(changedElsewhere('complexité.tex')).toBe('« complexité.tex » a aussi été modifié sur un autre PC : à l’enregistrement, cette version-là sera gardée sous « complexité (conflit du … ).tex ».');
+  expect(reloadedNotice('x.tex')).toBe('« x.tex » a été modifié sur un autre PC : sa nouvelle version est chargée.');
+  expect(keptNotice('x.tex', 'x (conflit du 2026-11-09 14h32).tex')).toBe('« x.tex » a été modifié sur deux PC : l’autre version est gardée sous « x (conflit du 2026-11-09 14h32).tex ».');
 });
 
 test('SaveScheduler : revenu, pendant un enregistrement, au texte d’avant, ce texte s’enregistre à la pause qui suit la fin de l’enregistrement (revue finale)', async () => {
@@ -191,7 +285,7 @@ test('trois enregistrements successifs de complexité.tex : un seul action_id, u
   const b = opened();
   try {
     const original = b.fileOf(), before = b.changes(), seq = b.store.lastSeq();
-    for (const v of ['v1', 'v2', 'v3']) expect(await b.save(`${b.textOf(original)}% ${v}\n`)).toEqual({ ok: true });
+    for (const v of ['v1', 'v2', 'v3']) expect(await b.save(`${b.textOf(original)}% ${v}\n`)).toEqual({ ok: true, hash: expect.any(String) });
     const v3 = b.fileOf();
     expect(b.textOf(v3)).toBe(`${b.textOf(original)}% v3\n`);
     // Kept in its place, under its name.
@@ -242,7 +336,7 @@ test('une annulation, ou l’enregistrement d’un autre .tex, entre deux enregi
     expect(b.actionsSince(seq).size).toBe(2);
     const other = b.store.lastSeq();
     await b.save('v3');
-    expect(await b.save('Autre énoncé.', b.ids.nodes.mdl, 'Enoncé_détaillé.tex')).toEqual({ ok: true });
+    expect(await b.save('Autre énoncé.', b.ids.nodes.mdl, 'Enoncé_détaillé.tex')).toEqual({ ok: true, hash: expect.any(String) });
     await b.save('v4');
     expect(b.actionsSince(other).size).toBe(2);
     expect(b.actionsSince(other, 'Modifier « Enoncé_détaillé.tex »').size).toBe(1);
@@ -292,7 +386,7 @@ test('un enregistrement refusé — le nœud supprimé entre-temps — ne ressus
     expect(await b.save('x', b.ids.nodes.mdl, 'absent.tex')).toEqual({ ok: false, message: '« absent.tex » n’est plus dans ce nœud.' });
     // The same text as the file's: nothing to write, and saved.
     const mdlTex = b.fileOf(b.ids.nodes.mdl, 'Enoncé_détaillé.tex');
-    expect(await b.save(b.textOf(mdlTex), b.ids.nodes.mdl, 'Enoncé_détaillé.tex')).toEqual({ ok: true });
+    expect(await b.save(b.textOf(mdlTex), b.ids.nodes.mdl, 'Enoncé_détaillé.tex')).toEqual({ ok: true, hash: mdlTex.hash });
     expect(b.store.lastSeq()).toBe(seq);
   } finally {
     b.close();
@@ -320,6 +414,46 @@ test('« Fermer sans enregistrer ? » : Entrée ne jette jamais le texte, le foc
   expect(closed).toBe(1);
   // Any other question keeps its first choice focused (« partout ou ici seulement »).
   expect(focusedChoice({ text: 'x', choices: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], answer: () => {} })).toBe(0);
+});
+
+test('D6 : un enregistrement fait d’une base que l’état n’a plus écrit le texte sous le nom et l’autre version sous son nom de conflit, en une action ; un Ctrl+Z rend les deux fichiers d’avant', async () => {
+  const b = opened();
+  try {
+    const original = b.fileOf(), seq = b.store.lastSeq();
+    const put = async (name: string, text: string) => storeText(b.dir, name, text, MAX);
+    // A first save of this opening, from the file's version.
+    const first = await saveTex(b.session, put, b.ids.nodes.kolmogorov, TEX, 'tapé ici 1', original.hash);
+    expect(first).toEqual({ ok: true, hash: expect.any(String) });
+    // Another version arrives (here, an action of the session standing for the synchronisation's).
+    const theirs = storeText(b.dir, TEX, 'leur version', MAX);
+    expect((await b.session.run(filesBuild(b.session.state, b.ids.nodes.kolmogorov, [theirs])!)).ok).toBe(true);
+    const before = b.session.state.nodes.get(b.ids.nodes.kolmogorov)!.files;
+    // Saved from the first save's version: ours under the name, theirs under its conflict name, in one action.
+    const r = await saveTex(b.session, put, b.ids.nodes.kolmogorov, TEX, 'tapé ici 2', first.hash);
+    expect(r).toEqual({ ok: true, hash: expect.any(String), kept: expect.stringMatching(/^complexité \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex$/) });
+    const files = b.session.state.nodes.get(b.ids.nodes.kolmogorov)!.files;
+    expect(files.map((f) => f.name)).toEqual([TEX, 'schéma_compression.png', r.kept]);
+    expect(b.textOf(b.fileOf())).toBe('tapé ici 2');
+    expect(files[2]).toEqual({ ...theirs, name: r.kept });
+    expect(isCopyOf(r.kept!, TEX)).toBe(true);
+    // One action, merged with nothing: three since (the first save, theirs, this one), this one labelled as a save.
+    const lines = b.store.changesSince(seq);
+    expect(new Set(lines.map((x) => x.actionId)).size).toBe(3);
+    expect(lines.at(-1)!.label).toBe(`Modifier « ${TEX} »`);
+    // One Ctrl+Z: both files as before the save — theirs under the name, no copy.
+    expect((await b.session.undo()).ok).toBe(true);
+    expect(b.session.state.nodes.get(b.ids.nodes.kolmogorov)!.files).toEqual(before);
+    expect(b.textOf(b.fileOf())).toBe('leur version');
+    // Made from the version the state holds: no copy, as before plan 5b.
+    expect(await saveTex(b.session, put, b.ids.nodes.kolmogorov, TEX, 'tapé ici 3', theirs.hash)).toEqual({ ok: true, hash: expect.any(String) });
+    expect(b.session.state.nodes.get(b.ids.nodes.kolmogorov)!.files).toHaveLength(2);
+    // Made from another version, but the same text as the one there: nothing written, no copy.
+    const now = b.store.lastSeq();
+    expect(await saveTex(b.session, put, b.ids.nodes.kolmogorov, TEX, 'tapé ici 3', theirs.hash)).toEqual({ ok: true, hash: b.fileOf().hash });
+    expect(b.store.lastSeq()).toBe(now);
+  } finally {
+    b.close();
+  }
 });
 
 // --- storeText: the main process's side

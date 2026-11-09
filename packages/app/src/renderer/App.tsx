@@ -366,8 +366,8 @@ export function App() {
             nodeTitle={(id) => { const n = resolveTarget(state, { kind: 'node', node: id })?.node; return n ? n.title || 'Sans titre' : null; }}
             annotations={annotations} onAnnotate={(a) => annotate(a, true)} onDeleteAnnotation={(node) => deleteAnnotation(node, true)}
             tex={{
-              state, registry, workbench,
-              onSave: (text) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text),
+              state, registry, workbench, onNotice: (text) => toast(text),
+              onSave: (text, base) => saveTex(session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file!.name, text, base),
             }}
           />
         </PanelBoundary>
