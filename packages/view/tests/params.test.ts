@@ -402,3 +402,22 @@ test('la latence et le débit du serveur : la médiane de combien de mesures, et
   expect(withOverrides({ serverStatusSamples: 1e9, throughputMinMb: 1e9 })).toMatchObject({ serverStatusSamples: 50, throughputMinMb: 100 });
   expect(withOverrides({ throughputMinMb: 0 })).toMatchObject({ throughputMinMb: 0.1 });
 });
+
+test('la recherche (Ctrl+K) : la couleur de son cercle, réglage principal de « Sélection et dépôt », distincte des autres cercles ; résultats et durée du cercle, groupe « Recherche » de « Navigation » (plan 6a, tâche 1)', () => {
+  expect(PARAM_SPECS.find((s) => s.key === 'searchFoundColor')).toEqual({
+    key: 'searchFoundColor', label: 'Résultats de la recherche', section: 'graphique', group: 'Sélection et dépôt', kind: 'color',
+  });
+  for (const other of [DEFAULT_PARAMS.selectionColor, DEFAULT_PARAMS.dropColor, DEFAULT_PARAMS.intruderColor]) {
+    expect(Math.max(...other.map((c, i) => Math.abs(c - DEFAULT_PARAMS.searchFoundColor[i])))).toBeGreaterThan(0.3);
+  }
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['searchMaxResults', 50, 'Résultats montrés au plus par la recherche (Ctrl+K)', 10, 500, 10],
+    ['searchFlashMs', 1200, 'Durée du cercle autour d’un objet après un saut (ms)', 0, 10_000, 100],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Recherche', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ searchMaxResults: 0, searchFlashMs: -1 })).toMatchObject({ searchMaxResults: 10, searchFlashMs: 0 });
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Navigation')!.groups.at(-1)).toBe('Recherche');
+});

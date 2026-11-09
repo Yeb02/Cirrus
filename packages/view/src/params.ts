@@ -324,6 +324,11 @@ export interface RenderParams {
   selectionGapPx: number;
   dropColor: Rgb;
   intruderColor: Rgb;
+  // Search (plan 6a, D1, D2)
+  /** The ring around what the search finds in the plan shown, and around the object a jump frames. */
+  searchFoundColor: Rgb;
+  searchMaxResults: number;
+  searchFlashMs: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -510,6 +515,10 @@ export const DEFAULT_PARAMS: RenderParams = {
   selectionGapPx: 3,
   dropColor: hexToRgb('#8fb8ff'),
   intruderColor: hexToRgb('#ff9a3c'),
+  // A green: the selection is a pale orange, the intruders an orange, the drop target a blue (Ruling of plan 6a, task 1).
+  searchFoundColor: hexToRgb('#5ee38f'),
+  searchMaxResults: 50,
+  searchFlashMs: 1200,
 };
 
 /**
@@ -731,6 +740,9 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('selectionGapPx', 'Écart du contour de sélection (px)', A, 'Sélection et dépôt', 0, 12, 0.5),
   color('dropColor', 'Groupe qui recevra un dépôt', 'Sélection et dépôt'),
   color('intruderColor', 'Intrus dans une enveloppe', 'Sélection et dépôt'),
+  color('searchFoundColor', 'Résultats de la recherche', 'Sélection et dépôt'),
+  num('searchMaxResults', 'Résultats montrés au plus par la recherche (Ctrl+K)', A, 'Recherche', 10, 500, 10),
+  num('searchFlashMs', 'Durée du cercle autour d’un objet après un saut (ms)', A, 'Recherche', 0, 10_000, 100),
 ];
 
 /**
@@ -739,7 +751,7 @@ export const PARAM_SPECS: ParamSpec[] = [
  */
 export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Apparence', groups: ['Couleurs', 'Fond', 'Nœuds', 'Groupes', 'Connexions', 'Flèches et marqueurs', 'Amorces', 'Fantômes et signes', 'Sélection et dépôt'] },
-  { title: 'Navigation', groups: ['Échelles', 'Niveaux de détail', 'Zoom et déplacement', 'Pointeur'] },
+  { title: 'Navigation', groups: ['Échelles', 'Niveaux de détail', 'Zoom et déplacement', 'Pointeur', 'Recherche'] },
   { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications'] },
   { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
