@@ -97,5 +97,11 @@ contextBridge.exposeInMainWorld('cirrus', {
   // « .tex ouvert ailleurs » (plan 5b, D6).
   texOpened: (node: string, name: string) => ipcRenderer.invoke('cirrus:sync:tex:opened', node, name),
   texClosed: (node: string, name: string) => ipcRenderer.send('cirrus:sync:tex:closed', node, name),
+  // The server's state and « Tout télécharger » (plan 5b, D8).
+  serverStatus: () => ipcRenderer.invoke('cirrus:sync:server:status'),
+  downloadAllPlan: (refs: unknown) => ipcRenderer.invoke('cirrus:sync:download-all:plan', refs),
+  downloadAllStart: (refs: unknown) => ipcRenderer.invoke('cirrus:sync:download-all:start', refs),
+  downloadAllStop: () => ipcRenderer.send('cirrus:sync:download-all:stop'),
+  onDownloadAll: (fn: (p: unknown) => void) => on('cirrus:sync:download-all', fn),
   launch,
 });

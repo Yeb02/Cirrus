@@ -1,12 +1,12 @@
-import { type Id, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
+import { type Id, isObject, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
 import type { PublicationRequest } from '@cirrus/sources';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { SecretStore } from './config.ts';
 import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
-import { Downloads, filesToFetch, isHash } from './downloads.ts';
+import { DownloadAll, Downloads, filesToFetch, freeBytes, isHash, LastMeasures, missingFiles, TransferRates } from './downloads.ts';
 import { readEvents } from './events.ts';
-import type { SyncStatus } from './protocol.ts';
+import type { DownloadAllPlan, DownloadAllProgress, DownloadAllStart, ServerSpace, ServerStatus, SyncStatus } from './protocol.ts';
 import { send, type SenderClient } from './sender.ts';
 import { receiveAllSettings, settingsEvent, type SettingsSync } from './settingsSync.ts';
 import { Uploads } from './uploads.ts';
@@ -21,10 +21,14 @@ import { Uploads } from './uploads.ts';
 // Here: its life (start, stop, the retries), each connection's hello and event stream, the reconciliation of what
 // arrived, and its status. A connection and its requests are connection.ts's; the sending, sender.ts's; the shared
 // settings, settingsSync.ts's; the files, uploads.ts's and downloads.ts's. The .tex open here (plan 5b, D6) go to the
-// server at each connection and at each change (presence).
+// server at each connection and at each change (presence). The server's state and « Tout télécharger » (plan 5b, D8):
+// the latency of GET /status measured here, the throughput by the transfers (TransferRates), the download of every PDF
+// by downloads.ts (DownloadAll).
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
-export type SyncParams = Pick<RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs'>;
+export type SyncParams = Pick<
+  RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs' | 'downloadAllReserveMb'
+>;
 
 export interface SyncDeps {
   fetch: typeof fetch;
@@ -54,6 +58,24 @@ export interface SyncDeps {
    * the client sends no list.
    */
   presence?: () => readonly OpenFile[];
+  /**
+   * The server's state and « Tout télécharger » (plan 5b, D8): the clock its round trips and transfers are measured by
+   * (ms, monotonic; performance.now by default), the free space of a folder's disk (its statfs by default), and what is
+   * told of « Tout télécharger » at each change (none: nothing told).
+   */
+  clock?: () => number;
+  freeBytes?: (dir: string) => Promise<number>;
+  downloadAll?: (p: DownloadAllProgress) => void;
+}
+
+/** GET /status's answer (plan 5b, D8), checked: each size a non-negative number, `counting` a boolean; null otherwise. */
+function spaceOf(body: unknown): ServerSpace | null {
+  if (!isObject(body)) return null;
+  const { baseBytes, storeBytes, storeFiles, freeBytes: free, counting } = body;
+  const size = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  return size(baseBytes) && size(storeBytes) && size(storeFiles) && size(free) && typeof counting === 'boolean'
+    ? { baseBytes, storeBytes, storeFiles, freeBytes: free, counting }
+    : null;
 }
 
 /** A file open in full screen: its node, its name. */
@@ -96,12 +118,24 @@ export class SyncClient {
   private readonly sending: SenderClient;
   /** The lists of open .tex sent, one at a time whatever the connection: the tail of their chain (it never rejects). */
   private presenceChain: Promise<unknown> = Promise.resolve();
+  /** The throughput (plan 5b, D8): the transfers' rates, downloads and files sent. */
+  private readonly rates: TransferRates;
+  /** The latency (D8): the last round trips of GET /status. */
+  private readonly latency = new LastMeasures();
+  /** « Tout télécharger » (D8). */
+  private readonly all: DownloadAll;
+  /** The GET /status under way: a call meanwhile shares its answer. */
+  private statusAsked: Promise<ServerStatus> | null = null;
+  /** A GET /status that failed is said once in the console: the block asks every few seconds. */
+  private statusWarned = false;
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
-    this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads);
+    this.rates = new TransferRates(deps.clock ?? (() => performance.now()));
+    this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads, this.rates);
+    this.all = new DownloadAll(this.downloads, (p) => deps.downloadAll?.(p));
     this.sending = {
-      deps, uploads: new Uploads(deps.storeDir),
+      deps, uploads: new Uploads(deps.storeDir, this.rates),
       reconciled: () => this.reconciled(), schedule: (conn) => this.schedule(conn), report: () => this.report(), latestSettingTime: () => this.latestSettingTime(),
     };
   }
@@ -114,8 +148,9 @@ export class SyncClient {
     this.connect();
   }
 
-  /** Stops: the connection closed, the reconciliation and the downloads under way awaited; off. */
+  /** Stops: « Tout télécharger » interrupted, the connection closed, the reconciliation and the downloads under way awaited; off. */
   async stop(): Promise<void> {
+    this.all.stop('interrupted');
     this.running = false;
     this.cancelRetry();
     const conn = this.conn;
@@ -204,6 +239,76 @@ export class SyncClient {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.presenceChain, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
     clearTimeout(timer);
+  }
+
+  /**
+   * The server's state for the block « Serveur » (plan 5b, D8): while a connection is open, GET /status asked through
+   * it, its round trip measured — the latency, the median of the last MEDIAN_OF —; the throughput's median; the
+   * server's space, null when not connected or when it could not be read (an older server, a failure). One request at
+   * a time: a call while one runs shares its answer.
+   */
+  serverStatus(): Promise<ServerStatus> {
+    this.statusAsked ??= this.askStatus().finally(() => { this.statusAsked = null; });
+    return this.statusAsked;
+  }
+
+  private async askStatus(): Promise<ServerStatus> {
+    const conn = this.conn;
+    if (conn === null || conn.closed || !conn.open) return { latencyMs: null, throughput: this.rates.median(), server: null };
+    let server: ServerSpace | null = null;
+    try {
+      const since = this.rates.clock();
+      const res = await conn.request('/status');
+      this.latency.add(this.rates.clock() - since);
+      server = spaceOf(await json(res));
+    } catch (e) {
+      if (!conn.closed && !this.statusWarned) console.warn(`État du serveur non lu : ${messageOf(e)}`);
+      this.statusWarned ||= !conn.closed;
+    }
+    return { latencyMs: this.latency.median(), throughput: this.rates.median(), server };
+  }
+
+  /**
+   * « Télécharger tous les PDF… » (plan 5b, D8): the plan of `refs` — the PDFs the interface counted (referencedPdfs),
+   * checked here —: those missing on this PC, their bytes by their references, the free space of its disk. Asks the
+   * server nothing.
+   */
+  downloadAllPlan(refs: unknown): Promise<DownloadAllPlan> {
+    return this.plan(missingFiles(this.deps.storeDir, refs));
+  }
+
+  private async plan(missing: ReadonlyMap<string, number>): Promise<DownloadAllPlan> {
+    let bytes = 0;
+    for (const size of missing.values()) bytes += size;
+    return { count: missing.size, bytes, freeBytes: await (this.deps.freeBytes ?? freeBytes)(this.deps.storeDir) };
+  }
+
+  /**
+   * Starts it: refused while one runs, without a connection open, with nothing missing, or when its bytes would leave
+   * less than downloadAllReserveMb free on this PC's disk — the plan made again now: the disk may have changed since the
+   * question. Told then by `deps.downloadAll`.
+   */
+  async downloadAllStart(refs: unknown): Promise<DownloadAllStart> {
+    if (this.all.running()) return { ok: false, reason: 'running' };
+    if (!this.connected()) return { ok: false, reason: 'offline' };
+    const missing = missingFiles(this.deps.storeDir, refs), plan = await this.plan(missing);
+    if (plan.count === 0) return { ok: false, reason: 'none', plan };
+    if (plan.bytes > plan.freeBytes - Math.max(0, this.deps.params().downloadAllReserveMb) * 2 ** 20) return { ok: false, reason: 'room', plan };
+    // Asked again after the disk's answer: a start, or a stop, may have come meanwhile.
+    if (this.all.running()) return { ok: false, reason: 'running' };
+    if (!this.connected()) return { ok: false, reason: 'offline' };
+    this.all.start(missing);
+    return { ok: true };
+  }
+
+  /** « Arrêter »: those queued dropped, those under way aborted. */
+  downloadAllStop(): void {
+    this.all.stop('stopped');
+  }
+
+  /** Where « Tout télécharger » is, or how the last one ended; null before any (the block « Serveur » shown again reads it). */
+  downloadAllProgress(): DownloadAllProgress | null {
+    return this.all.current();
   }
 
   /** The server's clock minus this PC's, measured at the last hello (0 before): a write's time is now() + clockOffset(). */

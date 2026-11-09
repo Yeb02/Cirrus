@@ -11,7 +11,8 @@ import { type ChangeRow, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { replayFetch, replayOpen } from '../../src/main/publications/replay.ts';
 import { SyncClient, type SyncParams } from '../../src/main/sync/client.ts';
-import type { SyncStatus } from '../../src/main/sync/protocol.ts';
+import { freeBytes as diskFree } from '../../src/main/sync/downloads.ts';
+import type { DownloadAllProgress, SyncStatus } from '../../src/main/sync/protocol.ts';
 import { fileSecrets, pair, type ServerConfig, type TokenCipher } from '../../src/main/sync/config.ts';
 import { FORMAT } from '../../src/main/sync/connection.ts';
 
@@ -32,6 +33,7 @@ export const PLAIN: TokenCipher = { encrypt: (text) => Buffer.from(text, 'utf8')
 export const TEST_PARAMS: SyncParams = {
   syncBatchUnits: DEFAULT_PARAMS.syncBatchUnits, syncDownloads: DEFAULT_PARAMS.syncDownloads, syncRetryMinMs: 10, syncRetryMaxMs: 40,
   syncClockSkewWarnMs: DEFAULT_PARAMS.syncClockSkewWarnMs, syncReceiveBatchMs: DEFAULT_PARAMS.syncReceiveBatchMs,
+  downloadAllReserveMb: DEFAULT_PARAMS.downloadAllReserveMb,
 };
 
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
@@ -71,8 +73,8 @@ export class Net {
   readonly results: UnitResult[] = [];
   /** The body of each POST /publications (plan 5b, task 3). */
   readonly publications: unknown[] = [];
-  /** An answer given instead of the server's (a 5xx, say), or null: the server's. */
-  respond: ((method: string, path: string) => Response | null) | null = null;
+  /** An answer given instead of the server's (a 5xx, say; a body that breaks: `signal`, the request's), or null: the server's. */
+  respond: ((method: string, path: string, signal?: AbortSignal) => Response | null) | null = null;
   corruptBlobs = false;
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
   /** Awaited before each request leaves (a test holds one: a seed at its first request, say). */
@@ -116,7 +118,7 @@ export class Net {
     await this.before?.(method, url.pathname);
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
     if (url.pathname === '/publications' && method === 'POST') this.publications.push(JSON.parse(String(init?.body)));
-    const instead = this.respond?.(method, url.pathname);
+    const instead = this.respond?.(method, url.pathname, init?.signal ?? undefined);
     if (instead) return instead;
     if (method === 'GET' && url.pathname.startsWith('/files/')) {
       const signal = init?.signal ?? undefined;
@@ -193,6 +195,15 @@ export class VirtualPc {
    * made with `presence`; otherwise it sends none, as before plan 5b.
    */
   readonly openTex: { node: Id; name: string }[] = [];
+  /**
+   * « Tout télécharger » and the server's state (plan 5b, D8): the clock its round trips and transfers are measured by
+   * (a test moves it); the free space of its disk, its own when null; the progress it is told, each in order, and a
+   * listener of each (a test acts when one comes).
+   */
+  clock: () => number = () => performance.now();
+  free: number | null = null;
+  readonly allProgress: DownloadAllProgress[] = [];
+  onAll: ((p: DownloadAllProgress) => void) | null = null;
   private readonly presence: boolean;
 
   constructor(o: { id: string; dir: string; now: () => number; params?: Partial<SyncParams>; presence?: boolean }) {
@@ -211,6 +222,11 @@ export class VirtualPc {
     return new SyncClient({
       fetch: this.net.fetch, store: this.store, storeDir: this.dir, secrets: fileSecrets(this.dir, PLAIN), reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       now: this.now, params: () => this.params, status: (s) => { this.statuses.push(s); }, ...(this.presence ? { presence: () => this.openTex } : {}),
+      clock: () => this.clock(), freeBytes: async (dir) => this.free ?? diskFree(dir),
+      downloadAll: (p) => {
+        this.allProgress.push(p);
+        this.onAll?.(p);
+      },
     });
   }
 

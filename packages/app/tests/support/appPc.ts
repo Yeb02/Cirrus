@@ -5,7 +5,7 @@ import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
 import { loadPayload, openBase, pcId } from '../../src/main/base.ts';
 import { fileSecrets, type TokenCipher } from '../../src/main/sync/config.ts';
 import { type HostWindow, SyncHost } from '../../src/main/sync/host.ts';
-import type { ServerInfo, SyncIncoming, SyncStatus } from '../../src/main/sync/protocol.ts';
+import type { DownloadAllProgress, ServerInfo, SyncIncoming, SyncStatus } from '../../src/main/sync/protocol.ts';
 import { EditSession, type Opened, openState } from '../../src/renderer/session.ts';
 import { type SyncBridge, SyncSession, type SyncView } from '../../src/renderer/sync/syncSession.ts';
 import { type Lab, Net, TEST_PARAMS } from './virtualPc.ts';
@@ -48,6 +48,8 @@ export class AppPc {
   readonly incoming: SyncIncoming[] = [];
   /** The shared settings received, each batch as the window was told it (cirrus:settings:changed, task 6). */
   readonly settingsTold: Record<string, unknown>[] = [];
+  /** « Tout télécharger » as the window was told it, each change (cirrus:sync:download-all, plan 5b, D8). */
+  readonly downloadAllTold: DownloadAllProgress[] = [];
   veils = 0;
   /** The app's relaunches asked for (a base taken from the server, D7): the test restarts it itself. */
   relaunched = 0;
@@ -85,6 +87,7 @@ export class AppPc {
         later(() => { for (const fn of this.listeners.veil) fn(); });
       },
       settings: (changes) => { this.settingsTold.push(clone(changes)); },
+      downloadAll: (p) => { this.downloadAllTold.push(clone(p)); },
       server: (info) => {
         this.serversTold.push(info);
         const copy = clone(info);

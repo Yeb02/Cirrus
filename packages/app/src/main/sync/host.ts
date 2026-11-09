@@ -11,7 +11,9 @@ import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
 import { isBaseId } from './firstSync.ts';
 import { Pairing } from './pairing.ts';
-import type { Committed, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
+import type {
+  Committed, DownloadAllPlan, DownloadAllProgress, DownloadAllStart, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, ServerStatus, SyncIncoming, SyncStatus,
+} from './protocol.ts';
 import { Reconciliations } from './reconciliations.ts';
 import { writeRefusal } from './sender.ts';
 
@@ -20,7 +22,8 @@ import { writeRefusal } from './sender.ts';
 // stopped and started again at wake, stopped at quit, never two of these at once —; the reconciliation's round trip
 // through the interface, which holds the state; the pairing, its first sync (task 5, D7: firstSync.ts), and the
 // unpairing; each local write's time; the settings changed in Réglages, shared with a server paired (task 6, D9); the
-// .tex open in full screen, which the server tells the other PCs of (plan 5b, D6).
+// .tex open in full screen, which the server tells the other PCs of (plan 5b, D6); the server's state and « Tout
+// télécharger » (plan 5b, D8).
 // SyncHost is what the IPC calls (wire.ts), one method per call, and what keeps them in order (step); their work is
 // in their parts: the client's in client.ts, the round trip's in reconciliations.ts, the pairing's in pairing.ts.
 
@@ -38,6 +41,8 @@ export interface HostWindow {
    * pairing ended (reloaded meanwhile) learns so that it is paired, and starts the synchronisation.
    */
   server(info: ServerInfo): void;
+  /** « Tout télécharger » at its start, at each file's end, and at its end (cirrus:sync:download-all, plan 5b, D8). */
+  downloadAll(p: DownloadAllProgress): void;
 }
 
 export interface HostDeps {
@@ -108,7 +113,8 @@ export class SyncHost {
     this.deps = deps;
     const config = deps.secrets.read();
     this.settings = new SharedSettings(deps.dir, deps.pc, (changes) => deps.window.settings(changes));
-    this.pairing = new Pairing(deps, this.settings, config);
+    // The block shows « Tout télécharger » of the client of now (D8): read when asked, the client replaced at an unpairing.
+    this.pairing = new Pairing(deps, this.settings, config, () => this.client.downloadAllProgress());
     this.reconciliations = new Reconciliations(deps);
     this.client = this.newClient();
   }
@@ -118,6 +124,7 @@ export class SyncHost {
     return new SyncClient({
       fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params, settings: this.settings,
       presence: () => [...this.openTex.values()],
+      downloadAll: (p) => deps.window.downloadAll(p),
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       status: (s) => {
         this.last = s;
@@ -335,6 +342,32 @@ export class SyncHost {
       this.deps.window.status(this.last);
       this.pairing.tell();
     });
+  }
+
+  /**
+   * The server's state for the block « Serveur » (cirrus:sync:server:status, plan 5b, D8), asked every
+   * serverStatusPollMs while the block is shown: the client's measures and GET /status (SyncClient.serverStatus);
+   * nothing without a server.
+   */
+  serverStatus(): Promise<ServerStatus> {
+    if (!this.pairing.paired() || this.closed) return Promise.resolve({ latencyMs: null, throughput: null, server: null });
+    return this.client.serverStatus();
+  }
+
+  /** « Télécharger tous les PDF… » (D8): its plan, of the PDFs the interface counted (SyncClient.downloadAllPlan). */
+  downloadAllPlan(refs: unknown): Promise<DownloadAllPlan> {
+    return this.client.downloadAllPlan(refs);
+  }
+
+  /** Its start (SyncClient.downloadAllStart), told by cirrus:sync:download-all; without a server, or quitting, refused. */
+  downloadAllStart(refs: unknown): Promise<DownloadAllStart> {
+    if (!this.pairing.paired() || this.closed) return Promise.resolve({ ok: false, reason: 'offline' });
+    return this.client.downloadAllStart(refs);
+  }
+
+  /** « Arrêter ». */
+  downloadAllStop(): void {
+    this.client.downloadAllStop();
   }
 
   /** cirrus-file:'s fetcher of an absent blob (D6): the client's, with a server paired; none otherwise (plan 4c's 404). */

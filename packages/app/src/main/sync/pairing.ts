@@ -5,13 +5,14 @@ import { pair, type ServerConfig, serverUrl } from './config.ts';
 import { FORMAT, messageOf, reasonOf } from './connection.ts';
 import { firstSyncOffer, isBaseId, offerMessage, pristine, revokeSelf, sentence, stagedDir } from './firstSync.ts';
 import type { HostDeps } from './host.ts';
-import type { FirstSyncOffer, PairResult, ServerInfo } from './protocol.ts';
+import type { DownloadAllProgress, FirstSyncOffer, PairResult, ServerInfo } from './protocol.ts';
 import { seedBase } from './seed.ts';
 import { stagedWaiting, waitingMessage } from './swap.ts';
 
 // This PC's pairing (plan 5a, D3), as SyncHost runs it, one step at a time: the server paired (serveur.json), a
 // pairing and its first sync (task 5, D7: firstSync.ts, seed.ts, adopt.ts), the unpairing's revocation (R15), and what
-// the block « Serveur » shows of them (info, told to the window at each change).
+// the block « Serveur » shows of them (info, told to the window at each change), « Tout télécharger » with it (plan 5b,
+// D8).
 
 /** A first sync that did not happen: this PC unpaired (its token revoked, R15), its base as it was. */
 const UNTOUCHED = 'Ce PC n’est pas jumelé, et sa base reste telle quelle.';
@@ -47,11 +48,14 @@ export class Pairing {
    * base waiting beside this one as if its swap had failed (short review after plan 5a, B2).
    */
   private restarting: ServerConfig | null = null;
+  /** « Tout télécharger » under way, or how the last one ended (plan 5b, D8): the client's, read when the block asks. */
+  private readonly downloadAll: () => DownloadAllProgress | null;
 
-  constructor(deps: HostDeps, settings: SharedSettings, config: ServerConfig | null) {
+  constructor(deps: HostDeps, settings: SharedSettings, config: ServerConfig | null, downloadAll: () => DownloadAllProgress | null = () => null) {
     this.deps = deps;
     this.settings = settings;
     this.config = config;
+    this.downloadAll = downloadAll;
   }
 
   /** Whether a server is paired (serveur.json read, its token opened). */
@@ -59,9 +63,15 @@ export class Pairing {
     return this.config !== null;
   }
 
-  /** What the block « Serveur » shows: the server paired; otherwise a restart, a first sync under way, an offer, or none. */
+  /**
+   * What the block « Serveur » shows: the server paired, and « Tout télécharger » under way or ended (D8: a block shown
+   * again, a page reloaded, finds it); otherwise a restart, a first sync under way, an offer, or none.
+   */
   info(): ServerInfo {
-    if (this.config) return { paired: true, url: this.config.url, name: this.config.name };
+    if (this.config) {
+      const all = this.downloadAll();
+      return { paired: true, url: this.config.url, name: this.config.name, ...(all ? { downloadAll: all } : {}) };
+    }
     const r = this.restarting;
     if (r) return { paired: false, url: r.url, name: r.name, busy: 'Base du serveur prise : Cirrus redémarre sur elle.' };
     const waiting = stagedWaiting(this.deps.dir) ? { waiting: waitingMessage(this.deps.dir) } : {};

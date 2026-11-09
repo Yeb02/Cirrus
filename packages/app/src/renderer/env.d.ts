@@ -3,7 +3,10 @@ import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@c
 import type { PublicationResult } from '@cirrus/sources';
 import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
-import type { Committed, FirstSyncChoice, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../main/sync/protocol.ts';
+import type {
+  Committed, DownloadAllPlan, DownloadAllProgress, DownloadAllStart, FirstSyncChoice, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, ServerStatus, SyncIncoming,
+  SyncStatus,
+} from '../main/sync/protocol.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -144,6 +147,18 @@ export interface CirrusBridge {
    */
   texOpened(node: Id, name: string): Promise<OpenElsewhere | null>;
   texClosed(node: Id, name: string): void;
+  /**
+   * The server's state and « Tout télécharger » (plan 5b, D8). serverStatus: the latency, the throughput and the
+   * server's space, as the main process measures and asks them (GET /status, while connected), asked by the block
+   * « Serveur » every serverStatusPollMs while it is shown. downloadAllPlan: of the PDFs the interface counted
+   * (referencedPdfs), those missing on this PC, their bytes, and the free space of its disk. downloadAllStart: started,
+   * or why not; onDownloadAll is then told where it is, at each file's end, and how it ended. downloadAllStop: « Arrêter ».
+   */
+  serverStatus(): Promise<ServerStatus>;
+  downloadAllPlan(refs: FileRef[]): Promise<DownloadAllPlan>;
+  downloadAllStart(refs: FileRef[]): Promise<DownloadAllStart>;
+  downloadAllStop(): void;
+  onDownloadAll(fn: (p: DownloadAllProgress) => void): () => void;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

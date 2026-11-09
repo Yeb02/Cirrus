@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, powerMonitor, safeStorage } from 'electron';
 import type { TokenCipher } from './config.ts';
 import type { HostWindow, SyncHost } from './host.ts';
-import type { ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
+import type { DownloadAllProgress, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
 
 // The synchronisation's wires to Electron (plan 5a, task 4): its IPC, the window it speaks to, the token's encryption
 // (safeStorage, DPAPI) and sleep (powerMonitor). Everything else is SyncHost's (host.ts, watchWindow too), which the
@@ -20,6 +20,7 @@ export const appWindows: HostWindow = {
   veil: () => { send('cirrus:sync:veil'); },
   settings: (changes: Record<string, unknown>) => { send('cirrus:settings:changed', changes); },
   server: (info: ServerInfo) => { send('cirrus:sync:server', info); },
+  downloadAll: (p: DownloadAllProgress) => { send('cirrus:sync:download-all', p); },
 };
 
 function send(channel: string, ...args: unknown[]): boolean {
@@ -34,7 +35,8 @@ function send(channel: string, ...args: unknown[]): boolean {
 
 /**
  * The interface's calls (preload: syncStart, syncRetry, syncReconciled, syncPending, syncServer, syncPair, syncFirst,
- * syncUnpair; texOpened and texClosed, plan 5b, D6), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
+ * syncUnpair; texOpened and texClosed, plan 5b, D6; serverStatus, downloadAllPlan, downloadAllStart and downloadAllStop,
+ * plan 5b, D8), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
  * connection. A window whose page goes away (closed, reloaded, crashed) has its reconciliations rejected (detach).
  */
 export function wireSync(host: SyncHost): void {
@@ -49,6 +51,10 @@ export function wireSync(host: SyncHost): void {
   ipcMain.handle('cirrus:sync:unpair', () => host.unpair());
   ipcMain.handle('cirrus:sync:tex:opened', (_e, node: unknown, name: unknown) => host.texOpened(node, name));
   ipcMain.on('cirrus:sync:tex:closed', (_e, node: unknown, name: unknown) => host.texClosed(node, name));
+  ipcMain.handle('cirrus:sync:server:status', () => host.serverStatus());
+  ipcMain.handle('cirrus:sync:download-all:plan', (_e, refs: unknown) => host.downloadAllPlan(refs));
+  ipcMain.handle('cirrus:sync:download-all:start', (_e, refs: unknown) => host.downloadAllStart(refs));
+  ipcMain.on('cirrus:sync:download-all:stop', () => host.downloadAllStop());
   powerMonitor.on('suspend', () => { void host.suspend(); });
   powerMonitor.on('resume', () => { void host.resume(); });
 }

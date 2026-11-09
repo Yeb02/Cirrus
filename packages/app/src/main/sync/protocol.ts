@@ -65,14 +65,55 @@ export type PairResult = { ok: true; restarting?: true } | { ok: false; message:
 export type FirstSyncChoice = 'seed' | 'adopt' | 'cancel';
 
 /**
- * The block « Serveur » of the settings: the server paired, its address and this PC's name there; not paired, the name
- * to propose (the machine's) and no address (the interface proposes its own), or, a pairing awaiting its answer, its
- * server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is —, or a first sync
- * under way (`busy`: what it does). Not paired, `waiting` says a base taken from the server waits beside this one, its
- * swap failed at the start (review of task 5, Important 2).
+ * The block « Serveur » of the settings: the server paired, its address and this PC's name there, and « Tout
+ * télécharger » under way or the way the last one ended (`downloadAll`, plan 5b, D8: a block shown again finds it); not
+ * paired, the name to propose (the machine's) and no address (the interface proposes its own), or, a pairing awaiting
+ * its answer, its server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is —,
+ * or a first sync under way (`busy`: what it does). Not paired, `waiting` says a base taken from the server waits beside
+ * this one, its swap failed at the start (review of task 5, Important 2).
  */
 export interface ServerInfo {
   paired: boolean; url: string; name: string; offer?: { message: string; offer: FirstSyncOffer }; busy?: string; waiting?: string;
+  downloadAll?: DownloadAllProgress;
+}
+
+/**
+ * The server's space, as GET /status answers it (plan 5b, D8): the size of its base's database files, of its store and
+ * the number of its files — what is known so far, `counting` until their first count at its start ends —, and the free
+ * space of its disk; in bytes.
+ */
+export interface ServerSpace { baseBytes: number; storeBytes: number; storeFiles: number; freeBytes: number; counting: boolean }
+
+/**
+ * The server's state for the block « Serveur » (cirrus:sync:server:status, D8), the main process's measures: the latency,
+ * the median of the last round trips of GET /status (ms), null while not connected; the throughput, the median of the
+ * last transfers of files of 1 Mio at least, either way (bytes per second), null before any; the server's space, null
+ * when it could not be asked now.
+ */
+export interface ServerStatus { latencyMs: number | null; throughput: number | null; server: ServerSpace | null }
+
+/**
+ * « Télécharger tous les PDF… » (D8), asked of the PDFs the interface counted (referencedPdfs): those missing on this PC,
+ * their bytes by their references' sizes, and the free space of this PC's disk.
+ */
+export interface DownloadAllPlan { count: number; bytes: number; freeBytes: number }
+
+/**
+ * Its start: under way, or refused — no connection to the server, one under way already, nothing missing (`none`), or
+ * not room enough for it and downloadAllReserveMb besides (`room`), the plan of now then given.
+ */
+export type DownloadAllStart =
+  | { ok: true } | { ok: false; reason: 'offline' | 'running' } | { ok: false; reason: 'none' | 'room'; plan: DownloadAllPlan };
+
+/**
+ * Where it is, told at its start and at each file's end (cirrus:sync:download-all): the files done, those that could not
+ * be had (absent from the server, bytes not their hash's), of the total; the bytes done, of the total, by the
+ * references' sizes. Once ended, `end`: all settled (`done`), « Arrêter » (`stopped`), the server lost (`lost`), this
+ * PC's disk refusing a file (`disk`), the synchronisation stopped — the app quitting, sleep, an unpairing
+ * (`interrupted`). Never resumed by itself: started again, it counts what is still missing.
+ */
+export interface DownloadAllProgress {
+  done: number; failed: number; total: number; doneBytes: number; totalBytes: number; end?: 'done' | 'stopped' | 'lost' | 'disk' | 'interrupted';
 }
 
 /** What a local write's commit gives the interface: its journal number, and its time, the server's clock's (D4). */
