@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@cirrus/core": "*",
+    "@cirrus/sources": "*",
     "@cirrus/store": "*",
     "@cirrus/view": "*",
     "@codemirror/autocomplete": "6.20.4",

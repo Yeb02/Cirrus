@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { FetchFn } from './fetch.ts';
+import type { FetchFn } from '@cirrus/sources';
 
 /**
  * Recorded answers instead of the network (plan 4c, task 4): the tests', and the built app's on a test base (the

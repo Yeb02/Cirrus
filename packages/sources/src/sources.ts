@@ -1,8 +1,9 @@
 /**
  * Where a publication's metadata and an arXiv article's PDF come from (plan 4c, D5, D6), in this one place, as
  * LATEX_SOURCES is for LaTeX: the hosts a request may reach, and the addresses asked of them. Internet sources for now;
- * plans 5 and 9 point them at Cirrus's own server. No other module of the app names one of these hosts (a test checks
- * it): the links a user pastes, which parseIdentifier reads, are listed here too (IDENTIFIER_LINKS).
+ * plans 5 and 9 point them at Cirrus's own server. No other module of this package, the app or the server names one of
+ * these hosts (a test checks it): the links a user pastes, which parseIdentifier reads, are listed here too
+ * (IDENTIFIER_LINKS).
  */
 
 export interface PublicationSources {

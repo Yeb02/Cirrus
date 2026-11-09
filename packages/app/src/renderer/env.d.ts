@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@cirrus/core';
+import type { PublicationResult } from '@cirrus/sources';
 import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
-import type { PublicationResult } from '../main/publications/fetch.ts';
 import type { Committed, FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../main/sync/protocol.ts';
 
 /** What the preload exposes (src/preload/index.ts). */

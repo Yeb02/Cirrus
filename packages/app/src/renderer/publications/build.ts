@@ -2,10 +2,10 @@ import {
   type Action, type BibEntry, type BibFields, bibFields, bibFileName, bibIdentifiers, bibShort, bibtexEntry, CITE_KEY_TAG, CiteKeys, citeKey, cleanArxiv, cleanDoi,
   CommandError, familyName, type FileRef, type NodeRec, normalizedTitle, parseBibtex, safeCiteKey, type State, type TagValue, type Vec2, yearIn,
 } from '@cirrus/core';
+import type { PublicationResult } from '@cirrus/sources';
+import { cslToFields } from '@cirrus/sources/csl';
+import { parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
-import { cslToFields } from '../../main/publications/csl.ts';
-import type { PublicationResult } from '../../main/publications/fetch.ts';
-import { parseIdentifier, type PublicationId } from '../../main/publications/identifier.ts';
 import { newNodeBuild } from '../actions.ts';
 import { messageOf, type Result } from '../session.ts';
 

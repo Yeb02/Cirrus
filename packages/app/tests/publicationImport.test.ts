@@ -7,10 +7,10 @@ import {
   type TagValue,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
+import { importPublication, type PublicationDeps, type PublicationResult } from '@cirrus/sources';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene, type SceneItem } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
-import { importPublication, type PublicationDeps, type PublicationResult } from '../src/main/publications/fetch.ts';
 import { replayFetch } from '../src/main/publications/replay.ts';
 import { checkFileName } from '../src/renderer/files/merge.ts';
 import { planBib } from '../src/renderer/publications/bib.ts';

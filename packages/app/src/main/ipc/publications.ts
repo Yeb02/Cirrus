@@ -1,8 +1,9 @@
+import { type FetchFn, importPublication } from '@cirrus/sources';
 import { type LocalStore, storeBytes } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { ipcMain, net } from 'electron';
-import { type FetchFn, importPublication, requestFetch } from '../publications/fetch.ts';
 import { replayDirOf, replayFetch } from '../publications/replay.ts';
+import { requestFetch } from '../publications/request.ts';
 
 /** What a publication's import reads when the interface asks for it (index.ts). */
 interface PublicationsDeps {
@@ -20,7 +21,7 @@ interface PublicationsDeps {
 export function wirePublications(deps: PublicationsDeps): void {
   /**
    * A publication's network (plan 4c, D5, D6): Electron's stack (its proxy, its certificates), by net.request, whose
-   * redirects fetch.ts follows by hand. On a test base out of the user's way (CIRRUS_DATA, in capture mode or with
+   * redirects @cirrus/sources follows by hand. On a test base out of the user's way (CIRRUS_DATA, in capture mode or with
    * CIRRUS_BACKGROUND=1), CIRRUS_PUBLICATIONS_REPLAY names recorded answers instead (replay.ts): the interface's scenarios
    * and the captures import without the network. Never on the user's own base, where the variable is ignored.
    */

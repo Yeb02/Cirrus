@@ -1,16 +1,17 @@
-import { Readable } from 'node:stream';
 import type { FileRef } from '@cirrus/core';
 import { type Csl, cslToFields } from './csl.ts';
 import { arxivDoi, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 
 /**
- * A publication's import on the main process's side (plan 4c, D5, D6): its CSL-JSON and its BibTeX asked of its DOI's
- * resolver (content negotiation), then, for an arXiv article, its PDF put into the store. Reached only by the IPC that
- * the user's import calls (main/ipc/publications.ts), never at startup nor in the background. Every request is guarded
- * (Review Focus 1, 5): HTTPS to a host of PUBLICATION_SOURCES only, redirects followed by hand and each target checked before
- * it is asked, every body read under its cap, a delay, the answers parsed as data. The network is handed in (`fetch`):
- * Electron's (requestFetch), a replay of recorded answers (replay.ts), a test's fake.
+ * A publication's import (plan 4c, D5, D6): its CSL-JSON and its BibTeX asked of its DOI's resolver (content
+ * negotiation), then, for an arXiv article, its PDF put into the store. Reached only by an import the user asks for (the
+ * app's IPC, main/ipc/publications.ts; the server's route, plan 5b, D2), never at startup nor in the background. Every
+ * request is guarded (Review Focus 1, 5 of plan 4c): HTTPS to a host of PUBLICATION_SOURCES only, redirects followed by
+ * hand and each target checked before it is asked, every body read under its cap, a delay, the answers parsed as data.
+ * The network is handed in (`fetch`): Electron's (the app's requestFetch), Node's at the server, a replay of recorded
+ * answers (the app's replay.ts), a test's fake. A package of its own, without Electron, so that the app and the server
+ * share one copy of these guards (plan 5b, D2).
  */
 
 /** A request: always GET, its Accept, redirects never followed by the network (`manual`: a 3xx comes back as it is). */
@@ -256,7 +257,7 @@ export async function fetchPublication(id: PublicationId, deps: PublicationDeps,
 }
 
 /**
- * The IPC's entry (`cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string that
+ * The import's entry (the app's IPC `cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string that
  * parseIdentifier reads (MAX_IDENTIFIER_CHARS at most), or nothing is asked of the network. `options`: `{ pdf: false }`
  * only, exactly, leaves an arXiv article's PDF out (a PDF dropped, task 5); anything else, the PDF is downloaded.
  */
@@ -264,65 +265,4 @@ export async function importPublication(text: unknown, deps: PublicationDeps, op
   const id = typeof text === 'string' ? parseIdentifier(text) : null;
   const pdf = !(typeof options === 'object' && options !== null && !Array.isArray(options) && Object.hasOwn(options, 'pdf') && (options as { pdf: unknown }).pdf === false);
   return id ? fetchPublication(id, deps, { pdf }) : { ok: false, message: UNRECOGNIZED };
-}
-
-/** What requestFetch needs of Electron's net.request: a ClientRequest's few calls and events. */
-interface RequestLike {
-  setHeader(name: string, value: string): void;
-  on(event: 'redirect', listener: (statusCode: number, method: string, redirectUrl: string) => void): this;
-  on(event: 'response', listener: (response: IncomingLike) => void): this;
-  on(event: 'error', listener: (error: Error) => void): this;
-  abort(): void;
-  end(): void;
-}
-/** Electron's IncomingMessage: a Node Readable, with its status and headers. */
-interface IncomingLike { statusCode: number; headers: Record<string, string | string[]> }
-interface RequestOptions { url: string; method: 'GET'; redirect: 'manual'; credentials: 'omit'; cache: 'no-store' }
-
-/** The statuses a Response cannot have a body with. */
-const NULL_BODY = new Set([101, 103, 204, 205, 304]);
-
-/**
- * The production FetchFn, over Electron's net.request (its network stack: the system's proxy and certificates, as
- * TinyTeX's download): net.fetch cannot give a redirect back (in `manual` mode, Electron 45 rejects it, « Redirect was
- * cancelled »; in `follow`, it hides where it went). A redirect is answered here as its status and its Location, the
- * request stopped before Electron follows it; fetch.ts checks the target and asks it, or not. No cookie is sent nor
- * kept, no cache used. The signal aborts the request, before an answer or while its body is read.
- */
-export function requestFetch(request: (options: RequestOptions) => RequestLike): FetchFn {
-  return (url, init) => new Promise<Response>((resolve, reject) => {
-    if (init.signal.aborted) { reject(init.signal.reason); return; }
-    const req = request({ url, method: 'GET', redirect: 'manual', credentials: 'omit', cache: 'no-store' });
-    init.signal.addEventListener('abort', () => { req.abort(); reject(init.signal.reason); }, { once: true });
-    req.setHeader('Accept', init.headers.Accept);
-    // A listener that throws would be an uncaught exception of the main process: what a server sent that a Response
-    // cannot hold (a status out of range, a header value refused) rejects instead.
-    const settle = (make: () => Response) => {
-      try {
-        resolve(make());
-      } catch (e) {
-        req.abort();
-        reject(e);
-      }
-    };
-    req.on('redirect', (status, _method, location) => {
-      req.abort();
-      settle(() => new Response(null, { status, headers: { location } }));
-    });
-    req.on('response', (res) => settle(() => {
-      const headers = new Headers();
-      for (const [k, v] of Object.entries(res.headers)) {
-        try {
-          headers.set(k, Array.isArray(v) ? v.join(', ') : String(v));
-        } catch {
-          // a name or a value Headers refuses: left out
-        }
-      }
-      // The same stream at run time; Node's and the DOM's typings of it differ.
-      const body = NULL_BODY.has(res.statusCode) ? null : Readable.toWeb(res as unknown as Readable) as unknown as ReadableStream<Uint8Array>;
-      return new Response(body, { status: res.statusCode, headers });
-    }));
-    req.on('error', reject);
-    req.end();
-  });
 }

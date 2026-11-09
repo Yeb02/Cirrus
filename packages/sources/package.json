@@ -1,0 +1,16 @@
+{
+  "name": "@cirrus/sources",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./identifier": "./src/identifier.ts",
+    "./csl": "./src/csl.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cirrus/core": "*"
+  }
+}

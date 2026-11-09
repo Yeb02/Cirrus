@@ -38,8 +38,8 @@ test('LATEX_SOURCES : l’installateur de TinyTeX et le dépôt des paquets, en 
   const files = (readdirSync(main, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => join(main, f));
   expect(files.length).toBeGreaterThan(5);
   for (const f of files) {
-    // PUBLICATION_SOURCES (plan 4c, D5) has its own test: publications.test.ts.
-    if (f.endsWith(join('latex', 'sources.ts')) || f.endsWith(join('publications', 'sources.ts'))) continue;
+    // PUBLICATION_SOURCES (plan 4c, D5) moved to @cirrus/sources (plan 5b, D2), with its own test.
+    if (f.endsWith(join('latex', 'sources.ts'))) continue;
     const text = readFileSync(f, 'utf8');
     expect(text, relative(main, f)).not.toMatch(/['"`]https?:\/\//);
     expect(text, relative(main, f)).not.toMatch(/['"`]ctan['"`]/);

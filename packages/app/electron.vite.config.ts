@@ -6,7 +6,7 @@ import { defineConfig } from 'electron-vite';
 import type { Plugin } from 'vite';
 
 // The workspace packages are TypeScript sources: bundle them instead of leaving them to Electron's Node.
-const bundled = { exclude: ['@cirrus/core', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures'] };
+const bundled = { exclude: ['@cirrus/core', '@cirrus/sources', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures'] };
 
 const PDFJS = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
 /**

@@ -1,7 +1,7 @@
 import type { FileRef } from '@cirrus/core';
+import { MAX_IDENTIFIER_CHARS } from '@cirrus/sources/identifier';
 import type { RenderParams } from '@cirrus/view';
 import { useEffect, useRef, useState } from 'react';
-import { MAX_IDENTIFIER_CHARS } from '../../main/publications/identifier.ts';
 import { fileKind } from '../files/kind.ts';
 import { carriesFiles, droppedPaths, refusalNotice } from '../files/nodeFiles.ts';
 import { createFromPdf, type ImportDeps, importByIdentifier, type ImportOutcome } from '../publications/build.ts';

@@ -1,4 +1,4 @@
-import { parseIdentifier, type PublicationId } from '../../main/publications/identifier.ts';
+import { parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
 
 /**
  * A PDF's own identifier (plan 4c, D8), looked for in what pdf.js reads of it: its metadata (the information dictionary,
