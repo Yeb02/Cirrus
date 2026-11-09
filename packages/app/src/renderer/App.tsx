@@ -1,4 +1,4 @@
-import { type Action, type Anchor, annotationTitle, createAnnotation, type FileRef, type Id, type NodeRec, type State } from '@cirrus/core';
+import { type Action, type Anchor, annotationTitle, createAnnotation, type Id, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
@@ -17,12 +17,12 @@ import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { LatexNotice } from './ui/latex/LatexNotice.tsx';
 import { saveTex } from './ui/latex/saveScheduler.ts';
-import type { WorkbenchHandle } from './ui/latex/TexWorkbench.tsx';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
 import type { Rect } from './ui/panels/geometry.ts';
-import { type PanelTarget, Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
+import { Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
+import { useScreens } from './ui/screens.ts';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
@@ -79,7 +79,6 @@ export function App() {
   const [params, setParams] = useState<RenderParams>(DEFAULT_PARAMS);
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
-  const [panel, setPanel] = useState(window.cirrus.launch.panel === true);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const readySent = useRef(false);
@@ -114,24 +113,10 @@ export function App() {
   paramsRef.current = params;
   const panels = useRef<PanelsHandle>(null);
   const graph = useRef<GraphHandle>(null);
-  /** The file in full screen, if any, by its name: closed once it is gone (resolveTarget). */
-  const [full, setFull] = useState<PanelTarget | null>(null);
-  const fullRef = useRef(full);
-  fullRef.current = full;
-  /** The .tex workbench open in full screen (plan 4b, D6): its text is saved before the window closes. */
-  const workbench = useRef<WorkbenchHandle | null>(null);
-  /** What the full screen last showed: kept while its .tex has unsaved text, should its file go meanwhile. */
-  const lastFull = useRef<{ node: NodeRec; file: FileRef } | null>(null);
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
   const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
-  /** The preamble's full screen (D5), opened from the settings; a modal, as a file's. */
-  const [preambleOpen, setPreambleOpen] = useState(false);
-  const preambleRef = useRef(preambleOpen);
-  preambleRef.current = preambleOpen;
   /** The last annotation index built (plan 4c): the next one reads again only what changed. */
   const builtAnnotations = useRef<AnnotationIndex | null>(null);
-  /** The steps made in the full screen open (its annotations): the only ones its Ctrl+Z and Ctrl+Y undo and redo. */
-  const fullSteps = useRef(new Set<Id>());
 
   /**
    * A notification, for toastMs; `closable` (a .bib's import, plan 4c), for bibNoticeMs, unless a click on it or an
@@ -156,6 +141,8 @@ export function App() {
       toast(`${verb} dans ${elsewhere.length > 1 ? 'les plans' : 'le plan'} ${names} : ${r.action.label}`);
     }
   };
+  /** What is open over the graph: the settings panel, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
+  const { panel, setPanel, setFull, fullRef, workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn } = useScreens();
   /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
   const sync = useSync(toast, paramsRef);
 
@@ -304,8 +291,6 @@ export function App() {
     builtAnnotations.current = built;
     return built;
   }, [state, rev]);
-  // A full screen opened or closed: its steps are no longer its own.
-  useEffect(() => { fullSteps.current = new Set(); }, [full]);
 
   /** Captures wait for the first drawn frame; a due snapshot waits for it too (R16). */
   const firstFrame = () => {
@@ -354,16 +339,9 @@ export function App() {
     setActive(live.active);
     return null;
   }
-  // The file in full screen: a new version of it stays; gone — removed, renamed, its addition undone, its node deleted —
-  // the full screen closes (Review Focus 5). A .tex whose typed text is not saved yet stays, as it last was: its save is
-  // then refused, and says why (Review Focus 4).
-  const found = full && resolveTarget(state, full);
-  if (found?.file) lastFull.current = { node: found.node, file: found.file };
-  const fullNow = found?.file ? found : full && workbench.current?.dirty ? lastFull.current : null;
-  if (full && !fullNow) {
-    setFull(null);
-    return null;
-  }
+  // The file in full screen, closed once it is gone (fullIn); rendered again at once then.
+  const fullNow = fullIn(state);
+  if (fullNow === undefined) return null;
   // The lobby has its own tab, always there: only another plan is added to the open ones.
   const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
   /**
