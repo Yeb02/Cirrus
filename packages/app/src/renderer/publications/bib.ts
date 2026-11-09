@@ -17,7 +17,8 @@ import { type PlannedPublication, planPublication, PublicationIndex, type Public
  * was put down, the duplicates set aside (the node there named) and the problems, by their line.
  */
 
-const fr = (n: number) => n.toLocaleString('fr-FR');
+/** A count as French writes it (« 1 234 »). */
+export const fr = (n: number) => n.toLocaleString('fr-FR');
 const plural = (n: number, one: string, many: string) => `${fr(n)} ${n === 1 ? one : many}`;
 
 /** A .bib's bytes as text (decodeText: UTF-8, UTF-16 with its BOM, else Windows-1252), or why not, in French. */

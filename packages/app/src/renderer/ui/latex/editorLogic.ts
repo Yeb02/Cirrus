@@ -1,7 +1,7 @@
 import type { CompileRequest, TexError } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { type LatexRegistry, type Origin, slotOf } from '../../latex/registry.ts';
-import { CITES, REF_LISTS, REFS, type TexMark, type TexScan } from '../../latex/scan.ts';
+import { CITES, isLetter, REF_LISTS, REFS, type TexMark, type TexScan } from '../../latex/scan.ts';
 
 /**
  * The LaTeX editor's logic (plan 4b, task 5), without CodeMirror: where a reference or a citation is being typed, what
@@ -12,7 +12,6 @@ import { CITES, REF_LISTS, REFS, type TexMark, type TexScan } from '../../latex/
 interface RefContext { kind: 'ref' | 'cite'; from: number; prefix: string }
 
 const BACKSLASH = 92, PERCENT = 37, LF = 10, OPEN = 123, CLOSE = 125, STAR = 42, CLOSE_OPT = 93;
-const isLetter = (c: number) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 const isBlank = (c: number) => c === 32 || c === 9;
 
 /** Back from `i` past the spaces and tabs: the first other character's offset (−1 at the start). */

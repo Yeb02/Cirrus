@@ -4,10 +4,8 @@ import { useRef } from 'react';
 import type { BibFile } from '../../../main/bib.ts';
 import { readableStep } from '../../actions.ts';
 import { loading } from '../../files/read.ts';
-import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../../publications/bib.ts';
+import { bibImportBuild, bibNotice, bibStoreFailure, bibText, fr, planBib, type PlannedBib, storeBibs } from '../../publications/bib.ts';
 import type { Graph } from './core.ts';
-
-const fr = (n: number) => n.toLocaleString('fr-FR');
 
 /**
  * A .bib being imported (plan 4c, D9, task 6), from the ghost of its block to the action: what it plans, in its plan;

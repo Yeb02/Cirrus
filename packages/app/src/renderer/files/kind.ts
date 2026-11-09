@@ -23,8 +23,8 @@ function words(kind: FileKind, list: string): [string, FileKind][] {
 }
 
 /**
- * The extension as Windows reads it, in lower case: after the last dot, trailing dots and spaces dropped. The same as the
- * main process's, so a file's kind and the type it is served with agree.
+ * The extension as Windows reads it, in lower case: after the last dot, trailing dots and spaces dropped (« a.bat. »
+ * opens as « a.bat »). The main process serves a file by it too (files.ts), so its kind and its type agree.
  */
 export function extensionOf(name: string): string {
   const n = name.replace(/[. ]+$/, '');

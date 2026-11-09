@@ -7,6 +7,7 @@ import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { type FileRef, plainName } from '@cirrus/core';
 import { type ChangeRow, filePath, importFile, storeBytes, storeBytesAsync } from '@cirrus/store';
+import { extensionOf } from '../renderer/files/kind.ts';
 import { checkFileName } from '../renderer/files/merge.ts';
 import { notDownloaded, notStored } from '../renderer/files/read.ts';
 import { NOT_STORED } from './sync/downloads.ts';
@@ -30,13 +31,6 @@ const RANGE = /^bytes=(\d*)-(\d*)$/i;
 type BlobAnswer =
   | { status: 400 | 404 | 416 | 503 | 507; headers: Record<string, string> }
   | { status: 200 | 206; headers: Record<string, string>; path: string; start: number; end: number };
-
-/** The extension as Windows reads it: after the last dot, trailing dots and spaces dropped (« a.bat. » opens as « a.bat »). */
-function extensionOf(name: string): string {
-  const n = name.replace(/[. ]+$/, '');
-  const dot = n.lastIndexOf('.');
-  return dot < 0 ? '' : n.slice(dot + 1).toLowerCase();
-}
 
 const CONTENT_TYPES = new Map([
   ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['gif', 'image/gif'], ['webp', 'image/webp'], ['bmp', 'image/bmp'],

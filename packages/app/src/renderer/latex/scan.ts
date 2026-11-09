@@ -16,7 +16,8 @@ export const CITES: ReadonlySet<string> = new Set(['cite', 'citep', 'citet', 'ci
 const VERBATIM = new Set(['verbatim', 'verbatim*', 'Verbatim', 'Verbatim*', 'lstlisting']);
 
 const BACKSLASH = 92, PERCENT = 37, LF = 10, STAR = 42, OPEN = 123, CLOSE = 125, OPEN_OPT = 91, CLOSE_OPT = 93;
-const isLetter = (c: number) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+/** A letter of a control word's name (ASCII, as TeX reads one): the editor's completion reads names so too. */
+export const isLetter = (c: number) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
 const isSpace = (c: number) => c === 32 || c === 9 || c === 10 || c === 13;
 
 /**
