@@ -8,13 +8,13 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import {
-  type Action, applyOps, canonical, createNode, createPlan, decodeState, editNode, emptyState, fromSnapshot, type Id, include, type State, toSnapshot, type Unit,
+  type Action, applyOps, canonical, createNode, createPlan, decodeState, editNode, emptyState, fromSnapshot, include, type State, toSnapshot, type Unit,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
 import { MAX_BODY_BYTES, MAX_PAIR_BODY_BYTES, MAX_PAIR_CODE_CHARS, MAX_UNITS_PER_REQUEST, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_SNAPSHOT_UNITS } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Tokens } from '../src/tokens.ts';
-import { Client, EventReader, FORMAT, newCode, pair, sha256, T0 } from './support.ts';
+import { Client, created, EventReader, FORMAT, newCode, pair, sha256, T0 } from './support.ts';
 
 let dir: string;
 /** The server's clock (its `now`). */
@@ -48,7 +48,6 @@ async function paired(url: string, pc: string, name = pc): Promise<Client> {
 }
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
-const created = (a: Action, t: 'node' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 const copy = (s: State): State => fromSnapshot(JSON.parse(JSON.stringify(toSnapshot(s))) as ReturnType<typeof toSnapshot>);
 const baseDir = () => join(dir, 'base');
 

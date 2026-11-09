@@ -10,7 +10,7 @@ import { type ChangeRow, LocalStore } from '@cirrus/store';
 import { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Tokens } from '../src/tokens.ts';
-import { Client, EventReader, newCode, pair, T0 } from './support.ts';
+import { Client, created, EventReader, newCode, pair, T0 } from './support.ts';
 
 // The first sync (plan 5a, task 5, D7, R16): a PC sends its base to an empty server — its snapshot, streamed to a
 // temporary file, then its journal by pages, then « done », which makes the server not empty —; the last PC to start
@@ -39,7 +39,6 @@ async function paired(url: string, pc: string, data = 'serveur'): Promise<Client
 }
 
 const image = (s: State) => canonical(Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)])));
-const created = (a: Action, t: 'node' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 
 /**
  * A PC's base, as the app keeps it: a lobby, a plan, nodes and their edits, written action by action; its snapshot

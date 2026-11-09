@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
-import { type Action, type RemoteUnit, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Unit, type UnitResult, uuidv7 } from '@cirrus/core';
+import { type Action, type Id, type RemoteUnit, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Unit, type UnitResult, uuidv7 } from '@cirrus/core';
 import { SCHEMA_VERSION } from '@cirrus/store';
 import { Tokens } from '../src/tokens.ts';
 
 // What the server's tests share: a code made as the command line makes one, the requests of a paired PC, a reader of
-// the event stream.
+// the event stream, the record an action creates.
 
 export const T0 = Date.UTC(2026, 10, 8, 9);
 
 export const sha256 = (b: string | Uint8Array): string => createHash('sha256').update(b).digest('hex');
+
+/** The record of kind `t` an action creates first: its identifier. */
+export const created = (a: Action, t: 'node' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 
 /** The format headers of /hello (D10), this build's. */
 export const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
