@@ -24,11 +24,13 @@ export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label
  * The head of the rubric « Serveur » (plan 5a, D3): not paired, the server's address, the pairing code its `jumeler`
  * shows, this PC's name there, and « Jumeler »; a refusal said under them. The first pairing's question (D7), in its
  * place while the main process holds it (`info.offer`: the panel closed and opened again shows it still): why, then its
- * button and « Annuler ». Paired, the server, the synchronisation's state, and « Dissocier ce PC ». A first sync under
- * way, or the restart on a base taken, says what the main process says (`info.busy`, told as it begins: short review
- * after plan 5a, D4). `refresh` reads what the main process holds at each mounting (the panel opened, the rubric
- * unfolded): a first sync under way then shows as such; until it answers, nothing can be clicked (review of task 5,
- * round 2); while mounted, `info` follows each change the main process tells (B2).
+ * button and « Annuler ». A vierge PC is asked nothing: « Jumeler » goes on to the download of the server's base, which
+ * shows as any first sync under way (after the short review of plan 5a, 2026-11-09). Paired, the server, the
+ * synchronisation's state, and « Dissocier ce PC ». A first sync under way, or the restart on a base taken, says what
+ * the main process says (`info.busy`, told as it begins: short review after plan 5a, D4). A failed one brings the form
+ * back, its message under it. `refresh` reads what the main process holds at each mounting (the panel opened, the
+ * rubric unfolded): a first sync under way then shows as such; until it answers, nothing can be clicked (review of task
+ * 5, round 2); while mounted, `info` follows each change the main process tells (B2).
  */
 export function ServerBlock(props: {
   info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onFirst(choice: FirstSyncChoice): Promise<PairResult>;

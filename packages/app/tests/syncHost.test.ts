@@ -89,13 +89,26 @@ test('jumeler un PC vide à un serveur vide : le jeton chiffré dans serveur.jso
   expect(a.store.loadState().nodes.get(X)?.title).toBe('X par A');
 });
 
-test('un serveur dont le journal n’est pas vide, même d’un lobby seul : un PC vide se voit proposer de prendre sa base (R7) ; rien de gardé ni de démarré avant sa réponse', async () => {
+/**
+ * An app PC whose base is empty but was used (a node created, then undone): not vierge, so that a server holding a base
+ * asks it D7's question (a vierge one takes the server's base at once: after the short review of plan 5a).
+ */
+async function used(l: Lab, name: string): Promise<AppPc> {
+  const a = await app(l, name);
+  const lobby = [...a.session.state.plans.values()][0].id;
+  expect((await a.session.run((s) => createNode(s, { plan: lobby, title: 'Essai', x: 0, y: 0, k: 0 }))).ok).toBe(true);
+  expect((await a.session.undo()).ok).toBe(true);
+  expect(a.store.isEmpty()).toBe(true);
+  return a;
+}
+
+test('un serveur dont le journal n’est pas vide, même d’un lobby seul : un PC vide se voit proposer de prendre sa base (R7) ; rien de gardé ni de démarré avant sa réponse ; vierge, il la prend aussitôt', async () => {
   const l = (lab = await Lab.start());
   // A first PC paired: its lobby is the server's first write.
   const first = await app(l, 'pc-0');
   expect(await first.sync.pair(l.url, l.code('Premier'), 'Premier')).toEqual({ ok: true });
   await until(async () => (await l.lastSeq()) === 1);
-  const a = await app(l, 'pc-a');
+  const a = await used(l, 'pc-a');
   expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'adopt', nodes: 0 } });
   // The question held by the main process, for the block to show again (a panel closed and opened).
   expect(a.host.info()).toMatchObject({ paired: false, url: l.url, name: 'Portable', offer: { offer: { kind: 'adopt' } } });
@@ -111,6 +124,11 @@ test('un serveur dont le journal n’est pas vide, même d’un lobby seul : un 
   expect(a.net.count('GET', '/events')).toBe(0);
   expect(a.statuses.every((s) => s.state === 'off')).toBe(true);
   expect((await l.journal()).filter((r) => r.op.t === 'plan' && (r.op.after as { type?: string } | null)?.type === 'lobby')).toHaveLength(1);
+  // A vierge PC is not asked: it takes the server's base at once (R7 all the same: never a second lobby).
+  const v = await app(l, 'pc-v');
+  expect(await v.sync.pair(l.url, l.code('Vierge'), 'Vierge')).toEqual({ ok: true, restarting: true });
+  expect([v.relaunched, v.serversTold.some((i) => i.offer !== undefined)]).toEqual([1, false]);
+  expect((await l.journal()).filter((r) => r.op.t === 'plan' && (r.op.after as { type?: string } | null)?.type === 'lobby')).toHaveLength(1);
 });
 
 test('revue courte du plan 5a, B2 : le principal dit à la fenêtre chaque changement du jumelage (cirrus:sync:server) — une offre, un jumelage fait, une dissociation', async () => {
@@ -120,8 +138,8 @@ test('revue courte du plan 5a, B2 : le principal dit à la fenêtre chaque chang
   expect(await first.host.pair(l.url, l.code('Premier'), 'Premier')).toEqual({ ok: true });
   expect(first.serversTold.at(-1)).toEqual({ paired: true, url: l.url, name: 'Premier' });
   await until(async () => (await l.lastSeq()) === 1);
-  // An offer (the server holds a lobby), then given up: each told.
-  const a = await app(l, 'pc-a');
+  // An offer (the server holds a lobby, this PC's base was used), then given up: each told.
+  const a = await used(l, 'pc-a');
   expect(await a.host.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'adopt' } });
   expect(a.serversTold.at(-1)).toMatchObject({ paired: false, url: l.url, name: 'Portable', offer: { offer: { kind: 'adopt' } } });
   await a.host.first('cancel');

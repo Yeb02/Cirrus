@@ -5,6 +5,7 @@ import {
   SyncFormatError, truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, storedHashes } from '@cirrus/store';
+import { LOBBY_NAME } from '../base.ts';
 import { writeJsonAtomic } from '../jsonFile.ts';
 import { parseSettingRows, SharedSettings } from '../settings.ts';
 import { SERVER_FILE, type SecretStore, type ServerConfig } from './config.ts';
@@ -13,10 +14,12 @@ import type { FirstSyncOffer } from './protocol.ts';
 
 // The first pairing of a base (plan 5a, task 5, D7): what the PC and the server hold decides it — both empty, the sync
 // starts; a full PC and an empty server, the PC sends its base (seed); an empty PC and a server holding one, the PC
-// takes the server's (adopt); both full, refused, the replacement of the PC's base proposed (adopt too, its own kept).
+// takes the server's (adopt), at once when its base is vierge (pristine, after the short review of plan 5a), on the
+// user's word otherwise; both full, refused, the replacement of the PC's base proposed (adopt too, its own kept).
 // A base taken is staged beside the PC's (`<base>-nouvelle`), complete once its mark is written, last; the app then
 // starts again, and the next start swaps it in before the base opens, the old one kept as
-// `<base>-avant-jumelage-AAAA-MM-JJ` (R17). Nothing here depends on Electron: the network is given.
+// `<base>-avant-jumelage-AAAA-MM-JJ` (R17), or deleted when vierge. Nothing here depends on Electron: the network is
+// given.
 
 /** What /hello says of the server's base: its last number, whether it is empty (D7), its nodes. */
 export interface ServerBase { lastSeq: number; empty: boolean; nodes: number }
@@ -48,13 +51,52 @@ function archiveName(dir: string, day: Date): string {
  * holds nothing (isEmpty) and never received anything from a server: one that did has lines another server numbered.
  * The server holds no base when it accepted no write and its state is empty: a server holding only another PC's lobby
  * holds one (R7: an empty PC takes it, rather than bring a second lobby). Counts the nodes and the store's files: a
- * pairing's cost, never paid otherwise.
+ * pairing's cost, never paid otherwise. A vierge base (pristine) is not asked its offer « adopt »: it takes the
+ * server's base at once (SyncHost.pairNow).
  */
 export function firstSyncOffer(store: LocalStore, dir: string, server: ServerBase, day: Date): FirstSyncOffer | null {
   const empty = store.isEmpty() && store.lastServerSeq() === 0;
   if (server.lastSeq === 0 && server.empty) return empty ? null : { kind: 'seed', nodes: store.nodeCount(), files: storedHashes(dir).length };
   const archive = archiveName(dir, day);
   return empty ? { kind: 'adopt', nodes: server.nodes, archive } : { kind: 'replace', nodes: server.nodes, local: store.nodeCount(), archive };
+}
+
+/**
+ * Whether this base is vierge (after the short review of plan 5a, 2026-11-09: the user keeps one base, and « la base
+ * de donnée vide locale que crée un nouveau PC pas encore jumelé n'a aucune raison d'être envoyée au serveur »): as its
+ * first opening made it, nothing since — empty in D7's sense (isEmpty), never given anything by a server, its journal
+ * the one line openBase writes (the lobby's creation, pending), its store without a file. It holds nothing of the
+ * user's: facing a server that holds a base, it takes it without an offer, and the swap deletes it rather than keep it
+ * aside. An empty base that was used is not vierge: it keeps the offer and its archive. Costs a few index lookups, one
+ * journal line and a listing of the store's folder: a pairing's, or a swap's.
+ */
+export function pristine(store: LocalStore, dir: string): boolean {
+  if (!store.isEmpty() || store.lastServerSeq() !== 0 || store.lastSeq() !== 1) return false;
+  const [line] = store.changesSince(0, 1), { op } = line;
+  return line.kind === 'local' && line.serverSeq === null && !line.superseded
+    && op.t === 'plan' && op.before === null && op.after?.type === 'lobby' && op.after.name === LOBBY_NAME
+    && storedHashes(dir).length === 0;
+}
+
+/**
+ * Whether the base in `dir` is vierge (pristine), read at the swap, before anything opens it: its store opened, read,
+ * closed. One that cannot be read (not a base, a newer schema) is not: it is kept aside, as before.
+ */
+function pristineAt(dir: string): boolean {
+  let store: LocalStore;
+  try {
+    // The PC's identifier signs writes only: none is made here.
+    store = LocalStore.open(dir, { pc: '' });
+  } catch {
+    return false;
+  }
+  try {
+    return pristine(store, dir);
+  } catch {
+    return false;
+  } finally {
+    store.close();
+  }
 }
 
 /** The offer's explanation, in French (the block « Serveur » adds its buttons). */
@@ -392,7 +434,9 @@ const RELAUNCH = 'Ferme ce qui la tient ouverte (l’antivirus, l’explorateur)
  * taken), without a list of downloads to do nor a server; one that is not complete (no mark: an interrupted adopt) is
  * removed. Costs one stat when there is none. A folder that holds no base (an interruption between the two renames)
  * is not archived. Each rename retried (`retry`); the staged base refused its place, the old one is put back the same
- * way. A failure throws, in French, naming where each base is.
+ * way. A failure throws, in French, naming where each base is. A vierge old base (pristine, read here: a write made
+ * while the server's base was downloaded counts) is set aside the same way, so that it comes back should the staged
+ * one be refused its place, then deleted once that one holds it (after the short review of plan 5a, 2026-11-09).
  */
 export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWAP_RETRY): 'none' | 'dropped' | 'swapped' {
   const staged = stagedDir(dir);
@@ -401,8 +445,9 @@ export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWA
     rmSync(staged, { recursive: true, force: true });
     return 'dropped';
   }
-  let archive: string | null = null;
+  let archive: string | null = null, blank = false;
   if (existsSync(join(dir, 'cirrus.db'))) {
+    blank = pristineAt(dir);
     archive = freeName(join(dirname(resolve(dir)), archiveName(dir, day)));
     try {
       rename(dir, archive, retry);
@@ -424,7 +469,16 @@ export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWA
     }
     throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}) : elle attend dans « ${staged} ».`);
   }
-  if (archive) for (const f of [DOWNLOADS_FILE, SERVER_FILE]) rmSync(join(archive, f), { force: true });
+  if (archive && blank) {
+    // Nothing of the user's in it: deleted, retried as a rename is. At best: one that resists stays aside, as any.
+    try {
+      rmSync(archive, { recursive: true, force: true, maxRetries: retry.tries, retryDelay: retry.pauseMs });
+    } catch (e) {
+      console.warn(`Base vierge de ce PC non effacée (${messageOf(e)}) : elle reste dans « ${archive} ».`);
+    }
+  } else if (archive) {
+    for (const f of [DOWNLOADS_FILE, SERVER_FILE]) rmSync(join(archive, f), { force: true });
+  }
   rmSync(join(dir, READY_FILE), { force: true });
   return 'swapped';
 }

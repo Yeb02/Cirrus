@@ -43,7 +43,9 @@ export type ReconcileOutcome = { reconciliation: ReconciliationAnswer } | { dive
 /**
  * D7's question to the user, after /pair and /hello (task 5):
  * - seed: this PC's base to the server, which holds none (its nodes and its store's files);
- * - adopt: the server's base on this PC, which holds none (the server's nodes), its own kept as `archive`;
+ * - adopt: the server's base on this PC, which holds none (the server's nodes), its own kept as `archive` — asked of a
+ *   base that was used only: a vierge one takes the server's at once, and is deleted (after the short review of plan
+ *   5a, 2026-11-09);
  * - replace: both hold one, which Cirrus does not merge — refused, but the server's may replace this PC's (`local`
  *   nodes), kept as `archive`.
  */
@@ -53,8 +55,9 @@ export type FirstSyncOffer =
   | { kind: 'replace'; nodes: number; local: number; archive: string };
 
 /**
- * A pairing's outcome: paired (`restarting`: the app starts again on the base taken from the server); refused, why;
- * or D7's question (`offer`), which `first` answers — until then nothing is kept, the token in memory only.
+ * A pairing's outcome: paired (`restarting`: the app starts again on the base taken from the server — that `first`
+ * took, or that a vierge PC took at its pairing); refused, why; or D7's question (`offer`), which `first` answers —
+ * until then nothing is kept, the token in memory only.
  */
 export type PairResult = { ok: true; restarting?: true } | { ok: false; message: string; offer?: FirstSyncOffer };
 

@@ -55,11 +55,13 @@ async function joined(l: Lab, name: string, settings?: Record<string, unknown>):
   return a;
 }
 
-/** A PC that takes the server's base (D7, adopt), then starts again on it; what its settings.json held at that start. */
+/**
+ * A new PC that takes the server's base (D7, adopt: at once, its base vierge — after the short review of plan 5a), then
+ * starts again on it; what its settings.json held at that start.
+ */
 async function adopted(l: Lab, name: string, settings?: Record<string, unknown>): Promise<{ pc: AppPc; atStart: Record<string, unknown> }> {
   const b = await app(l, name, settings);
-  expect(await b.sync.pair(l.url, l.code(name), name)).toMatchObject({ ok: false, offer: { kind: 'adopt' } });
-  expect(await b.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  expect(await b.sync.pair(l.url, l.code(name), name)).toEqual({ ok: true, restarting: true });
   apps.splice(apps.indexOf(b), 1);
   await b.close();
   expect(swapStaged(b.dir, new Date(l.clock))).toBe('swapped');

@@ -29,12 +29,15 @@ export function pcId(dir: string): string {
   return id;
 }
 
+/** The name of the lobby a base's first opening creates: a vierge base's one line names it (firstSync.ts, pristine). */
+export const LOBBY_NAME = 'Lobby';
+
 /** Opens (or creates) the local base; a base without a lobby gets one (spec 7). The main process keeps no state. */
 export function openBase(dir: string): LocalStore {
   mkdirSync(dir, { recursive: true });
   const store = LocalStore.open(dir, { pc: pcId(dir) });
   // A new plan's action depends on nothing else in the state: computed on an empty one, its "before" checked by the base.
-  if (!store.hasLobby()) store.commit(createPlan(emptyState(), 'Lobby', 'lobby'));
+  if (!store.hasLobby()) store.commit(createPlan(emptyState(), LOBBY_NAME, 'lobby'));
   return store;
 }
 

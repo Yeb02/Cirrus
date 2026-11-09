@@ -7,11 +7,11 @@ import { filePath, storeBytes } from '@cirrus/store';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-import { pcId } from '../src/main/base.ts';
+import { openBase, pcId } from '../src/main/base.ts';
 import { readSettings } from '../src/main/settings.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { quitsInsteadOfRelaunch, READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
+import { pristine, quitsInsteadOfRelaunch, READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
 import type { ServerInfo } from '../src/main/sync/protocol.ts';
 import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 import { AppPc } from './support/appPc.ts';
@@ -19,7 +19,8 @@ import { image, Lab, until } from './support/virtualPc.ts';
 
 // The first pairing (plan 5a, task 5, D7): a PC whose base is not empty sends it to an empty server (seed); an empty
 // PC, or one that agrees to replace its base, takes the server's (adopt), staged beside its own and swapped in at the
-// next start; two full bases are refused, the replacement proposed; an interruption leaves the old base as it was.
+// next start — a vierge one at once, its base then deleted rather than kept aside (after the short review of plan 5a);
+// two full bases are refused, the replacement proposed; an interruption leaves the old base as it was.
 
 let lab: Lab | null = null;
 const apps: AppPc[] = [];
@@ -111,12 +112,11 @@ test('envoyer sa base puis la prendre sur un autre PC : les états égaux, l’h
   // Every file of its store, the version only the history names included.
   expect([notes, old, pdf].map((f) => serverBlob(l, f))).toEqual([true, true, true]);
 
-  // B, a new PC: the offer to take the server's base; staged beside its own, which stays until the restart.
+  // B, a new PC (vierge): the server's base taken at once, no offer (after the short review of plan 5a); staged beside
+  // its own, which stays until the restart.
   const b = await app(l, 'pc-b');
   const ownId = pcId(b.dir);
-  const rb = await b.sync.pair(l.url, l.code('Fixe'), 'Fixe');
-  expect(rb).toEqual({ ok: false, message: expect.any(String), offer: { kind: 'adopt', nodes: 2, archive: 'pc-b-avant-jumelage-2026-11-08' } });
-  expect(await b.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toEqual({ ok: true, restarting: true });
   expect(b.relaunched).toBe(1);
   // The block says the restart, as the main process words it (short review after plan 5a, D4), not a base waiting.
   const restarting = { paired: false, url: l.url, name: 'Fixe', busy: 'Base du serveur prise : Cirrus redémarre sur elle.' };
@@ -124,11 +124,10 @@ test('envoyer sa base puis la prendre sur un autre PC : les états égaux, l’h
   expect(existsSync(join(stagedDir(b.dir), READY_FILE))).toBe(true);
   expect([b.host.paired(), existsSync(join(b.dir, SERVER_FILE))]).toEqual([false, false]);
   const b2 = await restart(l, b);
-  // The same PC (its identifier, the token's), paired, its old base kept aside.
+  // The same PC (its identifier, the token's), paired, its old base, vierge, deleted (a used one is kept aside: below).
   expect(pcId(b2.dir)).toBe(ownId);
   expect(b2.host.paired()).toBe(true);
-  const archive = join(dirname(b.dir), 'pc-b-avant-jumelage-2026-11-08');
-  expect([existsSync(join(archive, 'cirrus.db')), existsSync(join(archive, SERVER_FILE)), existsSync(join(archive, DOWNLOADS_FILE))]).toEqual([true, false, false]);
+  expect(leftBeside(b2)).toEqual([]);
   await until(() => b2.status?.state === 'live', 5000, () => JSON.stringify(b2.statuses));
   expect(image(b2.session.state)).toBe(image(await l.state()));
   expect([b2.store.lastServerSeq(), b2.store.pendingCount()]).toEqual([lines, 0]);
@@ -692,14 +691,132 @@ test.each([
   const sent = numbered(a.store.changesSince(0));
   expect(sent.every(([local, server]) => local === server)).toBe(true);
   expect(numbered(await l.journal())).toEqual(sent);
-  // B takes it: the same lines, the same numbers, the old one too.
+  // B, vierge, takes it at once: the same lines, the same numbers, the old one too.
   const b = await app(l, 'pc-b');
-  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toMatchObject({ offer: { kind: 'adopt' } });
-  expect(await b.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toEqual({ ok: true, restarting: true });
   const b2 = await restart(l, b);
   await until(() => b2.status?.state === 'live');
   expect(numbered(b2.store.changesSince(0))).toEqual(sent);
   expect(b2.store.changesSince(line - 1, 1)[0].op).toEqual(a.store.changesSince(line - 1, 1)[0].op);
   expect([b2.store.baseId(), a.store.baseId()]).toEqual([await l.baseId(), await l.baseId()]);
   expect(image(b2.session.state)).toBe(image(a.session.state));
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// After the short review of plan 5a: the first pairing of a vierge PC (2026-11-09). A base as its first opening made
+// it, nothing touched since (pristine), takes the server's at once, without an offer, and the swap deletes it rather
+// than keep it aside; an empty base that was used keeps the offer and the archive.
+
+/** What the main process tells the block while a PC takes the server's base, then once it is taken (B2, D4). */
+const downloading = (l: Lab, name: string): ServerInfo => ({ paired: false, url: l.url, name, busy: 'Téléchargement de la base du serveur…' });
+const restartingOn = (l: Lab, name: string): ServerInfo => ({ paired: false, url: l.url, name, busy: 'Base du serveur prise : Cirrus redémarre sur elle.' });
+
+/** The block « Serveur » as `info` draws it, read from the main process already (nothing clicked here). */
+const drawn = (info: ServerInfo) => renderToStaticMarkup(createElement(ServerBlock, {
+  info, status: { state: 'off' }, onPair: async () => ({ ok: true as const }), onFirst: async () => ({ ok: true as const }), onUnpair: async () => {},
+}));
+
+test('PC vierge face à un serveur plein : aucune offre, la base du serveur prise dès le code accepté (le bloc ne dit que le téléchargement), l’app redémarre sur elle ; la base vierge est effacée, aucun dossier -avant-jumelage-', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  await seeded(l, a);
+  // B, as its first opening made it: its lobby, nothing else.
+  const b = await app(l, 'pc-b');
+  const ownId = pcId(b.dir);
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toEqual({ ok: true, restarting: true });
+  // What the window was told: the download, then the restart — never an offer, nothing to click.
+  expect(b.serversTold).toEqual([downloading(l, 'Fixe'), restartingOn(l, 'Fixe')]);
+  expect(drawn(b.serversTold[0])).toContain('Téléchargement de la base du serveur…');
+  expect(drawn(b.serversTold[0])).not.toContain('<button');
+  expect([b.relaunched, b.host.paired(), existsSync(join(b.dir, SERVER_FILE)), existsSync(join(stagedDir(b.dir), READY_FILE))]).toEqual([1, false, false, true]);
+  const b2 = await restart(l, b);
+  // Deleted, not kept aside: nothing beside the base, neither an archive nor a staged one.
+  expect(leftBeside(b2)).toEqual([]);
+  expect([pcId(b2.dir), b2.host.paired()]).toEqual([ownId, true]);
+  await until(() => b2.status?.state === 'live', 5000, () => JSON.stringify(b2.statuses));
+  expect(image(b2.session.state)).toBe(image(await l.state()));
+  expect([b2.store.baseId(), b2.store.pendingCount()]).toEqual([await l.baseId(), 0]);
+});
+
+test('PC vide mais déjà servi (un nœud créé puis annulé) face à un serveur plein : l’offre, comme avant ; prise, sa base gardée à part sous <nom>-avant-jumelage-AAAA-MM-JJ', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  await seeded(l, a);
+  const c = await app(l, 'pc-c');
+  const lobby = [...c.session.state.plans.values()][0].id;
+  await run(c, (s) => createNode(s, { plan: lobby, title: 'Essai', x: 0, y: 0, k: 0 }));
+  expect((await c.session.undo()).ok).toBe(true);
+  // Empty in D7's sense, never synced, but not vierge: its journal holds more than its lobby's creation.
+  expect([c.store.isEmpty(), c.store.lastServerSeq(), c.store.lastSeq() > 1, pristine(c.store, c.dir)]).toEqual([true, 0, true, false]);
+  const journal = JSON.stringify(c.store.changesSince(0));
+  expect(await c.sync.pair(l.url, l.code('Bureau'), 'Bureau')).toEqual({
+    ok: false, offer: { kind: 'adopt', nodes: 2, archive: 'pc-c-avant-jumelage-2026-11-08' },
+    message: 'Le serveur tient déjà une base : ce PC peut la prendre. Cirrus redémarre alors sur elle ; la base actuelle de ce PC est gardée à part.',
+  });
+  // Nothing taken nor kept while the user decides (R8).
+  expect([c.host.paired(), existsSync(stagedDir(c.dir)), c.net.count('GET', '/snapshot'), c.relaunched]).toEqual([false, false, 0, 0]);
+  expect(await c.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  const c2 = await restart(l, c);
+  await until(() => c2.status?.state === 'live', 5000, () => JSON.stringify(c2.statuses));
+  expect(image(c2.session.state)).toBe(image(await l.state()));
+  // Kept aside, whole, without a list of downloads to do nor a server.
+  expect(leftBeside(c2)).toEqual(['pc-c-avant-jumelage-2026-11-08']);
+  const archive = join(dirname(c.dir), 'pc-c-avant-jumelage-2026-11-08');
+  expect([existsSync(join(archive, 'cirrus.db')), existsSync(join(archive, SERVER_FILE)), existsSync(join(archive, DOWNLOADS_FILE))]).toEqual([true, false, false]);
+  const kept = new AppPc(l, 'pc-c-avant-jumelage-2026-11-08');
+  try {
+    expect(JSON.stringify(kept.store.changesSince(0))).toBe(journal);
+  } finally {
+    kept.store.close();
+  }
+});
+
+test('PC vierge, la prise interrompue au milieu (un fichier perdu en route) : son jeton révoqué, sa base vierge intacte, l’erreur dite ; rien à côté', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  await fill(a);
+  await seeded(l, a);
+  const b = await app(l, 'pc-b');
+  const bId = pcId(b.dir), mine = image(b.session.state), journal = JSON.stringify(b.store.changesSince(0));
+  expect(pristine(b.store, b.dir)).toBe(true);
+  // The snapshot and the journal staged, the answer of a file's download lost: the server, reachable, keeps the token.
+  b.net.loses = (method, path) => method === 'GET' && path.startsWith('/files/');
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toEqual({
+    ok: false, message: expect.stringMatching(/^Base du serveur non prise : Serveur injoignable .* Ce PC n’est pas jumelé, et sa base reste telle quelle\.$/s),
+  });
+  expect(b.net.count('GET', '/snapshot')).toBe(1);
+  // Revoked by the PC itself (R15): the server no longer knows it.
+  expect(b.net.count('POST', '/unpair')).toBe(1);
+  expect(pairedPcs(l)).not.toContain(bId);
+  // The block: the download, then the form again, under which the pairing's message is said (ServerBlock: outcome).
+  expect(b.serversTold).toEqual([downloading(l, 'Fixe'), { paired: false, url: '', name: 'PORTABLE' }]);
+  expect([leftBeside(b), b.relaunched, b.host.paired(), existsSync(join(b.dir, SERVER_FILE))]).toEqual([[], 0, false, false]);
+  expect([image(b.session.state), JSON.stringify(b.store.changesSince(0)), pristine(b.store, b.dir)]).toEqual([mine, journal, true]);
+  // Paired again, the server reachable: taken this time.
+  b.net.loses = null;
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toEqual({ ok: true, restarting: true });
+});
+
+test('au démarrage, une base vierge que la base prise ne peut pas remplacer (son renommage refusé) est remise à sa place, pas effacée ; l’échange fait au démarrage suivant, elle l’est', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cirrus-echange-'));
+  dirs.push(root);
+  const dir = join(root, 'base'), staged = stagedDir(dir);
+  // As its first opening made it.
+  openBase(dir).close();
+  mkdirSync(staged);
+  writeFileSync(join(staged, 'cirrus.db'), 'prise');
+  writeFileSync(join(staged, READY_FILE), '{}');
+  const refused = flaky(new Map([[`${staged} → ${dir}`, 99]]));
+  expect(startBase(dir, DAY, { ...QUICK, rename: refused })).toEqual({ open: true, log: expect.stringMatching(/attend dans « .*base-nouvelle »/) });
+  expect([existsSync(join(dir, 'cirrus.db')), stagedWaiting(dir), readdirSync(root).sort()]).toEqual([true, true, ['base', 'base-nouvelle']]);
+  const back = openBase(dir);
+  try {
+    expect(pristine(back, dir)).toBe(true);
+  } finally {
+    back.close();
+  }
+  expect(swapStaged(dir, DAY, QUICK)).toBe('swapped');
+  expect([readFileSync(join(dir, 'cirrus.db'), 'utf8'), readdirSync(root)]).toEqual(['prise', ['base']]);
 });
