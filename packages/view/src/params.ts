@@ -247,6 +247,13 @@ export interface RenderParams {
   latexBackgroundMax: number;
   /** A .tex typed in its full screen is saved once typing has paused this long (D6), and at Ctrl+S and closing. */
   texSaveIdleMs: number;
+  /**
+   * The comparison of a .tex with its conflict copy (plan 5b, D7), @codemirror/merge's own values: how many identical lines
+   * stay shown around a block that differs,
+   */
+  compareContextLines: number;
+  /** and how many identical lines at least are folded (a stretch of fewer stays shown). */
+  compareFoldMinLines: number;
   /** The LaTeX editor's suggestions of labels and keys: how many are drawn at most, and how long after a key they are asked. */
   latexSuggestionsMax: number;
   latexSuggestionDelayMs: number;
@@ -440,6 +447,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexTypingPauseMs: 300,
   latexBackgroundMax: 300,
   texSaveIdleMs: 10_000,
+  compareContextLines: 3,
+  compareFoldMinLines: 4,
   latexSuggestionsMax: 100,
   latexSuggestionDelayMs: 100,
   syncConnectTimeoutMs: 4000,
@@ -651,6 +660,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'Compilation', 50, 3000, 10),
   num('latexBackgroundMax', 'Recompilations en arrière-plan en attente au plus, après une synchronisation (0 : aucune)', A, 'Compilation', 0, 5000, 10),
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'Éditeur LaTeX', 1000, 600_000, 500),
+  num('compareContextLines', 'Lignes identiques gardées autour d’un bloc qui diffère, dans la comparaison d’un .tex et de sa copie', A, 'Éditeur LaTeX', 0, 100, 1),
+  num('compareFoldMinLines', 'Lignes identiques au moins pour être repliées, dans la comparaison d’un .tex et de sa copie', A, 'Éditeur LaTeX', 1, 1000, 1),
   num('latexSuggestionsMax', 'Suggestions de labels et de clés montrées dans l’éditeur LaTeX', A, 'Éditeur LaTeX', 10, 1000, 10),
   num('latexSuggestionDelayMs', 'Délai avant les suggestions de l’éditeur LaTeX (ms)', A, 'Éditeur LaTeX', 0, 1000, 10),
   num('syncConnectTimeoutMs', 'Attente maximale du serveur, sous le voile « Synchronisation… » (démarrage, réveil) et au jumelage (ms)', A, 'Synchronisation', 500, 60_000, 100),

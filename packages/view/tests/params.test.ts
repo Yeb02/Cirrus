@@ -290,6 +290,20 @@ test('résumé compilé et suggestions de l’éditeur LaTeX : réglages avancé
   });
 });
 
+test('la comparaison d’un .tex et de sa copie : deux réglages avancés du groupe « Éditeur LaTeX » (plan 5b, tâche 6)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number][] = [
+    // @codemirror/merge's own values (collapseUnchanged's margin and minSize), now settings.
+    ['compareContextLines', 3, 'Lignes identiques gardées autour d’un bloc qui diffère, dans la comparaison d’un .tex et de sa copie', 0, 100],
+    ['compareFoldMinLines', 4, 'Lignes identiques au moins pour être repliées, dans la comparaison d’un .tex et de sa copie', 1, 1000],
+  ];
+  for (const [key, value, label, min, max] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Éditeur LaTeX', kind: 'number', min, max, step: 1 });
+  }
+  expect(withOverrides({ compareContextLines: -1, compareFoldMinLines: 0 })).toMatchObject({ compareContextLines: 0, compareFoldMinLines: 1 });
+  expect(withOverrides({ compareContextLines: 1e6, compareFoldMinLines: 1e6 })).toMatchObject({ compareContextLines: 100, compareFoldMinLines: 1000 });
+});
+
 test('délai de tlmgr : un réglage avancé du groupe « Paquets et installation » (plan 4b, tâche 7)', () => {
   // About three times the slowest call measured (203 s, a slow CTAN mirror: tlmgr's base packages, registry).
   expect(DEFAULT_PARAMS.latexTlmgrTimeoutMs).toBe(600_000);
