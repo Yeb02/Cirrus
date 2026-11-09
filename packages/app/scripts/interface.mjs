@@ -188,6 +188,15 @@ const NODE_AT = { x: 400, y: 800 };
 const A_TITLE = 'Nœud de A', A_FILE = 'notes_de_A.txt', A_TEXT = 'Écrit sur le PC A, lu sur le PC B.\n';
 const CHAPTER_PATH = join(appDir, '..', 'fixtures', 'assets', CHAPTER);
 const blobIn = (data, hash) => join(data, 'files', hash.slice(0, 2), hash);
+// Plan 5b, D6: a .tex of the virtual PC's, open on both PCs; its versions written there.
+const TEX_NAME = 'note.tex';
+const texVersion = (n) => `\\section{Écrit sur le PC virtuel, version ${n}}\n`;
+/** The text of the .tex's editor in the full screen, its lines joined by « \n ». */
+const EDITOR_TEXT = `[...document.querySelectorAll('.full-screen .tex-source .cm-line')].map((l) => l.textContent).join('\\n')`;
+/** The full screen's banner over the .tex (D6). */
+const TEX_BANNER = `document.querySelector('.full-screen .tex-workbench .viewer-banner')?.textContent ?? ''`;
+/** Whether a notification says `text` within `ms`. */
+const toastSays = (page, text, ms = 5000) => page.until(`[...document.querySelectorAll('.toast')].some((t) => ${text instanceof RegExp ? `${text}.test(t.textContent)` : `t.textContent === ${JSON.stringify(text)}`})`, ms);
 /** The node's pop-up, by a click on it, showing `title`. */
 async function openPopup(page, at, title) {
   for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`, 1000)); i++) {
@@ -287,7 +296,8 @@ const TWO_PCS = {
       name: '2. B ouverte, un PC virtuel renomme le nœud : B montre le nouveau titre en moins d’une seconde (plan 5a)',
       async run(ctx) {
         const page = ctx.app.page;
-        ctx.virtual = await virtualPc(ctx.server, 'pc-virtuel');
+        // Its .tex open sent to the server (plan 5b, D6: step 5).
+        ctx.virtual = await virtualPc(ctx.server, 'pc-virtuel', { presence: true });
         const pc = ctx.virtual.pc;
         if (!(await until(() => pc.s.nodes.get(ctx.node) !== undefined && pc.status?.state === 'live', 10_000))) throw new Error(`le PC virtuel ne rattrape pas le serveur : ${JSON.stringify(pc.status)}`);
         const title = 'Renommé par le PC virtuel';
@@ -346,6 +356,91 @@ const TWO_PCS = {
         }
         const kept = blobIn(ctx.b.data, ref.hash);
         if (!existsSync(kept) || createHash('sha256').update(readFileSync(kept)).digest('hex') !== ref.hash) throw new Error('le PDF affiché n’est pas gardé dans le magasin de B');
+      },
+    },
+    {
+      name: '5. un .tex ouvert en plein écran sur le PC virtuel : B, qui l’ouvre à son tour, le dit dans son bandeau ; le PC virtuel apprend que B l’a ouvert (plan 5b, D6)',
+      async run(ctx) {
+        const page = ctx.app.page, pc = ctx.virtual.pc;
+        // The virtual PC adds note.tex to the node, and opens it: nobody else has it.
+        const ref = storeBytes(pc.dir, TEX_NAME, Buffer.from(texVersion(0), 'utf8'));
+        pc.act((s) => editNode(s, ctx.node, { files: [...s.nodes.get(ctx.node).files, ref] }));
+        pc.openTex.push({ node: ctx.node, name: TEX_NAME });
+        const first = await pc.client.presence();
+        if (JSON.stringify(first) !== '[]') throw new Error(`le PC virtuel n’envoie pas son .tex ouvert : ${JSON.stringify(first)}`);
+        // B: the .tex in the node's pop-up — the chapter's preview of step 4 closed, the row brought into view —, its
+        // preview, then its full screen (⤢).
+        if (!(await page.until(`!!document.querySelector('.node-popup .file[data-name="${TEX_NAME}"]')`, 10_000))) throw new Error('le pop-up de B ne montre pas le .tex reçu');
+        for (let i = 0; i < 3 && (await page.evaluate(`!!document.querySelector('.file-preview .close')`)); i++) {
+          const close = await page.centre('.file-preview .close', '×');
+          await page.click(close.x, close.y);
+        }
+        await page.evaluate(`document.querySelector('.node-popup .file[data-name="${TEX_NAME}"]').scrollIntoView({ block: 'center' })`);
+        const row = await page.centre(`.node-popup .file[data-name="${TEX_NAME}"]`, '');
+        await page.click(row.x, row.y);
+        const expand = `[...document.querySelectorAll('.file-preview')].find((p) => p.querySelector('.title')?.textContent === '${TEX_NAME}')?.querySelector('.expand')`;
+        if (!(await page.until(`!!${expand}`, 10_000))) {
+          const shown = await page.evaluate(`[...document.querySelectorAll('.file-preview')].map((p) => p.querySelector('.title')?.textContent)`);
+          throw new Error(`pas d’aperçu du .tex, ou pas de ⤢ : aperçus ${JSON.stringify(shown)}`);
+        }
+        const at = await page.evaluate(`(() => { const b = ${expand}.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+        await page.click(at.x, at.y);
+        if (!(await page.until(`(${EDITOR_TEXT}).includes('version 0')`, 15_000))) throw new Error('le plein écran de B ne montre pas le .tex');
+        // Its banner names the virtual PC (its name at the server), since when.
+        const banner = /^Ce \.tex est ouvert sur « PC-VIRTUEL » depuis \d{2}h\d{2} : sa dernière version y est peut-être restée\.$/;
+        if (!(await page.until(`${banner}.test(${TEX_BANNER})`, 10_000))) throw new Error(`le bandeau du plein écran dit « ${await page.evaluate(TEX_BANNER)} »`);
+        // The virtual PC hears of B's, under the name `jumeler` gave B.
+        const back = await pc.client.presence();
+        if (!back?.some((o) => o.node === ctx.node && o.name === TEX_NAME && o.pc === 'B')) throw new Error(`le PC virtuel n’apprend pas que B a ouvert le .tex : ${JSON.stringify(back)}`);
+      },
+    },
+    {
+      name: '6. le .tex changé par le PC virtuel pendant qu’il est ouvert dans B : rien de tapé, la nouvelle version chargée et dite ; du texte tapé, le bandeau, puis Ctrl+S garde les deux versions en une action ; Échap, et le PC virtuel ne l’apprend plus ouvert (plan 5b, D6)',
+      async run(ctx) {
+        const page = ctx.app.page, pc = ctx.virtual.pc, base = reader(ctx.b.data);
+        /** A version written by the virtual PC, under the .tex's name. */
+        const changed = (n) => {
+          const ref = storeBytes(pc.dir, TEX_NAME, Buffer.from(texVersion(n), 'utf8'));
+          pc.act((s) => editNode(s, ctx.node, { files: s.nodes.get(ctx.node).files.map((f) => (f.name === TEX_NAME ? ref : f)) }));
+          return ref;
+        };
+        // Nothing typed in B: version 1 replaces the editor's text, and a notification says so.
+        changed(1);
+        if (!(await page.until(`(${EDITOR_TEXT}).includes('version 1')`, 15_000))) throw new Error(`l’éditeur de B ne montre pas la version 1 : « ${await page.evaluate(EDITOR_TEXT)} »`);
+        if (!(await toastSays(page, `« ${TEX_NAME} » a été modifié sur un autre PC : sa nouvelle version est chargée.`))) throw new Error(`pas de notification : ${await toastsText(page)}`);
+        // Typed in B, then version 2 there: the typed text stays, and the banner says that version will be kept.
+        const line = await page.centre('.full-screen .tex-source .cm-line', 'version 1');
+        await page.click(line.x, line.y);
+        await page.press('End', 'End', 35);
+        await page.type(' % tapé dans B');
+        const v2 = changed(2);
+        const also = `« ${TEX_NAME} » a aussi été modifié sur un autre PC : à l’enregistrement, cette version-là sera gardée sous « note (conflit du … ).tex ».`;
+        if (!(await page.until(`(${TEX_BANNER}).includes(${JSON.stringify(also)})`, 15_000))) throw new Error(`le bandeau dit « ${await page.evaluate(TEX_BANNER)} »`);
+        if (!(await page.evaluate(`(${EDITOR_TEXT}).includes('version 1} % tapé dans B')`))) throw new Error(`le texte tapé n’est plus là : « ${await page.evaluate(EDITOR_TEXT)} »`);
+        // Ctrl+S: the typed text under the name, version 2 under its conflict name, in one write of B's base; said.
+        await page.press('s', 'KeyS', 83, 2);
+        const copy = /^note \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex$/;
+        const last = () => base(`SELECT op FROM changes ORDER BY local_seq DESC LIMIT 1`).map((r) => JSON.parse(r.op))[0];
+        const both = () => {
+          const files = last()?.after?.files ?? [];
+          return files.some((f) => f.name === TEX_NAME && f.hash !== v2.hash) && files.some((f) => copy.test(f.name) && f.hash === v2.hash);
+        };
+        if (!(await until(both, 10_000))) throw new Error(`l’enregistrement n’écrit pas les deux versions en une écriture : ${JSON.stringify(last())}`);
+        if (!(await toastSays(page, /^« note\.tex » a été modifié sur deux PC : l’autre version est gardée sous « note \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex »\.$/))) {
+          throw new Error(`pas de notification de la copie : ${await toastsText(page)}`);
+        }
+        if ((await page.evaluate(TEX_BANNER)).includes('a aussi été modifié')) throw new Error('le bandeau parle encore de la version gardée');
+        // The virtual PC receives both.
+        if (!(await until(() => pc.s.nodes.get(ctx.node).files.some((f) => copy.test(f.name) && f.hash === v2.hash), 10_000))) throw new Error('le PC virtuel ne reçoit pas la copie de conflit');
+        // Escape leaves the full screen: B's .tex no longer open for the virtual PC.
+        for (let i = 0; i < 3 && (await page.evaluate(`!!document.querySelector('.full-screen')`)); i++) {
+          await page.press('Escape', 'Escape', 27);
+          await sleep(300);
+        }
+        if (await page.evaluate(`!!document.querySelector('.full-screen')`)) throw new Error('Échap ne ferme pas le plein écran');
+        let others = await pc.client.presence();
+        for (const end = Date.now() + 5000; others?.length !== 0 && Date.now() < end; others = await pc.client.presence()) await sleep(100);
+        if (others?.length !== 0) throw new Error(`le PC virtuel apprend encore que B a ouvert le .tex : ${JSON.stringify(others)}`);
       },
     },
   ],

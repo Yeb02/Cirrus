@@ -56,16 +56,17 @@ export async function localServer() {
 
 /**
  * A PC without Electron (tests/support/virtualPc.ts: its base, its state reconciled as the interface does, its sync
- * client on Node's fetch), paired with `server` ({ url, code(name) }) under the identifier `id`, its client started.
- * Its token stays in its temporary folder, as in the tests.
+ * client on Node's fetch), paired with `server` ({ url, code(name) }) under the identifier `id` (its name there: `id` in
+ * capitals), its client started; with `presence`, it sends the .tex it has open (its `openTex`, plan 5b, D6). Its token
+ * stays in its temporary folder, as in the tests.
  */
-export async function virtualPc(server, id) {
+export async function virtualPc(server, id, { presence = false } = {}) {
   const { PLAIN, VirtualPc } = await import('../tests/support/virtualPc.ts');
   const { fileSecrets, pair } = await import('../src/main/sync/config.ts');
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-pc-virtuel-'));
   const name = id.toUpperCase();
   fileSecrets(dir, PLAIN).write(await pair(fetch, server.url, server.code(name), id, name));
-  const pc = new VirtualPc({ id, dir, now: Date.now });
+  const pc = new VirtualPc({ id, dir, now: Date.now, presence });
   pc.client.start();
   return {
     pc,
