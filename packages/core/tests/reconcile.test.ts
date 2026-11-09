@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import {
-  type Action, addedViolation, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode,
-  removeFromPlan, setRole,
+  type Action, addedViolation, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editConnection, editNode, exclude, include, moveNodes,
+  placeNode, removeFromPlan, setRole,
 } from '../src/commands.ts';
 import { uuidv7 } from '../src/ids.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
@@ -14,7 +14,7 @@ import { parseRemoteUnit, parseUnit, reconcile, type RemoteUnit, SyncDivergedErr
 afterEach(() => { vi.restoreAllMocks(); });
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
-const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
+const created = (a: { ops: Op[] }, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 /** Through JSON, as on the network. */
 const wire = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
@@ -124,6 +124,43 @@ test('reconcile : deux inclusions du même nœud dans deux groupes du même plan
   expect(groupOf(s, P, X)).toBe(H);
   expect(checkState(s)).toEqual([]);
   expect(image(s)).toBe(image(server));
+});
+
+// Final review of plan 5a, Minor 1 (re-graded Important): what a dropped write created does not come back through a
+// later pending write that edits it.
+
+test('revue finale : « Mettre X dans G » écartée (X mis dans H ailleurs), puis la connexion qu’elle créait modifiée : la connexion ne revient pas, X dans H seulement, et la notification le dit', () => {
+  const { s, P, X, G, H } = world();
+  const server = copy(s);
+  const inc = unitOf(run(s, include(s, P, X, G)), 'pc-a', T0 + 1);
+  const C = created(inc, 'connection');
+  const ren = unitOf(run(s, editConnection(s, C, { title: 'renommée' })), 'pc-a', T0 + 2);
+  const theirs = unitOf(run(server, include(server, P, X, H)), 'pc-b', T0);
+  const r = reconcile(s, [inc, ren], [relayed(theirs, theirs.ops.length)], []);
+  expect(r.dropped.map((d) => d.message)).toEqual([
+    '« Mettre « X » dans « G » » écartée : « X » est déjà dans le groupe « H », depuis un autre PC. Ce que « Modifier une connexion » changeait à ce qu’elle avait créé est écarté avec elle.',
+  ]);
+  expect(r.rebased).toEqual([]);
+  expect(s.connections.has(C)).toBe(false);
+  expect([...s.branches].some((b) => b.connection === C)).toBe(false);
+  expect(groupOf(s, P, X)).toBe(H);
+  expect([...s.connections.values()].filter((c) => c.kind === 'inclusion' && c.members.some((m) => m.node === X))).toHaveLength(1);
+  expect(checkState(s)).toEqual([]);
+  expect(image(s)).toBe(image(server));
+});
+
+test('revue finale : une écriture refusée par le serveur qui créait un enregistrement : la suivante, qui le modifiait, n’en garde que le reste', () => {
+  const { s, P, X, G, H } = world();
+  const inc = unitOf(run(s, include(s, P, X, G)), 'pc-a', T0);
+  const C = created(inc, 'connection');
+  // One write that edits C and renames H: H's change stays, C's goes.
+  const both = unitOf(run(s, combine(s, 'Deux changements', [(t) => editConnection(t, C, { title: 'renommée' }), (t) => editNode(t, H, { title: 'H2' })])), 'pc-a', T0 + 1);
+  const r = reconcile(s, [inc, both], [], [{ unit: inc.unit, message: 'Refusée.' }]);
+  expect(r.dropped.map((d) => d.message)).toEqual(['« Mettre « X » dans « G » » écartée : Refusée. Ce que « Deux changements » changeait à ce qu’elle avait créé est écarté avec elle.']);
+  expect(r.rebased).toHaveLength(1);
+  expect(r.rebased[0].ops.map((o) => o.t)).toEqual(['node']);
+  expect([s.connections.has(C), s.nodes.get(H)!.title]).toEqual([false, 'H2']);
+  expect(checkState(s)).toEqual([]);
 });
 
 test('reconcile : une opération reçue qui ne s’applique pas lève SyncDivergedError, et l’état reste intact', () => {

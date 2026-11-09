@@ -1,4 +1,4 @@
-import { normalizeTag, TagError, type TagKeyDef, type TagValue } from '@cirrus/core';
+import { MAX_ID_CHARS, normalizeTag, TagError, type TagKeyDef, type TagValue } from '@cirrus/core';
 
 /** A number as typed, the French way too: « 1,5 », « -2.25 », « 1 000 ». */
 const NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
@@ -7,7 +7,9 @@ const NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
  * A tag typed in a node's pop-up (spec 5.4): « mot » is a word, « clé:valeur » a key and its value, split at the first
  * colon, both trimmed. A key of the registry is held to its type: a word takes no value, any other type needs one; a
  * number is read the French way too; an enumeration value, by its name or its rank, goes through normalizeTag. A key the
- * registry does not know is kept as typed (the registry grows over time). Refusals throw TagError, in French.
+ * registry does not know is kept as typed (the registry grows over time), within MAX_ID_CHARS characters, as the
+ * server's gate bounds a key a write adds (R32: refused when typed, never undone afterwards). Refusals throw TagError,
+ * in French.
  */
 export function parseTag(input: string, defs: ReadonlyMap<string, TagKeyDef>): TagValue {
   const text = input.trim();
@@ -15,6 +17,7 @@ export function parseTag(input: string, defs: ReadonlyMap<string, TagKeyDef>): T
   const colon = text.indexOf(':');
   const key = (colon < 0 ? text : text.slice(0, colon)).trim();
   if (key === '') throw new TagError('Il manque le nom du tag avant « : ».');
+  if (key.length > MAX_ID_CHARS) throw new TagError(`Le nom d’un tag compte ${MAX_ID_CHARS} caractères au plus (ici ${key.length}).`);
   const value = colon < 0 ? undefined : text.slice(colon + 1).trim();
   const def = defs.get(key);
   if (def?.type === 'word') {

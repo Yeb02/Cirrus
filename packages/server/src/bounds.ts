@@ -14,8 +14,28 @@ export { MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_OPS_PER_UNIT, MAX_UNITS_PER
  */
 export { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from '@cirrus/core';
 
+/**
+ * The core's too, which parseOp and parseUnit apply to every write and journal line received (final review, Minor 3):
+ * the longest identifier — a record's, a write's, an action's, a PC's (/pair's `pc` too), a tag key or a registry key a
+ * write adds (R32: one its "before" holds already is not judged again) —, uuidv7 giving 36 characters; the longest label
+ * of a write, in UTF-16 units (R20: the PC cuts a longer one before it leaves, the server refuses it).
+ */
+export { MAX_ID_CHARS, MAX_LABEL_CHARS } from '@cirrus/core';
+
 /** The largest body of POST /pair, the only route without a token: a code, an identifier and a name. */
 export const MAX_PAIR_BODY_BYTES = 4096;
+
+/**
+ * The longest pairing code /pair reads (an input without a token, final review, Minor 3): a code is 16 characters, 19
+ * with its dashes; a longer one, spaces and all, is a body of the wrong shape (400), which counts against no code.
+ */
+export const MAX_PAIR_CODE_CHARS = 64;
+
+/**
+ * How long a write of serveur.db waits for another one (SQLite's busy timeout): the command line (`jumeler`,
+ * `revoquer`) writes it while the server runs. Final review, Minor 3.
+ */
+export const SERVER_DB_BUSY_MS = 5000;
 
 /** The largest file a PC sends (PUT /files/<hash>). */
 export const MAX_FILE_BYTES = 2 ** 30;

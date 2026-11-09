@@ -105,12 +105,15 @@ async function envoyer(url, dataDir, pcDir) {
 async function prendre(url, dataDir, pcDir) {
   const { adoptBase, stagedDir } = await import('../src/main/sync/firstSync.ts');
   const { fileSecrets } = await import('../src/main/sync/config.ts');
+  const { FORMAT } = await import('../src/main/sync/client.ts');
   const { LocalStore } = await import('@cirrus/store');
   const config = await pairing(url, dataDir, 'Mesure B', 'pc-mesure-b');
   mkdirSync(pcDir, { recursive: true });
+  // The identity of the server's base, as the pairing's /hello gives it (R31): the base taken keeps it.
+  const { baseId } = await (await fetch(`${url}/hello`, { headers: { ...FORMAT, Authorization: `Bearer ${config.token}` } })).json();
   const plain = { encrypt: (t) => Buffer.from(t), decrypt: (b) => b.toString() };
   const times = {}, sampler = peakSampler(), t0 = performance.now();
-  const { last } = await adoptBase({ fetch: timedFetch(times), dir: pcDir, pc: 'pc-mesure-b', config, secrets: fileSecrets(stagedDir(pcDir), plain), signal: new AbortController().signal });
+  const { last } = await adoptBase({ fetch: timedFetch(times), dir: pcDir, pc: 'pc-mesure-b', config, baseId, secrets: fileSecrets(stagedDir(pcDir), plain), signal: new AbortController().signal });
   const adoptMs = performance.now() - t0, peakMb = mb(sampler.stop());
   const store = LocalStore.open(stagedDir(pcDir), { pc: 'pc-mesure-b' });
   const nodes = store.nodeCount();
@@ -312,7 +315,7 @@ async function reconcilier(dir, kind, rounds) {
     const run = (a) => { built.commit(a); applyOps(s, a.ops); return a; };
     const lobby = run(createPlan(s, 'Lobby', 'lobby')).ops[0].after.id;
     for (let i = 0; i < 600; i++) run(createNode(s, { plan: lobby, title: `Nœud ${i}`, x: (i % 20) * 200, y: Math.floor(i / 20) * 120, k: 0 }));
-    built.numberSeeded(built.lastSeq());
+    built.numberSeeded(built.lastSeq(), uuidv7());
     built.close();
   }
   const store = LocalStore.open(dir, { pc: 'pc-mesure' });

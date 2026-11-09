@@ -98,16 +98,25 @@ const maybe = (o: Fields, k: string, check: (v: unknown, at: string) => unknown,
 const scalar = (v: unknown, at: string): void => { if (typeof v !== 'string') finite(v, at); };
 const vec2 = (v: unknown, at: string): void => { const o = fields(v, at, ['x', 'y']); finite(o.x, `${at}.x`); finite(o.y, `${at}.y`); };
 
-function tags(v: unknown, at: string): void {
-  list(v, at, (x, a) => { const t = fields(x, a, ['key'], ['value']); ident(t.key, `${a}.key`); maybe(t, 'value', scalar, a); });
+/**
+ * How a tag key (a node's or a connection's, or a registry key) is judged (R32): bounded like an identifier, 1 to
+ * MAX_ID_CHARS characters, when the write adds it; only non-empty text when it is the record as the base holds it — a
+ * key of the "before", kept by the "after" — or a line of history (parseOp's `history`).
+ */
+type KeyCheck = (key: unknown, at: string) => void;
+const boundedKey: KeyCheck = (k, at) => { ident(k, at); };
+const anyKey: KeyCheck = (k, at) => { if (text(k, at) === '') bad(`${at} est vide`); };
+
+function tags(v: unknown, at: string, key: KeyCheck): void {
+  list(v, at, (x, a) => { const t = fields(x, a, ['key'], ['value']); key(t.key, `${a}.key`); maybe(t, 'value', scalar, a); });
 }
 
-function nodeRec(v: unknown, at: string): Fields {
+function nodeRec(v: unknown, at: string, key: KeyCheck): Fields {
   const n = fields(v, at, ['id', 'title', 'summary', 'tags', 'files'], ['trashedAt', 'anchor']);
   ident(n.id, `${at}.id`);
   text(n.title, `${at}.title`);
   text(n.summary, `${at}.summary`);
-  tags(n.tags, `${at}.tags`);
+  tags(n.tags, `${at}.tags`, key);
   list(n.files, `${at}.files`, (x, a) => {
     const f = fields(x, a, ['name', 'hash', 'size']);
     if (text(f.name, `${a}.name`) === '') bad(`${a}.name est vide`);
@@ -119,13 +128,13 @@ function nodeRec(v: unknown, at: string): Fields {
   return n;
 }
 
-function connectionRec(v: unknown, at: string): Fields {
+function connectionRec(v: unknown, at: string, key: KeyCheck): Fields {
   const c = fields(v, at, ['id', 'kind', 'title', 'relation', 'tags', 'members'], ['trashedAt']);
   ident(c.id, `${at}.id`);
   oneOf(c.kind, ['knowledge', 'inclusion', 'structure'], `${at}.kind`);
   text(c.title, `${at}.title`);
   text(c.relation, `${at}.relation`);
-  tags(c.tags, `${at}.tags`);
+  tags(c.tags, `${at}.tags`, key);
   list(c.members, `${at}.members`, (x, a) => { const m = fields(x, a, ['node', 'role']); ident(m.node, `${a}.node`); oneOf(m.role, ['source', 'target', 'associate'], `${a}.role`); });
   maybe(c, 'trashedAt', finite, at);
   return c;
@@ -139,9 +148,9 @@ function planRec(v: unknown, at: string): Fields {
   return p;
 }
 
-function tagKeyRec(v: unknown, at: string): Fields {
+function tagKeyRec(v: unknown, at: string, key: KeyCheck): Fields {
   const t = fields(v, at, ['key', 'type', 'scope', 'multi', 'required'], ['defaultValue', 'enumValues']);
-  ident(t.key, `${at}.key`);
+  key(t.key, `${at}.key`);
   oneOf(t.type, ['word', 'number', 'enum', 'date', 'text'], `${at}.type`);
   oneOf(t.scope, ['node', 'connection', 'both'], `${at}.scope`);
   flag(t.multi, `${at}.multi`);
@@ -203,12 +212,15 @@ export function plainName(name: string): boolean {
   return true;
 }
 
-/** Per record type: its check, and the fields that name it (an operation's "before" and "after" are the same record). */
-const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: string) => Fields; identity: readonly string[] }> = {
-  node: { check: nodeRec, identity: ['id'] },
-  connection: { check: connectionRec, identity: ['id'] },
+/**
+ * Per record type: its check (`key`: how its tag keys are judged), the fields that name it (an operation's "before"
+ * and "after" are the same record), and its tag keys, once checked.
+ */
+const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: string, key: KeyCheck) => Fields; identity: readonly string[]; keys?: (r: Fields) => string[] }> = {
+  node: { check: nodeRec, identity: ['id'], keys: (r) => (r.tags as { key: string }[]).map((t) => t.key) },
+  connection: { check: connectionRec, identity: ['id'], keys: (r) => (r.tags as { key: string }[]).map((t) => t.key) },
   plan: { check: planRec, identity: ['id'] },
-  tagKey: { check: tagKeyRec, identity: ['key'] },
+  tagKey: { check: tagKeyRec, identity: ['key'], keys: (r) => [r.key as string] },
   placement: { check: placementRec, identity: ['plan', 'node'] },
   connLayout: { check: layoutRec, identity: ['plan', 'connection'] },
   phantom: { check: phantomRec, identity: ['id'] },
@@ -216,14 +228,23 @@ const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: stri
 };
 
 /**
- * An operation received from elsewhere (another PC through the server, plan 5a), checked whole before anything reads
+ * An operation received from elsewhere (another PC through the server, plan 5a), or about to be written by this PC
+ * (R32: SyncHost.commit applies the server's check before anything is written), checked whole before anything reads
  * it: its type; every field of each record, of the right type, finite numbers, identifiers of 1 to MAX_ID_CHARS
  * characters, known enumerations, no field the model does not have; a "before" and an "after" of the same record, not
- * both absent; a plain name (plainName) for each file name the "after" adds to a node — one the "before" has already
- * is not judged again, the "before" being the record as it is. Returns it as given; throws SyncFormatError, in French,
- * otherwise.
+ * both absent. What the "after" adds is held to today's content bounds: a plain name (plainName) for each file name it
+ * adds to a node, 1 to MAX_ID_CHARS characters for each tag key (or registry key) it adds; what the "before" holds, and
+ * the "after" keeps of it, is not judged again — the "before" is the record as the base holds it (an older base may
+ * hold what today's bounds refuse, and its records stay editable: R32).
+ *
+ * `history` (R32, in the spirit of R19 and R20): a line of a journal taken whole — a seeding PC's up to the line its
+ * snapshot covers, the server's by a PC that adopts its base —, which the app may have written before today's content
+ * bounds: those are not applied (its tag keys and file names are only non-empty), its shape always is. Lines applied as
+ * writes (a seed's tail, the writes sent and received) never take it.
+ *
+ * Returns it as given; throws SyncFormatError, in French, otherwise.
  */
-export function parseOp(x: unknown): Op {
+export function parseOp(x: unknown, history = false): Op {
   const t = fields(x, 'l’opération', ['t'], ['before', 'after', 'key']).t;
   if (t === 'branch') {
     const op = fields(x, 'branch', ['t', 'key', 'before', 'after']);
@@ -235,13 +256,15 @@ export function parseOp(x: unknown): Op {
   }
   const type = typeof t === 'string' && Object.hasOwn(RECORDS, t) ? (t as keyof typeof RECORDS) : bad(`type « ${String(t)} » inconnu`);
   const op = fields(x, type, ['t'], ['before', 'after']);
-  const { check, identity } = RECORDS[type];
-  const before = op.before === null || op.before === undefined ? null : check(op.before, `${type}.before`);
-  const after = op.after === null || op.after === undefined ? null : check(op.after, `${type}.after`);
+  const { check, identity, keys } = RECORDS[type];
+  const before = op.before === null || op.before === undefined ? null : check(op.before, `${type}.before`, anyKey);
+  const kept = new Set(before && keys ? keys(before) : []);
+  const added: KeyCheck = history ? anyKey : (k, at) => (typeof k === 'string' && kept.has(k) ? anyKey(k, at) : boundedKey(k, at));
+  const after = op.after === null || op.after === undefined ? null : check(op.after, `${type}.after`, added);
   if (op.before === undefined || op.after === undefined) bad(`${type} : « before » et « after » sont requis, null pour un enregistrement absent`);
   if (!before && !after) bad(`${type} : ni « before » ni « after »`);
   if (before && after && identity.some((k) => before[k] !== after[k])) bad(`${type} : « before » et « after » ne sont pas le même enregistrement`);
-  if (type === 'node' && after) {
+  if (type === 'node' && after && !history) {
     const had = new Set((before?.files as { name: string }[] | undefined)?.map((f) => f.name));
     (after.files as { name: string }[]).forEach((f, i) => {
       if (!had.has(f.name) && !plainName(f.name)) bad(`node.after.files[${i}].name n’est pas un nom de fichier simple`);

@@ -81,7 +81,7 @@ async function journal(c: Client): Promise<ChangeRow[]> {
 test('seed : l’instantané, le journal par pages, puis done ; le serveur tient l’état et l’historique du PC, numérotés, et le dit (hello)', async () => {
   const { url } = await start();
   const a = await paired(url, 'pc-a');
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0 });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0, baseId: expect.any(String) });
   // The snapshot covers the first four lines; the tail (5 to 7) is replayed by the server on it.
   const { store, s, X } = pcBase('pc-a', 4);
   const rows = store.changesSince(0), snap = store.readSnapshot()!;
@@ -92,8 +92,8 @@ test('seed : l’instantané, le journal par pages, puis done ; le serveur tient
   expect(await journal(a)).toEqual([]);
   const done = await send(a, '/seed/done', { last: rows.length });
   expect(done.status).toBe(200);
-  expect(await done.json()).toEqual({ lastSeq: rows.length });
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: rows.length, empty: false, nodes: 2 });
+  expect(await done.json()).toEqual({ lastSeq: rows.length, baseId: expect.any(String) });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: rows.length, empty: false, nodes: 2, baseId: expect.any(String) });
   const served = decodeState(await (await a.get('/snapshot')).arrayBuffer());
   expect(image(served)).toBe(image(s));
   // The history of every line, as the PC wrote it, numbered (server_seq = its local_seq).
@@ -260,6 +260,68 @@ test('seed : les flux ouverts avant sont fermés à done, et reprennent par le j
   } finally {
     events.close();
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Final review of plan 5a.
+
+test('R31 : la base du serveur a une identité, rendue par /hello, gardée quand serveur.db est remis à zéro ; une base neuve en a une autre, et un envoi de base la remplace (done la rend)', async () => {
+  const first = await start();
+  const a = await paired(first.url, 'pc-a');
+  const fresh = (await a.hello()).baseId;
+  expect(fresh).toMatch(/^[0-9a-f-]{36}$/);
+  expect((await a.hello()).baseId).toBe(fresh);
+  // serveur.db reset (its PCs, codes and settings lost), the base kept: the same identity.
+  await running.pop()!.close();
+  for (const f of ['serveur.db', 'serveur.db-wal', 'serveur.db-shm']) rmSync(join(dir, 'serveur', f), { force: true });
+  const again = await start();
+  const b = await paired(again.url, 'pc-b');
+  expect((await b.hello()).baseId).toBe(fresh);
+  // A seed brings another base: another identity, which done gives the seeding PC.
+  const { store } = pcBase('pc-b');
+  const rows = store.changesSince(0);
+  expect((await sendSnapshot(b, seedBody(replay(rows)), rows.length)).status).toBe(204);
+  expect((await send(b, '/seed/journal', { rows })).status).toBe(200);
+  const done = (await (await send(b, '/seed/done', { last: rows.length })).json()) as { lastSeq: number; baseId: string };
+  expect(done).toEqual({ lastSeq: rows.length, baseId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+  expect(done.baseId).not.toBe(fresh);
+  expect((await b.hello()).baseId).toBe(done.baseId);
+  // The base folder replaced by a new one: another identity again.
+  await running.pop()!.close();
+  rmSync(join(dir, 'serveur', 'base'), { recursive: true, force: true });
+  const third = await start();
+  const c = new Client(third.url, b.token, 'pc-b');
+  expect((await c.hello()).baseId).not.toBe(done.baseId);
+});
+
+test('R32 : une ligne d’historique qu’un PC a écrite avant les bornes d’aujourd’hui (une clé de tag trop longue) s’envoie, numérotée comme chez lui ; la même ligne dans la fin du journal, rejouée sur l’instantané, est refusée', async () => {
+  const { url } = await start();
+  const a = await paired(url, 'pc-a');
+  const { store, s, X } = pcBase('pc-a');
+  // As an older app wrote it: a word tag of 200 characters, then removed (the node editable again).
+  const long = 'mot'.repeat(70);
+  for (const tags of [[{ key: long }], []]) {
+    const n = s.nodes.get(X)!, op = { t: 'node' as const, before: n, after: { ...n, tags } };
+    store.commit({ id: `a-${tags.length}`, label: 'Tag', ops: [op] });
+    applyOps(s, [op]);
+  }
+  const rows = store.changesSince(0), line = rows.findIndex((r) => r.op.t === 'node' && (r.op.after?.tags.length ?? 0) > 0) + 1;
+  // Its snapshot before that line: the line is in the tail, replayed as a write — refused, named.
+  expect((await sendSnapshot(a, seedBody(replay(rows.slice(0, line - 1))), line - 1)).status).toBe(204);
+  const tail = await send(a, '/seed/journal', { rows });
+  expect(tail.status).toBe(400);
+  expect(await errorOf(tail)).toMatch(new RegExp(`^Ligne ${line} du journal de ce PC : Opération mal formée : node\\.after\\.tags\\[0\\]\\.key`));
+  // Its snapshot after it: history, taken; the server numbers every line as the PC's journal does.
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
+  expect((await send(a, '/seed/done', { last: rows.length })).status).toBe(200);
+  const got = await journal(a);
+  expect(got.map((r) => [r.localSeq, r.serverSeq, r.unit])).toEqual(rows.map((r) => [r.localSeq, r.localSeq, r.unit]));
+  expect(got[line - 1].op).toEqual(rows[line - 1].op);
+  // A write adding such a key is still refused; one editing the node, which no longer holds it, passes.
+  const n = s.nodes.get(X)!;
+  expect(await a.units([a.unit({ id: 'a-x', label: 'Tag', ops: [{ t: 'node', before: n, after: { ...n, tags: [{ key: long }] } }] })])).toEqual([{ refused: expect.stringMatching(/tags\[0\]\.key/) }]);
+  expect(await a.units([a.unit(editNode(s, X, { title: 'X3' }))])).toEqual([{ accepted: rows.length + 1 }]);
 });
 
 test('R15 : POST /unpair révoque le jeton qui le demande, et lui seul', async () => {

@@ -130,3 +130,41 @@ test('parseOp : un fichier ajouté à un nœud doit avoir un nom simple ; un nom
   expect(parseOp({ t: 'node', before: legacy, after: { ...legacy, files: [] } })).toBeDefined();
   expect(parseOp({ t: 'node', before: legacy, after: null })).toBeDefined();
 });
+
+// Final review of plan 5a, Important 2 (R32).
+
+test('R32 : une clé de tag que l’« après » ajoute est bornée ; une clé déjà dans l’« avant » n’est pas rejugée (le nœud reste modifiable)', () => {
+  const long = 'k'.repeat(MAX_ID_CHARS + 1), conn = EVERY_OP[3].after as Extract<Op, { t: 'connection' }>['after'] & object;
+  // Added: a node's tag, a connection's, a registry key created.
+  expect(() => parseOp({ t: 'node', before: null, after: { ...node, tags: [{ key: long }] } })).toThrow(/tags\[0\]\.key n’est pas un identifiant de 1 à 128 caractères/);
+  expect(() => parseOp({ t: 'node', before: node, after: { ...node, tags: [...node.tags, { key: long }] } })).toThrow(SyncFormatError);
+  expect(() => parseOp({ t: 'connection', before: conn, after: { ...conn, tags: [{ key: long, value: 1 }] } })).toThrow(SyncFormatError);
+  expect(() => parseOp({ t: 'tagKey', before: null, after: { key: long, type: 'word', scope: 'node', multi: false, required: false } })).toThrow(SyncFormatError);
+  // An empty key, never.
+  expect(() => parseOp({ t: 'node', before: { ...node, tags: [{ key: '' }] }, after: null })).toThrow(SyncFormatError);
+  // The record as the base holds it: renamed, its tag removed, thrown away; a registry key changed or removed.
+  const legacy = { ...node, tags: [{ key: long }, { key: 'lu' }] };
+  expect(parseOp({ t: 'node', before: legacy, after: { ...legacy, title: 'Renommé' } })).toBeDefined();
+  expect(parseOp({ t: 'node', before: legacy, after: { ...legacy, tags: [{ key: 'lu' }] } })).toBeDefined();
+  expect(parseOp({ t: 'node', before: legacy, after: null })).toBeDefined();
+  const def = { key: long, type: 'word', scope: 'node', multi: false, required: false };
+  expect(parseOp({ t: 'tagKey', before: def, after: { ...def, scope: 'both' } })).toBeDefined();
+  expect(parseOp({ t: 'tagKey', before: def, after: null })).toBeDefined();
+});
+
+test('R32 : une ligne d’historique (history) n’est pas jugée sur les bornes de contenu d’aujourd’hui — clé de tag, nom de fichier ajouté — mais toujours sur sa forme', () => {
+  const long = 'k'.repeat(MAX_ID_CHARS + 1);
+  const old: unknown[] = [
+    { t: 'node', before: null, after: { ...node, tags: [{ key: long }] } },
+    { t: 'node', before: node, after: { ...node, files: [{ name: 'ancien:nom', hash: H('c'), size: 1 }] } },
+    { t: 'tagKey', before: null, after: { key: long, type: 'word', scope: 'node', multi: false, required: false } },
+  ];
+  for (const x of old) {
+    expect(() => parseOp(x), JSON.stringify(x).slice(0, 80)).toThrow(SyncFormatError);
+    expect(parseOp(x, true)).toBe(x);
+  }
+  // Its shape and identifiers stay checked.
+  expect(() => parseOp({ t: 'node', before: null, after: { ...node, id: 'x'.repeat(MAX_ID_CHARS + 1) } }, true)).toThrow(SyncFormatError);
+  expect(() => parseOp({ t: 'node', before: null, after: { ...node, extra: 1 } }, true)).toThrow(SyncFormatError);
+  expect(() => parseOp({ t: 'node', before: null, after: { ...node, tags: [{ key: 7 }] } }, true)).toThrow(SyncFormatError);
+});

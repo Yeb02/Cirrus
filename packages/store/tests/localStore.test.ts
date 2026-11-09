@@ -602,9 +602,9 @@ test('numberSeeded : les lignes du PC jusqu’à `last` prennent leur numéro du
   const last = store.lastSeq();
   // A write made while the base was being sent: after `last`, pending.
   const later = commitUnit(store, s, editNode(s, id, { summary: 'pendant l’envoi' }));
-  store.numberSeeded(last);
+  store.numberSeeded(last, 'base-serveur');
   expect(store.changesSince(0).map((r) => r.serverSeq)).toEqual([1, 2, 3, 4, null]);
-  expect(store.lastServerSeq()).toBe(last);
+  expect([store.lastServerSeq(), store.baseId()]).toEqual([last, 'base-serveur']);
   expect(store.pendingUnits().map((u) => u.unit)).toEqual([later.unit]);
   expect(store.nodeCount()).toBe(1);
   store.close();

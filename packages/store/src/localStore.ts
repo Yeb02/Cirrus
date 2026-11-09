@@ -55,10 +55,11 @@ const DERIVED = ['flow', 'subject'];
  * A journal line received from elsewhere (plan 5a, task 5, D7: a seeding PC's, by the server; the server's, by a PC
  * that adopts its base), checked whole before any of it is written: its fields of the right type and no other, its
  * identifiers of 1 to MAX_ID_CHARS characters, its label of MAX_LABEL_CHARS at most, its operation as parseOp checks a
- * write's; `localSeq`, the journal number it must have. Its flow and subject are read from its operation. Throws
- * SyncFormatError, in French, otherwise.
+ * write's — or, `history` (R32), as parseOp checks a line of history, without today's content bounds: a line up to the
+ * one the seed's snapshot covers, or adopted —; `localSeq`, the journal number it must have. Its flow and subject are
+ * read from its operation. Throws SyncFormatError, in French, otherwise.
  */
-export function parseChangeRow(x: unknown, localSeq: number): ChangeRow {
+export function parseChangeRow(x: unknown, localSeq: number, history = false): ChangeRow {
   const bad = (why: string): never => { throw new SyncFormatError(why); };
   if (typeof x !== 'object' || x === null || Array.isArray(x)) return bad('ce n’est pas un objet.');
   const r = x as Record<string, unknown>;
@@ -74,7 +75,7 @@ export function parseChangeRow(x: unknown, localSeq: number): ChangeRow {
   if (typeof r.at !== 'number' || !Number.isFinite(r.at)) bad('son heure n’est pas un nombre fini.');
   if (!KINDS.includes(r.kind as ChangeKind)) bad('son genre n’est ni local, ni remote, ni rewind.');
   if (typeof r.superseded !== 'boolean') bad('superseded n’est pas un booléen.');
-  const op = parseOp(r.op);
+  const op = parseOp(r.op, history);
   return {
     localSeq, serverSeq: r.serverSeq as number | null, actionId: r.actionId as Id, label: r.label as string, flow: flowOf(op), at: r.at as number, pc: r.pc as string,
     subject: subjectOf(op), op, unit: r.unit as Id, kind: r.kind as ChangeKind, superseded: r.superseded as boolean,
@@ -418,15 +419,32 @@ export class LocalStore {
   /**
    * This PC's journal numbered by the empty server it seeded (plan 5a, task 5, D7): each line up to `last` takes its
    * journal number as its server number, as the server keeps them (any number an earlier server gave is dropped); the
-   * lines after it, written while the base was being sent, stay pending; last_server_seq is `last`. One transaction.
+   * lines after it, written while the base was being sent, stay pending; last_server_seq is `last`; the server's base
+   * identity, `baseId` (R31), with them. One transaction.
    */
-  numberSeeded(last: number): void {
+  numberSeeded(last: number, baseId: string): void {
     this.transaction(() => {
       if (!Number.isSafeInteger(last) || last < 0 || last > this.lastSeq()) throw new Error(`Numérotation refusée : la ligne ${last} n’est pas dans le journal.`);
       this.q('UPDATE changes SET server_seq = NULL WHERE server_seq IS NOT NULL').run();
       this.q('UPDATE changes SET server_seq = local_seq WHERE local_seq <= ?').run(last);
       this.setLastServerSeq(last);
+      this.setBaseId(baseId);
     });
+  }
+
+  /**
+   * The identity of the server's base (final review of plan 5a, R31), in the meta: on the server, its own, created with
+   * it (Canon) and replaced by a seed; on a PC, the one of the base it follows, kept at its first sync (a seed, an
+   * adopt, two empty bases), so that pairing it again with that server picks up where it stopped, and a server holding
+   * another base is told apart. Null: none (a PC never synced, or synced before R31).
+   */
+  baseId(): string | null {
+    const row = this.q("SELECT value FROM meta WHERE key = 'base_id'").get() as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setBaseId(id: string): void {
+    this.q("INSERT INTO meta (key, value) VALUES ('base_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(id);
   }
 
   /**

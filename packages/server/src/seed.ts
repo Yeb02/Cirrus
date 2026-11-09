@@ -43,11 +43,13 @@ const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'obj
 /**
  * A line of a seeding PC's journal, checked whole (parseChangeRow: its operation as parseOp checks a write's), as the
  * server keeps it: numbered by itself (server_seq = local_seq, R6) whatever number an earlier server gave it.
- * `expected`: the journal number it must have.
+ * `expected`: the journal number it must have. `history` (R32): a line the snapshot covers, which the PC's app may have
+ * written before today's content bounds — its shape checked, not those bounds; a line after it is replayed on the
+ * snapshot as a write is applied, and keeps the whole check.
  */
-function seedRow(x: unknown, expected: number): ChangeRow {
+function seedRow(x: unknown, expected: number, history: boolean): ChangeRow {
   try {
-    return { ...parseChangeRow(x, expected), serverSeq: expected };
+    return { ...parseChangeRow(x, expected, history), serverSeq: expected };
   } catch (e) {
     if (e instanceof SyncFormatError) throw new SeedError(400, `Ligne ${expected} du journal de ce PC : ${e.message}`);
     throw e;
@@ -115,7 +117,7 @@ export class Seeds {
     const a = this.owned(tokenHash);
     if (!isObject(body) || !Array.isArray(body.rows)) throw new SeedError(400, 'Corps attendu : { rows: [...] }.');
     if (body.rows.length > MAX_JOURNAL_PAGE) throw new SeedError(400, `Au plus ${MAX_JOURNAL_PAGE} lignes par page.`);
-    const rows = (body.rows as unknown[]).map((x, i) => seedRow(x, a.rows + i + 1));
+    const rows = (body.rows as unknown[]).map((x, i) => seedRow(x, a.rows + i + 1, a.rows + i + 1 <= a.seq));
     const insert = a.journal.prepare('INSERT INTO lines (local_seq, json) VALUES (?, ?)');
     a.journal.exec('BEGIN');
     try {

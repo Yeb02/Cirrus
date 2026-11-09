@@ -1,6 +1,6 @@
 import { addedViolation } from './commands.ts';
 import { groupOf, type Violation } from './invariants.ts';
-import { rebaseUnit } from './merge.ts';
+import { rebaseUnit, recordKey } from './merge.ts';
 import type { Id, NodeRec } from './model.ts';
 import { invertOp, MAX_ID_CHARS, MAX_LABEL_CHARS, type Op, parseOp, SyncFormatError } from './ops.ts';
 import { applyOp, canonical, rollback, type State } from './state.ts';
@@ -156,9 +156,11 @@ function dropMessage(s: State, u: Unit, replayed: Unit, v: Violation): string {
  * pending writes, in order (D4): the received writes that are the pending ones at the head, as they were, acknowledge
  * them; then, if anything remains to receive or was refused, the other pending writes are undone, the received ones
  * applied, and each pending one replayed on top (rebaseUnit), checked as a command — dropped with a notification when the
- * server refused it or it would add a violation, gone without a word when it no longer changes anything. `s` is left
- * reconciled; it is left as it was when a received operation (or an inverse) does not apply: SyncDivergedError. Costs
- * what the pending and received writes touch, never the size of the base.
+ * server refused it or it would add a violation, gone without a word when it no longer changes anything. What a dropped
+ * write created is not written again by a later pending write that changed it (final review, Minor 1): that write keeps
+ * the rest, and the dropped write's notification names it. `s` is left reconciled; it is left as it was when a received
+ * operation (or an inverse) does not apply: SyncDivergedError. Costs what the pending and received writes touch, never
+ * the size of the base.
  */
 export function reconcile(s: State, pending: readonly Unit[], incoming: readonly RemoteUnit[], refused: readonly { unit: Id; message: string }[]): Reconciliation {
   let n = 0;
@@ -188,23 +190,34 @@ export function reconcile(s: State, pending: readonly Unit[], incoming: readonly
   const received = new Set(later.map((u) => u.unit));
   /** The conflict copies the replayed writes made, by node: a later write of the same .tex may replace one. */
   const copies: { node: Id; name: string }[] = [];
+  /**
+   * What the dropped writes had created (recordKey), each with the dropped write's index in `out.dropped`: a later
+   * write that edits one does not bring it back (final review, Minor 1); the labels of those later writes, by dropped
+   * write, for its notification.
+   */
+  const gone = new Map<string, number>(), lostBy = new Map<number, string[]>();
+  const drop = (u: Unit, message: string) => {
+    const i = out.dropped.push({ unit: u, message }) - 1;
+    for (const op of u.ops) if (op.t === 'branch' ? !op.before && op.after : op.before === null) gone.set(recordKey(op), i);
+  };
   try {
     for (const u of rest) {
       // Accepted by the server after other writes: received above, as the server holds it.
       if (received.has(u.unit)) continue;
       const message = refusal.get(u.unit);
       if (message !== undefined) {
-        out.dropped.push({ unit: u, message: `« ${u.label} » écartée : ${message}` });
+        drop(u, `« ${u.label} » écartée : ${message}`);
         continue;
       }
-      const { unit, conflictCopies } = rebaseUnit(s, u, later);
+      const { unit, conflictCopies, lost } = rebaseUnit(s, u, later, gone);
+      for (const i of new Set(lost.map((key) => gone.get(key)!))) lostBy.set(i, [...(lostBy.get(i) ?? []), u.label]);
       if (!unit) continue;
       const mark = log.length;
       for (const op of unit.ops) { applyOp(s, op); log.push(op); }
       const v = addedViolation(s, unit.ops);
       if (v) {
         rollback(s, log, mark);
-        out.dropped.push({ unit: u, message: dropMessage(s, u, unit, v) });
+        drop(u, dropMessage(s, u, unit, v));
         continue;
       }
       out.rebased.push(unit);
@@ -216,6 +229,11 @@ export function reconcile(s: State, pending: readonly Unit[], incoming: readonly
   } catch (e) {
     rollback(s, log, 0);
     throw e;
+  }
+  // A dropped write's notification names the later writes that lost what they changed of its records (Minor 1).
+  for (const [i, labels] of lostBy) {
+    const names = labels.map((l) => `« ${l} »`), list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} et ${names.at(-1)}`;
+    out.dropped[i] = { ...out.dropped[i], message: `${out.dropped[i].message} Ce que ${list} ${names.length === 1 ? 'changeait' : 'changeaient'} à ce qu’elle avait créé est écarté avec elle.` };
   }
   // One notification per conflict: for each copy the replayed writes leave in the end.
   const told = new Set<string>();

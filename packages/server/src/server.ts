@@ -164,8 +164,9 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
       GET: (req, res) => {
         const refusal = formatRefusal(req);
         if (refusal) throw new HttpError(409, refusal);
-        // The nodes it holds: the first pairing's offer to take its base names them (task 5, D7).
-        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty(), nodes: canon.state.nodes.size });
+        // The nodes it holds: the first pairing's offer to take its base names them (task 5, D7). Its base's identity:
+        // a PC that follows it picks up where it stopped, one that follows another stops (R31).
+        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty(), nodes: canon.state.nodes.size, baseId: canon.baseId });
       },
     },
     // R15: a PC revokes its own token — a pairing it cancels, a first sync that fails, « Dissocier ce PC » —, never another's.
@@ -224,9 +225,10 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         } finally {
           seeds.drop();
         }
-        // A stream live on the empty base would miss the seed's lines: each reconnects and catches up.
+        // A stream live on the empty base would miss the seed's lines: each reconnects and catches up (or, a PC that
+        // followed the empty base, stops: its identity has changed, R31).
         hub.endStreams();
-        reply(res, 200, { lastSeq: canon.seq });
+        reply(res, 200, { lastSeq: canon.seq, baseId: canon.baseId });
       },
     },
     '/events': {

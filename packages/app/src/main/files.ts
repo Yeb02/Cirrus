@@ -8,7 +8,8 @@ import { Readable } from 'node:stream';
 import { type FileRef, plainName } from '@cirrus/core';
 import { type ChangeRow, filePath, importFile, storeBytes, storeBytesAsync } from '@cirrus/store';
 import { checkFileName } from '../renderer/files/merge.ts';
-import { notDownloaded } from '../renderer/files/read.ts';
+import { notDownloaded, notStored } from '../renderer/files/read.ts';
+import { NOT_STORED } from './sync/downloads.ts';
 
 /**
  * The nodes' files on the main process's side (plan 4a, D1, D5, D6): the store's blobs served read-only to the
@@ -27,7 +28,7 @@ const HASH = /^[0-9a-f]{64}$/;
 const RANGE = /^bytes=(\d*)-(\d*)$/i;
 
 export type BlobAnswer =
-  | { status: 400 | 404 | 416 | 503; headers: Record<string, string> }
+  | { status: 400 | 404 | 416 | 503 | 507; headers: Record<string, string> }
   | { status: 200 | 206; headers: Record<string, string>; path: string; start: number; end: number };
 
 /** The extension as Windows reads it: after the last dot, trailing dots and spaces dropped (« a.bat. » opens as « a.bat »). */
@@ -70,7 +71,7 @@ export function latexRequest(cacheDir: string, url: string, range: string | null
   return served(join(cacheDir, `${parsed.hash}.pdf`), 'application/pdf', range);
 }
 
-const bare = (status: 400 | 404 | 416 | 503, more?: Record<string, string>): BlobAnswer =>
+const bare = (status: 400 | 404 | 416 | 503 | 507, more?: Record<string, string>): BlobAnswer =>
   ({ status, headers: { 'Accept-Ranges': 'bytes', 'Content-Length': '0', ...more } });
 
 /** <prefix><sha256>/<name>, the name decoded; null for anything else. */
@@ -132,15 +133,20 @@ export function isNoDownloadRequest(url: string): boolean {
   return params.has('vignette') || params.has('taille');
 }
 
-/** A blob the server must give: `true` once it is in the store, checked against its hash (SyncClient.fetchBlob). */
+/**
+ * A blob the server must give: `true` once it is in the store, checked against its hash; `false` when it could not be
+ * had; rejected, its code NOT_STORED, when this PC could not keep it (SyncClient.fetchBlob).
+ */
 export type FetchBlob = (hash: string) => Promise<boolean>;
 
 /**
  * The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). With a
  * server paired (`fetchBlob`, plan 5a, D6), a blob absent from the store — a PDF at its first reading, a file whose
  * download has not come yet — is fetched from it, checked, kept, then served; when it cannot be had (offline, absent
- * there, bytes that are not its hash's), 503. A request that never downloads (a thumbnail's, a size's) answers 503 at
- * once for an absent blob: not downloaded yet (R12). Without a server, an absent blob is 404, as in plan 4c.
+ * there, bytes that are not its hash's), 503; when this PC could not keep the bytes it received (a disk full, a folder
+ * it may not write: NOT_STORED, final review, Minor 4), 507, which the reader says apart. A request that never
+ * downloads (a thumbnail's, a size's) answers 503 at once for an absent blob: not downloaded yet (R12). Without a
+ * server, an absent blob is 404, as in plan 4c.
  */
 export function fileResponse(storeDir: string, cacheDir: string, request: Request, fetchBlob: FetchBlob | null = null): Response | Promise<Response> {
   const range = request.headers.get('range'), url = request.url;
@@ -152,7 +158,7 @@ export function fileResponse(storeDir: string, cacheDir: string, request: Reques
   if (!hash) return respond(answer);
   return fetchBlob(hash).then(
     (ok) => respond(ok ? blobRequest(storeDir, url, range) : bare(503)),
-    () => respond(bare(503)),
+    (e: unknown) => respond(bare((e as { code?: unknown } | null)?.code === NOT_STORED ? 507 : 503)),
   );
 }
 
@@ -366,8 +372,9 @@ export function openTarget(storeDir: string, ref: FileRef, root: string): { path
 /**
  * openTarget, with a server paired (`fetchBlob`, plan 5a, D6, R12, R14): a blob the store does not hold — a PDF never
  * read on this PC, an older version — is opened, so it is downloaded first, by the same path as cirrus-file: (checked
- * against its hash; two openings at once, one download). When it cannot be had (offline, absent there), it throws, said
- * as the reader says it (openFailure). Without a server, openTarget as in plan 4c.
+ * against its hash; two openings at once, one download). When it cannot be had (offline, absent there), or this PC's
+ * disk could not keep it (NOT_STORED), it throws, said as the reader says it (openFailure). Without a server,
+ * openTarget as in plan 4c.
  */
 export async function openTargetFetched(storeDir: string, ref: FileRef, root: string, fetchBlob: FetchBlob | null): Promise<{ path: string; shown: 'app' | 'folder' }> {
   const absent = HASH.test(ref.hash) && plainName(ref.name) && !existsSync(filePath(storeDir, ref));
@@ -385,8 +392,9 @@ export type OpenResult = { ok: true; shown: 'app' | 'folder' } | { ok: false; me
 export function openFailure(name: string, e: unknown): string {
   if (typeof e === 'string') return `Windows n’a pas pu ouvrir « ${name} » : aucune application ne semble associée à ce type de fichier.`;
   const why = (e as NodeJS.ErrnoException | null)?.code;
-  // Not downloaded from the server paired (R14): the reader's words.
+  // Not downloaded from the server paired (R14), or received but not kept by this PC's disk (Minor 4): the reader's words.
   if (why === NOT_DOWNLOADED) return notDownloaded(name);
+  if (why === NOT_STORED) return notStored(name);
   const reason = why === 'ENOENT' ? 'le fichier manque dans la base'
     : why === 'EBUSY' ? 'sa copie est encore ouverte dans une autre application'
     : why === 'EACCES' || why === 'EPERM' ? 'Windows refuse l’accès à sa copie'

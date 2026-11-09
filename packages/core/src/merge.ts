@@ -22,8 +22,8 @@ const same = (a: unknown, b: unknown): boolean => a === b || canonical(a ?? null
 const deleted = (r: unknown): boolean => r === null || r === undefined || (r as { trashedAt?: number }).trashedAt !== undefined;
 
 const SEP = '\u0000';
-/** The record an operation writes, as a key: what a write's operations are grouped by. */
-function recordKey(op: Op): string {
+/** The record an operation writes, as a key: what a write's operations are grouped by (and a reconciliation's `gone`). */
+export function recordKey(op: Op): string {
   switch (op.t) {
     case 'node':
     case 'connection':
@@ -349,8 +349,12 @@ function withoutTrash<T extends { trashedAt?: number }>(r: T): T {
  * the write deletes but that were changed elsewhere lose that deletion, with their placements, branches, memberships
  * and phantoms; records it changes but that were deleted elsewhere come back, with the placements and branches that
  * deletion took, where their plan, connection and membership still stand. `s` is read, never written.
+ *
+ * `gone` (final review of plan 5a, Minor 1): the records that a pending write dropped before this one had created
+ * (recordKey). One this write found (its "before") but that is absent now is not written again: the dropped write's
+ * record would otherwise come back through this one, a creation the notification said was dropped. `lost`: those.
  */
-export function rebaseUnit(s: State, u: Unit, remote: readonly RemoteUnit[]): { unit: Unit | null; conflictCopies: string[] } {
+export function rebaseUnit(s: State, u: Unit, remote: readonly RemoteUnit[], gone?: { has(key: string): boolean; readonly size: number }): { unit: Unit | null; conflictCopies: string[]; lost: string[] } {
   const rx = receivedOf(remote);
   const entries = new Map<string, Entry>();
   for (const op of u.ops) {
@@ -361,6 +365,15 @@ export function rebaseUnit(s: State, u: Unit, remote: readonly RemoteUnit[]): { 
     } else entries.set(key, { op, only: op, base: op.before, mine: op.after, theirs: null, merged: null });
   }
   for (const e of entries.values()) e.theirs = current(s, e.op);
+  const lost: string[] = [];
+  if (gone && gone.size > 0) {
+    const absent = (r: unknown) => r === null || r === false;
+    for (const [key, e] of entries) {
+      if (!gone.has(key) || absent(e.base) || !absent(e.theirs)) continue;
+      entries.delete(key);
+      lost.push(key);
+    }
+  }
   const c: Ctx = { stamps: undefined, mine: { at: u.at, pc: u.pc }, defs: s.tagKeys, kept: new Set(), back: new Set(), copies: [] };
   const entryOf = (t: string, ...key: string[]) => entries.get([t, ...key].join(SEP));
 
@@ -458,7 +471,7 @@ export function rebaseUnit(s: State, u: Unit, remote: readonly RemoteUnit[]): { 
     } else ops.push(e.op.t === 'branch' ? { t: 'branch', key: e.op.key, before: e.theirs as boolean, after: e.merged as boolean } : ({ t: e.op.t, before: e.theirs, after: e.merged } as Op));
   }
   ops.push(...extra);
-  if (ops.length === 0) return { unit: null, conflictCopies: c.copies };
-  if (reused === u.ops.length && ops.length === reused) return { unit: u, conflictCopies: c.copies };
-  return { unit: { ...u, ops }, conflictCopies: c.copies };
+  if (ops.length === 0) return { unit: null, conflictCopies: c.copies, lost };
+  if (reused === u.ops.length && ops.length === reused) return { unit: u, conflictCopies: c.copies, lost };
+  return { unit: { ...u, ops }, conflictCopies: c.copies, lost };
 }

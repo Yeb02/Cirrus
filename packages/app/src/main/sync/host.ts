@@ -4,7 +4,7 @@ import { type Action, type Id, MAX_ID_CHARS, type Op, type Reconciliation, type 
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
-import { FORMAT, SyncClient, type SyncStatus } from './client.ts';
+import { FORMAT, SyncClient, type SyncStatus, writeRefusal } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
 import {
@@ -137,7 +137,7 @@ export class SyncHost {
    * A pairing done (/pair, /hello) that awaits the user's answer to D7's offer (`first`): its server and token, in
    * memory only — nothing is written, nothing starts, until the base's first sync is settled (R8).
    */
-  private offered: { config: ServerConfig; offer: FirstSyncOffer; at: number } | null = null;
+  private offered: { config: ServerConfig; offer: FirstSyncOffer; at: number; baseId: string } | null = null;
   /** The first sync under way (seed, adopt): aborted if the app quits meanwhile. */
   private firstSync: AbortController | null = null;
   /** The first sync under way, for the block (info): its server, and what it does (review of task 5, Minor 3). */
@@ -248,10 +248,18 @@ export class SyncHost {
   /**
    * A local write (cirrus:commit), with the interface's identifier: written at the time of this PC corrected by the
    * server's (D4), the client told. Its journal number and that time, which the interface's pending write carries.
+   * Every local write passes here, paired or not: one the server's gate would refuse (writeRefusal: its form, its
+   * operations, its size) is refused now, in French, before anything is written (R32) — never undone after the fact by
+   * a reconciliation, never a line that would stop the base's seed. Costs the write, never the base.
    */
   commit(action: Action, unit: unknown): Committed {
     if (typeof unit !== 'string' || unit.length === 0 || unit.length > MAX_ID_CHARS) throw new Error('Action refusée : identifiant d’écriture invalide.');
     const at = this.deps.now() + this.client.clockOffset();
+    // An action that changes nothing writes no line, and sends nothing.
+    if (!Array.isArray(action.ops) || action.ops.length > 0) {
+      const refusal = writeRefusal({ unit, action: action.id, label: action.label, at, pc: this.deps.pc, ops: action.ops });
+      if (refusal !== null) throw new Error(refusal);
+    }
     const seq = this.deps.store.commit(action, { at, unit });
     this.client.kick();
     return { seq, at };
@@ -356,10 +364,11 @@ export class SyncHost {
   /**
    * Pairs this PC (D3), the code `jumeler` showed traded for a token. Refused, in French, before anything is asked of
    * the server: without encryption (no token in clear), an http: address off this machine (R10), without a code or a
-   * name. Then /pair and /hello, which tells the server's base and format (D10), and D7 decides: both empty, paired at
-   * once — the token kept encrypted in serveur.json, the interface then takes its pending writes and starts the sync
-   * (start), and this PC's lobby becomes the server's first write —; otherwise the offer (`first` answers it). A refusal
-   * after /pair revokes the token (R15): nothing is kept.
+   * name. Then /pair and /hello, which tells the server's base (its identity too, R31) and format (D10). The base this
+   * PC follows already, paired again: at once, no offer (R31). Otherwise D7 decides: both empty, paired at once — the
+   * token kept encrypted in serveur.json, the interface then takes its pending writes and starts the sync (start), and
+   * this PC's lobby becomes the server's first write —; otherwise the offer (`first` answers it). A refusal after /pair
+   * revokes the token (R15): nothing is kept.
    */
   async pair(url: unknown, code: unknown, name: unknown): Promise<PairResult> {
     let result: PairResult = { ok: false, message: 'Jumelage interrompu.' };
@@ -417,28 +426,38 @@ export class SyncHost {
     if (
       !isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq) || !Number.isSafeInteger(hello.nodes)
       || typeof hello.serverTime !== 'number' || !Number.isFinite(hello.serverTime)
+      || typeof hello.baseId !== 'string' || hello.baseId.length === 0 || hello.baseId.length > MAX_ID_CHARS
     ) {
       return refuse('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
     }
-    const server = { lastSeq: hello.lastSeq as number, empty: hello.empty, nodes: hello.nodes as number };
+    const server = { lastSeq: hello.lastSeq as number, empty: hello.empty, nodes: hello.nodes as number }, baseId = hello.baseId;
+    // R31: the base this PC follows, its token lost since (dissociated, revoked, serveur.db reset), the server holding
+    // every line this PC received: paired again at once, no offer — the sync picks up where it stopped, and the writes
+    // made meanwhile go as any pending write. Its settings are not stamped again: the server's, newer maybe, stay.
+    if (this.deps.store.baseId() === baseId && this.deps.store.lastServerSeq() <= server.lastSeq) {
+      this.joined(config, null, null);
+      return { ok: true };
+    }
     const offer = firstSyncOffer(this.deps.store, this.deps.dir, server, new Date(this.deps.now()));
     // The pairing's time, the server's: this PC's settings are stamped with it when they are sent (R23).
     const at = Math.round(hello.serverTime);
     if (offer) {
-      this.offered = { config, offer, at };
+      this.offered = { config, offer, at, baseId };
       return { ok: false, message: offerMessage(offer), offer };
     }
-    this.joined(config, at);
+    this.joined(config, at, baseId);
     return { ok: true };
   }
 
   /**
-   * Paired, the first sync settled (R8): this PC's settings wait, stamped at the pairing's time (R23: two empty bases,
-   * or this PC's sent), written before serveur.json — a stop between the two leaves them waiting for no server, and the
-   * next pairing writes them again —, then the server kept.
+   * Paired, the first sync settled (R8): this PC's settings wait, stamped `at`, the pairing's time (R23: two empty
+   * bases, or this PC's sent; null for a rejoin, R31: nothing stamped); the server's base identity kept, `baseId` (two
+   * empty bases; a seed keeps the one its done gives with the numbers, numberSeeded; null: kept already) — both before
+   * serveur.json: a stop between leaves them for no server, and the next pairing writes them again —, then the server.
    */
-  private joined(config: ServerConfig, at: number): void {
-    this.settings.pairedAt(at);
+  private joined(config: ServerConfig, at: number | null, baseId: string | null): void {
+    if (at !== null) this.settings.pairedAt(at);
+    if (baseId !== null) this.deps.store.setBaseId(baseId);
     this.deps.secrets.write(config);
     this.config = config;
   }
@@ -476,7 +495,7 @@ export class SyncHost {
     const offered = this.offered;
     if (!offered) return no('Aucun jumelage n’attend de réponse.');
     this.offered = null;
-    const { config, offer, at } = offered, { deps } = this;
+    const { config, offer, at, baseId } = offered, { deps } = this;
     const revoke = () => revokeSelf(deps.fetch, config, deps.params().syncConnectTimeoutMs);
     if (choice === 'cancel') {
       await revoke();
@@ -496,11 +515,11 @@ export class SyncHost {
           if (!this.closed) await revoke();
           return no(`Base non envoyée : ${sentence(messageOf(e))} ${UNTOUCHED}`);
         }
-        this.joined(config, at);
+        this.joined(config, at, null);
         return { ok: true };
       }
       try {
-        await adoptBase({ fetch: deps.fetch, dir: deps.dir, pc: deps.pc, config, secrets: deps.secretsAt(stagedDir(deps.dir)), signal: abort.signal });
+        await adoptBase({ fetch: deps.fetch, dir: deps.dir, pc: deps.pc, config, baseId, secrets: deps.secretsAt(stagedDir(deps.dir)), signal: abort.signal });
       } catch (e) {
         if (!this.closed) await revoke();
         return no(`Base du serveur non prise : ${sentence(messageOf(e))} ${UNTOUCHED}`);

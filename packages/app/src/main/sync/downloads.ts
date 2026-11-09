@@ -66,6 +66,28 @@ export type BlobRequest = (hash: string, signal: AbortSignal) => Promise<Respons
 export const isHash = (h: unknown): h is string => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h);
 
 /**
+ * The code of the error a download asked for now (Downloads.fetch) rejects with when this PC could not keep the bytes it
+ * received — a disk full, a folder it may not write (final review, Minor 4): not the server out of reach, which is a
+ * plain `false`. cirrus-file: answers it 507, and the system's opening says it (files.ts).
+ */
+export const NOT_STORED = 'CIRRUS_NOT_STORED';
+
+/** A download's end: the blob is there; it could not be had (the network, the server); or this PC could not keep it. */
+type Outcome = 'done' | 'failed' | 'not-stored';
+
+/** A failure of the network while the bytes were read: told apart from one of the disk while they were written. */
+class NetworkFailure extends Error {}
+
+/** A response's bytes, a failure to read them marked as the network's (NetworkFailure). */
+async function* fromNetwork(source: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
+  try {
+    yield* source;
+  } catch (e) {
+    throw new NetworkFailure(e instanceof Error ? e.message : String(e), { cause: e });
+  }
+}
+
+/**
  * The eager downloads still to do — queued, under way, broken by the network — kept beside the base (R9): a stop
  * (sleep) or a quit loses none. `{ hashes: [...] }`; read back by the next Downloads on the same base.
  */
@@ -84,7 +106,7 @@ export class Downloads {
   private readonly file: string;
   /** The queued hashes, in order (a Set: queued once, taken from the front). */
   private readonly queue = new Set<string>();
-  private readonly running = new Map<string, Promise<boolean>>();
+  private readonly running = new Map<string, Promise<Outcome>>();
   /** The eager downloads under way (the others were asked for: fetch). */
   private readonly eager = new Set<string>();
   /** The eager downloads to try again at the next connection. */
@@ -113,13 +135,18 @@ export class Downloads {
     this.pump();
   }
 
-  /** The blob of `hash` in the store now: true once it is there, checked; false when it could not be had. */
+  /**
+   * The blob of `hash` in the store now: true once it is there, checked; false when it could not be had (the network,
+   * the server, bytes that are not its hash's). Rejects, its code NOT_STORED, when this PC could not keep the bytes it
+   * received (final review, Minor 4).
+   */
   fetch(hash: string): Promise<boolean> {
     if (hasBlob(this.storeDir, hash)) return Promise.resolve(true);
-    const under = this.running.get(hash);
-    if (under) return under;
     // Queued, it stays an eager download (tried again if it breaks), started now, outside the limit.
-    return this.start(hash, this.queue.delete(hash));
+    return (this.running.get(hash) ?? this.start(hash, this.queue.delete(hash))).then((o) => {
+      if (o === 'not-stored') throw Object.assign(new Error('fichier reçu du serveur, mais non enregistré sur ce PC'), { code: NOT_STORED });
+      return o === 'done';
+    });
   }
 
   /** The eager downloads broken, interrupted or left at the last quit, queued again (a connection is back). */
@@ -154,7 +181,7 @@ export class Downloads {
     }
   }
 
-  private start(hash: string, eager: boolean): Promise<boolean> {
+  private start(hash: string, eager: boolean): Promise<Outcome> {
     if (eager) this.eager.add(hash);
     const p = this.download(hash, eager).finally(() => {
       this.running.delete(hash);
@@ -168,28 +195,45 @@ export class Downloads {
     return p;
   }
 
-  private async download(hash: string, eager: boolean): Promise<boolean> {
+  /**
+   * One download: the request, then the bytes kept (receiveBlob). Never rejects: its outcome. A failure of the network,
+   * or a server's own (5xx), is tried again at the next connection when eager; bytes that are not their hash's are said,
+   * and not tried again; a failure of this PC's disk while they were written (full, a folder it may not write: final
+   * review, Minor 4) is said with its cause, and tried again when eager — the disk may have room by then.
+   */
+  private async download(hash: string, eager: boolean): Promise<Outcome> {
     const signal = this.abort.signal;
+    let res: Response | null;
     try {
-      const res = await this.request(hash, signal);
-      if (!res) return false;
-      const length = res.headers.get('content-length'), size = length === null ? Number.NaN : Number(length);
-      if (res.status !== 200 || !res.body || !Number.isSafeInteger(size) || size < 0) {
-        await res.body?.cancel().catch(() => {});
-        // Absent from the server (404), or a server that refuses (a token, a format): not tried again; its own failure is.
-        if (res.status >= 500 && eager) this.failed.add(hash);
-        return false;
-      }
+      res = await this.request(hash, signal);
+    } catch {
+      if (!signal.aborted && eager) this.failed.add(hash);
+      return 'failed';
+    }
+    if (!res) return 'failed';
+    const length = res.headers.get('content-length'), size = length === null ? Number.NaN : Number(length);
+    if (res.status !== 200 || !res.body || !Number.isSafeInteger(size) || size < 0) {
+      await res.body?.cancel().catch(() => {});
+      // Absent from the server (404), or a server that refuses (a token, a format): not tried again; its own failure is.
+      if (res.status >= 500 && eager) this.failed.add(hash);
+      return 'failed';
+    }
+    try {
       // The bytes announced at most, checked against the hash before anything is kept.
-      await receiveBlob(this.storeDir, hash, chunks(res.body), size);
-      return true;
+      await receiveBlob(this.storeDir, hash, fromNetwork(chunks(res.body)), size);
+      return 'done';
     } catch (e) {
       if (e instanceof BlobError) {
         console.warn(`Fichier ${hash} reçu du serveur refusé : ${e.message}`);
-      } else if (!signal.aborted && eager) {
-        this.failed.add(hash);
+        return 'failed';
       }
-      return false;
+      if (signal.aborted || e instanceof NetworkFailure) {
+        if (!signal.aborted && eager) this.failed.add(hash);
+        return 'failed';
+      }
+      console.warn(`Fichier ${hash} reçu du serveur, mais non enregistré dans la base : ${e instanceof Error ? e.message : String(e)}`);
+      if (eager) this.failed.add(hash);
+      return 'not-stored';
     }
   }
 

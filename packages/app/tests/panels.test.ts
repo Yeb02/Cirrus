@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOps, CommandError, deleteEverywhere, invertAction, type State, TagError, type TagValue } from '@cirrus/core';
+import { applyOps, CommandError, deleteEverywhere, invertAction, MAX_ID_CHARS, type State, TagError, type TagValue } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -258,6 +258,14 @@ test('parseTag : une erreur lève TagError, avec un message français', () => {
   expect(refusal('mot:')).toBe('Il manque la valeur après « mot: ».');
   expect(refusal(':valeur')).toBe('Il manque le nom du tag avant « : ».');
   expect(refusal('   ')).toBe('Le tag est vide.');
+  // Final review of plan 5a, Important 2 (R32): a key as parseOp bounds it — a pasted phrase as a word tag, or as a
+  // key, is refused when it is typed, never undone after the fact by the server; at the bound, taken.
+  const bound = 'x'.repeat(MAX_ID_CHARS), past = `${bound}y`;
+  const tooLong = `Le nom d’un tag compte ${MAX_ID_CHARS} caractères au plus (ici ${MAX_ID_CHARS + 1}).`;
+  expect(refusal(past)).toBe(tooLong);
+  expect(refusal(`${past}:valeur`)).toBe(tooLong);
+  expect(parseTag(bound, defs)).toEqual({ key: bound });
+  expect(parseTag(`${bound}:valeur longue ${'v'.repeat(300)}`, defs).key).toBe(bound);
 });
 
 test('withTag et withoutTag : une clé non multiple remplace sa valeur, une clé multiple s’ajoute', () => {

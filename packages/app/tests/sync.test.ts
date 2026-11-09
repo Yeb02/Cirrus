@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, checkState, createNode, createPlan, deleteEverywhere, editNode, type FileRef, groupOf, include, type RemoteUnit } from '@cirrus/core';
+import { applyOp, checkState, createNode, createPlan, deleteEverywhere, editConnection, editNode, type FileRef, groupOf, include, type RemoteUnit } from '@cirrus/core';
 import { filePath, LocalStore, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
 import { SyncClient, type SyncStatus } from '../src/main/sync/client.ts';
@@ -485,7 +485,7 @@ test('un flux qui s’ouvre puis se ferme aussitôt ne remet pas l’attente à 
     const path = new URL(String(input)).pathname, m = mode;
     if (path === '/hello') hellos.push(Date.now());
     if (m === 'down') throw new TypeError('fetch failed');
-    if (path === '/hello') return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: false });
+    if (path === '/hello') return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: false, baseId: 'base-x' });
     if (path !== '/events') throw new Error(`requête inattendue : ${path}`);
     const body = new ReadableStream<Uint8Array>({
       start(c) {
@@ -545,4 +545,52 @@ test('une écriture reçue qui ne s’applique pas : la réception s’arrête, 
   await sleep(100);
   expect([b.net.requests.length, b.reconciled.length]).toEqual([requests, calls]);
   expect(b.s.nodes.get(X)!.title).toBe('Z');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Final review of plan 5a.
+
+test('R31 (Minor 2) : un PC face à un serveur dont la base a été remplacée par une autre, au journal plus long, s’arrête avec un message, sans rien appliquer ; un PC jumelé sans identité prend celle du serveur', async () => {
+  const { lab: l, a } = await twoPcs();
+  // Paired by the lab (no first sync here): each took the server's base identity at its first hello.
+  expect(a.store.baseId()).toBe(await l.baseId());
+  const before = image(a.s), seq = a.store.lastServerSeq(), journal = a.store.lastSeq();
+  await a.client.stop();
+  // The server's base folder replaced, serveur.db kept: another base, whose journal is soon longer than A's.
+  await l.replaceBase();
+  const c = await l.pc('pc-c');
+  const P = created(c.act((s) => createPlan(s, 'Autre base', 'plan')), 'plan');
+  for (let i = 0; i <= seq; i++) c.act((s) => createNode(s, { plan: P, title: `c${i}`, x: i * 200, y: 0, k: 0 }));
+  await l.settle([c]);
+  expect(await l.lastSeq()).toBeGreaterThan(seq);
+  expect(c.store.baseId()).toBe(await l.baseId());
+  const streams = a.net.count('GET', '/events');
+  a.client.start();
+  await until(() => a.status?.state === 'refused', 5000, () => JSON.stringify(a.statuses.slice(-3)));
+  expect(a.status).toEqual({
+    state: 'refused', message: 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.',
+  });
+  expect([image(a.s), a.store.lastServerSeq(), a.store.lastSeq(), a.net.count('GET', '/events')]).toEqual([before, seq, journal, streams]);
+  // Not tried again until asked.
+  const n = a.net.requests.length;
+  await sleep(100);
+  expect(a.net.requests).toHaveLength(n);
+});
+
+test('revue finale, Minor 1 : hors ligne, « Mettre X dans G » puis la connexion qu’elle crée modifiée ; ailleurs, X mis dans H : la connexion n’existe nulle part, X est dans H seulement, et la notification nomme l’inclusion écartée', async () => {
+  const { lab: l, a, b, P, X, G, H } = await twoPcs();
+  await a.client.stop();
+  const C = created(a.act((s) => include(s, P, X, G)), 'connection');
+  a.act((s) => editConnection(s, C, { title: 'renommée' }));
+  b.act((s) => include(s, P, X, H));
+  await l.settle([b]);
+  a.client.start();
+  await l.settle();
+  const server = await converged(l, [a, b]);
+  expect([server.connections.has(C), a.s.connections.has(C), b.s.connections.has(C)]).toEqual([false, false, false]);
+  expect(groupOf(server, P, X)).toBe(H);
+  expect([...server.connections.values()].filter((c) => c.kind === 'inclusion' && c.members.some((m) => m.node === X))).toHaveLength(1);
+  // Dropped by A's replay, or refused by the server first (whichever comes first): named either way, the edit with it.
+  expect(a.dropped).toEqual([expect.stringMatching(/^« Mettre « X » dans « G » » écartée : .+\. Ce que « Modifier une connexion » changeait à ce qu’elle avait créé est écarté avec elle\.$/)]);
+  expect((await l.journal()).some((r) => r.subject === C)).toBe(false);
 });

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createNode, createPlan, decodeState, editNode, encodeState, type Id, type Reconciliation, reconcile, SyncDivergedError } from '@cirrus/core';
+import { createNode, createPlan, decodeState, editNode, encodeState, type Id, MAX_BODY_BYTES, MAX_ID_CHARS, MAX_OPS_PER_UNIT, type NodeRec, type Op, type Reconciliation, reconcile, type State, SyncDivergedError } from '@cirrus/core';
 import { afterEach, expect, test, vi } from 'vitest';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
@@ -243,6 +243,69 @@ test('commit : l’heure du principal corrigée de l’écart du serveur, rendue
   const sent = a.session.pending.find((u) => u.unit === row.unit) ?? (await l.journal()).find((x) => x.unit === row.unit);
   expect(sent?.at).toBe(row.at);
   expect(() => a.host.commit(createNode(a.session.state, { plan: lobby, title: 'W', x: 0, y: 0, k: 0 }), '' as Id)).toThrow(/identifiant/);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Final review of plan 5a, Important 2 (R32): a base never holds a write the server's gate would refuse.
+
+test('R32 : une action que le serveur refuserait (trop d’opérations, trop grosse, mal formée) est refusée avant d’être écrite, en français, jumelé ou non ; rien n’est écrit ni envoyé', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const lobby = [...a.session.state.plans.values()][0].id;
+  const X = (await a.session.run((s) => createNode(s, { plan: lobby, title: 'X', x: 0, y: 0, k: 0 }))).ok ? [...a.session.state.nodes.keys()][0] : '';
+  const x = () => a.session.state.nodes.get(X)!;
+  const refusals = async () => {
+    const lines = a.store.lastSeq(), before = JSON.stringify(x());
+    const out: string[] = [];
+    // Deleting more than MAX_OPS_PER_UNIT records at once, say (the same operation, as many times: never applied).
+    const op: Op = { t: 'node', before: x(), after: { ...x(), title: 'X' } };
+    for (const build of [
+      () => ({ id: 'a-n', label: 'Beaucoup', ops: Array.from({ length: MAX_OPS_PER_UNIT + 1 }, () => op) }),
+      (s: State) => editNode(s, X, { summary: 's'.repeat(MAX_BODY_BYTES) }),
+      (s: State) => editNode(s, X, { tags: [{ key: 'k'.repeat(MAX_ID_CHARS + 1) }] }),
+    ]) {
+      const r = await a.session.run(build);
+      out.push(r.ok ? 'acceptée' : r.message);
+    }
+    expect([a.store.lastSeq(), JSON.stringify(x())]).toEqual([lines, before]);
+    return out;
+  };
+  const expected = [
+    `Action refusée : elle compte ${(MAX_OPS_PER_UNIT + 1).toLocaleString('fr-FR')} opérations, et le serveur en prend ${MAX_OPS_PER_UNIT.toLocaleString('fr-FR')} au plus. Fais-la en plusieurs fois.`,
+    `Action refusée : elle fait plus de ${MAX_BODY_BYTES / 2 ** 20} Mio, ce que le serveur ne prend pas.`,
+    expect.stringMatching(/^Action refusée : Opération mal formée : node\.after\.tags\[0\]\.key n’est pas un identifiant de 1 à 128 caractères/),
+  ];
+  // Without a server: refused all the same (nothing visible changes but the refusal itself).
+  expect(await refusals()).toEqual(expected);
+  // Paired: refused before anything is sent.
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'seed' } });
+  expect(await a.sync.first('seed')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  const sent = a.net.count('POST', '/units');
+  expect(await refusals()).toEqual(expected);
+  // A normal action passes, and goes.
+  expect((await a.session.run((s) => editNode(s, X, { title: 'X2' }))).ok).toBe(true);
+  await until(() => a.store.pendingCount() === 0 && a.net.count('POST', '/units') === sent + 1);
+});
+
+test('R32 : un nœud qu’une version plus ancienne a laissé avec une clé de tag trop longue reste modifiable (renommé, son tag retiré), jumelé ou non', async () => {
+  const l = (lab = await Lab.start());
+  const a = new AppPc(l, 'pc-a');
+  apps.push(a);
+  // As an older app wrote it, before the bound: a node with a word tag of 200 characters.
+  const s = a.store.loadState(), lobby = [...s.plans.values()][0].id, long = 'mot'.repeat(70);
+  const made = createNode(s, { plan: lobby, title: 'Ancien', x: 0, y: 0, k: 0 });
+  a.store.commit(made);
+  const N = (made.ops[0].after as { id: Id }).id, n = { ...(made.ops[0].after as NodeRec), tags: [{ key: long }, { key: 'lu' }] };
+  a.store.commit({ id: 'a-tag', label: 'Tag', ops: [{ t: 'node', before: made.ops[0].after as NodeRec, after: n }] });
+  await a.open();
+  expect((await a.session.run((t) => editNode(t, N, { title: 'Renommé' }))).ok).toBe(true);
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'seed' } });
+  expect(await a.sync.first('seed')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  expect((await a.session.run((t) => editNode(t, N, { tags: [{ key: 'lu' }] }))).ok).toBe(true);
+  await until(async () => a.store.pendingCount() === 0 && (await l.state()).nodes.get(N)?.tags.length === 1, 5000, () => JSON.stringify(a.statuses.slice(-2)));
+  expect(a.store.loadState().nodes.get(N)).toMatchObject({ title: 'Renommé', tags: [{ key: 'lu' }] });
 });
 
 test('R13 : la page rechargée (detach), une écriture reçue avant le cirrus:sync:start de la nouvelle est rejetée aussitôt ; stop() rend la main ; après start, le lot est réconcilié', async () => {

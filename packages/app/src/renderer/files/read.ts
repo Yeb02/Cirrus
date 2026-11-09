@@ -29,6 +29,15 @@ export function notDownloaded(name: string): string {
 }
 
 /**
+ * Why a blob the server gave could not be kept by this PC (507, final review of plan 5a, Minor 4): its disk full, or a
+ * folder it may not write — the server was reached; the main process's console has the cause. Not downloaded either:
+ * it is asked again at its next opening.
+ */
+export function notStored(name: string): string {
+  return `${fileKind(name) === 'pdf' ? 'PDF' : `« ${name} »`} non enregistré sur ce PC : le disque est plein, ou Windows y refuse l’écriture.`;
+}
+
+/**
  * A file's head, at most `maxBytes` (a view's ceiling: « une vue ne lit jamais plus que son plafond »), by the
  * cirrus-file: protocol; `truncated` when the file is longer. The body is read as a stream and let go at the ceiling, so
  * a server that would ignore the range (200, the whole file) is not read further either. A blob missing from the store
@@ -40,6 +49,7 @@ export async function readHead(ref: ViewRef, maxBytes: number, signal?: AbortSig
   const res = await fetch(fileUrl(ref, opts), { headers: range ? { Range: range } : {}, signal });
   if (res.status === 404) throw new ReadError(`« ${ref.name} » est introuvable dans la base.`);
   if (res.status === 503) throw new NotDownloadedError(notDownloaded(ref.name));
+  if (res.status === 507) throw new NotDownloadedError(notStored(ref.name));
   if (!res.ok) throw new ReadError(`« ${ref.name} » n’a pas pu être lu (${res.status}).`);
   const out = new Uint8Array(Math.min(ref.size, maxBytes));
   let n = 0;
@@ -74,6 +84,7 @@ export async function blobSize(ref: { name: string; hash: string }, signal?: Abo
   void res.body?.cancel().catch(() => {});
   if (res.status === 404) throw new ReadError(`Cette version de « ${ref.name} » est introuvable dans la base.`);
   if (res.status === 503) throw new NotDownloadedError(opts.sizeOnly ? notDownloadedYet(ref.name) : notDownloaded(ref.name));
+  if (res.status === 507) throw new NotDownloadedError(notStored(ref.name));
   const size = Number(res.headers.get('content-length') ?? Number.NaN);
   if (!res.ok || !Number.isSafeInteger(size) || size < 0) throw new ReadError(`Cette version de « ${ref.name} » n’a pas pu être lue (${res.status}).`);
   return size;

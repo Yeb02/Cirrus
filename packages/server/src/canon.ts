@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import {
   addedViolation, applyOps, decodeState, encodeState, invertOp, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
-  SyncFormatError, type Unit, type UnitResult,
+  SyncFormatError, type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
 import { MAX_JOURNAL_PAGE, SERVER_SNAPSHOT_UNITS } from './bounds.ts';
@@ -47,6 +47,9 @@ export class Canon {
   private snapshotSeq: number;
   private sinceSnapshot = 0;
 
+  /** The base's identity (R31), in its meta: what /hello gives; replaced by a seed only. */
+  private id: string;
+
   private constructor(dir: string, store: LocalStore, relay: (u: RemoteUnit) => void) {
     this.dir = dir;
     this.store = store;
@@ -55,6 +58,14 @@ export class Canon {
     this.s = s;
     this.last = store.lastSeq();
     this.snapshotSeq = snapshotSeq;
+    // Created with the base (a base kept from before R31 gets its own at its first opening since): kept in its meta,
+    // so that serveur.db reset, the base is the same.
+    let id = store.baseId();
+    if (id === null) {
+      id = uuidv7();
+      store.setBaseId(id);
+    }
+    this.id = id;
   }
 
   /** The base in `dir` (created if absent) and its state; `relay` gets each write accepted, numbered (the event streams). */
@@ -71,6 +82,16 @@ export class Canon {
   /** The server's last number (0: nothing accepted yet). */
   get seq(): number {
     return this.last;
+  }
+
+  /**
+   * The identity of the base this server holds (final review of plan 5a, R31): a PC keeps it at its first sync, so
+   * that pairing it again with this server picks up where it stopped, and a server holding another base is told apart
+   * (its data replaced). Created with the base, kept in its meta — a reset serveur.db keeps it —, replaced by a seed,
+   * which brings another base.
+   */
+  get baseId(): string {
+    return this.id;
   }
 
   /** The state, read only: GET /snapshot encodes it. */
@@ -103,11 +124,13 @@ export class Canon {
   /**
    * A PC's base taken whole by this fresh server (task 5, D7: POST /seed/done, every input checked by Seeds.take): its
    * journal, each line numbered as this server numbers its own (server_seq = local_seq), and its state, written in one
-   * transaction; then the state in memory replaced, and the numbering goes on after its last line. A failure writes
-   * nothing and keeps the state.
+   * transaction, with a new identity (R31: another base; a PC that knew the empty one's no longer follows it); then the
+   * state in memory replaced, and the numbering goes on after its last line. A failure writes nothing and keeps the
+   * state.
    */
   seed(s: State, last: number, lines: (after: number, limit: number) => ChangeRow[]): void {
     if (!this.fresh()) throw new Error('Ce serveur tient déjà une base.');
+    const id = uuidv7();
     this.store.atomically(() => {
       for (let after = 0; after < last; ) {
         const page = lines(after, MAX_JOURNAL_PAGE);
@@ -116,7 +139,9 @@ export class Canon {
         after = page.at(-1)!.localSeq;
       }
       this.store.importState(s, last);
+      this.store.setBaseId(id);
     });
+    this.id = id;
     this.s = s;
     this.last = last;
     this.snapshotSeq = last;

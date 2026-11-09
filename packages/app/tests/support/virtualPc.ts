@@ -278,6 +278,24 @@ export class Lab {
     this.server = null;
   }
 
+  /**
+   * serveur.db lost (final review, R31): the server stopped, its file of PCs, codes and settings removed, then started
+   * again on the same base — every token, the lab's own too, now refused; the lab pairs its own again.
+   */
+  async resetServerDb(): Promise<void> {
+    await this.stopServer();
+    for (const f of ['serveur.db', 'serveur.db-wal', 'serveur.db-shm']) rmSync(join(this.dataDir, f), { force: true });
+    await this.startServer();
+    this.observer = await this.pairing('Observateur', 'observateur');
+  }
+
+  /** The base folder replaced by another (R31, Minor 2): the server stopped, its base removed, then started on a new one. */
+  async replaceBase(): Promise<void> {
+    await this.stopServer();
+    rmSync(join(this.dataDir, 'base'), { recursive: true, force: true });
+    await this.startServer();
+  }
+
   /** A code made as `jumeler` makes it (the app's pairing takes it: task 4). */
   code(name: string): string {
     const tokens = Tokens.open(this.dataDir);
@@ -328,9 +346,18 @@ export class Lab {
   }
 
   async lastSeq(): Promise<number> {
+    return (await this.hello()).lastSeq;
+  }
+
+  /** The identity of the base the server holds (R31). */
+  async baseId(): Promise<string> {
+    return (await this.hello()).baseId;
+  }
+
+  private async hello(): Promise<{ lastSeq: number; baseId: string }> {
     const res = await this.get('/hello', FORMAT);
     if (res.status !== 200) throw new Error(`GET /hello : ${res.status}`);
-    return ((await res.json()) as { lastSeq: number }).lastSeq;
+    return (await res.json()) as { lastSeq: number; baseId: string };
   }
 
   /** The server's state (GET /snapshot). */

@@ -1,7 +1,7 @@
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type Action, createNode, createPlan, editNode, encodeState, type FileRef, type Id, type State } from '@cirrus/core';
+import { type Action, applyOps, createNode, createPlan, editNode, encodeState, type FileRef, type Id, type State } from '@cirrus/core';
 import { Tokens } from '@cirrus/server';
 import { filePath, storeBytes } from '@cirrus/store';
 import { createElement } from 'react';
@@ -23,11 +23,14 @@ import { image, Lab, until } from './support/virtualPc.ts';
 let lab: Lab | null = null;
 const apps: AppPc[] = [];
 const dirs: string[] = [];
+/** Other servers a test starts (a second one, new). */
+const labs: Lab[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const a of apps.splice(0)) await a.close();
   await lab?.close();
   lab = null;
+  for (const l of labs.splice(0)) await l.close();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -488,4 +491,154 @@ test('R27 : CIRRUS_NO_RELAUNCH fait seulement quitter l’app après une prise, 
   expect(quitsInsteadOfRelaunch({ CIRRUS_NO_RELAUNCH: '1', CIRRUS_BACKGROUND: '1' }, true)).toBe(false);
   expect(quitsInsteadOfRelaunch(env, false)).toBe(false);
   expect(quitsInsteadOfRelaunch({ ...env, CIRRUS_NO_RELAUNCH: 'oui', CIRRUS_BACKGROUND: '1' }, false)).toBe(false);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Final review of plan 5a: pairing a PC again with the server it follows (R31), a history that today's bounds would
+// refuse (R32), a base already numbered by an earlier server (Minor 7).
+
+/** What a first sync left beside the base: an archive (`…-avant-jumelage-…`) or a staged base (`…-nouvelle`). */
+const leftBeside = (a: AppPc): string[] => readdirSync(dirname(a.dir)).filter((d) => d.startsWith(`${a.name}-`));
+
+/**
+ * A, paired with the lab's server through a seed (its full base), then cut from it by `cut`; offline, it renames X and
+ * adds a node — and a setting changed in Réglages —; then it is dissociated and paired again with a new code: no offer,
+ * paired at once; the writes made meanwhile reach the server, nothing goes aside, the settings are not stamped again.
+ */
+async function rejoin(cut: (l: Lab, a: AppPc) => Promise<void>): Promise<void> {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const { X } = await fill(a);
+  await seeded(l, a);
+  const id = await l.baseId();
+  expect(a.store.baseId()).toBe(id);
+  await cut(l, a);
+  await run(a, (s) => editNode(s, X, { title: 'X entre-temps' }));
+  const P = [...a.session.state.plans.values()].find((p) => p.name === 'Thèse')!.id;
+  const N = createdId(await run(a, (s) => createNode(s, { plan: P, title: 'Nouveau entre-temps', x: 600, y: 0, k: 0 })), 'node');
+  if (a.host.paired()) await a.sync.unpair();
+  a.host.setSettings({ syncDownloads: 7 });
+  expect(a.store.pendingCount()).toBe(2);
+  const sentSettings = a.net.count('POST', '/settings');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 5000, () => JSON.stringify(a.statuses.slice(-3)));
+  const server = await l.state();
+  expect([server.nodes.get(X)?.title, server.nodes.get(N)?.title]).toEqual(['X entre-temps', 'Nouveau entre-temps']);
+  expect(image(server)).toBe(image(a.session.state));
+  expect([a.store.baseId(), await l.baseId()]).toEqual([id, id]);
+  // Nothing aside, nothing staged, no restart; the settings not stamped again at the pairing, nor sent (R31).
+  expect([leftBeside(a), a.relaunched]).toEqual([[], 0]);
+  expect(a.net.count('POST', '/settings')).toBe(sentSettings);
+  expect((await l.settings()).syncDownloads).toBeUndefined();
+}
+
+test('R31 : jumelé de nouveau après « Dissocier ce PC » : aucune offre, les écritures faites entre-temps partent, rien n’est mis à part', async () => {
+  await rejoin(async (_l, a) => { await a.sync.unpair(); });
+});
+
+test('R31 : jumelé de nouveau après une révocation au serveur (revoquer) : de même', async () => {
+  await rejoin(async (l, a) => {
+    l.revoke('Portable');
+    // Its next connection is refused: the chip says it.
+    await a.host.client.stop();
+    a.host.retry();
+    await until(() => a.status?.state === 'refused', 5000, () => JSON.stringify(a.statuses.slice(-3)));
+    expect(a.status).toMatchObject({ message: 'Jeton absent, inconnu ou révoqué : jumelle ce PC de nouveau.' });
+  });
+});
+
+test('R31 : jumelé de nouveau après la remise à zéro de serveur.db (la base du serveur gardée) : de même', async () => {
+  await rejoin(async (l, a) => {
+    await l.resetServerDb();
+    await until(() => a.status?.state === 'refused', 5000, () => JSON.stringify(a.statuses.slice(-3)));
+  });
+});
+
+test('Minor 7 et R31 : une base déjà numérotée par un serveur s’envoie à un serveur neuf (l’offre de D7, pas une reprise) : ses numéros effacés puis redonnés, le serveur et le PC d’accord, et la synchro continue', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  expect(a.store.baseId()).toBe(await l.baseId());
+  // Another PC writes while A's writes wait: A's journal gets received lines, inverses and replayed ones — its own
+  // numbers no longer the server's.
+  const v = await l.pc('pc-v');
+  await until(() => v.store.lastServerSeq() === 1);
+  const lobby = [...v.s.plans.values()][0].id;
+  await a.host.client.stop();
+  for (let i = 0; i < 3; i++) await run(a, (s) => createNode(s, { plan: lobby, title: `A${i}`, x: i * 200, y: 0, k: 0 }));
+  for (let i = 0; i < 3; i++) v.act((s) => createNode(s, { plan: lobby, title: `V${i}`, x: i * 200, y: 300, k: 0 }));
+  await l.settle([v]);
+  a.host.retry();
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0 && a.session.state.nodes.size === 6, 5000, () => JSON.stringify(a.statuses.slice(-3)));
+  const before = a.store.changesSince(0);
+  expect(before.some((r) => r.serverSeq !== null && r.serverSeq !== r.localSeq)).toBe(true);
+  expect(before.some((r) => r.kind === 'rewind')).toBe(true);
+  // A new server, fresh: the offer of D7 (its base sent), not a rejoin — another base identity.
+  await a.sync.unpair();
+  const l2 = await Lab.start();
+  labs.push(l2);
+  expect(await a.sync.pair(l2.url, l2.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'seed', nodes: 6 } });
+  expect(await a.sync.first('seed')).toEqual({ ok: true });
+  const last = before.length;
+  expect(a.store.lastServerSeq()).toBe(last);
+  expect(a.store.changesSince(0).map((r) => [r.localSeq, r.serverSeq])).toEqual(before.map((r) => [r.localSeq, r.localSeq]));
+  expect((await l2.journal()).map((r) => [r.localSeq, r.serverSeq, r.unit, r.kind])).toEqual(before.map((r) => [r.localSeq, r.localSeq, r.unit, r.kind]));
+  expect(a.store.baseId()).toBe(await l2.baseId());
+  expect(await l2.baseId()).not.toBe(await l.baseId());
+  // And it goes on: the next write numbered after them, on both sides.
+  await until(() => a.status?.state === 'live');
+  await run(a, (s) => createNode(s, { plan: lobby, title: 'Après', x: 0, y: 600, k: 0 }));
+  await until(() => a.store.pendingCount() === 0 && a.store.lastServerSeq() === last + 2);
+  expect(await l2.lastSeq()).toBe(last + 2);
+  expect(image(await l2.state())).toBe(image(a.session.state));
+});
+
+/**
+ * A base as an older app left it: a plan, X, then X given a word tag of 200 characters (past MAX_ID_CHARS), then that
+ * tag removed — all written straight to the base, before the app opens it; its snapshot stored before that line or
+ * after it (`snapshotAfter`).
+ */
+function oldBase(l: Lab, name: string, snapshotAfter: boolean): { a: AppPc; X: Id; line: number } {
+  const a = new AppPc(l, name);
+  apps.push(a);
+  const s = a.store.loadState(), long = 'mot'.repeat(70);
+  const commit = (x: Action) => { a.store.commit(x); applyOps(s, x.ops); return x; };
+  const P = createdId(commit(createPlan(s, 'Thèse', 'plan')), 'plan');
+  const X = createdId(commit(createNode(s, { plan: P, title: 'X', x: 0, y: 0, k: 0 })), 'node');
+  if (!snapshotAfter) a.store.writeSnapshot(encodeState(s), a.store.lastSeq());
+  const x = s.nodes.get(X)!;
+  commit({ id: 'a-ancien', label: 'Tag d’une version ancienne', ops: [{ t: 'node', before: x, after: { ...x, tags: [{ key: long }] } }] });
+  const line = a.store.lastSeq();
+  commit(editNode(s, X, { tags: [] }));
+  if (snapshotAfter) a.store.writeSnapshot(encodeState(s), a.store.lastSeq());
+  return { a, X, line };
+}
+
+test.each([
+  ['dans l’historique que couvre l’instantané', true],
+  ['dans la fin du journal (l’instantané n’est pas pris : l’état des tables part)', false],
+])('R32 : une base dont une ligne passée tient une clé de tag trop longue, %s, s’envoie puis se prend ; la numérotation est la même au serveur, chez celui qui envoie et chez celui qui prend', async (_where, snapshotAfter) => {
+  const l = (lab = await Lab.start());
+  const { a, X, line } = oldBase(l, 'pc-a', snapshotAfter);
+  await a.open();
+  await run(a, (s) => editNode(s, X, { title: 'X2' }));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await seeded(l, a);
+  // Its tail refused as a write, the tables' state goes, whole (said); covered by the snapshot, the snapshot goes.
+  expect(warn.mock.calls.some((c) => String(c[0]).startsWith('Instantané de cette base inutilisable pour l’envoi'))).toBe(!snapshotAfter);
+  const numbered = (rows: { localSeq: number; serverSeq: number | null; unit: string }[]) => rows.map((r) => [r.localSeq, r.serverSeq, r.unit]);
+  const sent = numbered(a.store.changesSince(0));
+  expect(sent.every(([local, server]) => local === server)).toBe(true);
+  expect(numbered(await l.journal())).toEqual(sent);
+  // B takes it: the same lines, the same numbers, the old one too.
+  const b = await app(l, 'pc-b');
+  expect(await b.sync.pair(l.url, l.code('Fixe'), 'Fixe')).toMatchObject({ offer: { kind: 'adopt' } });
+  expect(await b.sync.first('adopt')).toEqual({ ok: true, restarting: true });
+  const b2 = await restart(l, b);
+  await until(() => b2.status?.state === 'live');
+  expect(numbered(b2.store.changesSince(0))).toEqual(sent);
+  expect(b2.store.changesSince(line - 1, 1)[0].op).toEqual(a.store.changesSince(line - 1, 1)[0].op);
+  expect([b2.store.baseId(), a.store.baseId()]).toEqual([await l.baseId(), await l.baseId()]);
+  expect(image(b2.session.state)).toBe(image(a.session.state));
 });

@@ -1,7 +1,8 @@
 import { openAsBlob } from 'node:fs';
 import {
-  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_LABEL_CHARS, MAX_SETTING_AHEAD_MS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST, parseRemoteUnit, type RemoteUnit,
-  type SettingChange, type SettingRow, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, SyncDivergedError, truncateLabel, type Unit, type UnitResult,
+  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_ID_CHARS, MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, MAX_SETTING_AHEAD_MS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST,
+  parseRemoteUnit, parseUnit, type RemoteUnit, type SettingChange, type SettingRow, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, SyncDivergedError, SyncFormatError, truncateLabel,
+  type Unit, type UnitResult,
 } from '@cirrus/core';
 import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
@@ -43,7 +44,10 @@ export type SyncStatus = (
 
 export interface SyncDeps {
   fetch: typeof fetch;
-  /** This PC's base: its pending writes, its last server number; never written by the client itself. */
+  /**
+   * This PC's base: its pending writes, its last server number, the identity of the server's base it follows (R31);
+   * the client writes only that identity, when the base has none yet.
+   */
   store: LocalStore;
   /** Where the base keeps its files (files/<2 hex>/<hash>). */
   storeDir: string;
@@ -97,6 +101,38 @@ class Refusal extends Error {
 async function reasonOf(res: Response): Promise<string> {
   const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
   return typeof body?.error === 'string' ? body.error : `Réponse ${res.status} du serveur.`;
+}
+
+/** A write as the client sends it (POST /units): a label past the bound, written before it was cut at its making, cut (R20). */
+const sentUnit = (u: Unit): Unit => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u);
+
+/** The body of POST /units that sends `units`, as the client sends it: what the server's MAX_BODY_BYTES bounds. */
+export const unitsBody = (units: readonly Unit[]): string => JSON.stringify({ units: units.map(sentUnit) });
+
+/** A server whose base is another than the one this PC follows (R31): its data replaced. */
+const BASE_REPLACED = 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.';
+
+/**
+ * Why the server would refuse `u` for its form, in French; null when it would not (R32: a base never holds a write the
+ * server's gate refuses — SyncHost.commit asks this before anything is written). The server's own checks, in its order:
+ * the most operations in one write (MAX_OPS_PER_UNIT: a deletion of that many records is done in parts), the write's
+ * shape and each operation's (parseUnit, as POST /units reads it), then the body that sends it alone within
+ * MAX_BODY_BYTES. Its label is taken as it will leave, cut (R20). Costs the write's operations, never the base.
+ */
+export function writeRefusal(u: Unit): string | null {
+  const count = Array.isArray(u.ops) ? u.ops.length : 0;
+  if (count > MAX_OPS_PER_UNIT) {
+    return `Action refusée : elle compte ${count.toLocaleString('fr-FR')} opérations, et le serveur en prend ${MAX_OPS_PER_UNIT.toLocaleString('fr-FR')} au plus. Fais-la en plusieurs fois.`;
+  }
+  const sent = typeof u.label === 'string' ? sentUnit(u) : u;
+  try {
+    parseUnit(sent);
+  } catch (e) {
+    if (e instanceof SyncFormatError) return `Action refusée : ${e.message}`;
+    throw e;
+  }
+  if (Buffer.byteLength(unitsBody([sent])) > MAX_BODY_BYTES) return `Action refusée : elle fait plus de ${MAX_BODY_BYTES / 2 ** 20} Mio, ce que le serveur ne prend pas.`;
+  return null;
 }
 
 /** An answer to POST /units, as the server gives it. */
@@ -256,7 +292,8 @@ export class SyncClient {
 
   /**
    * The blob of `hash` in the store (a PDF at its first reading, D6; any absent file): downloaded now from the server,
-   * checked against its hash; false when it could not be had (no server, offline, absent there, wrong bytes).
+   * checked against its hash; false when it could not be had (no server, offline, absent there, wrong bytes). Rejects,
+   * its code NOT_STORED (downloads.ts), when this PC could not keep the bytes received (final review, Minor 4).
    */
   fetchBlob(hash: string): Promise<boolean> {
     return isHash(hash) ? this.downloads.fetch(hash) : Promise.resolve(false);
@@ -311,10 +348,19 @@ export class SyncClient {
     const t0 = this.deps.now();
     const hello = await this.json(await this.request(conn, '/hello', { headers: FORMAT }));
     const t1 = this.deps.now();
-    const { serverTime, lastSeq } = (hello ?? {}) as { serverTime?: unknown; lastSeq?: unknown };
-    if (typeof serverTime !== 'number' || !Number.isFinite(serverTime) || !Number.isSafeInteger(lastSeq) || (lastSeq as number) < 0) {
+    const { serverTime, lastSeq, baseId } = (hello ?? {}) as { serverTime?: unknown; lastSeq?: unknown; baseId?: unknown };
+    if (
+      typeof serverTime !== 'number' || !Number.isFinite(serverTime) || !Number.isSafeInteger(lastSeq) || (lastSeq as number) < 0
+      || typeof baseId !== 'string' || baseId.length === 0 || baseId.length > MAX_ID_CHARS
+    ) {
       throw new Refusal('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
     }
+    // The base this PC follows (R31): another one, the server's data replaced, stops here, before anything of it is
+    // received (Minor 2 of the final review: its lines would otherwise apply, unrelated); none known (a PC paired
+    // before R31), it takes the server's.
+    const known = this.deps.store.baseId();
+    if (known === null) this.deps.store.setBaseId(baseId);
+    else if (known !== baseId) throw new Refusal(BASE_REPLACED);
     // The server's time against the middle of the exchange (D4).
     this.setClock(serverTime - (t0 + t1) / 2);
     conn.target = lastSeq as number;
@@ -578,7 +624,7 @@ export class SyncClient {
    */
   private async post(conn: Connection, batch: Unit[]): Promise<UnitResult[] | null> {
     // A label past the bound, written before it was cut at its making, is cut as it leaves (R20): the server refuses it.
-    const body = JSON.stringify({ units: batch.map((u) => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u)) });
+    const body = unitsBody(batch);
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
       if (batch.length > 1) conn.batchLimit = Math.max(1, Math.floor(batch.length / 2));
       else {

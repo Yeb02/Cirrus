@@ -2,8 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { MAX_ID_CHARS, newer, type SettingRow } from '@cirrus/core';
-import { MAX_PC_NAME_CHARS, MAX_SETTINGS_KEPT, PAIRING_TRIES, PAIRING_TTL_MS } from './bounds.ts';
+import { newer, type SettingRow } from '@cirrus/core';
+import { MAX_ID_CHARS, MAX_PAIR_CODE_CHARS, MAX_PC_NAME_CHARS, MAX_SETTINGS_KEPT, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_DB_BUSY_MS } from './bounds.ts';
 import { SettingsError, type StoredChange } from './settings.ts';
 
 // Pairing and tokens (plan 5a, D3): `jumeler` makes a one-time code, a PC trades it for a token of 256 bits. The
@@ -12,9 +12,6 @@ import { SettingsError, type StoredChange } from './settings.ts';
 
 /** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings. */
 export const SERVER_DB = 'serveur.db';
-
-/** How long a write of serveur.db waits for another (the command line writes it while the server runs). */
-const BUSY_MS = 5000;
 
 /** Forward-only migrations of serveur.db: index i upgrades user_version i to i + 1. Never edit a shipped migration. */
 const MIGRATIONS: string[] = [
@@ -93,7 +90,7 @@ export class Tokens {
 
   static open(dataDir: string): Tokens {
     mkdirSync(dataDir, { recursive: true });
-    const db = new DatabaseSync(join(dataDir, SERVER_DB), { timeout: BUSY_MS });
+    const db = new DatabaseSync(join(dataDir, SERVER_DB), { timeout: SERVER_DB_BUSY_MS });
     try {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
       migrate(db);
@@ -154,7 +151,7 @@ export class Tokens {
     const shape = (): never => { throw new PairingError(400, 'Jumelage refusé : { code, pc, name } attendus (le code, l’identifiant de ce PC, son nom).'); };
     if (typeof body !== 'object' || body === null || Array.isArray(body)) shape();
     const { code, pc, name, ...rest } = body as Record<string, unknown>;
-    if (typeof code !== 'string' || code.length > 64 || typeof pc !== 'string' || pc.length === 0 || pc.length > MAX_ID_CHARS || Object.keys(rest).length > 0) shape();
+    if (typeof code !== 'string' || code.length > MAX_PAIR_CODE_CHARS || typeof pc !== 'string' || pc.length === 0 || pc.length > MAX_ID_CHARS || Object.keys(rest).length > 0) shape();
     const machine = checkName(name) ?? shape();
     const token = randomBytes(32).toString('base64url');
     const paired = this.transaction(() => {

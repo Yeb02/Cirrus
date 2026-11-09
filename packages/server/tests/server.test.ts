@@ -11,7 +11,7 @@ import {
   type Action, applyOps, canonical, createNode, createPlan, decodeState, editNode, emptyState, fromSnapshot, type Id, include, type State, toSnapshot, type Unit,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
-import { MAX_BODY_BYTES, MAX_PAIR_BODY_BYTES, MAX_UNITS_PER_REQUEST, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_SNAPSHOT_UNITS } from '../src/bounds.ts';
+import { MAX_BODY_BYTES, MAX_PAIR_BODY_BYTES, MAX_PAIR_CODE_CHARS, MAX_UNITS_PER_REQUEST, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_SNAPSHOT_UNITS } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Tokens } from '../src/tokens.ts';
 import { Client, EventReader, FORMAT, newCode, pair, sha256, T0 } from './support.ts';
@@ -82,7 +82,7 @@ test('jumelage : un code, puis un jeton ; la base du serveur ne garde que son em
   // 256 bits.
   expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
   const a = new Client(url, token, 'pc-a');
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0 });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0, baseId: expect.any(String) });
   // Only the token's hash is kept, and the code's: neither in clear, in the tables nor anywhere in the file.
   const db = new DatabaseSync(join(dir, 'serveur.db'));
   const rows = db.prepare('SELECT * FROM pcs').all() as Record<string, unknown>[];
@@ -123,7 +123,21 @@ test('jumelage : un code faux, expiré, déjà servi ou épuisé par des essais 
   for (const body of [{ code: fresh }, { code: fresh, pc: '', name: 'X' }, { code: fresh, pc: 'pc-d', name: 'x'.repeat(1000) }, '[]', '{']) {
     expect((await pair(url, body)).status, JSON.stringify(body)).toBe(400);
   }
+  // Final review, Minor 3: the code's bound, named in bounds.ts — past it, a 400 that tries no code (PAIRING_TRIES of
+  // them would otherwise burn `fresh`); at it, a code tried.
+  for (let i = 0; i < PAIRING_TRIES; i++) expect(await tryCode('0'.repeat(MAX_PAIR_CODE_CHARS + 1))).toBe(400);
+  expect(await tryCode('0'.repeat(MAX_PAIR_CODE_CHARS))).toBe(403);
   expect(await tryCode(fresh, 'pc-d')).toBe(200);
+});
+
+test('revue finale, Minor 3 : toutes les bornes du serveur sont nommées dans bounds.ts, celles du cœur reprises', async () => {
+  const bounds = await import('../src/bounds.ts');
+  const core = await import('@cirrus/core');
+  expect([bounds.MAX_ID_CHARS, bounds.MAX_LABEL_CHARS]).toEqual([core.MAX_ID_CHARS, core.MAX_LABEL_CHARS]);
+  expect([bounds.MAX_PAIR_CODE_CHARS, bounds.SERVER_DB_BUSY_MS]).toEqual([64, 5000]);
+  // tokens.ts takes its bounds from there: no number of its own.
+  const tokens = readFileSync(join(import.meta.dirname, '..', 'src', 'tokens.ts'), 'utf8');
+  expect(tokens).not.toMatch(/\b(64|5000|5_000)\b/);
 });
 
 test('jumeler deux fois le même nom est refusé ; revoquer retire le PC et son code en attente', async () => {
@@ -240,7 +254,7 @@ test('hello : l’heure du serveur, son dernier numéro, s’il est vide ; un au
   const { url } = await start();
   const a = await paired(url, 'pc-a');
   clock = T0 + 1234;
-  expect(await a.hello()).toEqual({ serverTime: T0 + 1234, lastSeq: 0, empty: true, nodes: 0 });
+  expect(await a.hello()).toEqual({ serverTime: T0 + 1234, lastSeq: 0, empty: true, nodes: 0, baseId: expect.any(String) });
   const s = emptyState();
   // Empty in the sense of D7: no node, no connection, no placement, no plan but a lobby.
   expect(await a.units([a.unit(run(s, createPlan(s, 'Lobby', 'lobby')))])).toEqual([{ accepted: 1 }]);

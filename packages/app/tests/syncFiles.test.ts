@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalStore, filePath } from '@cirrus/store';
@@ -137,6 +137,32 @@ test('R12 : les annotations d’un pop-up demandent la taille de leur version pa
   vi.stubGlobal('fetch', async (url: string) => { asked.push(url); return new Response(new Uint8Array(3), { status: 200, headers: { 'Content-Length': '3' } }); });
   expect(await blobSize(REF)).toBe(3);
   expect(asked.at(-1)).toBe(fileUrl(REF));
+});
+
+test('revue finale, Minor 4 : un PDF reçu que ce PC ne peut pas enregistrer (disque plein, accès refusé) : la cause dans la console, 507 et non « serveur injoignable » ; le lecteur et l’ouverture le disent', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const { dir, net, client, get } = paired();
+  // The store's folder of files is a file: nothing can be written in it (the disk refuses, as a full one would).
+  writeFileSync(join(dir, 'files'), 'pas un dossier');
+  const res = await get(fileUrl(REF));
+  expect(res.status).toBe(507);
+  expect(net.requests).toHaveLength(1);
+  expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(new RegExp(`^Fichier ${HASH} reçu du serveur, mais non enregistré dans la base : .*E[A-Z]+`)));
+  // The system's opening says it as the reader does.
+  const root = mkdtempSync(join(tmpdir(), 'cirrus-ouverts-'));
+  dirs.push(root);
+  const opened = await openTargetFetched(dir, REF, root, (h) => client.fetchBlob(h)).catch((e: unknown) => e);
+  const said = 'PDF non enregistré sur ce PC : le disque est plein, ou Windows y refuse l’écriture.';
+  expect(openFailure(REF.name, opened)).toBe(said);
+  // The reader: 507, its own words; another file, by its name. A version's size (?taille) never downloads: unchanged.
+  vi.stubGlobal('fetch', async () => new Response(null, { status: 507 }));
+  await expect(readHead(REF, 1024)).rejects.toEqual(new ReadError(said));
+  await expect(readHead({ name: 'notes.txt', hash: HASH, size: 3 }, 1024)).rejects.toEqual(new ReadError('« notes.txt » non enregistré sur ce PC : le disque est plein, ou Windows y refuse l’écriture.'));
+  await expect(blobSize(REF)).rejects.toEqual(new ReadError(said));
+  // Offline still says the server is out of reach.
+  vi.unstubAllGlobals();
+  net.down = true;
+  expect((await get(fileUrl({ ...REF, name: 'Autre.pdf' }))).status).toBe(503);
 });
 
 test('revue, Minor 11 : deux lectures du même PDF absent en même temps : un seul téléchargement', async () => {

@@ -1,7 +1,7 @@
 import { closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openAsBlob, openSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
-  applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, type State,
+  applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_ID_CHARS, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, type State,
   SyncFormatError, truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, storedHashes } from '@cirrus/store';
@@ -130,43 +130,57 @@ function eachPage(store: LocalStore, after: number, last: number, each: (rows: C
 }
 
 /**
- * What a seed sends of the base, read and checked here before any request (review of task 5, Important 3; R19, R20),
- * in one go (nothing is written in between, so a write made later stays pending, and a file a line up to `last` names
- * is in the store already: blobs are stored before their write):
+ * A journal line as it will be sent (its label cut, R20), checked as the server checks it (parseChangeRow), numbered
+ * `expected` (from 1 without a gap); `history` (R32), a line the snapshot covers: its shape only, not today's content
+ * bounds. A line the server would refuse throws, said in French.
+ */
+function checkLine(r: ChangeRow, expected: number, history: boolean): void {
+  try {
+    parseChangeRow(sentRow(r), expected, history);
+  } catch (e) {
+    if (e instanceof SyncFormatError) throw new Error(`Ligne ${r.localSeq} du journal de ce PC : ${e.message}`);
+    throw e;
+  }
+}
+
+/**
+ * What a seed sends of the base, read and checked here before any request (review of task 5, Important 3; R19, R20,
+ * R32), in one go (nothing is written in between, so a write made later stays pending, and a file a line up to `last`
+ * names is in the store already: blobs are stored before their write):
  * - the journal's last line, `last`;
- * - every line up to it as it will be sent (its label cut, R20), checked as the server checks it (parseChangeRow,
- *   numbered from 1 without a gap): a line the server would refuse stops the seed here, said in French;
- * - the stored snapshot, when it is of this format and the journal's lines after it replay on it, each "before"
- *   checked, and the line it covers (the server replays them too); otherwise — none, or one that does not replay
- *   (reported) — the state of the tables, covering the whole journal.
+ * - the stored snapshot, when it is of this format and the journal's lines after it — its tail, which the server
+ *   replays on it as it applies a write — each pass the server's whole check (parseChangeRow) and replay on it, "before"
+ *   checked; and the line it covers. Otherwise — none, or one whose tail does not replay or holds a line the server's
+ *   check refuses (an older app's: reported) — the state of the tables, covering the whole journal, which then has no
+ *   tail;
+ * - every line up to what the snapshot covers, checked as the server checks a line of history (R32: its shape, not
+ *   today's content bounds, so that a base the app opens and edits normally always seeds, its numbering whole): a line
+ *   the server would refuse even so stops the seed here, said in French.
  * The rules of the graph are not judged: what the base already carries goes with it (R19). Costs a reading of the
  * journal and, with a stored snapshot, its decoding: a seed's, once.
  */
 export function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last: number } {
   const last = store.lastSeq();
-  let expected = 1;
-  eachPage(store, 0, last, (rows) => {
-    for (const r of rows) {
-      try {
-        parseChangeRow(sentRow(r), expected++);
-      } catch (e) {
-        if (e instanceof SyncFormatError) throw new Error(`Ligne ${r.localSeq} du journal de ce PC : ${e.message}`);
-        throw e;
-      }
-    }
-  });
+  let snapshot: { data: ArrayBuffer; seq: number } | null = null;
   const snap = store.readSnapshot();
   if (snap && snap.version === SNAPSHOT_VERSION && snap.seq <= last) {
     try {
       // A copy: a state decoded keeps views on its buffer, which the replay may write.
       const s = decodeState(snap.data.slice(0));
-      eachPage(store, snap.seq, last, (rows) => applyOps(s, rows.map((r) => r.op)));
-      return { data: snap.data, seq: snap.seq, last };
+      let expected = snap.seq + 1;
+      eachPage(store, snap.seq, last, (rows) => {
+        for (const r of rows) checkLine(r, expected++, false);
+        applyOps(s, rows.map((r) => r.op));
+      });
+      snapshot = { data: snap.data, seq: snap.seq };
     } catch (e) {
       console.warn(`Instantané de cette base inutilisable pour l’envoi (${messageOf(e)}) : l’état est relu de ses tables.`);
     }
   }
-  return { data: encodeState(store.loadState()), seq: last, last };
+  const seq = snapshot?.seq ?? last;
+  let expected = 1;
+  eachPage(store, 0, seq, (rows) => { for (const r of rows) checkLine(r, expected++, true); });
+  return snapshot ? { ...snapshot, last } : { data: encodeState(store.loadState()), seq: last, last };
 }
 
 /** What a seed needs: the network, this PC's base and its folder, the server paired (its token), the abort of the app's quit. */
@@ -215,20 +229,26 @@ export async function seedBase(o: SeedDeps): Promise<number> {
     await json('/seed/journal', body);
     after = rows[n - 1].localSeq;
   }
-  const done = (await json('/seed/done', { last })) as { lastSeq?: unknown } | null;
-  if (done?.lastSeq !== last) throw new Error('Réponse du serveur illisible à /seed/done : mets à jour Cirrus, ou le serveur.');
-  o.store.numberSeeded(last);
+  const done = (await json('/seed/done', { last })) as { lastSeq?: unknown; baseId?: unknown } | null;
+  const baseId = done?.baseId;
+  if (done?.lastSeq !== last || typeof baseId !== 'string' || baseId.length === 0 || baseId.length > MAX_ID_CHARS) {
+    throw new Error('Réponse du serveur illisible à /seed/done : mets à jour Cirrus, ou le serveur.');
+  }
+  // With the numbers, the identity of the base the server now holds (R31): pairing this PC again picks up from here.
+  o.store.numberSeeded(last, baseId);
   return last;
 }
 
 /**
  * A line of the server's journal, as the adopting PC keeps it (parseChangeRow): numbered by the server as its own
- * (R6), this PC's own lines local, the other PCs' remote, an inverse an inverse.
+ * (R6), this PC's own lines local, the other PCs' remote, an inverse an inverse. Every line taken is covered by the
+ * server's snapshot: history (R32) — its shape checked, not today's content bounds (a line a seeding PC's older app
+ * wrote, which the server took as history), so that the numbering is the server's, whole.
  */
 function adoptedRow(x: unknown, expected: number, pc: string): ChangeRow {
   let r: ChangeRow;
   try {
-    r = parseChangeRow(x, expected);
+    r = parseChangeRow(x, expected, true);
   } catch (e) {
     if (e instanceof SyncFormatError) throw new Error(`Ligne ${expected} du journal du serveur : ${e.message}`);
     throw e;
@@ -266,18 +286,20 @@ function writeSynced(file: string, text: string): void {
 }
 
 /**
- * What an adopt needs: the network, this base's folder, this PC's identifier (the token's, R17), the server paired, the
- * configuration file of the staged base (its token encrypted as the app keeps it), the abort of the app's quit.
+ * What an adopt needs: the network, this base's folder, this PC's identifier (the token's, R17), the server paired and
+ * the identity of its base (its /hello's, R31), the configuration file of the staged base (its token encrypted as the
+ * app keeps it), the abort of the app's quit.
  */
-export interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; secrets: SecretStore; signal: AbortSignal }
+export interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; baseId: string; secrets: SecretStore; signal: AbortSignal }
 
 /**
  * Takes the server's base (D7, R17), staged in `<base>-nouvelle` beside this one, which nothing here touches: its
  * snapshot (GET /snapshot, MAX_SEED_BYTES at most) and the line it covers; its journal up to that line, by pages
- * (MAX_JOURNAL_PAGE), each line checked; its state written whole; then the files of its nodes but the PDFs — this
- * base's own copy when it has one, downloaded and checked otherwise (one the server lacks too is left: opened later,
- * it says so) —; the server's settings (R23: this PC's are not kept, nor sent), this PC's identifier, the server and
- * its token. Its mark last: complete. Any failure removes the staged base and throws, in French.
+ * (MAX_JOURNAL_PAGE), each line checked as history (R32); its state written whole, with the identity of the server's
+ * base (R31); then the files of its nodes but the PDFs — this base's own copy when it has one, downloaded and checked
+ * otherwise (one the server lacks too is left: opened later, it says so) —; the server's settings (R23: this PC's are
+ * not kept, nor sent), this PC's identifier, the server and its token. Its mark last: complete. Any failure removes the
+ * staged base and throws, in French.
  */
 export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
   const staged = stagedDir(o.dir);
@@ -308,6 +330,8 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
         after = rows.at(-1)!.localSeq;
       }
       store.importState(state, last);
+      // The base it follows (R31): pairing this PC again with this server picks up where it stopped.
+      store.setBaseId(o.baseId);
     } finally {
       store.close();
     }
