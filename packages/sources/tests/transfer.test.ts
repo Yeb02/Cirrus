@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { fetchPublication } from '../src/fetch.ts';
 import { openFetch } from '../src/guard.ts';
-import { duration } from '../src/transfer.ts';
+import { duration, readBody, Refusal, Transfer } from '../src/transfer.ts';
 import { endless, html, pdf, PDF_BYTES, PUBLIC, web } from './support.ts';
 
 /** The reading of a body and its delays, shared by the metadata's exchange and the open web's (review of task 2, I1, I2). */
@@ -60,6 +60,48 @@ test('une longueur déclarée fausse ne sert qu’à la première taille du tamp
     const r = await openFetch(`https://public.example/${i}.pdf`, w.deps, 'application/pdf', { page: 1024, pdf: 2 ** 20 });
     expect(r.ok && [r.pdf, r.bytes.length], String(i)).toEqual([true, PDF_BYTES.length]);
   }
+});
+
+test('une longueur annoncée ne réserve pas sa taille : 200 Mo annoncés, 8 octets envoyés, puis plus rien, coûtent 1 Mio au plus', async () => {
+  const MIB = 2 ** 20;
+  const t = new Transfer({ timeoutMs: 300, pdfMaxMs: 60_000 }, { late: () => new Refusal('délai'), tooLong: () => new Refusal('trop long'), offline: () => new Refusal('hors ligne') });
+  const stalled = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode('%PDF-1.7')); } });
+  const res = new Response(stalled, { headers: { 'content-type': 'application/pdf', 'content-length': String(200 * MIB) } });
+  const sizes: number[] = [];
+  await expect(readBody(res, t, () => ({ cap: 200 * MIB, tooBig: new Refusal('trop gros'), stall: true }), (n) => sizes.push(n))).rejects.toThrow('délai');
+  t.close();
+  expect(sizes.length).toBeGreaterThan(0);
+  expect(Math.max(...sizes)).toBeLessThanOrEqual(MIB);
+  // An honest body of 3 Mio, said so, in 64 Kio pieces: grown as it comes, never past what was said.
+  const t2 = new Transfer({ timeoutMs: 2000, pdfMaxMs: 60_000 }, { late: () => new Refusal('délai'), tooLong: () => new Refusal('trop long'), offline: () => new Refusal('hors ligne') });
+  let sent = 0;
+  const honest = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (sent >= 3 * MIB) { c.close(); return; }
+      c.enqueue(new Uint8Array(64 * 1024).fill(0x25));
+      sent += 64 * 1024;
+    },
+  });
+  const grown: number[] = [];
+  const r = await readBody(new Response(honest, { headers: { 'content-length': String(3 * MIB) } }), t2, () => ({ cap: 200 * MIB, tooBig: null, stall: false }), (n) => grown.push(n));
+  t2.close();
+  expect(r.bytes.length).toBe(3 * MIB);
+  expect(grown).toEqual([MIB, 2 * MIB, 3 * MIB]);
+  // A body that says 64 Kio and sends 4 Mio: past what it said, it doubles, never a copy per piece.
+  const t3 = new Transfer({ timeoutMs: 2000, pdfMaxMs: 60_000 }, { late: () => new Refusal('délai'), tooLong: () => new Refusal('trop long'), offline: () => new Refusal('hors ligne') });
+  let more = 0;
+  const liar = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (more >= 4 * MIB) { c.close(); return; }
+      c.enqueue(new Uint8Array(64 * 1024));
+      more += 64 * 1024;
+    },
+  });
+  const lied: number[] = [];
+  const l = await readBody(new Response(liar, { headers: { 'content-length': String(64 * 1024) } }), t3, () => ({ cap: 200 * MIB, tooBig: null, stall: false }), (n) => lied.push(n));
+  t3.close();
+  expect(l.bytes.length).toBe(4 * MIB);
+  expect(lied).toEqual([64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, MIB, 2 * MIB, 4 * MIB]);
 });
 
 test('duration : une durée en secondes sous la minute, en minutes au-delà', () => {

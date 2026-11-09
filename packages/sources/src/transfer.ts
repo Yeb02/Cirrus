@@ -135,6 +135,11 @@ export class Transfer {
 export const HEAD_BYTES = 5;
 /** A buffer's first size when the body's length is not declared within its cap. */
 const FIRST_BYTES = 64 * 1024;
+/**
+ * A buffer's first size at most when it is declared within its cap: a server that announces 200 Mo and sends nothing
+ * costs this, never what it announced (review of task 2, round 2).
+ */
+const FIRST_DECLARED_BYTES = 2 ** 20;
 
 /** How a body is read. */
 export interface BodyRule {
@@ -146,24 +151,37 @@ export interface BodyRule {
   stall: boolean;
 }
 
-/** One buffer, doubling as it fills, never beyond its cap. */
+/**
+ * One buffer, doubling as bytes come, never beyond its cap; while the body keeps within its declared length
+ * (`expected`), never beyond that length either, so that an honest body ends in a buffer of its own size. `sized`: each
+ * size allocated (a test's probe).
+ */
 class Bytes {
   private buf: Uint8Array;
   private readonly cap: number;
+  private readonly expected: number | null;
+  private readonly sized: ((capacity: number) => void) | undefined;
   size = 0;
 
-  constructor(first: number, cap: number) {
+  constructor(first: number, cap: number, expected: number | null, sized?: (capacity: number) => void) {
     this.buf = new Uint8Array(first);
     this.cap = cap;
+    this.expected = expected;
+    this.sized = sized;
+    sized?.(first);
   }
 
   /** `piece` after the others: the caller made sure it fits under the cap. */
   push(piece: Uint8Array): void {
     const need = this.size + piece.byteLength;
     if (need > this.buf.length) {
-      const next = new Uint8Array(Math.min(this.cap, Math.max(need, this.buf.length * 2)));
+      const doubled = Math.max(need, this.buf.length * 2);
+      // Past its declared length, a body doubles as any other: a server that lies costs no copy per piece.
+      const target = this.expected !== null && need <= this.expected ? Math.min(doubled, this.expected) : doubled;
+      const next = new Uint8Array(Math.min(this.cap, target));
       next.set(this.buf.subarray(0, this.size));
       this.buf = next;
+      this.sized?.(next.length);
     }
     this.buf.set(piece, this.size);
     this.size = need;
@@ -175,15 +193,17 @@ class Bytes {
 }
 
 /**
- * `res`'s body (review of task 2, I1): into one buffer that doubles as it fills and never grows past its cap (allocated
- * whole when the declared length is within it), so that memory follows the bytes, never the pieces a server cuts them
- * into. `rule(null)`: the rule before any byte, whose cap refuses a declared length at once when it has a refusal;
+ * `res`'s body (review of task 2, I1): into one buffer that doubles as bytes come and never grows past its cap (its
+ * first size the declared length, 1 Mio at most), so that memory follows the bytes received, never the pieces a server
+ * cuts them into nor the length it announces. `sized`: each size of the buffer allocated (a test's probe). `rule(null)`: the rule before any byte, whose cap refuses a declared length at once when it has a refusal;
  * `rule(head)`: the rule the body is read under, once its first HEAD_BYTES are in (or fewer, at its end). A read waits
  * on the network without a race: when the exchange stops, its reader is cancelled, which ends the read at once, even
  * on a source that ignores it. A failure of the stream is the connection's (`t.failure`). Its first bytes come back
  * as `head`, whatever the cap kept.
  */
-export async function readBody(res: Response, t: Transfer, rule: (head: Uint8Array | null) => BodyRule): Promise<{ bytes: Uint8Array; head: Uint8Array }> {
+export async function readBody(
+  res: Response, t: Transfer, rule: (head: Uint8Array | null) => BodyRule, sized?: (capacity: number) => void,
+): Promise<{ bytes: Uint8Array; head: Uint8Array }> {
   const declared = Number(res.headers.get('content-length') ?? Number.NaN);
   const before = rule(null);
   if (before.tooBig && declared > before.cap) {
@@ -193,7 +213,7 @@ export async function readBody(res: Response, t: Transfer, rule: (head: Uint8Arr
   const head = new Uint8Array(HEAD_BYTES);
   let headSize = 0;
   let current: BodyRule | null = null;
-  let out = new Bytes(0, 0);
+  let out = new Bytes(0, 0, null);
   /** The pieces before the head is in: HEAD_BYTES − 1 bytes, then the piece that completes it. */
   const early: Uint8Array[] = [];
   /** `piece` under the current rule; false once the body is cut there (nothing further is read). */
@@ -214,8 +234,10 @@ export async function readBody(res: Response, t: Transfer, rule: (head: Uint8Arr
     current = chosen;
     if (chosen.stall) t.stall();
     if (chosen.tooBig && declared > chosen.cap) throw chosen.tooBig;
-    // The declared length sizes the buffer only: a server that sends more or less is read as it sends.
-    out = new Bytes(Number.isSafeInteger(declared) && declared >= 0 && declared <= chosen.cap ? declared : Math.min(chosen.cap, FIRST_BYTES), chosen.cap);
+    // The declared length only sizes the buffer, and only as its bytes come: a server that sends more or less is read as
+    // it sends, and one that announces much and sends little costs FIRST_DECLARED_BYTES at most.
+    const expected = Number.isSafeInteger(declared) && declared >= 0 && declared <= chosen.cap ? declared : null;
+    out = new Bytes(expected !== null ? Math.min(expected, FIRST_DECLARED_BYTES) : Math.min(chosen.cap, FIRST_BYTES), chosen.cap, expected, sized);
     return early.splice(0).every(add);
   };
   if (!res.body) {
