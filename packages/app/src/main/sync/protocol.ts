@@ -77,3 +77,9 @@ export interface ServerInfo {
 
 /** What a local write's commit gives the interface: its journal number, and its time, the server's clock's (D4). */
 export interface Committed { seq: number; at: number }
+
+/**
+ * The .tex this PC opens in full screen, open on another PC (plan 5b, task 5, D6: cirrus:sync:tex:opened): that PC's
+ * name at the server (the one `jumeler` gave it), and since when, on this PC's clock.
+ */
+export interface OpenElsewhere { pc: string; since: number }

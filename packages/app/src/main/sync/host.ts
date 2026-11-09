@@ -1,17 +1,17 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Action, Id, RemoteUnit } from '@cirrus/core';
+import { type Action, fileNameKey, type Id, MAX_ID_CHARS, plainName, type RemoteUnit } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { ServerImport } from '../publications/via.ts';
 import { SharedSettings } from '../settings.ts';
-import { SyncClient } from './client.ts';
+import { type OpenFile, SyncClient } from './client.ts';
 import type { SecretStore } from './config.ts';
 import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
 import { isBaseId } from './firstSync.ts';
 import { Pairing } from './pairing.ts';
-import type { Committed, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
+import type { Committed, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
 import { Reconciliations } from './reconciliations.ts';
 import { writeRefusal } from './sender.ts';
 
@@ -19,7 +19,8 @@ import { writeRefusal } from './sender.ts';
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,
 // stopped and started again at wake, stopped at quit, never two of these at once —; the reconciliation's round trip
 // through the interface, which holds the state; the pairing, its first sync (task 5, D7: firstSync.ts), and the
-// unpairing; each local write's time; the settings changed in Réglages, shared with a server paired (task 6, D9).
+// unpairing; each local write's time; the settings changed in Réglages, shared with a server paired (task 6, D9); the
+// .tex open in full screen, which the server tells the other PCs of (plan 5b, D6).
 // SyncHost is what the IPC calls (wire.ts), one method per call, and what keeps them in order (step); their work is
 // in their parts: the client's in client.ts, the round trip's in reconciliations.ts, the pairing's in pairing.ts.
 
@@ -60,6 +61,14 @@ export interface HostDeps {
   relaunch(): void;
 }
 
+/** A file open in full screen as the interface names it (cirrus:sync:tex:opened, :closed): null for anything that is not one. */
+function openFile(node: unknown, name: unknown): OpenFile | null {
+  return typeof node === 'string' && node.length > 0 && node.length <= MAX_ID_CHARS && typeof name === 'string' && plainName(name) ? { node, name } : null;
+}
+
+/** A file's key among those open: its node and its name as the reimport compares them (the core's fileNameKey). */
+const openKey = (f: OpenFile): string => `${f.node}\u0000${fileNameKey(f.name)}`;
+
 /** What watchWindow listens to: a window and its page, as Electron's BrowserWindow and WebContents emit them. */
 interface Emitter { on(event: string, listener: (...args: unknown[]) => void): unknown }
 type WatchedWindow = Emitter & { webContents: Emitter };
@@ -92,6 +101,8 @@ export class SyncHost {
   private closed = false;
   /** start, stop, pairing, unpairing, waking: one at a time, in order (never a start while a stop runs). */
   private cycle: Promise<void> = Promise.resolve();
+  /** The .tex the interface has open in full screen (plan 5b, D6), by openKey: what the client sends the server. */
+  private readonly openTex = new Map<string, OpenFile>();
 
   constructor(deps: HostDeps) {
     this.deps = deps;
@@ -106,6 +117,7 @@ export class SyncHost {
     const { deps } = this;
     return new SyncClient({
       fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params, settings: this.settings,
+      presence: () => [...this.openTex.values()],
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       status: (s) => {
         this.last = s;
@@ -173,13 +185,17 @@ export class SyncHost {
   /**
    * Quitting: a first sync under way aborted, an offer left unanswered given up (its token stays at the server until
    * `revoquer`: quitting does not wait on the network), the client stopped (the reconciliations under way rejected
-   * first: detach), nothing started again.
+   * first, the .tex open forgotten: detach) once the list of those has left, syncSuspendFlushMs at most (D6: closed by
+   * the window, a .tex is no longer said open elsewhere); nothing started again.
    */
   close(): Promise<void> {
     this.closed = true;
     this.pairing.close();
     this.detach();
-    return this.step(() => this.client.stop());
+    return this.step(async () => {
+      await this.client.presenceSent(this.deps.params().syncSuspendFlushMs);
+      await this.client.stop();
+    });
   }
 
   /**
@@ -226,9 +242,40 @@ export class SyncHost {
     return this.reconciliations.reconciled(id, outcome);
   }
 
-  /** The window is gone (closed, its page reloaded or crashed): what it held abandoned (Reconciliations.detach, R13). */
+  /**
+   * The window is gone (closed, its page reloaded or crashed): what it held abandoned (Reconciliations.detach, R13), its
+   * .tex open in full screen too, the server told while connected (D6).
+   */
   detach(): void {
     this.reconciliations.detach();
+    if (this.openTex.size === 0) return;
+    this.openTex.clear();
+    void this.client.presence();
+  }
+
+  /**
+   * A .tex opened in full screen (cirrus:sync:tex:opened, plan 5b, task 5, D6): kept among this PC's open ones, the list
+   * sent to the server if connected (SyncClient.presence). Resolves with the first other PC that has it open (the
+   * earliest): its name at the server, since when on this PC's clock (the server's, less the offset measured at the
+   * hello). Null when none has, or the answer cannot be had now — not paired, not connected (the list leaves at the next
+   * connection), a request that failed —: nothing is said then. Null at once for a node or a name that is not one.
+   */
+  async texOpened(node: unknown, name: unknown): Promise<OpenElsewhere | null> {
+    const file = openFile(node, name);
+    if (!file || this.closed) return null;
+    const key = openKey(file);
+    this.openTex.set(key, file);
+    if (!this.pairing.paired()) return null;
+    const client = this.client, others = await client.presence();
+    const other = others?.find((o) => openKey(o) === key);
+    return other ? { pc: other.pc, since: other.since - client.clockOffset() } : null;
+  }
+
+  /** A .tex's full screen closed (cirrus:sync:tex:closed): no longer among the open ones, the server told while connected. */
+  texClosed(node: unknown, name: unknown): void {
+    const file = openFile(node, name);
+    if (!file || !this.openTex.delete(openKey(file))) return;
+    void this.client.presence();
   }
 
   /** Pairs this PC (cirrus:sync:pair: Pairing.pairNow), after whatever step runs; the block told then (B2). */

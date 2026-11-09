@@ -3,7 +3,7 @@ import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@c
 import type { PublicationResult } from '@cirrus/sources';
 import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
-import type { Committed, FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../main/sync/protocol.ts';
+import type { Committed, FirstSyncChoice, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../main/sync/protocol.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
@@ -137,6 +137,13 @@ export interface CirrusBridge {
   onSyncStatus(fn: (s: SyncStatus) => void): () => void;
   onSyncVeil(fn: () => void): () => void;
   onSyncServer(fn: (info: ServerInfo) => void): () => void;
+  /**
+   * « .tex ouvert ailleurs » (plan 5b, task 5, D6). texOpened: a .tex's full screen opened, told to the server; the first
+   * other PC that has it open (its name, since when), or null — none, not paired, offline. texClosed: that full screen
+   * closed.
+   */
+  texOpened(node: Id, name: string): Promise<OpenElsewhere | null>;
+  texClosed(node: Id, name: string): void;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

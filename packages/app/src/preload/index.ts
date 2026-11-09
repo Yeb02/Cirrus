@@ -94,5 +94,8 @@ contextBridge.exposeInMainWorld('cirrus', {
   onSyncVeil: (fn: () => void) => on('cirrus:sync:veil', () => fn()),
   // Each change of the pairing (short review after plan 5a, B2).
   onSyncServer: (fn: (info: unknown) => void) => on('cirrus:sync:server', fn),
+  // « .tex ouvert ailleurs » (plan 5b, D6).
+  texOpened: (node: string, name: string) => ipcRenderer.invoke('cirrus:sync:tex:opened', node, name),
+  texClosed: (node: string, name: string) => ipcRenderer.send('cirrus:sync:tex:closed', node, name),
   launch,
 });

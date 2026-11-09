@@ -188,11 +188,18 @@ export class VirtualPc {
   readonly reconciled: { incoming: RemoteUnit[]; refused: { unit: Id; message: string }[] }[] = [];
   readonly now: () => number;
   params: SyncParams;
+  /**
+   * The .tex it has open in full screen (plan 5b, D6), sent at each connection and by `client.presence()`, when it was
+   * made with `presence`; otherwise it sends none, as before plan 5b.
+   */
+  readonly openTex: { node: Id; name: string }[] = [];
+  private readonly presence: boolean;
 
-  constructor(o: { id: string; dir: string; now: () => number; params?: Partial<SyncParams> }) {
+  constructor(o: { id: string; dir: string; now: () => number; params?: Partial<SyncParams>; presence?: boolean }) {
     this.id = o.id;
     this.dir = o.dir;
     this.now = o.now;
+    this.presence = o.presence ?? false;
     this.params = { ...TEST_PARAMS, ...o.params };
     this.store = LocalStore.open(o.dir, { pc: o.id });
     this.s = this.store.loadState();
@@ -203,7 +210,7 @@ export class VirtualPc {
   private newClient(): SyncClient {
     return new SyncClient({
       fetch: this.net.fetch, store: this.store, storeDir: this.dir, secrets: fileSecrets(this.dir, PLAIN), reconcile: (incoming, refused) => this.reconcile(incoming, refused),
-      now: this.now, params: () => this.params, status: (s) => { this.statuses.push(s); },
+      now: this.now, params: () => this.params, status: (s) => { this.statuses.push(s); }, ...(this.presence ? { presence: () => this.openTex } : {}),
     });
   }
 
@@ -363,12 +370,15 @@ export class Lab {
     }
   }
 
-  /** A virtual PC paired with the server (its name there: its id in capitals), its client started unless `start` is false. */
-  async pc(id: string, o: { skewMs?: number; params?: Partial<SyncParams>; start?: boolean } = {}): Promise<VirtualPc> {
+  /**
+   * A virtual PC paired with the server (its name there: its id in capitals), its client started unless `start` is false;
+   * with `presence`, it sends the .tex it has open (VirtualPc.openTex).
+   */
+  async pc(id: string, o: { skewMs?: number; params?: Partial<SyncParams>; start?: boolean; presence?: boolean } = {}): Promise<VirtualPc> {
     const dir = join(this.root, id);
     mkdirSync(dir, { recursive: true });
     fileSecrets(dir, PLAIN).write(await this.pairing(id.toUpperCase(), id));
-    const pc = new VirtualPc({ id, dir, now: () => this.clock + (o.skewMs ?? 0), params: o.params });
+    const pc = new VirtualPc({ id, dir, now: () => this.clock + (o.skewMs ?? 0), params: o.params, presence: o.presence });
     this.pcs.push(pc);
     if (o.start !== false) pc.client.start();
     return pc;

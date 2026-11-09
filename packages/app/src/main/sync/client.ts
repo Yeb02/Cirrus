@@ -20,7 +20,8 @@ import { Uploads } from './uploads.ts';
 // the tests run several PCs in one process.
 // Here: its life (start, stop, the retries), each connection's hello and event stream, the reconciliation of what
 // arrived, and its status. A connection and its requests are connection.ts's; the sending, sender.ts's; the shared
-// settings, settingsSync.ts's; the files, uploads.ts's and downloads.ts's.
+// settings, settingsSync.ts's; the files, uploads.ts's and downloads.ts's. The .tex open here (plan 5b, D6) go to the
+// server at each connection and at each change (presence).
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs'>;
@@ -48,6 +49,26 @@ export interface SyncDeps {
   status(s: SyncStatus): void;
   /** The shared settings (task 6, main/settings.ts's SharedSettings); none: the client shares none. */
   settings?: SettingsSync;
+  /**
+   * The .tex open in full screen on this PC (plan 5b, task 5, D6), as they are when a list leaves (SyncHost's); none:
+   * the client sends no list.
+   */
+  presence?: () => readonly OpenFile[];
+}
+
+/** A file open in full screen: its node, its name. */
+export interface OpenFile { node: Id; name: string }
+
+/** The same file open on another PC, as the server answers it: that PC's name at the server, since when (the server's clock). */
+export interface FileOpenElsewhere extends OpenFile { pc: string; since: number }
+
+/** The server's answer to PUT /presence, checked: the files open elsewhere; null for anything else. */
+function othersOf(body: unknown): FileOpenElsewhere[] | null {
+  const others = (body as { others?: unknown } | null)?.others;
+  if (!Array.isArray(others)) return null;
+  const ok = others.every((o: Partial<FileOpenElsewhere> | null) =>
+    typeof o?.node === 'string' && typeof o.name === 'string' && typeof o.pc === 'string' && typeof o.since === 'number' && Number.isFinite(o.since));
+  return ok ? (others as FileOpenElsewhere[]).map(({ node, name, pc, since }) => ({ node, name, pc, since })) : null;
 }
 
 /** A server whose base is another than the one this PC follows (R31): its data replaced. */
@@ -73,6 +94,8 @@ export class SyncClient {
   private lastStatus = '';
   /** What its sender works with (sender.ts): the files sent, each once (uploads.ts), its reconciliation and its status. */
   private readonly sending: SenderClient;
+  /** The lists of open .tex sent, one at a time whatever the connection: the tail of their chain (it never rejects). */
+  private presenceChain: Promise<unknown> = Promise.resolve();
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
@@ -149,6 +172,38 @@ export class SyncClient {
     const conn = this.conn;
     if (conn === null || conn.closed || !conn.open) return Promise.reject(new Error('aucune connexion au serveur'));
     return conn.request('/publications', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(request) });
+  }
+
+  /**
+   * The .tex open here (plan 5b, task 5, D6) sent to the server (PUT /presence): the whole list, as `deps.presence` gives
+   * it when the request leaves. Resolves with the same files open on other PCs; null when no connection is open — the
+   * list leaves at the next one (session) —, without a list to send, or when the request fails (the next change or
+   * connection sends it again). One request at a time, in order: the server always ends with the latest list.
+   */
+  presence(): Promise<FileOpenElsewhere[] | null> {
+    const conn = this.conn, list = this.deps.presence;
+    if (!list || conn === null || conn.closed || !conn.open) return Promise.resolve(null);
+    const p = this.presenceChain.then(async (): Promise<FileOpenElsewhere[] | null> => {
+      if (conn.closed) return null;
+      try {
+        const res = await conn.request('/presence', { method: 'PUT', headers: JSON_BODY, body: JSON.stringify({ open: list() }) });
+        const others = othersOf(await json(res));
+        if (others === null) console.warn('Fichiers ouverts : réponse du serveur illisible à /presence.');
+        return others;
+      } catch (e) {
+        if (!conn.closed) console.warn(`Fichiers ouverts non envoyés au serveur : ${messageOf(e)}`);
+        return null;
+      }
+    });
+    this.presenceChain = p;
+    return p;
+  }
+
+  /** Resolves once the lists of open .tex under way are sent (or failed), or after `ms`: what quitting waits for. */
+  async presenceSent(ms: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([this.presenceChain, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+    clearTimeout(timer);
   }
 
   /** The server's clock minus this PC's, measured at the last hello (0 before): a write's time is now() + clockOffset(). */
@@ -233,6 +288,9 @@ export class SyncClient {
       this.retryDelay = 0;
     }, this.deps.params().syncRetryMaxMs);
     this.downloads.retry();
+    // The .tex open here (D6): what this PC has open now, an empty list included — a list left by a stop without closing
+    // them (a laptop shut) goes so at its next connection.
+    void this.presence();
     this.progress(conn);
     started(send(conn, this.sending));
     for await (const e of readEvents(res.body, conn.abort.signal)) {
