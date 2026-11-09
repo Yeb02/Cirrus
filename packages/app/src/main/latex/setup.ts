@@ -23,7 +23,7 @@ export interface PackageManager {
   installFor(file: string): Promise<string | null>;
 }
 
-export interface LatexSetupOptions {
+interface LatexSetupOptions {
   service: CompileService;
   /** pdfLaTeX, or null while LaTeX is not installed (asked again each time). */
   binaries(): Promise<TexBinaries | null>;
@@ -36,7 +36,7 @@ export interface LatexSetupOptions {
 }
 
 /** The distribution in `pdflatex --version`'s first line: « TeX Live 2026 ». */
-export function distribution(version: string): string {
+function distribution(version: string): string {
   return /\((TeX Live [^)]*)\)/.exec(version)?.[1] ?? version;
 }
 

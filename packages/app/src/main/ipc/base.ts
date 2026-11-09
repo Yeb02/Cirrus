@@ -7,7 +7,7 @@ import type { SyncHost } from '../sync/host.ts';
 import { markNow } from './bench.ts';
 
 /** What the base's calls read when the interface makes them: by then, the base is open (index.ts). */
-export interface BaseDeps {
+interface BaseDeps {
   store(): LocalStore | null;
   /** The synchronisation (plan 5a): with no server paired, it does nothing. */
   sync(): SyncHost | null;

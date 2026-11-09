@@ -6,7 +6,7 @@ import { type CompiledPdf, type CompileRequest, isStandalone, type KnownLabel } 
 import { DRIVER_VERSION } from './driver.ts';
 
 /** What the cache keeps beside a PDF, in <key>.json. */
-export interface CacheMeta { pages: number; labels: KnownLabel[]; log: string; passes: number }
+interface CacheMeta { pages: number; labels: KnownLabel[]; log: string; passes: number }
 
 const KEY = /^[0-9a-f]{64}$/;
 const ENTRY = /^([0-9a-f]{64})\.(pdf|json)$/;

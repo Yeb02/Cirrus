@@ -1,7 +1,7 @@
 import { type ChildProcess, execFile } from 'node:child_process';
 
 /** Stops `pid` and every process it started: null once done, else why not. */
-export type TreeKiller = (pid: number) => Promise<Error | null>;
+type TreeKiller = (pid: number) => Promise<Error | null>;
 
 const taskkill: TreeKiller = (pid) => new Promise((done) => {
   execFile('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true }, (e) => done(e));

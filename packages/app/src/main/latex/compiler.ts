@@ -24,7 +24,7 @@ import { missingFile, texEnv, type TexBinaries } from './tinytex.ts';
  * installation and its missing packages are LatexSetup's (setup.ts, task 7), which stands in front of this service.
  */
 
-export interface LatexServiceOptions {
+interface LatexServiceOptions {
   /** pdfLaTeX, or null while LaTeX is not installed (asked again at each compilation). */
   binaries: () => Promise<TexBinaries | null>;
   /** <base>/latex. */

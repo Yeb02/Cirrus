@@ -62,7 +62,7 @@ export async function* chunks(body: ReadableStream<Uint8Array>): AsyncGenerator<
 }
 
 /** GET /files/<hash> on the paired server, with its token; null without a server. */
-export type BlobRequest = (hash: string, signal: AbortSignal) => Promise<Response> | null;
+type BlobRequest = (hash: string, signal: AbortSignal) => Promise<Response> | null;
 
 /** A hash as the store names its blobs: 64 lower-case hexadecimal digits. */
 export const isHash = (h: unknown): h is string => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h);

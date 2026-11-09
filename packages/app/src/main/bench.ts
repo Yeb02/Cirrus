@@ -9,7 +9,7 @@ import type { BenchRun, ProcessMb, Stats } from '../renderer/bench.ts';
 import { openBase } from './base.ts';
 
 /** The load phases, in order, with their names in the report: the first two are the main process's, the rest the interface's. */
-export const PHASES = [
+const PHASES = [
   ['baseOpened', 'base ouverte'], ['dataSent', 'données envoyées'], ['dataReceived', 'données reçues'], ['stateReady', 'état prêt'],
   ['sceneReady', 'scène prête'], ['engineReady', 'moteur prêt'], ['firstFrame', 'première image'],
 ] as const;
@@ -81,7 +81,7 @@ const trio = (s: Stats | undefined, hi: 'p95' | 'p99', d = 2) => (s ? `${f(s.p50
  * A criterion of plan 3c (task 10): its target, the measure, whether it is met (null: no verdict, either not measured by
  * these passes, its measure then « — », or only to be reported, as the fallback path).
  */
-export interface Criterion { key: string; name: string; target: string; measure: string; met: boolean | null }
+interface Criterion { key: string; name: string; target: string; measure: string; met: boolean | null }
 
 /**
  * The criteria of plan 3c (task 10), on the reference base, from the passes recorded. The memory criteria read the
@@ -149,7 +149,7 @@ export interface SnapshotGrowth {
 }
 
 /** Where the snapshot rewrites wait for the report (scripts/bench.mjs removes it before a run). */
-export const SNAPSHOTS_FILE = '.app-rendu-instantanes.json';
+const SNAPSHOTS_FILE = '.app-rendu-instantanes.json';
 
 /**
  * The base file over `rounds` snapshot rewrites (plan 3c task 10, M3 of the final review), on the bench's copy of its
@@ -208,7 +208,7 @@ export function recordSnapshots(docsDir: string, growth: SnapshotGrowth): void {
 }
 
 /** The GPU time of the drawing alone (frames without a rebuild): raw (vsync), floor (all layers hidden), content = raw − floor. */
-export function gpuSummary(runs: PassRecord[]): { raw: Stats | null; floor: Stats | null; content: { p50: number; p95: number } } {
+function gpuSummary(runs: PassRecord[]): { raw: Stats | null; floor: Stats | null; content: { p50: number; p95: number } } {
   const raw = runs.find((r) => r.label === 'vsync')?.gpuSteadyMs ?? null, floor = runs.find((r) => r.label === 'plancher')?.gpuSteadyMs ?? null;
   // A NaN read back from the runs file is null: still no number.
   const num = (v: number | null | undefined) => (typeof v === 'number' ? v : Number.NaN);

@@ -52,7 +52,7 @@ const SWAP_TRIES = 10;
 const SWAP_PAUSE_MS = 150;
 
 /** How the swap retries a rename; `rename`, the system's, given otherwise by a test only. */
-export interface SwapRetry { tries: number; pauseMs: number; rename?: (from: string, to: string) => void }
+interface SwapRetry { tries: number; pauseMs: number; rename?: (from: string, to: string) => void }
 const SWAP_RETRY: SwapRetry = { tries: SWAP_TRIES, pauseMs: SWAP_PAUSE_MS };
 
 function rename(from: string, to: string, retry: SwapRetry): void {

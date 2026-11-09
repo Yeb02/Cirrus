@@ -61,7 +61,7 @@ export interface HostDeps {
 
 /** What watchWindow listens to: a window and its page, as Electron's BrowserWindow and WebContents emit them. */
 interface Emitter { on(event: string, listener: (...args: unknown[]) => void): unknown }
-export type WatchedWindow = Emitter & { webContents: Emitter };
+type WatchedWindow = Emitter & { webContents: Emitter };
 
 /**
  * A window's page gone or replaced: what it was reconciling is abandoned, and nothing is sent until a page asks to start

@@ -61,7 +61,7 @@ export function parseSettingRows(x: unknown): Record<string, SettingRow> {
  * The time of a change made here (`at`: this PC's clock corrected by the server's, D4), and the latest the server takes
  * (R26: SyncClient.latestSettingTime).
  */
-export interface SettingClock { at: number; latest: number }
+interface SettingClock { at: number; latest: number }
 
 /**
  * This PC's settings and their sharing (task 6). Without a server paired, a change goes to settings.json only, as

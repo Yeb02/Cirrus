@@ -32,7 +32,7 @@ export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit
  * A reconciliation as the interface sends it back: the received writes named only, by identifier and number (main
  * holds them: it sent them); the rest whole.
  */
-export type ReconciliationAnswer = Omit<Reconciliation, 'remote'> & { remote: { unit: Id; seq: number }[] };
+type ReconciliationAnswer = Omit<Reconciliation, 'remote'> & { remote: { unit: Id; seq: number }[] };
 
 /**
  * The interface's answer (cirrus:sync:reconciled): its reconciliation, for the base to write; or why it could not make

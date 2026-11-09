@@ -40,9 +40,9 @@ export type PublicationResult =
   | { ok: true; id: PublicationId; csl: Csl; bibtex: string; pdf?: FileRef; pdfMessage?: string }
   | { ok: false; message: string };
 
-export const UNRECOGNIZED = 'Identifiant non reconnu.';
-export const NOT_FOUND = 'Publication introuvable.';
-export const OFFLINE = 'Pas de connexion.';
+const UNRECOGNIZED = 'Identifiant non reconnu.';
+const NOT_FOUND = 'Publication introuvable.';
+const OFFLINE = 'Pas de connexion.';
 
 const CSL_TYPE = 'application/vnd.citationstyles.csl+json';
 const BIBTEX_TYPE = 'application/x-bibtex';
@@ -267,7 +267,7 @@ export async function importPublication(text: unknown, deps: PublicationDeps, op
 }
 
 /** What requestFetch needs of Electron's net.request: a ClientRequest's few calls and events. */
-export interface RequestLike {
+interface RequestLike {
   setHeader(name: string, value: string): void;
   on(event: 'redirect', listener: (statusCode: number, method: string, redirectUrl: string) => void): this;
   on(event: 'response', listener: (response: IncomingLike) => void): this;
@@ -276,8 +276,8 @@ export interface RequestLike {
   end(): void;
 }
 /** Electron's IncomingMessage: a Node Readable, with its status and headers. */
-export interface IncomingLike { statusCode: number; headers: Record<string, string | string[]> }
-export interface RequestOptions { url: string; method: 'GET'; redirect: 'manual'; credentials: 'omit'; cache: 'no-store' }
+interface IncomingLike { statusCode: number; headers: Record<string, string | string[]> }
+interface RequestOptions { url: string; method: 'GET'; redirect: 'manual'; credentials: 'omit'; cache: 'no-store' }
 
 /** The statuses a Response cannot have a body with. */
 const NULL_BODY = new Set([101, 103, 204, 205, 304]);

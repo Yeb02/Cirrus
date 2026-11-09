@@ -5,7 +5,7 @@
 export type Csl = Record<string, unknown>;
 
 /** What a publication's node takes from its CSL (D7): its title, its authors « Prénom Nom », its year. */
-export interface PublicationFields { title: string; authors: string[]; year: string | null }
+interface PublicationFields { title: string; authors: string[]; year: string | null }
 
 /** `o`'s own field `key`: never one inherited (`toString`, `constructor`), whatever the JSON named. */
 const field = (o: unknown, key: string): unknown =>

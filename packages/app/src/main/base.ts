@@ -45,7 +45,7 @@ export function openBase(dir: string): LocalStore {
  * What cirrus:load sends the interface: the snapshot, the journal's operations after it as JSON, the number they reach;
  * the pending writes as JSON (plan 5a: all of them with a server paired, R5; none otherwise).
  */
-export interface Payload { data: ArrayBuffer; tail: string; seq: number; pending: string }
+interface Payload { data: ArrayBuffer; tail: string; seq: number; pending: string }
 
 /**
  * cirrus:load (plan 3c, decision 4): the base's snapshot and the journal after it. Without a snapshot of this format,

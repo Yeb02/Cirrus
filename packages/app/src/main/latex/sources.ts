@@ -7,7 +7,7 @@
 
 export interface TinyTexRelease { version: string; asset: string; url: string; sha256: string; bytes: number }
 
-export interface LatexSources {
+interface LatexSources {
   tinytex: TinyTexRelease;
   /**
    * tlmgr's repository (ruling R2.4): `ctan`, which tlmgr reads as CTAN's mirror network for TeX Live's own tlnet. An

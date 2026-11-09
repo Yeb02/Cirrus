@@ -27,7 +27,7 @@ const LATEX_PREFIX = `${FILE_SCHEME}://latex/`;
 const HASH = /^[0-9a-f]{64}$/;
 const RANGE = /^bytes=(\d*)-(\d*)$/i;
 
-export type BlobAnswer =
+type BlobAnswer =
   | { status: 400 | 404 | 416 | 503 | 507; headers: Record<string, string> }
   | { status: 200 | 206; headers: Record<string, string>; path: string; start: number; end: number };
 
@@ -126,7 +126,7 @@ export function blobResponse(storeDir: string, request: Request): Response {
  * A request that never downloads (plan 5a, D6, R12): a thumbnail's (`?vignette`: the pop-up shows the kind's icon
  * instead), or one asking only a version's size (`?taille`: an annotation listed). Served if the store holds the blob.
  */
-export function isNoDownloadRequest(url: string): boolean {
+function isNoDownloadRequest(url: string): boolean {
   const query = url.split('#')[0].split('?')[1];
   if (query === undefined) return false;
   const params = new URLSearchParams(query);
@@ -137,7 +137,7 @@ export function isNoDownloadRequest(url: string): boolean {
  * A blob the server must give: `true` once it is in the store, checked against its hash; `false` when it could not be
  * had; rejected, its code NOT_STORED, when this PC could not keep it (SyncClient.fetchBlob).
  */
-export type FetchBlob = (hash: string) => Promise<boolean>;
+type FetchBlob = (hash: string) => Promise<boolean>;
 
 /**
  * The protocol's response for either host: the store's blobs (blob) or the compiled PDFs of `cacheDir` (latex). With a

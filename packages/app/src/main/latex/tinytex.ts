@@ -14,8 +14,6 @@ import { LATEX_SOURCES, type TinyTexRelease } from './sources.ts';
  * this module: the download's fetch is handed in.
  */
 
-export type { TinyTexRelease } from './sources.ts';
-
 /** The pinned TinyTeX release (LATEX_SOURCES.tinytex). */
 export const TINYTEX_RELEASE: TinyTexRelease = LATEX_SOURCES.tinytex;
 

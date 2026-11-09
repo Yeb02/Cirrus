@@ -52,7 +52,7 @@ function shareBlob(from: string, to: string): void {
  * the identity of its base (its /hello's, R31), the configuration file of the staged base (its token encrypted as the
  * app keeps it), the abort of the app's quit.
  */
-export interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; baseId: string; secrets: SecretStore; signal: AbortSignal }
+interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; baseId: string; secrets: SecretStore; signal: AbortSignal }
 
 /**
  * Takes the server's base (D7, R17), staged in `<base>-nouvelle` beside this one, which nothing here touches: its

@@ -5,7 +5,7 @@ import { type FetchFn, importPublication, requestFetch } from '../publications/f
 import { replayDirOf, replayFetch } from '../publications/replay.ts';
 
 /** What a publication's import reads when the interface asks for it (index.ts). */
-export interface PublicationsDeps {
+interface PublicationsDeps {
   /** The base's folder, whose store keeps the PDF. */
   dir(): string;
   /** The base, null until it is open. */

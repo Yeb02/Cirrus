@@ -7,7 +7,7 @@ import { navigationAllowed } from './navigation.ts';
 import { type SyncHost, watchWindow } from './sync/host.ts';
 
 /** What the window takes of the process (index.ts). */
-export interface WindowDeps {
+interface WindowDeps {
   /** The options the interface reads at launch (the preload's `launch`). */
   launch: object;
   /** CIRRUS_BENCH and CIRRUS_CAPTURE, as the process read them. */

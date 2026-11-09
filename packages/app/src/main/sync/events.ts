@@ -2,7 +2,7 @@
 // or \r; a blank line dispatches the event; « : … » is a comment (the server's pings); data lines joined by \n; the
 // last id seen kept for the next events; an event left unfinished at the end is dropped.
 
-export interface SseEvent { id: string | null; event: string; data: string }
+interface SseEvent { id: string | null; event: string; data: string }
 
 /**
  * The events of `body`, as they come. Its bytes are decoded as UTF-8 across chunks, and each line is put together from

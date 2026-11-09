@@ -82,7 +82,7 @@ function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last:
  * What a seed needs: the network, this PC's base and its folder, the server paired (its token), the pairing's time (its
  * /hello's: kept with the seed, B1), the abort of the app's quit.
  */
-export interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal }
+interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal }
 
 /**
  * Sends this PC's base to the server, which holds none (D7, R16). First, before any request, what it sends is read

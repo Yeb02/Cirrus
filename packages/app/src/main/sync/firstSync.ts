@@ -18,7 +18,7 @@ import type { FirstSyncOffer } from './protocol.ts';
 // adopt.ts's, the swap at the next start swap.ts's, and the pairing that asks them pairing.ts's.
 
 /** What /hello says of the server's base: its last number, whether it is empty (D7), its nodes. */
-export interface ServerBase { lastSeq: number; empty: boolean; nodes: number }
+interface ServerBase { lastSeq: number; empty: boolean; nodes: number }
 
 /** Where a base taken from the server is staged: beside the base, `<base>-nouvelle`. */
 export const stagedDir = (dir: string): string => `${resolve(dir)}-nouvelle`;

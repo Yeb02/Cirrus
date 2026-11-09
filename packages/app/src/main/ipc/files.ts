@@ -7,7 +7,7 @@ import { externalUrlAllowed } from '../navigation.ts';
 import type { SyncHost } from '../sync/host.ts';
 
 /** What the files' calls read when the interface makes them: by then, the base is open (index.ts). */
-export interface FilesDeps {
+interface FilesDeps {
   /** The base's folder, whose store holds the files. */
   dir(): string;
   /** The synchronisation (plan 5a): with a server paired, a file the store lacks is downloaded. */

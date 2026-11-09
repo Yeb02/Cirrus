@@ -5,7 +5,7 @@ import { INVALID_REQUEST, invalidRequest, type LatexService } from '../latex/com
 import type { LatexSetup } from '../latex/setup.ts';
 
 /** What LaTeX's calls read when the interface makes them: once the base is open, the service and its setup (index.ts). */
-export interface LatexDeps {
+interface LatexDeps {
   /** The base's folder, whose store holds a compilation's resources. */
   dir(): string;
   /** The settings LaTeX reads (textViewMaxMb). */
