@@ -61,11 +61,13 @@ export interface SyncDeps {
   /**
    * The server's state and « Tout télécharger » (plan 5b, D8): the clock its round trips and transfers are measured by
    * (ms, monotonic; performance.now by default), the free space of a folder's disk (its statfs by default), and what is
-   * told of « Tout télécharger » at each change (none: nothing told).
+   * told of « Tout télécharger » at each change (none: nothing told), at most once every `downloadAllEveryMs`
+   * (PROGRESS_EVERY_MS by default; 0, every change: the tests' virtual PCs, which act on each file's end).
    */
   clock?: () => number;
   freeBytes?: (dir: string) => Promise<number>;
   downloadAll?: (p: DownloadAllProgress) => void;
+  downloadAllEveryMs?: number;
 }
 
 /** GET /status's answer (plan 5b, D8), checked: each size a non-negative number, `counting` a boolean; null otherwise. */
@@ -133,7 +135,7 @@ export class SyncClient {
     this.deps = deps;
     this.rates = new TransferRates(deps.clock ?? (() => performance.now()));
     this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads, this.rates);
-    this.all = new DownloadAll(this.downloads, (p) => deps.downloadAll?.(p));
+    this.all = new DownloadAll(this.downloads, (p) => deps.downloadAll?.(p), deps.downloadAllEveryMs === undefined ? {} : { everyMs: deps.downloadAllEveryMs });
     this.sending = {
       deps, uploads: new Uploads(deps.storeDir, this.rates),
       reconciled: () => this.reconciled(), schedule: (conn) => this.schedule(conn), report: () => this.report(), latestSettingTime: () => this.latestSettingTime(),

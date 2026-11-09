@@ -450,23 +450,79 @@ export class Downloads {
 }
 
 /**
+ * The least time between two progress events of « Tout télécharger » told to the window (task 8a, from the review of
+ * task 7): one per file would be hundreds a second for small PDFs from a near server, each a message to the interface
+ * and a render of its block. A pace of the main process's messages, which the user does not see (the progress shown is
+ * the same), not a setting.
+ */
+export const PROGRESS_EVERY_MS = 200;
+
+/** A clock and its timers (ms): the real ones, or a test's. */
+export interface Ticks { now(): number; set(cb: () => void, ms: number): unknown; clear(timer: unknown): void }
+const REAL_TICKS: Ticks = { now: () => performance.now(), set: (cb, ms) => setTimeout(cb, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) };
+
+/**
+ * What is told at most once every `everyMs`: told at once when that time has passed since the last, else kept — the
+ * latest replacing the one before — and told when it has. An edge (a first, a last) is told at once, whatever is kept
+ * dropped.
+ */
+class Paced<T> {
+  private readonly send: (x: T) => void;
+  private readonly everyMs: number;
+  private readonly ticks: Ticks;
+  private last = Number.NEGATIVE_INFINITY;
+  private kept: { x: T } | null = null;
+  private timer: unknown = null;
+
+  constructor(send: (x: T) => void, everyMs: number, ticks: Ticks) {
+    this.send = send;
+    this.everyMs = everyMs;
+    this.ticks = ticks;
+  }
+
+  tell(x: T, edge = false): void {
+    const now = this.ticks.now();
+    if (edge || now - this.last >= this.everyMs) {
+      if (this.timer !== null) this.ticks.clear(this.timer);
+      this.timer = null;
+      this.kept = null;
+      this.last = now;
+      this.send(x);
+      return;
+    }
+    this.kept = { x };
+    this.timer ??= this.ticks.set(() => this.due(), this.last + this.everyMs - now);
+  }
+
+  private due(): void {
+    const k = this.kept;
+    this.timer = null;
+    this.kept = null;
+    if (!k) return;
+    this.last = this.ticks.now();
+    this.send(k.x);
+  }
+}
+
+/**
  * « Télécharger tous les PDF… » (plan 5b, D8): the files a plan counted missing, downloaded by the queue of the eager
  * downloads (Downloads.wantOnce: syncDownloads at a time with them, each checked against its hash), told at its start
- * and at each file's end. It stops at the first file the network lost (the server out of reach) or this PC's disk
- * refused, at « Arrêter », and when the synchronisation stops: those still queued dropped, those under way aborted,
- * their temporaries removed — the store never keeps half a file. Neither written beside the base nor resumed: started
- * again, it counts what is still missing.
+ * and at each file's end — at most once every `pace.everyMs` (PROGRESS_EVERY_MS by default), its start and its end
+ * always (task 8a). It stops at the first file the network lost (the server out of reach, or up but failing) or this
+ * PC's disk refused, at « Arrêter », and when the synchronisation stops: those still queued dropped, those under way
+ * aborted, their temporaries removed — the store never keeps half a file. Neither written beside the base nor resumed:
+ * started again, it counts what is still missing.
  */
 export class DownloadAll {
   private readonly downloads: Downloads;
-  private readonly tell: (p: DownloadAllProgress) => void;
+  private readonly told: Paced<DownloadAllProgress>;
   /** The files it still waits for, by hash: their sizes, the references'. */
   private readonly left = new Map<string, number>();
   private progress: DownloadAllProgress | null = null;
 
-  constructor(downloads: Downloads, tell: (p: DownloadAllProgress) => void) {
+  constructor(downloads: Downloads, tell: (p: DownloadAllProgress) => void, pace: { everyMs?: number; ticks?: Ticks } = {}) {
     this.downloads = downloads;
-    this.tell = tell;
+    this.told = new Paced(tell, pace.everyMs ?? PROGRESS_EVERY_MS, pace.ticks ?? REAL_TICKS);
     downloads.onSettled = (hash, outcome) => this.settled(hash, outcome);
   }
 
@@ -488,7 +544,7 @@ export class DownloadAll {
       bytes += size;
     }
     this.progress = { done: 0, failed: 0, total: this.left.size, doneBytes: 0, totalBytes: bytes };
-    this.tell(this.progress);
+    this.told.tell(this.progress, true);
     this.downloads.wantOnce([...this.left.keys()]);
   }
 
@@ -511,13 +567,13 @@ export class DownloadAll {
     const p = this.progress!;
     this.progress = outcome === 'done' ? { ...p, done: p.done + 1, doneBytes: p.doneBytes + size } : { ...p, failed: p.failed + 1 };
     if (this.left.size === 0) this.end('done');
-    else this.tell(this.progress);
+    else this.told.tell(this.progress);
   }
 
   private end(end: NonNullable<DownloadAllProgress['end']>): void {
     this.left.clear();
     this.downloads.dropOnce();
     this.progress = { ...this.progress!, end };
-    this.tell(this.progress);
+    this.told.tell(this.progress, true);
   }
 }

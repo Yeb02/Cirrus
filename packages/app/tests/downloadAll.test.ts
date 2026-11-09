@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type Action, applyOps, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, emptyState, type FileRef, type Id } from '@cirrus/core';
 import { filePath, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
-import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome } from '../src/main/sync/downloads.ts';
+import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome, PROGRESS_EVERY_MS, type Ticks } from '../src/main/sync/downloads.ts';
 import type { DownloadAllProgress, ServerStatus } from '../src/main/sync/protocol.ts';
 import { planText, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
 import { created, Lab, sleep, until, type VirtualPc } from './support/virtualPc.ts';
@@ -368,6 +368,52 @@ test('DownloadAll : un téléchargement de la fois d’avant, arrêté mais pas 
   expect([hasBlob(dir, first), hasBlob(dir, opened)]).toEqual([true, true]);
   expect(asked).toEqual([first, opened, first]);
   expect(told.map((p) => p.end)).toEqual([undefined, 'stopped', undefined, 'done']);
+});
+
+test('DownloadAll : l’avancement dit à la fenêtre au plus une fois toutes les PROGRESS_EVERY_MS, le premier et le dernier toujours, le plus récent gardé entre deux (relecture de la tâche 7)', async () => {
+  expect(PROGRESS_EVERY_MS).toBe(200);
+  // A fake clock: its timers run when it is moved on.
+  let now = 1000, next = 0;
+  const timers = new Map<number, { at: number; cb: () => void }>();
+  const ticks: Ticks = { now: () => now, set: (cb, ms) => { timers.set(++next, { at: now + ms, cb }); return next; }, clear: (t) => { timers.delete(t as number); } };
+  const advance = (ms: number) => {
+    const end = now + ms;
+    for (let due = [...timers].sort((x, y) => x[1].at - y[1].at)[0]; due && due[1].at <= end; due = [...timers].sort((x, y) => x[1].at - y[1].at)[0]) {
+      timers.delete(due[0]);
+      now = due[1].at;
+      due[1].cb();
+    }
+    now = end;
+  };
+  // Five files under way at once, each answered when the test says.
+  const { dir, blobs, hashes } = queueOf(5);
+  const waiting = new Map<string, (r: Response) => void>();
+  const downloads = new Downloads(dir, (hash) => new Promise((resolve) => { waiting.set(hash, resolve); }), () => 5);
+  const told: [number, number, string | undefined][] = [];
+  const all = new DownloadAll(downloads, (p) => told.push([now, p.done, p.end]), { ticks });
+  /** File `i` received at `at` (the fake clock's), its end noted by the run. */
+  const receive = async (i: number, at: number) => {
+    now = at;
+    waiting.get(hashes[i])!(answer(blobs.get(hashes[i])!));
+    await until(() => all.current()!.done === i + 1);
+  };
+  all.start(new Map(hashes.map((h) => [h, 600])));
+  // The first at once; two files within 200 ms of it: kept, the latest told when that time is over.
+  expect(told).toEqual([[1000, 0, undefined]]);
+  await receive(0, 1050);
+  await receive(1, 1100);
+  expect(told).toHaveLength(1);
+  advance(100);
+  expect(told.at(-1)).toEqual([1200, 2, undefined]);
+  // Past 200 ms since the last told: at once.
+  await receive(2, 1500);
+  expect(told.at(-1)).toEqual([1500, 3, undefined]);
+  // One kept, then the last: the last told at once, the one kept dropped.
+  await receive(3, 1550);
+  await receive(4, 1560);
+  advance(1000);
+  expect(told).toEqual([[1000, 0, undefined], [1200, 2, undefined], [1500, 3, undefined], [1560, 5, 'done']]);
+  expect(timers.size).toBe(0);
 });
 
 test('DownloadAll : un serveur qui répond mais échoue (5xx, 401, 403) arrête la suite, « Serveur perdu » ; un fichier absent du serveur (404) compte comme « n’a pas pu l’être », et la suite continue (relecture de la tâche 7)', async () => {

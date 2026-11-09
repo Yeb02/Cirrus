@@ -222,7 +222,7 @@ export class VirtualPc {
     return new SyncClient({
       fetch: this.net.fetch, store: this.store, storeDir: this.dir, secrets: fileSecrets(this.dir, PLAIN), reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       now: this.now, params: () => this.params, status: (s) => { this.statuses.push(s); }, ...(this.presence ? { presence: () => this.openTex } : {}),
-      clock: () => this.clock(), freeBytes: async (dir) => this.free ?? diskFree(dir),
+      clock: () => this.clock(), freeBytes: async (dir) => this.free ?? diskFree(dir), downloadAllEveryMs: 0,
       downloadAll: (p) => {
         this.allProgress.push(p);
         this.onAll?.(p);
