@@ -12,6 +12,7 @@ import { PdfCache } from '../src/main/latex/cache.ts';
 import { invalidRequest, LatexService } from '../src/main/latex/compiler.ts';
 import { findBinaries, type TexBinaries } from '../src/main/latex/tinytex.ts';
 import { readPdf } from './latexPdf.ts';
+import { sleep, until } from './support/latex.ts';
 
 /** Every process the service starts, to check that none is left (and that a cache hit starts none), and its folder. */
 const spawned = vi.hoisted(() => [] as ChildProcess[]);
@@ -71,10 +72,6 @@ const NODE = '0192f0c3-7a1b-7c2d-8e3f-a1b2c3d4e5f6';
 const PUB = '0192f0c3-7a1b-7c2d-8e3f-000000000042';
 const MDL = 'Minimum Description Length Principle (MDL)';
 const LOOP = '\\loop\\iftrue\\repeat';
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, ms = 10_000): Promise<void> {
-  for (const t0 = performance.now(); !cond(); await sleep(20)) if (performance.now() - t0 > ms) throw new Error('attente trop longue');
-}
 const alive = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
 /** The preamble a spawned driver loads (read from its work folder, '' once the folder is gone). */
 function preambleOf(p: ChildProcess): string {

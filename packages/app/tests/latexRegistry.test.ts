@@ -8,10 +8,10 @@ import {
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { filePath, LocalStore } from '@cirrus/store';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
-import { fileKind } from '../src/renderer/files/kind.ts';
 import { LatexRegistry, shortCitation, slotOf } from '../src/renderer/latex/registry.ts';
 import { scanTex } from '../src/renderer/latex/scan.ts';
 import { loadTexTexts } from '../src/renderer/latex/texts.ts';
+import { texTexts } from './support/latex.ts';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
 let dir: string, store: LocalStore, ids: FixtureIds;
@@ -32,11 +32,7 @@ const kv = (key: string, value: string | number): TagValue => ({ key, value });
 /** Applies an action computed on `s` to `s`, as the session does once it is written. */
 const run = (s: State, a: Action) => applyOps(s, a.ops);
 /** The texts of the base's .tex, by hash, read from the store as loadTexTexts would. */
-function textsOf(s: State): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const n of s.nodes.values()) for (const f of n.files) if (fileKind(f.name) === 'tex') out.set(f.hash, readFileSync(filePath(dir, f), 'utf8'));
-  return out;
-}
+const textsOf = (s: State) => texTexts(s, dir);
 const texOf = (s: State, node: Id, name: string) => s.nodes.get(node)!.files.find((f) => f.name === name)!;
 
 test('slotOf : un emplacement par source', () => {

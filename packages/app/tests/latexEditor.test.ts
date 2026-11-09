@@ -1,16 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Action, applyOps, CITE_KEY_TAG, editNode, type State, type TexError } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
-import { filePath, LocalStore } from '@cirrus/store';
+import { LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { fileKind } from '../src/renderer/files/kind.ts';
 import { LatexRegistry, type Origin } from '../src/renderer/latex/registry.ts';
 import { buildRequest } from '../src/renderer/latex/request.ts';
 import { scanTex } from '../src/renderer/latex/scan.ts';
 import { completionsFor, diagnosticsFor, lineStartOf, refContext, suggestionOptions } from '../src/renderer/ui/latex/editorLogic.ts';
+import { texTexts } from './support/latex.ts';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
 let dir: string, store: LocalStore, ids: FixtureIds;
@@ -26,11 +26,7 @@ afterAll(() => {
 
 const MDL = 'Minimum Description Length Principle (MDL)';
 const run = (s: State, a: Action) => applyOps(s, a.ops);
-function textsOf(s: State): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const n of s.nodes.values()) for (const f of n.files) if (fileKind(f.name) === 'tex') out.set(f.hash, readFileSync(filePath(dir, f), 'utf8'));
-  return out;
-}
+const textsOf = (s: State) => texTexts(s, dir);
 /** `text` with « | » for the cursor: the text without it, and the cursor's offset. */
 const at = (text: string) => ({ doc: text.replace('|', ''), pos: text.indexOf('|') });
 const ctxOf = (text: string) => { const { doc, pos } = at(text); return refContext(doc, pos); };

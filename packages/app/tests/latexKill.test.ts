@@ -9,6 +9,7 @@ import { PdfCache } from '../src/main/latex/cache.ts';
 import { LatexService } from '../src/main/latex/compiler.ts';
 import { killTree } from '../src/main/latex/kill.ts';
 import { runFile } from '../src/main/latex/tinytex.ts';
+import { until } from './support/latex.ts';
 
 /**
  * A pdfLaTeX that starts a long child, as kpathsea starts mktexpk or mf for a missing font (plan 4b, final review I2):
@@ -42,10 +43,6 @@ vi.mock('node:child_process', async (original) => {
   return { ...cp, spawn, execFile, default: { ...cp, spawn, execFile } };
 });
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, ms = 10_000): Promise<void> {
-  for (const t0 = performance.now(); !cond(); await sleep(20)) if (performance.now() - t0 > ms) throw new Error('attente trop longue');
-}
 const running = (pid: number) => {
   try {
     process.kill(pid, 0);

@@ -17,6 +17,7 @@ import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
 import { brokenPreambleQuestion, discardPreambleQuestion, leaveUnsaved, PREAMBLE_SAMPLE, preambleRequest, saveStep } from '../src/renderer/ui/latex/preamble.ts';
 import { readPdf } from './latexPdf.ts';
+import { sleep } from './support/latex.ts';
 
 // --- the main process's side (LatexSetup), with a fake compile service, a fake TinyTeX and a fake tlmgr
 
@@ -35,7 +36,6 @@ const OK: CompileAnswer = { status: 'ok', pdf: { key: 'a'.repeat(64), size: 100,
 const missing = (file: string): CompileAnswer => ({
   status: 'error', error: { message: `File \`${file}' not found.`, line: 3, where: 'preamble' }, labels: [], log: 'journal', ms: 1, missing: file,
 });
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * The setup over fakes: TinyTeX absent until provision puts it there (unless `present`); a service that answers a
