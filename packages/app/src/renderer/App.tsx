@@ -1,6 +1,4 @@
-import {
-  type Action, type Anchor, annotationTitle, createAnnotation, type FileRef, type Id, type LatexStatus, type NodeRec, preambleText, type State,
-} from '@cirrus/core';
+import { type Action, type Anchor, annotationTitle, createAnnotation, type FileRef, type Id, type NodeRec, type State } from '@cirrus/core';
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
@@ -9,13 +7,10 @@ import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
-import { loading, MB, viewsSettled } from './files/read.ts';
+import { loading, viewsSettled } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
-import { withPackage } from './latex/install.ts';
-import { LatexRegistry } from './latex/registry.ts';
-import { latexChanged, onPackagesInstalled } from './latex/scheduler.ts';
-import { loadTexTexts, sameTexts } from './latex/texts.ts';
+import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { applyReceived, dueChanges, keepUnsaved, withSetting } from './settingChanges.ts';
 import { liveTabs } from './tabs.ts';
@@ -44,7 +39,6 @@ const NODE_GONE = 'Ce nœud n’existe plus.';
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
 /** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
 const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
-const NO_TEXTS: ReadonlyMap<string, string> = new Map();
 /** Without a server paired (plan 5a, D8): no veil, no chip. */
 const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null };
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
@@ -133,16 +127,6 @@ export function App() {
   const lastFull = useRef<{ node: NodeRec; file: FileRef } | null>(null);
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
   const views = useMemo(() => new ViewStates(viewStorage(), params.viewStatesKept), [params.viewStatesKept]);
-  /** The texts of the .tex, by hash, that the registry reads (plan 4b, D8), and the ceiling (textViewMaxMb) they were read under. */
-  const [texts, setTexts] = useState({ byHash: NO_TEXTS, maxMb: 0 });
-  const textsRef = useRef(texts);
-  textsRef.current = texts;
-  /** The labels and citation keys of the base (D7, D8), for the compile requests: the pop-ups and the full screen take it (tasks 5, 6). */
-  const [registry, setRegistry] = useState<LatexRegistry | null>(null);
-  /** The last registry built, and when: the next one reuses its analyses, and waits for the pause. */
-  const built = useRef<{ registry: LatexRegistry | null; at: number }>({ registry: null, at: -Infinity });
-  /** LaTeX on this PC (task 7), as the main process tells it; null until it has. */
-  const [latex, setLatex] = useState<LatexStatus | null>(null);
   /** The preamble's full screen (D5), opened from the settings; a modal, as a file's. */
   const [preambleOpen, setPreambleOpen] = useState(false);
   const preambleRef = useRef(preambleOpen);
@@ -322,68 +306,11 @@ export function App() {
   // Shared settings received from the server (task 6, D9), one batch at a time.
   useEffect(() => window.cirrus.onSettingsChanged((changes) => adoptSettings(changes)), []);
 
-  // LaTeX (plan 4b, D2): pdfLaTeX prepared with the preamble once the state is loaded, and again when it changes. Not
-  // for the bench, which measures the graph.
-  const preamble = state ? preambleText(state) : null;
-  useEffect(() => {
-    if (preamble !== null && window.cirrus.launch.bench === undefined) window.cirrus.latexWarm(preamble);
-  }, [preamble]);
-
-  // LaTeX's state (task 7): asked once, then told at each change. At each change of state, and at each `ready`
-  // (installed, or packages added), the views that could not compile ask again (latexChanged): they compile, or say
-  // why not as it now stands (installing, failed). Not for the bench, which measures the graph.
-  useEffect(() => {
-    if (window.cirrus.launch.bench !== undefined) return;
-    let told = false, before: LatexStatus['state'] | null = null;
-    const off = window.cirrus.onLatexStatus((s) => {
-      told = true;
-      setLatex(s);
-      if (s.state === 'ready' || s.state !== before) latexChanged();
-      before = s.state;
-    });
-    window.cirrus.latexStatus().then((s) => { if (!told) setLatex(s); }, (e: unknown) => console.error('État de LaTeX :', e));
-    return off;
-  }, []);
-  // The packages a compilation installed join latexPackages, which every PC installs at its start (D1).
-  useEffect(() => onPackagesInstalled((names) => setParams((p) => names.reduce((q, name) => withPackage(q, name) ?? q, p))), []);
-
-  // The .tex not read yet, after each change of the state; the texts of the files gone are let go. Another ceiling
-  // reads them all again: one left empty as too long may fit now.
+  // LaTeX (plan 4b): its state on this PC and the preamble's warm-up (task 7, D2), then the registry the compile
+  // requests read (D7, D8), built again after each change of the state (latex/useLatex.ts).
+  const { latex, installLatex } = useLatexStatus(state, setParams);
   const rev = shown?.rev;
-  useEffect(() => {
-    if (!state) return;
-    const maxMb = params.textViewMaxMb, stop = new AbortController();
-    const have = textsRef.current.maxMb === maxMb ? textsRef.current.byHash : NO_TEXTS;
-    void loading(loadTexTexts(state, have, maxMb * MB, stop.signal)).then(
-      (byHash) => {
-        const now = textsRef.current;
-        if (now.maxMb !== maxMb || !sameTexts(byHash, now.byHash)) setTexts({ byHash, maxMb });
-      },
-      (e: unknown) => { if (!stop.signal.aborted) console.error('Lecture des .tex pour leurs labels :', e); },
-    );
-    return () => stop.abort();
-  }, [state, rev, params.textViewMaxMb]);
-
-  // The registry, built again when the state or the texts change, at most once per typing pause: at once after a
-  // quiet moment, else once the pause since the last build is over, with the state as it then is. A build waiting is
-  // counted among what the views load: a capture waits for the compilations it changes (plan 4b, task 6).
-  useEffect(() => {
-    if (!state) return;
-    const build = () => {
-      const r = LatexRegistry.build(state, texts.byHash, built.current.registry ?? undefined);
-      built.current = { registry: r, at: performance.now() };
-      setRegistry(r);
-    };
-    const wait = built.current.at + params.latexTypingPauseMs - performance.now();
-    if (wait <= 0) {
-      build();
-      return;
-    }
-    let done = () => {};
-    void loading(new Promise<void>((resolve) => { done = resolve; }));
-    const timer = setTimeout(() => { build(); done(); }, wait);
-    return () => { clearTimeout(timer); done(); };
-  }, [state, rev, texts, params.latexTypingPauseMs]);
+  const registry = useLatexRegistry(state, rev, params);
 
   // The annotations (plan 4c, D4), built again at each change of the state from the last index: what did not change
   // is not read again, and an index where nothing changed is the same (the readers draw nothing again).
@@ -508,8 +435,6 @@ export function App() {
     }
     for (const notice of await addImported(session.current!, node, { refs: r.refs, refused: [...refused, ...r.refused] })) toast(notice);
   };
-  /** TinyTeX installed, the user having asked (the notice, the settings); how it goes is told by its state. */
-  const installLatex = () => { window.cirrus.latexInstall().catch((e: unknown) => console.error('Installation de LaTeX :', e)); };
   /**
    * The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing; what the main process holds comes
    * through the session (onServer), after each of them and at each mounting of the block (refresh: review of task 5,
