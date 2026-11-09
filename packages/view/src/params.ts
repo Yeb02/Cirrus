@@ -245,6 +245,11 @@ export interface RenderParams {
    * compiled when their view opens, as before. 0: none.
    */
   latexBackgroundMax: number;
+  /**
+   * After each of the user's compilation requests, the background starts none for this long (plan 5b, after task 8): while
+   * the user types, it starts nothing new. 0: it waits only while one of the user's requests runs or waits, as before.
+   */
+  latexBackgroundPauseMs: number;
   /** A .tex typed in its full screen is saved once typing has paused this long (D6), and at Ctrl+S and closing. */
   texSaveIdleMs: number;
   /**
@@ -460,6 +465,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   latexLogMaxKb: 256,
   latexTypingPauseMs: 300,
   latexBackgroundMax: 300,
+  latexBackgroundPauseMs: 2000,
   texSaveIdleMs: 10_000,
   compareContextLines: 3,
   compareFoldMinLines: 4,
@@ -677,6 +683,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('latexLogMaxKb', 'Taille gardée d’un journal de compilation (Ko)', A, 'Compilation', 16, 4096, 16),
   num('latexTypingPauseMs', 'Pause de frappe avant de compiler (ms)', A, 'Compilation', 50, 3000, 10),
   num('latexBackgroundMax', 'Recompilations en arrière-plan en attente au plus, après une synchronisation (0 : aucune)', A, 'Compilation', 0, 5000, 10),
+  num('latexBackgroundPauseMs', 'Pause des recompilations de fond pendant la frappe (ms)', A, 'Compilation', 0, 60_000, 100),
   num('texSaveIdleMs', 'Pause de frappe avant l’enregistrement d’un .tex (ms)', A, 'Éditeur LaTeX', 1000, 600_000, 500),
   num('compareContextLines', 'Lignes identiques gardées autour d’un bloc qui diffère, dans la comparaison d’un .tex et de sa copie', A, 'Éditeur LaTeX', 0, 100, 1),
   num('compareFoldMinLines', 'Lignes identiques au moins pour être repliées, dans la comparaison d’un .tex et de sa copie', A, 'Éditeur LaTeX', 1, 1000, 1),

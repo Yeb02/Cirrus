@@ -265,6 +265,18 @@ test('recompilations en arrière-plan après une synchronisation : 300 en attent
   expect(withOverrides({ latexBackgroundMax: 9000 }).latexBackgroundMax).toBe(5000);
 });
 
+test('pause des recompilations de fond pendant la frappe : 2 s, de 0 à 60 s par pas de 0,1 s, réglage avancé du groupe « Compilation », après la file (plan 5b, après la tâche 8)', () => {
+  expect(DEFAULT_PARAMS.latexBackgroundPauseMs).toBe(2000);
+  expect(PARAM_SPECS.find((s) => s.key === 'latexBackgroundPauseMs')).toEqual({
+    key: 'latexBackgroundPauseMs', label: 'Pause des recompilations de fond pendant la frappe (ms)', section: 'avancé', group: 'Compilation', kind: 'number',
+    min: 0, max: 60_000, step: 100,
+  });
+  const keys = PARAM_SPECS.map((s) => s.key);
+  expect(keys.indexOf('latexBackgroundPauseMs')).toBe(keys.indexOf('latexBackgroundMax') + 1);
+  expect(withOverrides({ latexBackgroundPauseMs: -1 }).latexBackgroundPauseMs).toBe(0);
+  expect(withOverrides({ latexBackgroundPauseMs: 1e6 }).latexBackgroundPauseMs).toBe(60_000);
+});
+
 test('pause de frappe avant l’enregistrement d’un .tex : 10 s, de 1 s à 10 min, réglage avancé du groupe « Éditeur LaTeX » (plan 4b, tâche 5)', () => {
   expect(DEFAULT_PARAMS.texSaveIdleMs).toBe(10_000);
   expect(PARAM_SPECS.find((s) => s.key === 'texSaveIdleMs')).toEqual({
