@@ -2,15 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  type Action, applyOps, canonical, decodeState, type Id, reconcile, type RemoteUnit, type SettingRow, SNAPSHOT_VERSION, type State, SYNC_PROTOCOL_VERSION, toSnapshot,
+  type Action, applyOps, canonical, decodeState, type Id, reconcile, type RemoteUnit, type SettingRow, type State, toSnapshot,
   type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type RunningServer, startServer, Tokens } from '@cirrus/server';
-import { type ChangeRow, LocalStore, SCHEMA_VERSION } from '@cirrus/store';
+import { type ChangeRow, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { SyncClient, type SyncParams } from '../../src/main/sync/client.ts';
 import type { SyncStatus } from '../../src/main/sync/protocol.ts';
 import { fileSecrets, pair, type ServerConfig, type TokenCipher } from '../../src/main/sync/config.ts';
+import { FORMAT } from '../../src/main/sync/connection.ts';
 
 // Virtual PCs (plan 5a, task 3): PCs without Electron, each a base in a temporary folder, the interface's state and its
 // pending writes, reconciled as the interface will reconcile them (task 4), and a SyncClient on Node's fetch — through
@@ -27,9 +28,6 @@ export const TEST_PARAMS: SyncParams = {
   syncBatchUnits: DEFAULT_PARAMS.syncBatchUnits, syncDownloads: DEFAULT_PARAMS.syncDownloads, syncRetryMinMs: 10, syncRetryMaxMs: 40,
   syncClockSkewWarnMs: DEFAULT_PARAMS.syncClockSkewWarnMs, syncReceiveBatchMs: DEFAULT_PARAMS.syncReceiveBatchMs,
 };
-
-/** The format headers of /hello (D10), this build's. */
-export const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
 
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
 export const image = (s: State): string =>

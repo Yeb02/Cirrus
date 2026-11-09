@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { FileRef, Op, Unit } from '@cirrus/core';
 import { BlobError, filePath, receiveBlob } from '@cirrus/store';
 import { writeJsonAtomic } from '../jsonFile.ts';
+import { messageOf } from './connection.ts';
 
 // The files of the synchronisation (plan 5a, D6): those a write adds go to the server before it; those of the records
 // received come down at once, in the background, a few at a time — but the PDFs, fetched at their first reading
@@ -84,7 +85,7 @@ async function* fromNetwork(source: AsyncIterable<Uint8Array>): AsyncGenerator<U
   try {
     yield* source;
   } catch (e) {
-    throw new NetworkFailure(e instanceof Error ? e.message : String(e), { cause: e });
+    throw new NetworkFailure(messageOf(e), { cause: e });
   }
 }
 
@@ -232,7 +233,7 @@ export class Downloads {
         if (!signal.aborted && eager) this.failed.add(hash);
         return 'failed';
       }
-      console.warn(`Fichier ${hash} reçu du serveur, mais non enregistré dans la base : ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`Fichier ${hash} reçu du serveur, mais non enregistré dans la base : ${messageOf(e)}`);
       if (eager) this.failed.add(hash);
       return 'not-stored';
     }
@@ -274,7 +275,7 @@ export class Downloads {
       }
       this.saved = hashes.length > 0;
     } catch (e) {
-      console.warn(`Liste des téléchargements non enregistrée (${DOWNLOADS_FILE}) : ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`Liste des téléchargements non enregistrée (${DOWNLOADS_FILE}) : ${messageOf(e)}`);
     }
   }
 

@@ -2,8 +2,9 @@ import { existsSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { LocalStore } from '@cirrus/store';
 import { SERVER_FILE } from './config.ts';
+import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
-import { archiveName, messageOf, pristine, READY_FILE, stagedDir } from './firstSync.ts';
+import { archiveName, pristine, READY_FILE, stagedDir } from './firstSync.ts';
 
 // The start on a base taken from the server (plan 5a, task 5, D7, R17): staged by the last run (adopt.ts), it replaces
 // the base before the base opens, the old one kept aside, or deleted when vierge. And how the app starts again on it

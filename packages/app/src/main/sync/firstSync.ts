@@ -3,6 +3,7 @@ import { MAX_ID_CHARS } from '@cirrus/core';
 import { type LocalStore, storedHashes } from '@cirrus/store';
 import { LOBBY_NAME } from '../base.ts';
 import type { ServerConfig } from './config.ts';
+import { messageOf, reasonOf } from './connection.ts';
 import type { FirstSyncOffer } from './protocol.ts';
 
 // The first pairing of a base (plan 5a, task 5, D7): what the PC and the server hold decides it — both empty, the sync
@@ -72,7 +73,6 @@ export function offerMessage(o: FirstSyncOffer): string {
   }
 }
 
-export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 /** A reason as a sentence of a message: its full stop. */
 export const sentence = (text: string): string => (/[.!?…]$/.test(text) ? text : `${text}.`);
 
@@ -90,8 +90,7 @@ export function requests(fetchFn: typeof fetch, config: ServerConfig, signal: Ab
       throw new Error(`Serveur injoignable (${config.url}) : ${sentence(messageOf(e))}`);
     }
     if (res.ok || answered.includes(res.status)) return res;
-    const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-    throw new Error(typeof body?.error === 'string' ? body.error : `Réponse ${res.status} du serveur à ${path}.`);
+    throw new Error(await reasonOf(res, path));
   };
   const json = async (path: string, body?: unknown): Promise<unknown> => {
     const res = await send(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });

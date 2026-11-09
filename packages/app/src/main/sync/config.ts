@@ -1,6 +1,7 @@
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '../jsonFile.ts';
+import { messageOf } from './connection.ts';
 
 // The server a PC is paired with (plan 5a, D3): its address, the token it gave, this PC's name there — kept in
 // serveur.json next to the base, the token encrypted (safeStorage, DPAPI, in the app): a test base can never speak to
@@ -79,7 +80,7 @@ export async function pair(fetchFn: typeof fetch, url: string, code: string, pc:
   try {
     res = await fetchFn(`${base}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, pc, name }) });
   } catch (e) {
-    throw new Error(`Serveur injoignable (${base}) : ${e instanceof Error ? e.message : String(e)}.`);
+    throw new Error(`Serveur injoignable (${base}) : ${messageOf(e)}.`);
   }
   const body = (await res.json().catch(() => null)) as { token?: unknown; error?: unknown } | null;
   if (res.status !== 200 || typeof body?.token !== 'string') {

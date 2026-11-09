@@ -5,8 +5,9 @@ import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob } fro
 import { writeJsonAtomic } from '../jsonFile.ts';
 import { parseSettingRows, SharedSettings } from '../settings.ts';
 import type { SecretStore, ServerConfig } from './config.ts';
+import { messageOf } from './connection.ts';
 import { chunks, hasBlob, isPdf } from './downloads.ts';
-import { messageOf, READY_FILE, requests, stagedDir } from './firstSync.ts';
+import { READY_FILE, requests, stagedDir } from './firstSync.ts';
 
 // An adopt (plan 5a, task 5, D7, R17): the server's base taken, staged beside this PC's (`<base>-nouvelle`), complete
 // once its mark is written, last; swap.ts swaps it in at the next start.

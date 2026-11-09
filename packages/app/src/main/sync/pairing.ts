@@ -2,8 +2,8 @@ import { isObject } from '@cirrus/core';
 import type { SharedSettings } from '../settings.ts';
 import { adoptBase } from './adopt.ts';
 import { pair, type ServerConfig, serverUrl } from './config.ts';
-import { FORMAT } from './connection.ts';
-import { firstSyncOffer, isBaseId, messageOf, offerMessage, pristine, revokeSelf, sentence, stagedDir } from './firstSync.ts';
+import { FORMAT, messageOf, reasonOf } from './connection.ts';
+import { firstSyncOffer, isBaseId, offerMessage, pristine, revokeSelf, sentence, stagedDir } from './firstSync.ts';
 import type { HostDeps } from './host.ts';
 import type { FirstSyncOffer, PairResult, ServerInfo } from './protocol.ts';
 import { seedBase } from './seed.ts';
@@ -122,8 +122,8 @@ export class Pairing {
     let hello: unknown;
     try {
       const res = await bounded(`${config.url}/hello`, { headers: { ...FORMAT, Authorization: `Bearer ${config.token}` } });
+      if (!res.ok) return refuse(await reasonOf(res));
       hello = await res.json().catch(() => null);
-      if (!res.ok) return refuse(isObject(hello) && typeof hello.error === 'string' ? hello.error : `Réponse ${res.status} du serveur.`);
     } catch (e) {
       return refuse(`Serveur injoignable (${config.url}) : ${messageOf(e)}.`);
     }

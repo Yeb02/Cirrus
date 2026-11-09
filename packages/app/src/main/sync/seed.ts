@@ -5,7 +5,8 @@ import {
 } from '@cirrus/core';
 import { type ChangeRow, filePath, type LocalStore, parseChangeRow, storedHashes } from '@cirrus/store';
 import type { ServerConfig } from './config.ts';
-import { isBaseId, messageOf, requests } from './firstSync.ts';
+import { messageOf } from './connection.ts';
+import { isBaseId, requests } from './firstSync.ts';
 
 // A seed (plan 5a, task 5, D7, R16): this PC's base sent to a server that holds none — what it sends read and checked
 // first, then its files, its snapshot, its journal, and done.

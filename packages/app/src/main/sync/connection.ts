@@ -10,6 +10,7 @@ import type { ServerConfig } from './config.ts';
 export const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
 export const JSON_BODY = { 'Content-Type': 'application/json' };
 
+/** What failed, as text: an error's message, or the value thrown (the sync's modules all read failures so). */
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
@@ -26,10 +27,13 @@ export class Refusal extends Error {
   }
 }
 
-/** The French reason of a refused request: its body's `error`, or its status. */
-export async function reasonOf(res: Response): Promise<string> {
+/**
+ * The French reason of a refused request: its body's `error`, or its status — and the route asked, `path`, when given
+ * (a first sync's requests: firstSync.ts).
+ */
+export async function reasonOf(res: Response, path?: string): Promise<string> {
   const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === 'string' ? body.error : `Réponse ${res.status} du serveur.`;
+  return typeof body?.error === 'string' ? body.error : `Réponse ${res.status} du serveur${path === undefined ? '' : ` à ${path}`}.`;
 }
 
 /** A refused request: a Refusal for what trying again will not change (4xx), an Error otherwise (the server's own failure). */
