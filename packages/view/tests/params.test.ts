@@ -355,8 +355,22 @@ test('synchronisation : écritures par requête, téléchargements, reconnexion,
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
   }
-  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual(specs.map(([key]) => key).sort());
+  // Plan 5b, task 7: two more of the group (the test below).
+  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual([...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb'].sort());
   expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
   expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1, syncConnectTimeoutMs: 0, syncSuspendFlushMs: 1e9 }))
     .toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100, syncConnectTimeoutMs: 500, syncSuspendFlushMs: 10_000 });
+});
+
+test('l’état du serveur et « Tout télécharger » : deux réglages avancés du groupe « Synchronisation » (plan 5b, tâche 7)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['serverStatusPollMs', 5000, 'Intervalle entre deux demandes de l’état du serveur, tant que son bloc est affiché (ms)', 1000, 60_000, 500],
+    ['downloadAllReserveMb', 1024, 'Espace à garder libre sur ce disque après « Télécharger tous les PDF… » (Mo)', 0, 100_000, 64],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Synchronisation', kind: 'number', min, max, step });
+  }
+  expect(withOverrides({ serverStatusPollMs: 10, downloadAllReserveMb: -5 })).toMatchObject({ serverStatusPollMs: 1000, downloadAllReserveMb: 0 });
+  expect(withOverrides({ serverStatusPollMs: 1e9, downloadAllReserveMb: 1e9 })).toMatchObject({ serverStatusPollMs: 60_000, downloadAllReserveMb: 100_000 });
 });

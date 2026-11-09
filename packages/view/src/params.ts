@@ -276,6 +276,13 @@ export interface RenderParams {
   syncReceiveBatchMs: number;
   /** before sleep, what is pending is sent for this long at most (D8). */
   syncSuspendFlushMs: number;
+  /**
+   * The server's state (plan 5b, D8): asked this often while the block « Serveur » is shown — its latency the median of
+   * the last round trips;
+   */
+  serverStatusPollMs: number;
+  /** « Télécharger tous les PDF… » is refused when it would leave less than this free on this PC's disk (Mo). */
+  downloadAllReserveMb: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -459,6 +466,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   syncClockSkewWarnMs: 120_000,
   syncReceiveBatchMs: 50,
   syncSuspendFlushMs: 1500,
+  serverStatusPollMs: 5000,
+  downloadAllReserveMb: 1024,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -672,6 +681,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('syncClockSkewWarnMs', 'Écart d’horloge avec le serveur au-delà duquel avertir (ms)', A, 'Synchronisation', 10_000, 3_600_000, 1000),
   num('syncReceiveBatchMs', 'Durée maximale d’un lot d’actions reçues avant de l’appliquer (ms)', A, 'Synchronisation', 0, 1000, 5),
   num('syncSuspendFlushMs', 'Temps laissé à l’envoi des actions en attente avant la mise en veille (ms)', A, 'Synchronisation', 0, 10_000, 100),
+  num('serverStatusPollMs', 'Intervalle entre deux demandes de l’état du serveur, tant que son bloc est affiché (ms)', A, 'Synchronisation', 1000, 60_000, 500),
+  num('downloadAllReserveMb', 'Espace à garder libre sur ce disque après « Télécharger tous les PDF… » (Mo)', A, 'Synchronisation', 0, 100_000, 64),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
