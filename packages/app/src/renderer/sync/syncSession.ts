@@ -101,11 +101,18 @@ export class SyncSession {
   /**
    * The main process's word on the pairing (cirrus:sync:server; short review after plan 5a, B2): given to the block
    * (onServer); paired while this session does not follow — a page that opened while a pairing or a first sync was
-   * under way (reloaded meanwhile, Ctrl+R): it follows and starts now, as a pairing done here would.
+   * under way (reloaded meanwhile, Ctrl+R): it follows and starts now, as a pairing done here would. Unpaired while
+   * it follows — a page that opened paired while an unpairing was under way —: it no longer follows, as after an
+   * unpairing done here, so that the next pairing starts again (re-review of the fixes, N2).
    */
   private heard(info: ServerInfo): void {
     this.deps.onServer?.(info);
     if (info.paired && this.opened && !this.following) void this.follow();
+    else if (!info.paired && this.following) {
+      this.following = null;
+      void this.deps.session.unfollow();
+      this.lower(false);
+    }
   }
 
   /**

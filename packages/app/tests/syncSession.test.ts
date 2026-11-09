@@ -259,7 +259,10 @@ test('la pastille : rien sans serveur ; « À jour », « Envoi de n actions… 
   expect(chipOf({ state: 'live', pending: 0, clockWarning: warn }, false)!.title).toContain(warn);
 });
 
-/** A bridge as the preload gives it, its calls recorded; the main process's messages sent by the test. */
+/**
+ * A bridge as the preload gives it, its calls recorded; the main process's messages sent by the test; its word on the
+ * server (syncServer) paired once a pairing or a first sync it answered is done, until an unpairing.
+ */
 function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; tellOnPair?: ServerInfo; tellOnStart?: ServerInfo } = {}) {
   const calls: string[] = [];
   const reconciled: { id: number; outcome: unknown }[] = [];
@@ -270,7 +273,11 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult
     (listeners[k] as unknown[]).push(fn);
     return () => {};
   };
-  let seq = 100;
+  let seq = 100, paired = false;
+  const answered = (r: PairResult): PairResult => {
+    if (r.ok && !r.restarting) paired = true;
+    return r;
+  };
   const bridge: SyncBridge = {
     syncStart: async () => {
       calls.push('start');
@@ -285,11 +292,14 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult
       calls.push(`pair ${url} ${code} ${name}`);
       // The main process tells the page of the pairing (cirrus:sync:server) before it answers the call.
       if (o.tellOnPair) for (const fn of listeners.server) fn(o.tellOnPair);
-      return o.pair ?? { ok: true };
+      return answered(o.pair ?? { ok: true });
     },
-    syncFirst: async (choice) => { calls.push(`first ${choice}`); return o.first ?? { ok: true }; },
-    syncUnpair: async () => { calls.push('unpair'); },
-    syncServer: async (): Promise<ServerInfo> => ({ paired: false, url: '', name: 'PORTABLE' }),
+    syncFirst: async (choice) => { calls.push(`first ${choice}`); return answered(o.first ?? { ok: true }); },
+    syncUnpair: async () => {
+      calls.push('unpair');
+      paired = false;
+    },
+    syncServer: async (): Promise<ServerInfo> => (paired ? { paired: true, url: 'http://127.0.0.1:7310', name: 'Portable' } : { paired: false, url: '', name: 'PORTABLE' }),
     onSyncIncoming: on('incoming'),
     onSyncStatus: on('status'),
     onSyncVeil: on('veil'),

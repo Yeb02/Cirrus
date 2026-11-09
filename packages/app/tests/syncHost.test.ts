@@ -169,6 +169,29 @@ test('dissocier : le client arrêté, downloads.json et serveur.json effacés ; 
   expect(a.store.pendingCount()).toBe(1);
 });
 
+test('relecture des corrections du plan 5a, N2 : la page rechargée (Ctrl+R) pendant une dissociation s’ouvre jumelée ; le principal dit ensuite la dissociation faite, et un jumelage refait dans la même session démarre la synchro', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.store.pendingCount() === 0);
+  // « Dissocier ce PC », asked by the page about to go: its answer reaches no one, so the call is the host's own. The new
+  // page asks the main process before the unpairing clears the server: paired, it follows and asks to start — a start
+  // that runs after the unpairing, and finds no server.
+  const seen = a.views.length;
+  const unpairing = a.host.unpair();
+  await a.reload();
+  await unpairing;
+  expect(a.views.slice(seen).some((v) => v.veil)).toBe(true);
+  await until(() => a.servers.at(-1)?.paired === false);
+  expect(a.host.paired()).toBe(false);
+  // Paired again (R31) without a relaunch: the synchronisation starts, and a write reaches the server.
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  const lobby = [...a.session.state.plans.values()][0].id;
+  expect((await a.session.run((s) => createNode(s, { plan: lobby, title: 'Après', x: 0, y: 0, k: 0 }))).ok).toBe(true);
+  await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 3000, () => `état ${JSON.stringify(a.statuses.slice(-3))}, ${a.store.pendingCount()} en attente`);
+  expect([...(await l.state()).nodes.values()].map((n) => n.title)).toEqual(['Après']);
+});
+
 test('reconcile : la base écrit la réconciliation de l’interface avant de rendre son numéro ; une divergence de l’interface rejette par SyncDivergedError ; une fenêtre fermée rejette', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');
