@@ -318,8 +318,8 @@ async function pagePdf(deps: PublicationDeps, open: OpenDeps, href: string, id: 
  *   guards, or `pdfMessage` says why not; without them, an arXiv article's PDF is arXiv's, as for its identifier.
  *   Without identifier, its PDF is `{ kind: 'pdf' }`;
  * - nothing of that: « Cette page ne mène à aucun PDF. ».
- * `pdf` false (a PDF dropped): the metadata only, the page's PDF not asked; an address that is itself a PDF is still
- * the thing asked for.
+ * `pdf` false (a PDF dropped): with an identifier, the metadata only, the page's PDF not asked; without one, the PDF the
+ * address leads to (itself, or its page's) is still what it gives.
  */
 async function importOpen(href: string, deps: PublicationDeps, open: OpenDeps, pdf: boolean): Promise<PublicationResult> {
   const a = await openFetch(href, open, PAGE_ACCEPT, { page: deps.maxKb * 1024, pdf: deps.maxPdfBytes });

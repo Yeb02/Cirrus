@@ -91,10 +91,11 @@ export function citationMeta(html: string, pageUrl?: string): CitationMeta {
     const end = html.indexOf('>', m.index);
     // A tag never closed: nothing further is a tag.
     if (end < 0) break;
-    const inside = html.slice(m.index + 5, end);
     meta.lastIndex = end + 1;
-    // « <meta » itself, not « <metadata »; a tag of reasonable length.
-    if ((inside === '' || blank(inside[0]) || inside[0] === '/') && inside.length <= MAX_TAG_CHARS) {
+    // A tag of reasonable length (never copied otherwise); « <meta » itself, not « <metadata ».
+    if (end - m.index - 5 > MAX_TAG_CHARS) continue;
+    const inside = html.slice(m.index + 5, end);
+    if (inside === '' || blank(inside[0]) || inside[0] === '/') {
       const attributes = attributesOf(inside);
       const key = NAMES.get((attributes.get('name') ?? '').trim().toLowerCase());
       const raw = attributes.get('content');

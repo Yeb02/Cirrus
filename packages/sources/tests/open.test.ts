@@ -118,12 +118,14 @@ test('importPublication : une page sans DOI qui mène à un PDF (PMLR, NeurIPS, 
   expect(await importPublication('https://proceedings.neurips.cc/paper_files/paper/2017/hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html', s.deps))
     .toEqual({ ok: true, kind: 'pdf', pdf: ref('3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf', PDF_BYTES) });
   expect(await importPublication('https://openreview.net/forum?id=YicbFdNTTy', s.deps)).toEqual({ ok: true, kind: 'pdf', pdf: ref('publication.pdf', PDF_BYTES) });
+  // `pdf: false` too: without identifier, the PDF is all the page gives.
+  expect(await importPublication('https://openreview.net/forum?id=YicbFdNTTy', s.deps, { pdf: false })).toEqual({ ok: true, kind: 'pdf', pdf: ref('publication.pdf', PDF_BYTES) });
   expect(s.asked).toEqual([]);
   expect(await importPublication('https://public.example/rien', s.deps)).toEqual({ ok: false, message: NO_PDF });
   expect(await importPublication('https://public.example/image', s.deps)).toEqual({ ok: false, message: NO_PDF });
   // Without DOI, its PDF refused: the reason.
   expect(await importPublication('https://public.example/interne', s.deps)).toEqual({ ok: false, message: LOCAL });
-  expect(s.stored.map((x) => x.name)).toEqual(['radford21a.pdf', '3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf', 'publication.pdf']);
+  expect(s.stored.map((x) => x.name)).toEqual(['radford21a.pdf', '3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf', 'publication.pdf', 'publication.pdf']);
 });
 
 test('importPublication : une page avec citation_arxiv_id — l’article d’arXiv, avec le PDF de la page s’il y en a un, sinon celui d’arXiv', async () => {
