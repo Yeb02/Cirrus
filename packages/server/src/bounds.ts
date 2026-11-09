@@ -62,7 +62,9 @@ export const MAX_PUBLICATION_PDF_MS = 10 * 60_000;
 /**
  * « .tex ouvert ailleurs » (plan 5b, task 5, D6: PUT /presence): the files a PC has open in full screen, its whole list
  * at each change, MAX_PRESENCE_ENTRIES at most (a PC has one full screen open: the bound only keeps serveur.db small);
- * its body, MAX_PRESENCE_BODY_BYTES at most — the most entries, each a node's identifier (MAX_ID_CHARS) and a file name.
+ * its body, MAX_PRESENCE_BODY_BYTES at most (413 beyond). That is not room for every list the entry bound allows — 100
+ * entries with long names, Chinese or Japanese ones of 3 bytes a character in UTF-8, would exceed it —, but a PC sends
+ * one entry per full screen open, one at a time, a few hundred bytes: far below it.
  */
 export const MAX_PRESENCE_ENTRIES = 100;
 export const MAX_PRESENCE_BODY_BYTES = 64 * 1024;
