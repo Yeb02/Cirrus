@@ -737,7 +737,7 @@ export function GraphView(props: {
       {publication.dialog && (
         <PublicationDialog
           key={publication.dialog.key} params={props.params} deps={publication.publicationDeps(publication.dialog)} onNotify={notify}
-          onClose={publication.closePublication}
+          onClose={publication.closePublication} initialPdf={publication.dialog.pdf}
         />
       )}
     </div>

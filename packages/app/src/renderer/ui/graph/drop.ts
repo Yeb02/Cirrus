@@ -9,16 +9,17 @@ import type { Graph } from './core.ts';
 import { ignored } from './launch.ts';
 
 /**
- * What is dropped on the graph (plan 4a, task 4; plan 4c, task 3 and D9): files, routed by dropRoute (dropFilesAt) to
- * the node under the point, to a .bib's import, or to a notice; a node dragged out of a list of annotations, put down
- * (dropNodeAt). `handlers` go on the graph's element.
+ * What is dropped on the graph (plan 4a, task 4; plan 4c, task 3 and D9; plan 5b, D5): files, routed by dropRoute
+ * (dropFilesAt) to the node under the point, to a .bib's import, to the publication import dialog (a PDF), or to a
+ * notice; a node dragged out of a list of annotations, put down (dropNodeAt). `handlers` go on the graph's element.
  */
 export function useGraphDrop(graph: Graph, onDropFiles: (node: Id, paths: string[], refused?: Refusal[]) => Promise<void>) {
   const { root, engine, sceneRef, paramsRef, redraw, notify, edit, indexOf, hitAt, local, moveCamera, dragging, busy, busyReason } = graph;
   /**
    * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
    * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
-   * is imported (plan 4c, D9); elsewhere, a notice (dropRoute).
+   * is imported (plan 4c, D9), a PDF alone opens the import dialog at the point, with it (plan 5b, D5); elsewhere, a
+   * notice (dropRoute).
    */
   const dropFilesAt = (sx: number, sy: number, paths: string[], refused: Refusal[] = []): Promise<void> => {
     const h = hitAt(sx, sy), i = h.kind === 'item' ? sceneRef.current?.byId.get(h.id) : undefined;
@@ -26,6 +27,7 @@ export function useGraphDrop(graph: Graph, onDropFiles: (node: Id, paths: string
     const route = dropRoute('graph', under, 'files', refused.length === 0 ? paths : undefined);
     if (route.to === 'node') return onDropFiles(route.node, paths, refused);
     if (route.to === 'bib') return graph.bib.dropBibFile(paths[0], { x: sx, y: sy });
+    if (route.to === 'pdf') { graph.publication.dropPdfFile(paths[0], { x: sx, y: sy }); return Promise.resolve(); }
     notify(backgroundNotice([...paths, ...refused.map((r) => r.name)]));
     return Promise.resolve();
   };

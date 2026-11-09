@@ -4,10 +4,15 @@ import {
 } from '@cirrus/core';
 import type { PublicationFound, PublicationResult } from '@cirrus/sources';
 import { cslToFields } from '@cirrus/sources/csl';
-import { parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
+import { isAddress, parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
+import type { ImportResult } from '../../main/files.ts';
 import { newNodeBuild } from '../actions.ts';
+import { fileKind } from '../files/kind.ts';
+import { pathName, refusalNotice } from '../files/nodeFiles.ts';
 import { messageOf, type Result } from '../session.ts';
+import { findIdentifier } from './identify.ts';
+import type { PdfClues } from './pdfClues.ts';
 
 /**
  * A publication's node (plan 4c, D7), from an import: by its identifier (the main process's answer, publicationFetch),
@@ -281,12 +286,14 @@ export interface ImportDeps {
 /**
  * What came of an import: `done` (the dialog closes; `notice`, what to notify besides); `failed` (said in the dialog,
  * which stays open: the user may correct the identifier); `notified` (a notification, the dialog closes: a duplicate,
- * an action refused); `dropped` (the dialog was closed meanwhile: nothing is said).
+ * an action refused); `pdf` (an address led to a PDF without identifier, already in the store, plan 5b, D3: the dialog
+ * takes it as a PDF dropped on it, readPdf); `dropped` (the dialog was closed meanwhile: nothing is said).
  */
 export type ImportOutcome =
   | { kind: 'done'; title: string; notice: string | null }
   | { kind: 'failed'; message: string }
   | { kind: 'notified'; message: string }
+  | { kind: 'pdf'; pdf: FileRef }
   | { kind: 'dropped' };
 
 /** The marks of an identifier typed, before the network: the identifier alone. */
@@ -303,18 +310,22 @@ async function putDown(plan: PlannedPublication, files: FileRef[], deps: ImportD
 }
 
 /**
- * An import by identifier (D5, D7), the user having pressed « Importer »: `text` read by parseIdentifier (else refused
- * without the network); a publication already there by that DOI or arXiv identifier, refused before the network too;
- * then the main process asked (the only step that reaches it), its answer read, the duplicates looked for again (key,
- * title and year), the .bib stored, and the node put down, `dropped` among its files (arXiv's PDF then not asked for).
- * The dialog closed at any step, what comes back is dropped. Every failure is said in French: the main process's own
- * messages, or, for a rejection of the IPC (an answer Electron could not clone) or of the store, a message of ours,
- * the cause to `log` — the store's own reason said after ours (review of task 6, M6).
+ * An import by identifier or by address (D5, D7; plan 5b, D3), the user having pressed « Importer »: `text` read by
+ * parseIdentifier, else taken for an address of the open web if it is one (isAddress: the main process, which holds the
+ * guards, says why one is refused — not https, a local machine — and stores nothing then), else refused without the
+ * network; a publication already there by that DOI or arXiv identifier, refused before the network too (an address
+ * has none to give yet: its duplicate is looked for in its answer); then the main process asked (the only step that
+ * reaches it), its answer read, the duplicates looked for again (key, title and year), the .bib stored, and the node
+ * put down, `dropped` among its files (arXiv's PDF then not asked for). An address that leads to a PDF without
+ * identifier gives `pdf` instead, nothing made yet. The dialog closed at any step, what comes back is dropped. Every
+ * failure is said in French: the main process's own messages, or, for a rejection of the IPC (an answer Electron could
+ * not clone) or of the store, a message of ours, the cause to `log` — the store's own reason said after ours (review of
+ * task 6, M6).
  */
 export async function importByIdentifier(text: string, dropped: FileRef | null, deps: ImportDeps): Promise<ImportOutcome> {
   const id = parseIdentifier(text);
-  if (id === null) return { kind: 'failed', message: 'Identifiant non reconnu.' };
-  const known = PublicationIndex.of(deps.state()).duplicate(marksOfId(id));
+  if (id === null && !isAddress(text)) return { kind: 'failed', message: 'Identifiant non reconnu.' };
+  const known = id === null ? null : PublicationIndex.of(deps.state()).duplicate(marksOfId(id));
   if (known) return { kind: 'notified', message: known };
   let r: PublicationResult;
   try {
@@ -325,9 +336,9 @@ export async function importByIdentifier(text: string, dropped: FileRef | null, 
   }
   if (!deps.open()) return { kind: 'dropped' };
   if (!r.ok) return { kind: 'failed', message: r.message };
-  // A PDF without identifier comes only of an address that is none (plan 5b, D3), which the dialog takes as a PDF
-  // dropped (task 4); `text` was read as an identifier here, which never gives one.
-  if ('kind' in r) return { kind: 'failed', message: 'Identifiant non reconnu.' };
+  // A PDF without identifier comes only of an address that is none (plan 5b, D3): the dialog takes it as a PDF dropped
+  // on it (D5), whatever was dropped before — the latest the user asked for.
+  if ('kind' in r) return { kind: 'pdf', pdf: r.pdf };
   const input = publicationOf(r, dropped);
   if ('failed' in input) return { kind: 'failed', message: input.failed };
   const plan = planPublication(PublicationIndex.of(deps.state()), input, deps.maxAuthors());
@@ -356,4 +367,90 @@ export async function createFromPdf(pdf: FileRef, title: string, deps: ImportDep
   const plan = planPublication(PublicationIndex.of(deps.state()), { fields: { title: title.trim(), authors: [], year: null }, entry: null, pdf }, deps.maxAuthors());
   if ('refused' in plan) return { kind: 'notified', message: plan.refused };
   return putDown(plan, [pdf], deps, null);
+}
+
+/**
+ * What the dialog needs to take a PDF (plan 4c, D8; plan 5b, D5): the store, and pdf.js, which GraphView's chunk does
+ * not hold (PublicationDialog loads it at the first PDF taken). Handed in, so that the flow runs without a window.
+ */
+export interface PdfDeps {
+  /** `importFiles`: the PDF at `paths` copied into the store, or why not. */
+  importFiles(paths: string[]): Promise<ImportResult>;
+  /** What pdf.js reads of a PDF of the store (readPdfClues); rejects if it cannot. */
+  readClues(ref: FileRef): Promise<PdfClues>;
+  /** Why pdf.js could not read `name`, in French (pdfFailure). */
+  unreadable(name: string, e: unknown): Promise<string>;
+  /** Whether the dialog is still open: a closed one drops what comes back. */
+  open(): boolean;
+  /** Where the causes the user is not shown go (the console). */
+  log?(what: string, e: unknown): void;
+}
+
+/**
+ * What came of taking a PDF: `read` (it is in the store, its title and its identifier found in it, if any; `unreadable`,
+ * what to say first when pdf.js could not read it, with its trailing space), `failed` (said in the dialog), `dropped`
+ * (the dialog was closed meanwhile).
+ */
+export type PdfTaken =
+  | { kind: 'read'; ref: FileRef; title: string; found: PublicationId | null; unreadable: string }
+  | { kind: 'failed'; message: string }
+  | { kind: 'dropped' };
+
+/**
+ * A PDF of the store read for its title and its identifier (D8): the metadata, then the text of its first pages
+ * (findIdentifier). One that cannot be read is still taken, under its file's name, and says why (`unreadable`). The one
+ * way in of the four that bring a PDF to the dialog — dropped on it, dropped on the graph's background, chosen by
+ * « Choisir un PDF… », and an address that leads to one (plan 5b, D3: `pdf` of importByIdentifier).
+ */
+export async function readPdf(ref: FileRef, deps: PdfDeps): Promise<PdfTaken> {
+  const fallback = ref.name.replace(/\.pdf$/i, '');
+  let found: PublicationId | null = null, title = fallback, unreadable = '';
+  try {
+    const clues = await deps.readClues(ref);
+    found = findIdentifier(clues.text, clues.meta);
+    title = clues.title ?? fallback;
+  } catch (e) {
+    deps.log?.(`Lecture de « ${ref.name} » :`, e);
+    unreadable = `${await deps.unreadable(ref.name, e)} `;
+  }
+  return deps.open() ? { kind: 'read', ref, title, found, unreadable } : { kind: 'dropped' };
+}
+
+/**
+ * A PDF the user dropped or chose, by its path (D8; plan 5b, D5): a file that is no PDF refused by its name, then copied
+ * into the store as a dropped file is (importFiles: the main process refuses a folder, a file too large, a path gone),
+ * then read (readPdf). Every refusal is said in French.
+ */
+export async function takePdfPath(path: string, deps: PdfDeps): Promise<PdfTaken> {
+  const name = pathName(path);
+  if (fileKind(name) !== 'pdf') return { kind: 'failed', message: `« ${name} » n’est pas un PDF.` };
+  let ref: FileRef;
+  try {
+    const r = await deps.importFiles([path]);
+    if (!deps.open()) return { kind: 'dropped' };
+    if (r.refs.length === 0) return { kind: 'failed', message: refusalNotice(r.refused) ?? `« ${name} » n’a pas pu être importé.` };
+    ref = r.refs[0];
+  } catch (e) {
+    deps.log?.(`Import de « ${name} » :`, e);
+    return deps.open() ? { kind: 'failed', message: `« ${name} » n’a pas pu être importé.` } : { kind: 'dropped' };
+  }
+  return readPdf(ref, deps);
+}
+
+/**
+ * « Choisir un PDF… » (plan 5b, D5): the system's dialog (`pick`, the main process's, filtered on PDF), the one chosen
+ * taken as a PDF dropped (takePdfPath), `chosen` told its path first (the dialog says it is reading it). Cancelled,
+ * null: nothing is done, nothing said, `chosen` not called. A dialog that cannot open is said.
+ */
+export async function choosePdf(pick: () => Promise<string | null>, deps: PdfDeps, chosen?: (path: string) => void): Promise<PdfTaken | null> {
+  let path: string | null;
+  try {
+    path = await pick();
+  } catch (e) {
+    deps.log?.('Sélecteur de PDF :', e);
+    return deps.open() ? { kind: 'failed', message: 'Le sélecteur de fichiers n’a pas pu s’ouvrir.' } : { kind: 'dropped' };
+  }
+  if (path === null || !deps.open()) return null;
+  chosen?.(path);
+  return takePdfPath(path, deps);
 }

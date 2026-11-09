@@ -356,6 +356,47 @@ test('importByIdentifier : non reconnu, hors ligne, introuvable — dit en fran�
   expect(s.nodes.size).toBe(before);
 });
 
+test('importByIdentifier (plan 5b, tâche 4, D3) : une adresse https d’un site quelconque n’est plus refusée avant la requête ; un texte qui n’est ni un identifiant ni une adresse l’est toujours, sans réseau', async () => {
+  const address = 'https://openreview.net/forum?id=Hk4_qw5xe';
+  const note: FileRef = { name: 'publication.pdf', hash: 'f'.repeat(64), size: 640 };
+  const before = s.nodes.size;
+  // A page that leads to a PDF without identifier: the main process answers `{ kind: 'pdf' }`, the dialog takes it as a PDF dropped.
+  const pdf = deps({ fetch: async (text, options) => { pdf.calls.fetch.push([text, options]); return { ok: true, kind: 'pdf', pdf: note }; } });
+  expect(await importByIdentifier(address, null, pdf.d)).toEqual({ kind: 'pdf', pdf: note });
+  expect(pdf.calls.fetch).toEqual([[address, { pdf: true }]]);
+  // Nothing of the dialog's is stored or made by the answer itself: the PDF is the main process's, the node comes of « Créer le nœud ».
+  expect(pdf.calls.stored).toEqual([]);
+  expect(pdf.calls.put).toEqual([]);
+  expect(s.nodes.size).toBe(before);
+  // With a PDF dropped before, the address's PDF is the latest the user asked for: the same outcome.
+  const dropped: FileRef = { name: 'attention.pdf', hash: 'd'.repeat(64), size: 1000 };
+  const again = deps({ fetch: async (text, options) => { again.calls.fetch.push([text, options]); return { ok: true, kind: 'pdf', pdf: note }; } });
+  expect(await importByIdentifier(address, dropped, again.d)).toEqual({ kind: 'pdf', pdf: note });
+  expect(again.calls.fetch).toEqual([[address, { pdf: false }]]);
+  // A page that gives its DOI: a publication found, imported as any.
+  const found = deps();
+  expect(await importByIdentifier('https://proceedings.example/paper/42', null, found.d)).toEqual({ kind: 'done', title: 'Attention Is All You Need', notice: null });
+  expect(found.calls.fetch).toEqual([['https://proceedings.example/paper/42', { pdf: true }]]);
+  // The main process's refusals are said as they come, nothing stored: an address that is not https, a machine of the local network, a page without a PDF.
+  for (const [text, message] of [
+    ['http://openreview.net/forum?id=x', 'Seules les adresses https sont acceptées.'], ['https://127.0.0.1/a.pdf', 'Adresse refusée : elle mène à une machine du réseau local.'],
+    [address, 'Cette page ne mène à aucun PDF.'],
+  ]) {
+    const { d, calls } = deps({ fetch: async () => ({ ok: false, message }) });
+    expect(await importByIdentifier(text, null, d), text).toEqual({ kind: 'failed', message });
+    expect(calls.stored).toEqual([]);
+    expect(calls.put).toEqual([]);
+  }
+  // Neither an identifier nor an address: refused here, before the network (nothing asked, nothing stored).
+  for (const text of ['bonjour', 'openreview.net/forum?id=x', 'www.example.org/a.pdf', 'https://', '://x', 'doi:', '  ']) {
+    const { d, calls } = deps();
+    expect(await importByIdentifier(text, null, d), text).toEqual({ kind: 'failed', message: 'Identifiant non reconnu.' });
+    expect(calls.fetch, text).toEqual([]);
+    expect(calls.stored, text).toEqual([]);
+  }
+  expect(s.nodes.size).toBe(before + 1);
+});
+
 test('importByIdentifier : un rejet de l’IPC ou du magasin devient un message français ; un BibTeX illisible refuse l’import', async () => {
   const logged: unknown[] = [];
   const rejected = deps({ fetch: () => Promise.reject(new Error('Error invoking remote method \'cirrus:publications:fetch\': Error: An object could not be cloned.')), log: (_w, e) => logged.push(e) });

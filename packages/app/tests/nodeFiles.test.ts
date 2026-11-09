@@ -183,11 +183,40 @@ test('dropRoute (plan 4c, tâche 6) : un .bib seul lâché sur le fond du graphe
     expect(dropRoute(dropZone(where), null, 'files', ['C:\\docs\\bibliographie.bib'])).toEqual({ to: 'refused' });
   }
   // With another file, two of them, another kind, or none: a notice on the background, as before.
-  for (const names of [['a.bib', 'b.bib'], ['a.bib', 'notes.md'], ['notes.md'], ['bib'], [], undefined]) {
+  for (const names of [['a.bib', 'b.bib'], ['a.bib', 'notes.md'], ['notes.md'], ['bib'], ['pdf'], [], undefined]) {
     expect(dropRoute(dropZone(canvas), null, 'files', names), JSON.stringify(names)).toEqual({ to: 'notice' });
   }
-  expect(backgroundNotice(['notes.md'])).toBe('Dépose le fichier sur un nœud pour l’y ajouter.');
-  expect(backgroundNotice(['a.bib', 'notes.md'])).toBe('Dépose un seul fichier .bib à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.');
+});
+
+test('dropRoute (plan 5b, tâche 4, D5) : un PDF seul lâché sur le fond ouvre le dialogue d’import ; deux PDF, ou un PDF avec un autre fichier, une notification ; sur un nœud, un fichier du nœud', () => {
+  const canvas = at(...GRAPH, 'div.canvas-host', 'canvas');
+  for (const names of [['C:\\docs\\attention.pdf'], ['D:\\ARTICLE.PDF'], ['/home/moi/article.pdf'], ['sans dossier.Pdf']]) {
+    expect(dropRoute(dropZone(canvas), null, 'files', names), JSON.stringify(names)).toEqual({ to: 'pdf' });
+  }
+  for (const names of [['a.pdf', 'b.pdf'], ['a.pdf', 'refs.bib'], ['a.pdf', 'notes.md'], ['article.pdf.txt'], ['pdf']]) {
+    expect(dropRoute(dropZone(canvas), null, 'files', names), JSON.stringify(names)).toEqual({ to: 'notice' });
+  }
+  // Un fichier refusé avec lui (drop.ts ne passe alors pas les chemins) : la notification.
+  expect(dropRoute(dropZone(canvas), null, 'files', undefined)).toEqual({ to: 'notice' });
+  // Sur un nœud, un groupe ou un pop-up : un fichier de ce nœud, un PDF comme un autre ; sur le dialogue, ce que le dialogue fait de son dépôt.
+  expect(dropRoute(dropZone(canvas), 'n', 'files', ['C:\\docs\\attention.pdf'])).toEqual({ to: 'node', node: 'n' });
+  expect(dropRoute(dropZone(at(...GRAPH, 'div.publication-dialog', 'p.status')), null, 'files', ['C:\\docs\\attention.pdf'])).toEqual({ to: 'refused' });
+  expect(dropRoute(dropZone(at(...MAIN, 'div.panels', 'section.panel.node-popup', 'div.body', 'ul.files')), 'mdl', 'files', ['C:\\docs\\attention.pdf']))
+    .toEqual({ to: 'node', node: 'mdl' });
+});
+
+test('backgroundNotice (plan 5b, tâche 4, D5) : la notification du fond cite les deux cas permis, un .bib seul et un PDF seul, que les fichiers contiennent un .bib ou non', () => {
+  const generic = 'Dépose un seul .bib ou un seul PDF sur le fond, ou un fichier sur un nœud pour l’y ajouter.';
+  const bib = 'Dépose un seul fichier .bib ou un seul PDF à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.';
+  expect(backgroundNotice(['notes.md'])).toBe(generic);
+  expect(backgroundNotice(['a.pdf', 'b.pdf'])).toBe(generic);
+  expect(backgroundNotice(['a.pdf', 'notes.md'])).toBe(generic);
+  expect(backgroundNotice(['a.bib', 'notes.md'])).toBe(bib);
+  expect(backgroundNotice(['a.bib', 'a.pdf'])).toBe(bib);
+  for (const text of [generic, bib]) {
+    expect(text).toContain('.bib');
+    expect(text).toContain('PDF');
+  }
 });
 
 test('droppedPaths : le chemin de chaque fichier du disque ; un fichier fait par une page est refusé, nommé', () => {

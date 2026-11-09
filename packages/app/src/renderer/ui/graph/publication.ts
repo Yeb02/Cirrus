@@ -6,19 +6,35 @@ import type { Graph } from './core.ts';
 
 /**
  * « Importer une publication… » (plan 4c, task 5): the dialog (`dialog`, PublicationDialog in GraphView), opened at a
- * point of the plan shown (`shownPlan`), and what it asks of the graph to put the publication's node there.
+ * point of the plan shown (`shownPlan`) — by the background's menu, or by a PDF dropped there (plan 5b, D5: dropPdfFile)
+ * — and what it asks of the graph to put the publication's node there.
  */
 export function usePublicationImport(graph: Graph, shownPlan: Id) {
-  const { root, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, indexOf } = graph;
+  const { engine, root, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, indexOf, notify, busy, busyReason } = graph;
   /**
    * « Importer une publication… » (plan 4c, task 5): the dialog, and where its node goes — the world point and the zoom
-   * of the right click that opened it, in its plan. Another plan shown closes it (a result still to come dropped).
+   * of the right click that opened it, in its plan. `pdf`: the path of a PDF dropped on the background, which the dialog
+   * takes as a PDF dropped on it (plan 5b, D5). Another plan shown closes it (a result still to come dropped).
    */
-  const [dialog, setDialog] = useState<{ key: number; plan: Id; at: Vec2; zoom: number } | null>(null);
+  const [dialog, setDialog] = useState<{ key: number; plan: Id; at: Vec2; zoom: number; pdf?: string } | null>(null);
   useEffect(() => { setDialog((d) => (d !== null && d.plan !== shownPlan ? null : d)); }, [shownPlan]);
-  /** The dialog opened for the screen point `at` of `plan`, seen through `cam`: its node goes there, at that zoom. */
-  const openPublication = (plan: Id, cam: Camera, at: { x: number; y: number }) => {
-    setDialog({ key: performance.now(), plan, at: screenToWorld(cam, at.x, at.y), zoom: cam.zoom });
+  /**
+   * The dialog opened for the screen point `at` of `plan`, seen through `cam`: its node goes there, at that zoom, with
+   * the PDF at `pdf` to take at once, if one is given.
+   */
+  const openPublication = (plan: Id, cam: Camera, at: { x: number; y: number }, pdf?: string) => {
+    setDialog({ key: performance.now(), plan, at: screenToWorld(cam, at.x, at.y), zoom: cam.zoom, ...(pdf === undefined ? {} : { pdf }) });
+  };
+  /**
+   * A PDF dropped alone on the graph's background at the screen point `at` (plan 5b, D5): the dialog opens there with
+   * it, as if it had been dropped on the dialog. Not while a gesture, a question or a .bib waiting for its place is under
+   * way, as for a .bib dropped.
+   */
+  const dropPdfFile = (path: string, at: { x: number; y: number }) => {
+    const e = engine.current, sc = sceneRef.current;
+    if (!e || !sc) return;
+    if (busy()) { notify(busyReason('d’importer une publication')); return; }
+    openPublication(sc.plan.id, e.renderer.camera, at, path);
   };
   /**
    * What the import dialog asks of the graph (plan 4c, D5 to D8): the IPC, and the node put down where the menu was
@@ -40,7 +56,7 @@ export function usePublicationImport(graph: Graph, shownPlan: Id) {
   });
   /** The dialog closed: the focus goes back to the graph. */
   const closePublication = () => { setDialog(null); root.current?.focus({ preventScroll: true }); };
-  return { dialog, openPublication, publicationDeps, closePublication };
+  return { dialog, openPublication, dropPdfFile, publicationDeps, closePublication };
 }
 
 export type PublicationPart = ReturnType<typeof usePublicationImport>;

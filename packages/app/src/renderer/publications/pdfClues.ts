@@ -7,7 +7,7 @@ import { MAX_TEXT_CHARS } from './identify.ts';
 export { pdfFailure } from '../files/pdf.ts';
 
 /** What a dropped PDF says of itself (D8): its metadata's text values, the text of its first pages, its title if it has one. */
-interface PdfClues { text: string; meta: Record<string, string>; title: string | null }
+export interface PdfClues { text: string; meta: Record<string, string>; title: string | null }
 
 /** The longest title taken from a PDF's metadata; a longer one is cut there. */
 const MAX_TITLE_CHARS = 300;

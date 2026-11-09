@@ -67,37 +67,47 @@ export function dropZone(target: EventTarget | DropTarget | null): DropZone | nu
 
 /**
  * Where a drop goes: files into a node's files, or to a notice, on the graph, where no node takes them (they are taken
- * all the same, so nothing shows them); a .bib alone on the graph's background, imported whole (plan 4c, D9); a node
- * dragged out of a list, placed in the plan shown (plan 4c, D4: placeDroppedBuild); or refused — files by the window's
- * guard (refusesStrayDrop), a node by nothing taking it.
+ * all the same, so nothing shows them); a .bib alone on the graph's background, imported whole (plan 4c, D9); a PDF
+ * alone there, given to the import dialog (plan 5b, D5); a node dragged out of a list, placed in the plan shown (plan
+ * 4c, D4: placeDroppedBuild); or refused — files by the window's guard (refusesStrayDrop), a node by nothing taking it.
  */
-type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'bib' } | { to: 'place' } | { to: 'refused' };
+type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'bib' } | { to: 'pdf' } | { to: 'place' } | { to: 'refused' };
 
+/** A file's name from its path, either separator's. */
+export const pathName = (path: string) => path.slice(Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')) + 1);
 /** Whether a file's name or path is a .bib's (D9). */
-const isBib = (name: string) => extensionOf(name.slice(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1)) === 'bib';
+const isBib = (name: string) => extensionOf(pathName(name)) === 'bib';
+/** Whether a file's name or path is a PDF's (plan 5b, D5), by the extension as every view reads it (fileKind). */
+const isPdf = (name: string) => fileKind(pathName(name)) === 'pdf';
 
 /**
  * The route of what is let go on `zone` (dropZone). Files (`what`, by default), `node` being the node that zone gives
  * them to: a pop-up's own (null once it is gone: its pop-up then takes none); on the graph, the node or group under the
  * point, the one a click there would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent
- * or a centre phantom, none) — where one .bib alone (`names`, the files' paths) is imported (plan 4c, task 6), on a node
- * a file of it as any other. A node dragged out of a list (plan 4c, task 3): placed on the graph, whatever lies under
- * the point (the group it enters is read in the plan, by placeDroppedBuild); taken nowhere else — a pop-up, what floats
- * over the graph (the import dialog among it, which takes a PDF only), a preview, the full screen (modal, D4).
+ * or a centre phantom, none) — where one .bib alone (`names`, the files' paths) is imported (plan 4c, task 6), one PDF
+ * alone opens the import dialog on it (plan 5b, D5), on a node a file of it as any other. A node dragged out of a list
+ * (plan 4c, task 3): placed on the graph, whatever lies under the point (the group it enters is read in the plan, by
+ * placeDroppedBuild); taken nowhere else — a pop-up, what floats over the graph (the import dialog among it, which
+ * takes a PDF itself), a preview, the full screen (modal, D4).
  */
 export function dropRoute(zone: DropZone | null, node: Id | null, what: Carried = 'files', names?: readonly string[]): DropRoute {
   if (what === 'node') return zone === 'graph' ? { to: 'place' } : { to: 'refused' };
   if (zone === null) return { to: 'refused' };
   if (node !== null) return { to: 'node', node };
   if (zone !== 'graph') return { to: 'refused' };
-  return names?.length === 1 && isBib(names[0]) ? { to: 'bib' } : { to: 'notice' };
+  if (names?.length !== 1) return { to: 'notice' };
+  return isBib(names[0]) ? { to: 'bib' } : isPdf(names[0]) ? { to: 'pdf' } : { to: 'notice' };
 }
 
-/** The notice of files let go on the graph's background that it does not import (dropRoute: `notice`). */
+/**
+ * The notice of files let go on the graph's background that it does not take (dropRoute: `notice`). Both texts name
+ * what the background takes — a .bib alone, a PDF alone (plan 5b, D5) —; the one for a drop that holds a .bib says it
+ * the way the .bib's import always did.
+ */
 export function backgroundNotice(names: readonly string[]): string {
   return names.some(isBib)
-    ? 'Dépose un seul fichier .bib à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.'
-    : 'Dépose le fichier sur un nœud pour l’y ajouter.';
+    ? 'Dépose un seul fichier .bib ou un seul PDF à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.'
+    : 'Dépose un seul .bib ou un seul PDF sur le fond, ou un fichier sur un nœud pour l’y ajouter.';
 }
 
 /** Why a dropped file that is not on the disk (one a web page made, dragged from a browser) is not imported. */

@@ -172,6 +172,8 @@ button, input, select { font: inherit; color: var(--ink); }
 .publication-dialog .status.found { color: var(--ink); }
 .publication-dialog .choices { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
 .publication-dialog .cancel { background: none; border-color: transparent; color: var(--muted); }
+/* « Choisir un PDF… » (plan 5b, D5): at the left of the row, apart from « Créer le nœud » and « Fermer ». */
+.publication-dialog .pick { margin-right: auto; }
 .popup {
   position: absolute; z-index: 28; width: 320px; box-sizing: border-box; padding: 10px 12px 12px; user-select: text;
   background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); border-radius: 10px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);
