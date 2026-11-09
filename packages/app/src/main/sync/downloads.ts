@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FileRef, Op, Unit } from '@cirrus/core';
 import { BlobError, filePath, receiveBlob } from '@cirrus/store';
+import { writeJsonAtomic } from '../jsonFile.ts';
 
 // The files of the synchronisation (plan 5a, D6): those a write adds go to the server before it; those of the records
 // received come down at once, in the background, a few at a time — but the PDFs, fetched at their first reading
@@ -257,17 +258,17 @@ export class Downloads {
   }
 
   /**
-   * Writes the eager downloads still to do beside the base (a temporary file renamed: a crash never leaves half a file),
-   * or removes the list when there are none. Costs what is pending. The list may name a file done since: the next
-   * want skips it (in the store already).
+   * Writes the eager downloads still to do beside the base (writeJsonAtomic: a crash never leaves half a file), or
+   * removes the list when there are none. Costs what is pending. The list may name a file done since: the next want
+   * skips it (in the store already). Not synced to the disk (short review after plan 5a, D4): it is rewritten at each
+   * batch received that brings files, and a power cut that loses it only leaves its files to come at their first
+   * opening (R9), the server holding them all.
    */
   private save(): void {
     const hashes = [...new Set([...this.queue, ...this.eager, ...this.failed])];
     try {
       if (hashes.length > 0) {
-        const tmp = `${this.file}.${process.pid}.tmp`;
-        writeFileSync(tmp, JSON.stringify({ hashes }), 'utf8');
-        renameSync(tmp, this.file);
+        writeJsonAtomic(this.file, { hashes }, { sync: false });
       } else if (this.saved) {
         rmSync(this.file, { force: true });
       }

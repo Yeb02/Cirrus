@@ -1,7 +1,8 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSettingTime, newer, type SettingChange, type SettingRow, type Stamp } from '@cirrus/core';
 import { DEFAULT_PARAMS, type RenderParams, sameSetting, settingValue } from '@cirrus/view';
+import { writeJsonAtomic } from './jsonFile.ts';
 
 // The settings (spec 19: outside the history and undo). settings.json holds those that differ from the defaults: this
 // PC's copy. With a server paired (plan 5a, task 6, D9, R23), they are shared: the server keeps each with the time of
@@ -33,12 +34,8 @@ export function readSettings(dir: string): Record<string, unknown> {
   return {};
 }
 
-/** settings.json or settings-pending.json, written to a temporary file then renamed: a crash never leaves half a file. */
-function writeJson(dir: string, name: string, value: unknown): void {
-  const tmp = join(dir, `${name}.${process.pid}.tmp`);
-  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
-  renameSync(tmp, join(dir, name));
-}
+/** settings.json or settings-pending.json, written whole and synced to the disk (writeJsonAtomic). */
+const writeJson = (dir: string, name: string, value: unknown): void => writeJsonAtomic(join(dir, name), value, { sync: true, space: 2 });
 
 const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const has = (o: object, key: string): boolean => Object.hasOwn(o, key);

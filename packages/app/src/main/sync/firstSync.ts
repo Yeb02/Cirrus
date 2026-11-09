@@ -1,10 +1,11 @@
-import { closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openAsBlob, openSync, renameSync, rmSync, writeSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, mkdirSync, openAsBlob, renameSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
   applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_ID_CHARS, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, type State,
   SyncFormatError, truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, storedHashes } from '@cirrus/store';
+import { writeJsonAtomic } from '../jsonFile.ts';
 import { parseSettingRows, SharedSettings } from '../settings.ts';
 import { SERVER_FILE, type SecretStore, type ServerConfig } from './config.ts';
 import { chunks, DOWNLOADS_FILE, hasBlob, isPdf } from './downloads.ts';
@@ -263,17 +264,6 @@ function shareBlob(from: string, to: string): void {
   }
 }
 
-/** A small file written and synced to the disk: the staged base's mark, after everything else is there. */
-function writeSynced(file: string, text: string): void {
-  const fd = openSync(file, 'w');
-  try {
-    writeSync(fd, text);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 /**
  * What an adopt needs: the network, this base's folder, this PC's identifier (the token's, R17), the server paired and
  * the identity of its base (its /hello's, R31), the configuration file of the staged base (its token encrypted as the
@@ -342,10 +332,11 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
     }
     // The server's settings, not this PC's (task 6, R23): bounded as the app reads them, and nothing of this PC's sent.
     new SharedSettings(staged, o.pc, () => {}).adopt(parseSettingRows(await json('/settings')));
-    // On the disk before the mark (review, Minor 1): a power cut never leaves a complete base without its PC or its server.
-    writeSynced(join(staged, 'pc.json'), JSON.stringify({ id: o.pc }));
+    // On the disk before the mark (review, Minor 1): a power cut never leaves a complete base without its PC or its
+    // server. The mark itself synced, after everything else is there.
+    writeJsonAtomic(join(staged, 'pc.json'), { id: o.pc }, { sync: true });
     o.secrets.write(o.config);
-    writeSynced(join(staged, READY_FILE), JSON.stringify({ server: o.config.url, seq: last }));
+    writeJsonAtomic(join(staged, READY_FILE), { server: o.config.url, seq: last }, { sync: true });
     return { last };
   } catch (e) {
     rmSync(staged, { recursive: true, force: true });
