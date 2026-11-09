@@ -2,15 +2,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { newer, type SettingRow } from '@cirrus/core';
+import { fileNameKey, newer, type SettingRow } from '@cirrus/core';
 import { MAX_ID_CHARS, MAX_PAIR_CODE_CHARS, MAX_PC_NAME_CHARS, MAX_SETTINGS_KEPT, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_DB_BUSY_MS } from './bounds.ts';
+import type { OpenElsewhere, OpenFile } from './presence.ts';
 import { SettingsError, type StoredChange } from './settings.ts';
 
 // Pairing and tokens (plan 5a, D3): `jumeler` makes a one-time code, a PC trades it for a token of 256 bits. The
 // server's own file, serveur.db, keeps only their SHA-256 hashes: neither a code nor a token is ever on its disk. It
-// keeps the shared settings too (task 6, D9).
+// keeps the shared settings too (task 6, D9), and the files each PC has open in full screen (plan 5b, D6).
 
-/** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings. */
+/** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings, the open files. */
 const SERVER_DB = 'serveur.db';
 
 /** Forward-only migrations of serveur.db: index i upgrades user_version i to i + 1. Never edit a shipped migration. */
@@ -21,6 +22,13 @@ const MIGRATIONS: string[] = [
   `,
   /* v2 (task 6): the shared settings, each its last change: its value's JSON (NULL: back to the default), its time, its PC. */ `
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, at REAL NOT NULL, pc TEXT NOT NULL);
+  `,
+  /*
+   * v3 (plan 5b, task 5, D6): the files each PC has open in full screen, by PC, node and name as the reimport compares
+   * them (the core's fileNameKey); the name as that PC spells it; since when, by the server's clock.
+   */ `
+  CREATE TABLE open_tex (pc TEXT NOT NULL, node TEXT NOT NULL, name_key TEXT NOT NULL, name TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (pc, node, name_key));
+  CREATE INDEX open_tex_file ON open_tex (node, name_key);
   `,
 ];
 
@@ -195,9 +203,13 @@ export class Tokens {
       .map((r) => ({ name: r.name, expiresAt: r.expires_at }));
   }
 
-  /** `revoquer`: the PC called `name` unpaired, its token worth nothing from the next request, and a code pending under that name dropped. Whether there was either. */
+  /**
+   * `revoquer`: the PC called `name` unpaired, its token worth nothing from the next request, its open files forgotten
+   * (D6), and a code pending under that name dropped. Whether there was either.
+   */
   revoke(name: string): boolean {
     return this.transaction(() => {
+      this.q('DELETE FROM open_tex WHERE pc IN (SELECT id FROM pcs WHERE name = ?)').run(name.trim());
       const pcs = Number(this.q('DELETE FROM pcs WHERE name = ?').run(name.trim()).changes);
       const codes = Number(this.q('DELETE FROM codes WHERE name = ?').run(name.trim()).changes);
       return pcs + codes > 0;
@@ -205,11 +217,42 @@ export class Tokens {
   }
 
   /**
-   * POST /unpair (R15): the PC of this token's hash unpaired by itself, its token worth nothing from the next request;
-   * no other PC touched. Whether there was one.
+   * POST /unpair (R15): the PC of this token's hash unpaired by itself, its token worth nothing from the next request,
+   * its open files forgotten (D6); no other PC touched. Whether there was one.
    */
   revokeToken(tokenHash: string): boolean {
-    return Number(this.q('DELETE FROM pcs WHERE token_hash = ?').run(tokenHash).changes) > 0;
+    return this.transaction(() => {
+      this.q('DELETE FROM open_tex WHERE pc IN (SELECT id FROM pcs WHERE token_hash = ?)').run(tokenHash);
+      return Number(this.q('DELETE FROM pcs WHERE token_hash = ?').run(tokenHash).changes) > 0;
+    });
+  }
+
+  /**
+   * PUT /presence (plan 5b, task 5, D6): the files PC `pc` has open in full screen, its whole list (parsePresence), which
+   * replaces the one kept, in one transaction. A file still open keeps its time; a new one takes `now`, the server's
+   * clock; a file listed twice (by fileNameKey, in one node) counts once. Returns the same files open on the other PCs
+   * paired, each with that PC's name (`jumeler`'s), the earliest first.
+   */
+  putPresence(pc: string, open: OpenFile[], now: number): OpenElsewhere[] {
+    return this.transaction(() => {
+      const key = (node: string, nameKey: string) => `${node}\u0000${nameKey}`;
+      const kept = new Map<string, number>();
+      for (const r of this.q('SELECT node, name_key, since FROM open_tex WHERE pc = ?').all(pc) as { node: string; name_key: string; since: number }[]) {
+        kept.set(key(r.node, r.name_key), r.since);
+      }
+      this.q('DELETE FROM open_tex WHERE pc = ?').run(pc);
+      const others: OpenElsewhere[] = [], seen = new Set<string>();
+      for (const f of open) {
+        const nameKey = fileNameKey(f.name), k = key(f.node, nameKey);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        this.q('INSERT INTO open_tex (pc, node, name_key, name, since) VALUES (?, ?, ?, ?, ?)').run(pc, f.node, nameKey, f.name, kept.get(k) ?? now);
+        const elsewhere = this.q(`SELECT o.name, o.since, p.name AS pc FROM open_tex o JOIN pcs p ON p.id = o.pc
+          WHERE o.node = ? AND o.name_key = ? AND o.pc <> ? ORDER BY o.since, p.name`).all(f.node, nameKey, pc) as { name: string; since: number; pc: string }[];
+        for (const r of elsewhere) others.push({ node: f.node, name: r.name, pc: r.pc, since: r.since });
+      }
+      return others;
+    });
   }
 
   /** GET /settings (task 6): every shared setting the server keeps, a reset to the default included (value null). */

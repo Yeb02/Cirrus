@@ -7,11 +7,12 @@ import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Un
 import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS,
-  MAX_UNITS_PER_REQUEST,
+  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES,
+  MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
+import { parsePresence, PresenceError } from './presence.ts';
 import { parsePublicationRequest, PublicationError, PublicationImports, type PublicationNetwork, serverNetwork } from './publications.ts';
 import { SeedError, Seeds } from './seed.ts';
 import { parseSettingChanges, SettingsError } from './settings.ts';
@@ -20,7 +21,7 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
 // anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
-// paired PCs, the shared settings), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
+// paired PCs, the shared settings, the files each PC has open in full screen), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
 // serves only a paired PC's import of a publication (plan 5b, D2: publications.ts).
 
 /**
@@ -290,6 +291,19 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         reply(res, 200, { settings: rows });
       },
     },
+    /**
+     * « .tex ouvert ailleurs » (plan 5b, task 5, D6): PUT `{ open: [{ node, name }] }`, the files this PC has open in full
+     * screen, its whole list, sent at each change and at each connection; checked whole before anything is written
+     * (parsePresence: MAX_PRESENCE_ENTRIES at most, plain names), it replaces the one serveur.db keeps of this PC. Its
+     * answer, `{ others }`: the same files open on the other PCs, by name as the reimport compares them, each with that
+     * PC's name and since when (the server's clock).
+     */
+    '/presence': {
+      PUT: async (req, res, _url, who) => {
+        const open = parsePresence(await readJson(req, MAX_PRESENCE_BODY_BYTES));
+        reply(res, 200, { others: tokens.putPresence(who.pc, open, now()) });
+      },
+    },
     '/files/missing': {
       POST: async (req, res) => {
         const body = await readJson(req, MAX_BODY_BYTES);
@@ -395,7 +409,8 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         await handle(req, res);
       } catch (e) {
         const known = e instanceof HttpError ? e
-          : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError ? new HttpError(e.status, e.message)
+          : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError || e instanceof PresenceError
+            ? new HttpError(e.status, e.message)
           : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
         if (res.headersSent) {
           res.destroy();

@@ -59,6 +59,14 @@ export const MAX_PUBLICATION_META_BYTES = 8 * 2 ** 20;
 export const MAX_PUBLICATION_TIMEOUT_MS = 60_000;
 export const MAX_PUBLICATION_PDF_MS = 10 * 60_000;
 
+/**
+ * « .tex ouvert ailleurs » (plan 5b, task 5, D6: PUT /presence): the files a PC has open in full screen, its whole list
+ * at each change, MAX_PRESENCE_ENTRIES at most (a PC has one full screen open: the bound only keeps serveur.db small);
+ * its body, MAX_PRESENCE_BODY_BYTES at most — the most entries, each a node's identifier (MAX_ID_CHARS) and a file name.
+ */
+export const MAX_PRESENCE_ENTRIES = 100;
+export const MAX_PRESENCE_BODY_BYTES = 64 * 1024;
+
 /** The longest name of a paired PC: the one `jumeler` gives, and the one the PC gives of itself. */
 export const MAX_PC_NAME_CHARS = 100;
 
