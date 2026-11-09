@@ -15,8 +15,8 @@ import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
-  absentBuild, addMemberBuild, ALREADY_HERE, type Build,
-  joinBuild, layoutBuild, lobbyConnectionBuild, placeDroppedBuild,
+  absentBuild, addMemberBuild, type Build,
+  joinBuild, layoutBuild, lobbyConnectionBuild,
   renameBuild, scaleBuild,
 } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
@@ -24,8 +24,7 @@ import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
-import { NODE_MIME } from '../files/annotations.ts';
-import { backgroundNotice, carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
+import type { Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 import { type Editor, type Engine, type Graph, NOTHING_SHOWN } from './graph/core.ts';
@@ -33,6 +32,7 @@ import { useHover } from './graph/hover.ts';
 import { ignored, measuring, replayPointer } from './graph/launch.ts';
 import { BIB_WAITING, useBibImport } from './graph/bibImport.ts';
 import { useCopyPaste } from './graph/copyPaste.ts';
+import { useGraphDrop } from './graph/drop.ts';
 import { useLayoutHandles } from './graph/layoutHandles.ts';
 import { usePublicationImport } from './graph/publication.ts';
 import { usePlacement } from './graph/placement.ts';
@@ -230,7 +230,8 @@ export function GraphView(props: {
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
     root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, gestures,
-    onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt, restoreScene, moveCamera, feed, busy, busyReason,
+    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt, local, restoreScene, moveCamera, feed,
+    busy, busyReason,
     get scenes() { return scenes; }, get questions() { return questions; }, get placement() { return placement; }, get copyPaste() { return copyPaste; },
     get bib() { return bib; }, get publication() { return publication; }, get repercussion() { return repercussion; }, get handles() { return handles; },
   };
@@ -245,6 +246,7 @@ export function GraphView(props: {
   const repercussion = useRepercussion(graph);
   const handles = useLayoutHandles(graph);
   const { settleWheel, wheelScale } = useScaleWheel(graph);
+  const drop = useGraphDrop(graph, props.onDropFiles);
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
@@ -451,59 +453,7 @@ export function GraphView(props: {
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  /**
-   * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
-   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
-   * is imported (plan 4c, D9); elsewhere, a notice (dropRoute).
-   */
-  const dropFilesAt = (sx: number, sy: number, paths: string[], refused: Refusal[] = []): Promise<void> => {
-    const h = hitAt(sx, sy), i = h.kind === 'item' ? sceneRef.current?.byId.get(h.id) : undefined;
-    const under = nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false);
-    const route = dropRoute('graph', under, 'files', refused.length === 0 ? paths : undefined);
-    if (route.to === 'node') return props.onDropFiles(route.node, paths, refused);
-    if (route.to === 'bib') return bib.dropBibFile(paths[0], { x: sx, y: sy });
-    notify(backgroundNotice([...paths, ...refused.map((r) => r.name)]));
-    return Promise.resolve();
-  };
-  useImperativeHandle(props.ref, () => ({ dropFilesAt }));
-  /** Files the graph takes: not on what floats over it and refuses them (dropZone). */
-  const takesFiles = (ev: React.DragEvent) => carriesFiles(ev) && dropZone(ev.target) === 'graph';
-  /** A node dragged out of a list of annotations that the graph takes (plan 4c, task 3): its own route, never files (dropRoute). */
-  const takesNode = (ev: React.DragEvent) => carried(ev) === 'node' && dropRoute(dropZone(ev.target), null, 'node').to === 'place';
-  /** What a node dragged over the graph would enter, lit (spec 10: the group under the cursor lights up); null: none. */
-  const lit = useRef<number | null>(null);
-  const lightHost = (pt: { sx: number; sy: number } | null) => {
-    const e = engine.current, sc = sceneRef.current;
-    if (!e || !sc || dragging.current) return;
-    const cam = e.renderer.camera;
-    const t = pt === null ? null : dropTarget(sc, screenToWorld(cam, pt.sx, pt.sy), [], cam.zoom, paramsRef.current, indexOf(sc));
-    if (t === lit.current) return;
-    lit.current = t;
-    e.renderer.setDropTarget(t);
-    redraw();
-  };
-  /**
-   * A node dragged out of a list of annotations (NODE_MIME), let go at (sx, sy) (plan 4c, D4): placed in this plan where
-   * it is let go, at the readable step, entering the group or the simple node under the point (placeDroppedBuild), with
-   * the « partout ou ici seulement » question when that inclusion exists elsewhere or may (spec 10: askRepercussion).
-   * Already here: said, and the view framed on it. Not while a gesture, a question or a repercussion is under way.
-   */
-  const dropNodeAt = (sx: number, sy: number, node: Id) => {
-    const e = engine.current, sc = sceneRef.current;
-    if (!e || !sc) return;
-    if (busy()) { notify(busyReason('de poser ce nœud')); return; }
-    const p = paramsRef.current, cam = e.renderer.camera, at = screenToWorld(cam, sx, sy), index = indexOf(sc);
-    const here = sc.byId.get(node);
-    if (here !== undefined) {
-      notify(ALREADY_HERE);
-      moveCamera(fitItem(sc, here, cam, p));
-      return;
-    }
-    const build = placeDroppedBuild(sc, node, at, cam.zoom, p, index);
-    const host = dropTarget(sc, at, [], cam.zoom, p, index);
-    if (host === null) void edit(build);
-    else repercussion.askRepercussion(sc.plan.id, [{ node, from: null, to: sc.items[host].id }], build, () => {});
-  };
+  useImperativeHandle(props.ref, () => ({ dropFilesAt: drop.dropFilesAt }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
@@ -838,32 +788,8 @@ export function GraphView(props: {
       ref={root}
       tabIndex={0}
       onContextMenu={(ev) => ev.preventDefault()}
-      // Files dropped on the graph (not on a connection's pop-up or a question over it: those refuse them); a node dragged
-      // out of a list of annotations, by its own route (plan 4c, task 3), the node or group it would enter lit meanwhile.
-      onDragOver={(ev) => {
-        const node = takesNode(ev);
-        if (!node && !takesFiles(ev)) return;
-        ev.preventDefault();
-        ev.dataTransfer.dropEffect = 'copy';
-        if (node && !ignored(ev)) lightHost(local(ev));
-      }}
-      onDragLeave={(ev) => { if (!root.current!.contains(ev.relatedTarget as Node | null)) lightHost(null); }}
-      onDrop={(ev) => {
-        if (takesNode(ev)) {
-          ev.preventDefault();
-          lightHost(null);
-          if (ignored(ev)) return;
-          const node = ev.dataTransfer.getData(NODE_MIME), { sx, sy } = local(ev);
-          root.current!.focus();
-          if (node) dropNodeAt(sx, sy, node);
-          return;
-        }
-        if (!takesFiles(ev)) return;
-        ev.preventDefault();
-        if (ignored(ev)) return;
-        const { sx, sy } = local(ev), d = droppedPaths(ev.dataTransfer.files, (f) => window.cirrus.pathForFile(f));
-        if (d.paths.length + d.refused.length > 0) void dropFilesAt(sx, sy, d.paths, d.refused);
-      }}
+      // Files, and nodes out of a list of annotations, dropped on the graph (graph/drop.ts).
+      {...drop.handlers}
       onPointerDown={(ev) => {
         if (ignored(ev)) return;
         root.current!.focus();

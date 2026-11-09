@@ -43,6 +43,8 @@ export interface Graph {
   setSelection: Dispatch<SetStateAction<Selection>>;
   setEditor: Dispatch<SetStateAction<Editor | null>>;
   gestures: RefObject<GestureMachine>;
+  /** Whether items are being dragged (spec 9.1): GraphView's drag, previewed by its drawing loop. */
+  dragging(): boolean;
   /** Shows a plan in its tab: GraphView's onOpenPlan, as of this render. */
   onOpenPlan(plan: Id): void;
   redraw(): void;
@@ -50,6 +52,8 @@ export interface Graph {
   edit(build: Build, onRefused?: () => void, extend?: Id): Promise<Result | null>;
   indexOf(scene: PlanScene): SceneIndex | undefined;
   hitAt(sx: number, sy: number): Hit;
+  /** The point of a pointer or drag event on the graph, in screen coordinates. */
+  local(ev: { clientX: number; clientY: number }): { sx: number; sy: number };
   restoreScene(): void;
   moveCamera(next: Camera): void;
   feed(input: Input): void;
