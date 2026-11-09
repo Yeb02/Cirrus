@@ -114,13 +114,16 @@ test('PdfCache.has : ni l’ordre du cache ni la date du PDF ne changent (plan 5
   for (const [i, k] of [a, b, c].entries()) cache.put(k, compiled(`job-${i}.pdf`, 3000), meta);
   const old = new Date(2020, 0, 1);
   utimesSync(join(cacheDir, `${a}.pdf`), old, old);
-  expect([a, b, c, d, 'pas une clé'].map((k) => cache.has(k))).toEqual([true, true, true, false, false]);
+  // a, the one used longest ago, alone: a has that made it the one used last would send b first.
+  expect(cache.has(a)).toBe(true);
+  expect([d, 'pas une clé'].map((k) => cache.has(k))).toEqual([false, false]);
   expect(statSync(join(cacheDir, `${a}.pdf`)).mtimeMs).toBe(old.getTime());
   // a is still the one used longest ago: the first to go (a get would have kept it).
   max = 7000;
   cache.trim();
   await cache.settled();
   expect(readdirSync(cacheDir).sort()).toEqual(files(b, c));
+  expect([b, c].map((k) => cache.has(k))).toEqual([true, true]);
   // Before the folder is listed, its files answer.
   const next = new PdfCache(cacheDir, () => 2 ** 30);
   expect([a, b, c].map((k) => next.has(k))).toEqual([false, true, true]);

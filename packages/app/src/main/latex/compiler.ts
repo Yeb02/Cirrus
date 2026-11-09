@@ -157,7 +157,12 @@ export class LatexService {
     const t0 = performance.now();
     if (this.disposed) return Promise.resolve({ status: 'cancelled' });
     this.cancel(req.slot);
-    return new Promise<CompileAnswer>((resolve) => { this.launch(req, t0, resolve, false); });
+    return new Promise<CompileAnswer>((resolve) => {
+      this.launch(req, t0, resolve, false);
+      // The background compiling this very source stops, and is not taken up again: the user's request compiles it (D1).
+      const twin = this.backgroundJob;
+      if (twin && twin.req.slot === `bg:${req.slot}`) this.settle(twin, { status: 'cancelled' });
+    });
   }
 
   /** The slot's request, waiting or running, is answered `cancelled`, its pdfLaTeX killed. */
@@ -270,6 +275,11 @@ export class LatexService {
     const job = this.backgroundJob;
     if (!job || job.done) return;
     if (job.waiter === null && preamble === this.preamble && this.idle.some((w) => w.ready)) return;
+    this.stepAside(job);
+  }
+
+  /** The background's job stopped for the user's requests: it waits again at the head of its queue (backgroundDone). */
+  private stepAside(job: Job): void {
     job.yielded = true;
     this.settle(job, { status: 'cancelled' });
   }
@@ -327,6 +337,8 @@ export class LatexService {
     const bins = await this.texBinaries();
     if (job.done) return;
     if (!bins) return this.settle(job, { status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
+    // A request of the user came while pdfLaTeX was looked for: the background waits for it (D1), even cold.
+    if (job.background && this.userBusy()) return this.stepAside(job);
     const key = this.opts.cache.key(job.req, bins.version);
     if (job.background) {
       // Compiled already (D1): skipped, its entry neither read nor made the one used last, no view having asked for it.
@@ -337,6 +349,13 @@ export class LatexService {
     }
     if (isStandalone(job.req.source)) return this.runStandalone(job, bins, key);
     if (job.req.preamble !== this.preamble || this.resting) {
+      if (job.background && this.resting) {
+        // The pool rests after a failure: only a request of the user starts it again; the queue goes (D1), its views
+        // compile them when they open.
+        this.snippets.clear();
+        this.pages.clear();
+        return this.settle(job, { status: 'cancelled' });
+      }
       // The background never takes the pool from the user's preamble (D1): a request made under another is outdated.
       if (job.background && this.preamble !== null && job.req.preamble !== this.preamble) return this.settle(job, { status: 'cancelled' });
       this.switchPool(job.req.preamble);
@@ -464,8 +483,7 @@ export class LatexService {
    */
   private take(job: Job, preamble: string, front: boolean): Promise<Warm | null> {
     if (job.background && this.userBusy()) {
-      job.yielded = true;
-      this.settle(job, { status: 'cancelled' });
+      this.stepAside(job);
       return Promise.resolve(null);
     }
     if (!job.background) this.yieldTo(preamble);
