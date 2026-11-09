@@ -221,7 +221,10 @@ function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last:
  */
 export interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal }
 
-/** An identity of the server's base (R31) as a PC takes it from an answer: text of 1 to MAX_ID_CHARS characters. */
+/**
+ * An identity of the server's base (R31) as a PC takes it from an answer: text of 1 to MAX_ID_CHARS characters. The
+ * same check for a write's identifier from the interface (SyncHost.commit: re-review of the fixes, N6).
+ */
 export const isBaseId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && x.length <= MAX_ID_CHARS;
 
 /**

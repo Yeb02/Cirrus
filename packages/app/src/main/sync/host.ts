@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Action, type Id, isObject, MAX_ID_CHARS, type Op, type Reconciliation, type RemoteUnit, SyncDivergedError, type Unit } from '@cirrus/core';
+import { type Action, type Id, isObject, type Op, type Reconciliation, type RemoteUnit, SyncDivergedError, type Unit } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
@@ -228,7 +228,7 @@ export class SyncHost {
    * a reconciliation, never a line that would stop the base's seed. Costs the write, never the base.
    */
   commit(action: Action, unit: unknown): Committed {
-    if (typeof unit !== 'string' || unit.length === 0 || unit.length > MAX_ID_CHARS) throw new Error('Action refusée : identifiant d’écriture invalide.');
+    if (!isBaseId(unit)) throw new Error('Action refusée : identifiant d’écriture invalide.');
     const at = this.deps.now() + this.client.clockOffset();
     // An action that changes nothing writes no line, and sends nothing.
     if (!Array.isArray(action.ops) || action.ops.length > 0) {
