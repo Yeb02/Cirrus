@@ -241,12 +241,19 @@ export function App() {
   }), []);
 
   useEffect(() => {
+    // What the main process says of the server after its answer below, until the session listens: a pairing or a first
+    // sync that ends while this page loads, reloaded meanwhile (short review after plan 5a, B2). Messages arrive in the
+    // order they were sent: one before the answer is older than it, and dropped.
+    const told: { info: ServerInfo | null } = { info: null };
+    const early = window.cirrus.onSyncServer((i) => { told.info = i; });
     void (async () => {
       try {
         // The snapshot and the journal after it (plan 3c); the tables when the snapshot cannot be used. With a server
-        // paired, the pending writes too (plan 5a).
+        // paired, the pending writes too (plan 5a). The server asked first: paired then, it is when the state is read,
+        // whose pending writes are then all of them (B2).
         const load = (fromTables: boolean) => window.cirrus.load(fromTables).then((l) => { mark('dataReceived'); return l; });
-        const [opened, settings, info] = await Promise.all([openState(load), window.cirrus.getSettings(), window.cirrus.syncServer()]);
+        const asked = window.cirrus.syncServer().then((i) => { told.info = null; return i; });
+        const [opened, settings, info] = await Promise.all([openState(load), window.cirrus.getSettings(), asked]);
         if (opened.fallback) console.warn(`Instantané de la base inutilisable (${opened.fallback}) : état relu dans ses tables.`);
         const s = opened.state;
         const plans = [...s.plans.values()];
@@ -272,16 +279,19 @@ export function App() {
           bridge: window.cirrus, session: session.current, load: () => openState(window.cirrus.load), timeoutMs: () => paramsRef.current.syncConnectTimeoutMs,
           toast: (text) => toast(text), onView: setSyncView, onServer: setServer,
         });
-        setServer(info);
+        early();
+        const since = told.info ?? undefined;
+        setServer(since ?? info);
         mark('stateReady');
         setParams(p);
         setTabs(open);
         setActive(current);
         setShown({ state: s, rev: 0, action: null });
         // The startup veil lasts the setting just read: the ref holds it only once rendered (review, Important 3).
-        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs, waiting: info.waiting })
+        void sync.current.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: p.syncConnectTimeoutMs, waiting: info.waiting, since })
           .catch((e: unknown) => console.error('Synchronisation :', e));
       } catch (e) {
+        early();
         setError(e instanceof Error ? e.message : String(e));
       }
     })();

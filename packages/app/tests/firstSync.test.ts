@@ -360,6 +360,30 @@ test('revue, tour 2, Minor 3 : le bloc « Serveur » remonté pendant un envoi (
   expect(a.servers.at(-1)).toMatchObject({ paired: true, url: l.url, name: 'Portable' });
 });
 
+test('revue courte du plan 5a, B2 : la page rechargée (Ctrl+R) pendant un envoi s’ouvre non jumelée ; l’envoi fini, le principal le lui dit, et elle démarre la synchro, ses écritures en attente envoyées', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const { X } = await fill(a);
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  const gate = holdFirst(a, '/files/missing');
+  // « Envoyer », asked by the page about to go: its answer reaches no one (the reloaded page is another), so the call
+  // is the host's own.
+  const sending = a.host.first('seed');
+  await gate.reached;
+  // Ctrl+R: the new page opens while the seed runs, not paired yet — nothing to follow, nothing started.
+  await a.reload();
+  expect(a.host.info()).toMatchObject({ paired: false, busy: 'Envoi de la base au serveur…' });
+  // A write on the new page meanwhile: pending, after the lines the seed sends.
+  await run(a, (s) => editNode(s, X, { title: 'X pendant l’envoi' }));
+  gate.release();
+  expect(await sending).toEqual({ ok: true });
+  // The new page told (cirrus:sync:server): it takes the pending writes and starts; the write reaches the server.
+  await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 3000, () => `état ${JSON.stringify(a.statuses.slice(-3))}, ${a.store.pendingCount()} en attente`);
+  expect((await l.state()).nodes.get(X)?.title).toBe('X pendant l’envoi');
+  expect(a.servers.at(-1)).toMatchObject({ paired: true, url: l.url, name: 'Portable' });
+  expect(a.view?.chip?.text).toBe('À jour');
+});
+
 test('R19, R20 : une ligne au libellé trop long (écrite avant la borne) et une violation déjà dans la base n’empêchent pas l’envoi ; le libellé arrive coupé', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');

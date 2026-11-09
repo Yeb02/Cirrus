@@ -24,6 +24,12 @@ export interface HostWindow {
   veil(): void;
   /** Shared settings received that changed here (cirrus:settings:changed, task 6): key: value, null back to the default; one batch. */
   settings(changes: Record<string, unknown>): void;
+  /**
+   * What the block « Serveur » shows, at each change of the pairing (cirrus:sync:server; short review after plan 5a,
+   * B2): a pairing done or refused, an offer, a first sync begun or ended, an unpairing. A page that opened before a
+   * pairing ended (reloaded meanwhile) learns so that it is paired, and starts the synchronisation.
+   */
+  server(info: ServerInfo): void;
 }
 
 export interface HostDeps {
@@ -102,6 +108,11 @@ export class SyncHost {
   private firstSync: AbortController | null = null;
   /** The first sync under way, for the block (info): its server, and what it does (review of task 5, Minor 3). */
   private working: { config: ServerConfig; busy: string } | null = null;
+  /**
+   * The server whose base was taken in this run (D7): the app restarts on it, and the block says only that — not the
+   * base waiting beside this one as if its swap had failed (short review after plan 5a, B2).
+   */
+  private restarting: ServerConfig | null = null;
   /** start, stop, pairing, unpairing, waking: one at a time, in order (never a start while a stop runs). */
   private cycle: Promise<void> = Promise.resolve();
   private nextId = 0;
@@ -134,11 +145,18 @@ export class SyncHost {
 
   info(): ServerInfo {
     if (this.config) return { paired: true, url: this.config.url, name: this.config.name };
+    const r = this.restarting;
+    if (r) return { paired: false, url: r.url, name: r.name, busy: 'Base du serveur prise : Cirrus redémarre sur elle.' };
     const waiting = stagedWaiting(this.deps.dir) ? { waiting: waitingMessage(this.deps.dir) } : {};
     const w = this.working, o = this.offered;
     if (w) return { paired: false, url: w.config.url, name: w.config.name, busy: w.busy, ...waiting };
     if (o) return { paired: false, url: o.config.url, name: o.config.name, offer: { message: offerMessage(o.offer), offer: o.offer }, ...waiting };
     return { paired: false, url: '', name: this.deps.machineName, ...waiting };
+  }
+
+  /** The block's information told to the window: after each change of the pairing (B2). */
+  private tell(): void {
+    this.deps.window.server(this.info());
   }
 
   /** The pending writes, all of them, as JSON: the interface's list at pairing (in its queue: none is written meanwhile). */
@@ -334,6 +352,7 @@ export class SyncHost {
         // serveur.json not written (a disk full, a folder refused): not paired.
         result = { ok: false, message: `Jumelage interrompu : ${messageOf(e)}` };
       }
+      this.tell();
     });
     return result;
   }
@@ -441,6 +460,7 @@ export class SyncHost {
       } catch (e) {
         result = { ok: false, message: `Jumelage interrompu : ${messageOf(e)}` };
       }
+      this.tell();
     });
     return result;
   }
@@ -462,6 +482,7 @@ export class SyncHost {
     }
     const abort = (this.firstSync = new AbortController());
     this.working = { config, busy: choice === 'seed' ? 'Envoi de la base au serveur…' : 'Téléchargement de la base du serveur…' };
+    this.tell();
     try {
       if (choice === 'seed') {
         try {
@@ -479,6 +500,7 @@ export class SyncHost {
         if (!this.closed) await revoke();
         return no(`Base du serveur non prise : ${sentence(messageOf(e))} ${UNTOUCHED}`);
       }
+      this.restarting = config;
       deps.relaunch();
       return { ok: true, restarting: true };
     } finally {
@@ -516,6 +538,7 @@ export class SyncHost {
       this.client = this.newClient();
       this.last = { state: 'off' };
       this.deps.window.status(this.last);
+      this.tell();
     });
   }
 

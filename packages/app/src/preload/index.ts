@@ -76,12 +76,14 @@ contextBridge.exposeInMainWorld('cirrus', {
   syncRetry: () => ipcRenderer.send('cirrus:sync:retry'),
   syncReconciled: (id: number, outcome: unknown) => ipcRenderer.invoke('cirrus:sync:reconciled', id, outcome),
   syncPending: () => ipcRenderer.invoke('cirrus:sync:pending'),
-  syncServer: () => ipcRenderer.invoke('cirrus:sync:server'),
+  syncServer: () => ipcRenderer.invoke('cirrus:sync:server:get'),
   syncPair: (url: string, code: string, name: string) => ipcRenderer.invoke('cirrus:sync:pair', url, code, name),
   syncFirst: (choice: string) => ipcRenderer.invoke('cirrus:sync:first', choice),
   syncUnpair: () => ipcRenderer.invoke('cirrus:sync:unpair'),
   onSyncIncoming: (fn: (m: unknown) => void) => on('cirrus:sync:incoming', fn),
   onSyncStatus: (fn: (s: unknown) => void) => on('cirrus:sync:status', fn),
   onSyncVeil: (fn: () => void) => on('cirrus:sync:veil', () => fn()),
+  // Each change of the pairing (short review after plan 5a, B2).
+  onSyncServer: (fn: (info: unknown) => void) => on('cirrus:sync:server', fn),
   launch,
 });

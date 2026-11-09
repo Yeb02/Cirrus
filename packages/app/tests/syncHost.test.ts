@@ -113,6 +113,23 @@ test('un serveur dont le journal n’est pas vide, même d’un lobby seul : un 
   expect((await l.journal()).filter((r) => r.op.t === 'plan' && (r.op.after as { type?: string } | null)?.type === 'lobby')).toHaveLength(1);
 });
 
+test('revue courte du plan 5a, B2 : le principal dit à la fenêtre chaque changement du jumelage (cirrus:sync:server) — une offre, un jumelage fait, une dissociation', async () => {
+  const l = (lab = await Lab.start());
+  const first = await app(l, 'pc-0');
+  // A call of the host itself, not the interface's: what the window is told comes from the main process.
+  expect(await first.host.pair(l.url, l.code('Premier'), 'Premier')).toEqual({ ok: true });
+  expect(first.serversTold.at(-1)).toEqual({ paired: true, url: l.url, name: 'Premier' });
+  await until(async () => (await l.lastSeq()) === 1);
+  // An offer (the server holds a lobby), then given up: each told.
+  const a = await app(l, 'pc-a');
+  expect(await a.host.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'adopt' } });
+  expect(a.serversTold.at(-1)).toMatchObject({ paired: false, url: l.url, name: 'Portable', offer: { offer: { kind: 'adopt' } } });
+  await a.host.first('cancel');
+  expect(a.serversTold.at(-1)).toEqual({ paired: false, url: '', name: 'PORTABLE' });
+  await first.host.unpair();
+  expect(first.serversTold.at(-1)).toEqual({ paired: false, url: '', name: 'PORTABLE' });
+});
+
 test('dissocier : le client arrêté, downloads.json et serveur.json effacés ; ensuite, rien ne part', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');

@@ -111,7 +111,8 @@ export interface CirrusBridge {
    * onSyncIncoming's message `id`, a reconciliation written by the base (its journal number) or why none (null).
    * syncPending: every pending write (JSON). syncServer: the server paired, or what to propose. syncPair, syncUnpair:
    * the block « Serveur »; syncFirst: its answer to the first pairing's offer (task 5, D7: send this PC's base, take the
-   * server's, or give up). onSyncVeil: waking up, the veil rises.
+   * server's, or give up). onSyncVeil: waking up, the veil rises. onSyncServer: what the block shows, at each change of
+   * the pairing (short review after plan 5a, B2: a page reloaded while a pairing ended learns so that it is paired).
    */
   syncStart(): Promise<SyncStatus>;
   syncRetry(): void;
@@ -124,6 +125,7 @@ export interface CirrusBridge {
   onSyncIncoming(fn: (m: SyncIncoming) => void): () => void;
   onSyncStatus(fn: (s: SyncStatus) => void): () => void;
   onSyncVeil(fn: () => void): () => void;
+  onSyncServer(fn: (info: ServerInfo) => void): () => void;
   /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
   benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */

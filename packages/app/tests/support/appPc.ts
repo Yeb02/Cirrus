@@ -43,6 +43,8 @@ export class AppPc {
   readonly toasts: string[] = [];
   /** What the session gave the interface of the server (App's state for the block « Serveur »), in order. */
   readonly servers: ServerInfo[] = [];
+  /** What the host told the window of the server, each change (cirrus:sync:server: short review after plan 5a, B2). */
+  readonly serversTold: ServerInfo[] = [];
   readonly incoming: SyncIncoming[] = [];
   /** The shared settings received, each batch as the window was told it (cirrus:settings:changed, task 6). */
   readonly settingsTold: Record<string, unknown>[] = [];
@@ -55,7 +57,9 @@ export class AppPc {
   /** The interface answers its reconciliations itself (true), or the test does (false: they are only recorded). */
   answers = true;
   params: RenderParams;
-  private readonly listeners = { incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[] };
+  private readonly listeners = {
+    incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[], server: [] as ((i: ServerInfo) => void)[],
+  };
 
   constructor(lab: Lab, name: string, params: Partial<RenderParams> = {}) {
     this.name = name;
@@ -81,14 +85,24 @@ export class AppPc {
         later(() => { for (const fn of this.listeners.veil) fn(); });
       },
       settings: (changes) => { this.settingsTold.push(clone(changes)); },
+      server: (info) => {
+        this.serversTold.push(info);
+        const copy = clone(info);
+        later(() => { for (const fn of this.listeners.server) fn(copy); });
+      },
     };
     this.host = new SyncHost({
       fetch: this.net.fetch, store: this.store, dir: this.dir, pc: pcId(this.dir), secrets: fileSecrets(this.dir, XOR), secretsAt: (d) => fileSecrets(d, XOR),
       canEncrypt: () => this.canEncrypt, params: () => this.params, now: () => lab.clock, machineName: 'PORTABLE', window, relaunch: () => { this.relaunched++; },
     });
+    // A page's listeners, until it goes (SyncSession.dispose: a reload, a close).
     const on = <K extends keyof AppPc['listeners']>(k: K) => (fn: AppPc['listeners'][K][number]) => {
-      (this.listeners[k] as unknown[]).push(fn);
-      return () => {};
+      const list = this.listeners[k] as unknown[];
+      list.push(fn);
+      return () => {
+        const i = list.indexOf(fn);
+        if (i >= 0) list.splice(i, 1);
+      };
     };
     this.bridge = {
       syncStart: async () => clone(await this.host.start()),
@@ -102,6 +116,7 @@ export class AppPc {
       onSyncIncoming: on('incoming'),
       onSyncStatus: on('status'),
       onSyncVeil: on('veil'),
+      onSyncServer: on('server'),
     };
   }
 
@@ -120,6 +135,16 @@ export class AppPc {
     const info = await this.bridge.syncServer();
     await this.sync.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: this.params.syncConnectTimeoutMs, waiting: info.waiting });
     return this;
+  }
+
+  /**
+   * The page reloaded (Ctrl+R): the old one goes — its listeners, and the host detaches (did-navigate) —, and a new one
+   * opens as App does. A call the old page made answers no one: the test makes it on the host itself.
+   */
+  async reload(): Promise<this> {
+    this.sync.dispose();
+    this.host.detach();
+    return this.open();
   }
 
   get status(): SyncStatus | undefined {

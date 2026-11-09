@@ -260,10 +260,12 @@ test('la pastille : rien sans serveur ; « À jour », « Envoi de n actions… 
 });
 
 /** A bridge as the preload gives it, its calls recorded; the main process's messages sent by the test. */
-function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult } = {}) {
+function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; tellOnPair?: ServerInfo } = {}) {
   const calls: string[] = [];
   const reconciled: { id: number; outcome: unknown }[] = [];
-  const listeners = { incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[] };
+  const listeners = {
+    incoming: [] as ((m: SyncIncoming) => void)[], status: [] as ((s: SyncStatus) => void)[], veil: [] as (() => void)[], server: [] as ((i: ServerInfo) => void)[],
+  };
   const on = <K extends keyof typeof listeners>(k: K) => (fn: (typeof listeners)[K][number]) => {
     (listeners[k] as unknown[]).push(fn);
     return () => {};
@@ -274,35 +276,43 @@ function fakeBridge(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult
     syncRetry: () => { calls.push('retry'); },
     syncReconciled: async (id, outcome) => { reconciled.push({ id, outcome }); return 'reconciliation' in outcome ? ++seq : null; },
     syncPending: async () => { calls.push('pending'); return JSON.stringify(o.pending ?? []); },
-    syncPair: async (url, code, name) => { calls.push(`pair ${url} ${code} ${name}`); return o.pair ?? { ok: true }; },
+    syncPair: async (url, code, name) => {
+      calls.push(`pair ${url} ${code} ${name}`);
+      // The main process tells the page of the pairing (cirrus:sync:server) before it answers the call.
+      if (o.tellOnPair) for (const fn of listeners.server) fn(o.tellOnPair);
+      return o.pair ?? { ok: true };
+    },
     syncFirst: async (choice) => { calls.push(`first ${choice}`); return o.first ?? { ok: true }; },
     syncUnpair: async () => { calls.push('unpair'); },
     syncServer: async (): Promise<ServerInfo> => ({ paired: false, url: '', name: 'PORTABLE' }),
     onSyncIncoming: on('incoming'),
     onSyncStatus: on('status'),
     onSyncVeil: on('veil'),
+    onSyncServer: on('server'),
   };
   return {
     bridge, calls, reconciled,
     status: (s: SyncStatus) => { for (const fn of listeners.status) fn(s); },
+    server: (i: ServerInfo) => { for (const fn of listeners.server) fn(i); },
     incoming: (m: SyncIncoming) => { for (const fn of listeners.incoming) fn(m); },
     veil: () => { for (const fn of listeners.veil) fn(); },
   };
 }
 
 /** The interface's SyncSession over a session of world(), its views and toasts recorded. */
-function syncing(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; timeoutMs?: number } = {}) {
+function syncing(o: { pending?: Unit[]; pair?: PairResult; first?: PairResult; timeoutMs?: number; tellOnPair?: ServerInfo } = {}) {
   const w = world();
   const fake = fakeBridge(o);
-  const views: SyncView[] = [], toasts: string[] = [];
+  const views: SyncView[] = [], toasts: string[] = [], servers: ServerInfo[] = [];
   let seq = 0;
   const session = new EditSession(w.s, async () => ({ seq: ++seq, at: 10 }), () => {});
   const reloads: number[] = [];
   const sync = new SyncSession({
     bridge: fake.bridge, session, timeoutMs: () => o.timeoutMs ?? 4000, toast: (t) => toasts.push(t), onView: (v) => views.push(v),
+    onServer: (i) => { servers.push(i); },
     load: async () => { reloads.push(1); return { state: copy(w.s), seq: 0, stale: false, pending: [], pc: 'pc-a' }; },
   });
-  return { ...w, ...fake, session, sync, views, toasts, reloads, view: () => views.at(-1)! };
+  return { ...w, ...fake, session, sync, views, toasts, servers, reloads, view: () => views.at(-1)! };
 }
 
 test('sans serveur jumelé, rien ne change : ni voile, ni pastille, ni démarrage', async () => {
@@ -402,6 +412,33 @@ test('jumeler : le principal jumelle, la session prend la liste des écritures e
   await no.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
   expect(await no.sync.pair('http://127.0.0.1:7310', 'X', 'P')).toEqual({ ok: false, message: 'Code de jumelage inconnu.' });
   expect(no.calls).toEqual(['pair http://127.0.0.1:7310 X P']);
+});
+
+test('revue courte du plan 5a, B2 : ouverte non jumelée (la page rechargée pendant un envoi de base), la session suit et démarre quand le principal dit le jumelage fait (cirrus:sync:server), une seule fois ; le bloc reçoit chaque état', async () => {
+  const lobby: Unit = { unit: 'u-lobby', action: 'a-lobby', label: 'Créer le plan « Lobby »', at: 1, pc: 'pc-a', ops: [] };
+  const url = 'http://127.0.0.1:7310';
+  const w = syncing({ pending: [lobby] });
+  await w.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  w.server({ paired: false, url, name: 'Portable', busy: 'Envoi de la base au serveur…' });
+  expect(w.calls).toEqual([]);
+  w.server({ paired: true, url, name: 'Portable' });
+  await vi.waitFor(() => expect(w.calls).toEqual(['pending', 'start']));
+  expect(w.session.pending).toEqual([lobby]);
+  // Told again, already following: nothing more.
+  w.server({ paired: true, url, name: 'Portable' });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(w.calls).toEqual(['pending', 'start']);
+  expect(w.servers.map((i) => [i.paired, i.busy])).toEqual([[false, 'Envoi de la base au serveur…'], [true, undefined], [true, undefined]]);
+  // A pairing the main process tells before it answers: followed and started once, the call resolved after both.
+  const p = syncing({ pending: [lobby], tellOnPair: { paired: true, url, name: 'Portable' } });
+  await p.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
+  expect(await p.sync.pair(url, 'CODE', 'Portable')).toEqual({ ok: true });
+  expect(p.calls).toEqual([`pair ${url} CODE Portable`, 'pending', 'start']);
+  // Unpaired, then paired again: followed anew.
+  await p.sync.unpair();
+  p.server({ paired: true, url, name: 'Portable' });
+  await vi.waitFor(() => expect(p.calls.slice(-2)).toEqual(['pending', 'start']));
+  expect(p.session.pending).toEqual([lobby]);
 });
 
 test('le bloc « Serveur » : non jumelé, l’adresse, le code, le nom de ce PC et « Jumeler » ; jumelé, l’état et « Dissocier ce PC »', () => {

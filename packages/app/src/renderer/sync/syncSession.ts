@@ -20,6 +20,7 @@ export interface SyncBridge {
   onSyncIncoming(fn: (m: SyncIncoming) => void): () => void;
   onSyncStatus(fn: (s: SyncStatus) => void): () => void;
   onSyncVeil(fn: () => void): () => void;
+  onSyncServer(fn: (info: ServerInfo) => void): () => void;
 }
 
 /** The chip in the tabs' bar: its text, its tooltip, whether a click tries again. */
@@ -74,6 +75,13 @@ export class SyncSession {
   private told = 0;
   /** The view last given (as text): an identical one is not given again (review of task 4, Minor 5). */
   private shown = '';
+  /** The interface has opened its state (open): this PC's identifier is known, a pairing told may be followed. */
+  private opened = false;
+  /**
+   * The session follows the pending writes for the server paired, and the synchronisation is started (or starting):
+   * once per pairing, whoever sees it first — the pairing's answer, or the main process's message (B2).
+   */
+  private following: Promise<void> | null = null;
   private readonly off: (() => void)[] = [];
 
   constructor(deps: SyncSessionDeps) {
@@ -86,24 +94,43 @@ export class SyncSession {
         this.setStatus(s);
       }),
       bridge.onSyncVeil(() => this.raise(deps.timeoutMs())),
+      bridge.onSyncServer((info) => this.heard(info)),
     );
+  }
+
+  /**
+   * The main process's word on the pairing (cirrus:sync:server; short review after plan 5a, B2): given to the block
+   * (onServer); paired while this session does not follow — a page that opened while a pairing or a first sync was under
+   * way (reloaded meanwhile, Ctrl+R): it follows and starts now, as a pairing done here would.
+   */
+  private heard(info: ServerInfo): void {
+    this.deps.onServer?.(info);
+    if (info.paired && this.opened && !this.following) void this.follow();
   }
 
   /**
    * The interface has opened its state: with a server paired, the session keeps the pending writes the base gave,
    * the veil rises for `timeoutMs` at most — the settings just loaded (review of task 4, Important 3) — and the
-   * synchronisation starts (the main process waits for this to reconcile anything). `waiting`: a base taken from the
-   * server that could not be swapped in at the start, said in a notification.
+   * synchronisation starts (the main process waits for this to reconcile anything). `paired`: the main process's answer,
+   * asked before the state, so that the pending writes given are all of them. `since`: its word since that answer, while
+   * the page loaded (short review after plan 5a, B2), taken as if it came now. `waiting`: a base taken from the server
+   * that could not be swapped in at the start, said in a notification.
    */
-  async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number; waiting?: string }): Promise<void> {
+  async open(o: { paired: boolean; pc: string; pending: Unit[]; timeoutMs: number; waiting?: string; since?: ServerInfo }): Promise<void> {
     this.pc = o.pc;
+    this.opened = true;
     // A base taken from the server waits beside this one, its swap failed at the start: said at once (review, Important 2).
     if (o.waiting) this.deps.toast(o.waiting);
-    // Without a server, nothing to show: the interface is as in plan 4c.
-    if (!o.paired) return;
-    await this.deps.session.follow(o.pc, async () => o.pending);
-    this.raise(o.timeoutMs);
-    await this.start();
+    // Without a server, nothing to show: the interface is as in plan 4c — until the main process says it is paired.
+    if (o.paired) {
+      this.following = (async () => {
+        await this.deps.session.follow(o.pc, async () => o.pending);
+        this.raise(o.timeoutMs);
+        await this.start();
+      })();
+      await this.following;
+    }
+    if (o.since) this.heard(o.since);
   }
 
   /** The synchronisation started; its status as the main process answers, unless a newer one came meanwhile. */
@@ -144,11 +171,11 @@ export class SyncSession {
    * What the block « Serveur » shows, read again from the main process and given to onServer: at each mounting of the
    * block — the settings panel opened, its rubric unfolded —, so that a first sync under way shows as such (`busy`)
    * rather than the offer the interface last held (review of task 5, round 2); and after each pairing, answer and
-   * unpairing.
+   * unpairing. Taken as the main process's message is (heard): paired while not following, it follows.
    */
   async server(): Promise<ServerInfo> {
     const info = await this.deps.bridge.syncServer();
-    this.deps.onServer?.(info);
+    this.heard(info);
     return info;
   }
 
@@ -157,23 +184,32 @@ export class SyncSession {
     await this.server().catch((e: unknown) => console.error('État du serveur non relu :', e));
   }
 
-  /** A pairing the main process did (`ok`, not restarting): every pending write taken, then the sync started. */
+  /** A pairing the main process did (`ok`, not restarting): followed and started (follow), unless its message came first. */
   private async paired(r: PairResult): Promise<PairResult> {
     if (!r.ok || r.restarting) return r;
-    const { bridge, session } = this.deps;
-    try {
-      await session.follow(this.pc, async () => JSON.parse(await bridge.syncPending()) as Unit[]);
-      await this.start();
-    } catch (e) {
-      console.error('Synchronisation non démarrée :', e);
-      this.deps.toast(`Ce PC est jumelé, mais la synchronisation n’a pas démarré (${messageOf(e)}) : relance Cirrus.`);
-    }
+    await (this.following ?? this.follow());
     return r;
+  }
+
+  /** Every pending write taken, then the sync started; once per pairing (`following`). A failure is said, never thrown. */
+  private follow(): Promise<void> {
+    const { bridge, session } = this.deps;
+    this.following = (async () => {
+      try {
+        await session.follow(this.pc, async () => JSON.parse(await bridge.syncPending()) as Unit[]);
+        await this.start();
+      } catch (e) {
+        console.error('Synchronisation non démarrée :', e);
+        this.deps.toast(`Ce PC est jumelé, mais la synchronisation n’a pas démarré (${messageOf(e)}) : relance Cirrus.`);
+      }
+    })();
+    return this.following;
   }
 
   /** Unpairs: the main process stops and forgets the server; the session no longer keeps the pending writes. */
   async unpair(): Promise<void> {
     await this.deps.bridge.syncUnpair();
+    this.following = null;
     await this.deps.session.unfollow();
     this.lower(false);
     this.setStatus({ state: 'off' });
