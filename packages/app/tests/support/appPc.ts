@@ -6,7 +6,7 @@ import { loadPayload, openBase, pcId } from '../../src/main/base.ts';
 import { fileSecrets, type TokenCipher } from '../../src/main/sync/config.ts';
 import { type HostWindow, SyncHost } from '../../src/main/sync/host.ts';
 import type { ServerInfo, SyncIncoming, SyncStatus } from '../../src/main/sync/protocol.ts';
-import { EditSession, openState } from '../../src/renderer/session.ts';
+import { EditSession, type Opened, openState } from '../../src/renderer/session.ts';
 import { type SyncBridge, SyncSession, type SyncView } from '../../src/renderer/sync/syncSession.ts';
 import { type Lab, Net, TEST_PARAMS } from './virtualPc.ts';
 
@@ -41,7 +41,7 @@ export class AppPc {
   readonly statuses: SyncStatus[] = [];
   readonly views: SyncView[] = [];
   readonly toasts: string[] = [];
-  /** What the session gave the interface of the server (App's state for the block « Serveur »), in order. */
+  /** App's state for the block « Serveur », in order: what each opening set it to, then what the session gave it. */
   readonly servers: ServerInfo[] = [];
   /** What the host told the window of the server, each change (cirrus:sync:server: short review after plan 5a, B2). */
   readonly serversTold: ServerInfo[] = [];
@@ -123,17 +123,30 @@ export class AppPc {
   /** cirrus:load as index.ts answers it: the payload, the pending writes when paired, this PC's identifier. */
   private load = async (fromTables: boolean) => clone({ ...loadPayload(this.store, fromTables, this.host.paired()).payload, pc: pcId(this.dir) });
 
-  /** The interface opens: its state from the base, its session, and the synchronisation started if paired. */
+  /**
+   * The interface opens as App does (re-review of the fixes, N4): the server asked first, then the state from the base
+   * (paired at the answer, its pending writes are all of them), its session, and the synchronisation started if paired;
+   * what the main process said of the server since its answer, until the session listens, passed on (`since`).
+   */
   async open(): Promise<this> {
-    const opened = await openState(this.load);
-    this.session = new EditSession(opened.state, async (a, unit) => clone(this.host.commit(clone(a), unit)), () => {}, opened.seq);
-    this.sync = new SyncSession({
-      bridge: this.bridge, session: this.session, timeoutMs: () => this.params.syncConnectTimeoutMs, toast: (t) => this.toasts.push(t), onView: (v) => this.views.push(v),
-      onServer: (i) => { this.servers.push(i); },
-      load: () => openState(this.load),
-    });
-    const info = await this.bridge.syncServer();
-    await this.sync.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: this.params.syncConnectTimeoutMs, waiting: info.waiting });
+    const told: { info: ServerInfo | null } = { info: null };
+    const early = this.bridge.onSyncServer((i) => { told.info = i; });
+    let opened: Opened, info: ServerInfo;
+    try {
+      const asked = this.bridge.syncServer().then((i) => { told.info = null; return i; });
+      [opened, info] = await Promise.all([openState(this.load), asked]);
+      this.session = new EditSession(opened.state, async (a, unit) => clone(this.host.commit(clone(a), unit)), () => {}, opened.seq);
+      this.sync = new SyncSession({
+        bridge: this.bridge, session: this.session, timeoutMs: () => this.params.syncConnectTimeoutMs, toast: (t) => this.toasts.push(t), onView: (v) => this.views.push(v),
+        onServer: (i) => { this.servers.push(i); },
+        load: () => openState(this.load),
+      });
+    } finally {
+      early();
+    }
+    const since = told.info ?? undefined;
+    this.servers.push(since ?? info);
+    await this.sync.open({ paired: info.paired, pc: opened.pc, pending: opened.pending, timeoutMs: this.params.syncConnectTimeoutMs, waiting: info.waiting, since });
     return this;
   }
 
