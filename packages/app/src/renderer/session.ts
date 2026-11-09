@@ -317,7 +317,10 @@ export class EditSession {
       return { ok: false, message: messageOf(e) };
     }
     this.apply(a, done.seq);
-    this.sync?.pending.push({ unit, action: a.id, label: a.label, at: done.at, pc: this.sync.pc, ops: a.ops });
+    // An action that changes nothing: the main process writes no line of it, and sends nothing (SyncHost.commit), so it
+    // never waits here either — it would stop the server's acknowledgements at the head of the list (short review after
+    // plan 5a, B3).
+    if (a.ops.length > 0) this.sync?.pending.push({ unit, action: a.id, label: a.label, at: done.at, pc: this.sync.pc, ops: a.ops });
     return { ok: true, action: a, plans: plansOf(a) };
   }
 

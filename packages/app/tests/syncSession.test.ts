@@ -99,6 +99,20 @@ test('accusé de réception : l’écriture en attente, revenue telle quelle, qu
   expect(s.nodes.get(X)!.title).toBe('X');
 });
 
+test('revue courte du plan 5a, B3 : une action sans opération n’attend pas (le principal n’en écrit ni n’en envoie rien) ; l’accusé de l’action suivante l’acquitte, sans rien défaire, et elle reste annulable', async () => {
+  const { s, X } = world();
+  const { session, writes, write } = following(s);
+  expect((await session.run(() => ({ id: uuidv7(), label: 'Rien', ops: [] }))).ok).toBe(true);
+  await session.run((st) => editNode(st, X, { title: 'A' }));
+  const real = session.pending.find((u) => u.ops.length > 0)!;
+  // The server numbers only the real one, and echoes it.
+  await session.reconcile([{ ...real, seq: 1 }], [], write);
+  expect(writes[0]).toMatchObject({ acked: [real.unit], rewind: [], rebased: [] });
+  expect(session.pending).toEqual([]);
+  expect((await session.undo()).ok).toBe(true);
+  expect(s.nodes.get(X)!.title).toBe('X');
+});
+
 test('une écriture reçue sans rien en attente s’applique comme une action locale : une action pour la scène, ses opérations, rev + 1, le numéro du journal', async () => {
   const { s, X } = world();
   const { session, changes, write } = following(s);
