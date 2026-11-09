@@ -1,24 +1,24 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { type Action, type CompileRequest, type FileRef, type Id, OpConflictError } from '@cirrus/core';
-import { forceGc } from '@cirrus/fixtures';
-import { type LocalStore, storeBytes } from '@cirrus/store';
+import type { LocalStore } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, screen, shell } from 'electron';
-import { dataDir, keepSnapshot, loadPayload, openBase, pcId, saveSnapshot } from './base.ts';
-import { ensureBenchBase, loadPhases, type PassRecord, type Phase, processMemoryMb, recordRun, recordSnapshots, snapshotRewrites } from './bench.ts';
-import { bibPickOf, readBib } from './bib.ts';
-import { cleanCopies, FILE_SCHEME, fileResponse, historySummary, importPaths, openFailure, openTargetFetched, storeText, storeTexts } from './files.ts';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, screen } from 'electron';
+import { dataDir, openBase, pcId } from './base.ts';
+import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
+import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
+import { wireBase } from './ipc/base.ts';
+import { captureWhenReady, markNow, wireBench } from './ipc/bench.ts';
+import { wireFiles } from './ipc/files.ts';
+import { tellLatexStatus, wireLatex } from './ipc/latex.ts';
+import { wirePublications } from './ipc/publications.ts';
 import { PdfCache } from './latex/cache.ts';
-import { INVALID_REQUEST, invalidRequest, LatexService } from './latex/compiler.ts';
+import { LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
 import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
-import { externalUrlAllowed, navigationAllowed } from './navigation.ts';
-import { type FetchFn, importPublication, requestFetch } from './publications/fetch.ts';
-import { replayDirOf, replayFetch } from './publications/replay.ts';
+import { navigationAllowed } from './navigation.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
 import { stagedDir } from './sync/firstSync.ts';
@@ -64,9 +64,6 @@ const launch = {
   // "sx,sy|path": files dropped on the graph at that point; captures only, whose base is a test copy (never the user's).
   import: capture ? process.env.CIRRUS_IMPORT : undefined,
 };
-/** The main process's load marks, in absolute time like the interface's. */
-const benchMarks: Partial<Record<Phase, number>> = {};
-const markNow = (name: Phase) => { if (benchMarks[name] === undefined) benchMarks[name] = performance.timeOrigin + performance.now(); };
 if (bench) {
   app.commandLine.appendSwitch('force_high_performance_gpu');
   // Memory after collections: gc() in the interface, and exact heap figures (Chromium rounds and caches them otherwise).
@@ -193,35 +190,9 @@ function createWindow(): void {
       void dbg.sendCommand('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CIRRUS_BENCH_THROTTLE) });
     });
   }
-  if (capture) {
-    let done = false;
-    const shoot = (code: number) => {
-      if (done) return;
-      done = true;
-      void win.webContents.capturePage().then((img) => {
-        mkdirSync(dirname(capture), { recursive: true });
-        writeFileSync(capture, img.toPNG());
-        console.log(`Capture écrite : ${capture}`);
-        exitAfterLatex(code);
-      });
-    };
-    ipcMain.once('cirrus:ready', () => setTimeout(() => shoot(0), 500));
-    setTimeout(() => { console.error('Pas d’image après 30 s : capture de l’état actuel.'); shoot(1); }, 30_000);
-  }
+  if (capture) captureWhenReady(win, capture, exitAfterLatex);
 }
 
-// The state as one ArrayBuffer (plan 3c, decision 5): the base's snapshot and the journal after it, or, without a
-// usable snapshot (or when the interface could not use it: fromTables), the state of the tables, kept as the new
-// snapshot once sent. An ArrayBuffer crosses IPC and the context bridge at the speed of memory. With a server paired,
-// every pending write too (plan 5a, R5), and always this PC's identifier, which signs them.
-ipcMain.handle('cirrus:load', (_e, fromTables: unknown) => {
-  const { payload, rebuilt } = loadPayload(store!, fromTables === true, sync?.paired() === true);
-  markNow('dataSent');
-  if (rebuilt) setImmediate(() => keepSnapshot(store!, payload.data, payload.seq));
-  return { ...payload, pc };
-});
-// The interface's snapshot, at rest and at closing: checked, kept if later than the stored one.
-ipcMain.handle('cirrus:snapshot:save', (_e, data: unknown, seq: unknown) => { saveSnapshot(store!, data, seq); });
 /** The settings: the defaults, or on the bench CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting. */
 const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.CIRRUS_BENCH_SETTINGS ?? '{}') : readSettings(dir));
 /**
@@ -230,147 +201,16 @@ const settings = (): Record<string, unknown> => (bench ? JSON.parse(process.env.
  */
 let latexParams: RenderParams | null = null;
 const currentParams = (): RenderParams => (latexParams ??= withOverrides(settings()));
-ipcMain.handle('cirrus:settings:get', () => settings());
-// The settings changed in Réglages, only those (key: value, null back to the default): settings.json, and with a server
-// paired, shared with it (task 6, D9). The answer: what is written for those keys, which the interface adopts.
-ipcMain.handle('cirrus:settings:set', (_e, changes: unknown) => {
-  latexParams = null;
-  return bench ? undefined : sync?.setSettings(changes);
-});
-/** The largest file an import takes, in bytes (setting maxImportMb). */
-const maxImportBytes = () => withOverrides(settings()).maxImportMb * 2 ** 20;
-// Files dropped on a node or chosen in the dialog, copied into the store before an action refers to them (plan 4a, D6).
-// The preload passes on only the paths of files dropped in the page (I1 of the review).
-ipcMain.handle('cirrus:files:import', (_e, paths: unknown) =>
-  importPaths(dir, Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : [], maxImportBytes()));
-ipcMain.handle('cirrus:files:pick', async (e) => {
-  const chosen = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender)!, { properties: ['openFile', 'multiSelections'] });
-  return chosen.canceled ? { refs: [], refused: [] } : importPaths(dir, chosen.filePaths, maxImportBytes());
-});
-// A .tex typed in its full screen (plan 4b, D6), stored before the action that refers to it; a name or a size refused
-// rejects with its reason, in French.
-ipcMain.handle('cirrus:files:store-text', (_e, name: unknown, text: unknown) => storeText(dir, name, text, maxImportBytes()));
-// A .bib's entries (plan 4c, task 6), a file each, stored by batches before the action that refers to them: checked here
-// whatever the interface did (a list of STORE_TEXTS_MAX at most, each storeText's checks, maxImportMb in all).
-ipcMain.handle('cirrus:files:store-texts', (_e, items: unknown) => storeTexts(dir, items, maxImportBytes()));
-/**
- * A whole .bib (plan 4c, D9, task 6), read here only: dropped on the graph's background (the preload passes on only a
- * drop's path), or chosen in the system's dialog by « Importer un fichier .bib… »; BIB_MAX_BYTES at most (readBib). On
- * a test base out of the user's way, CIRRUS_BIB_PICK names the file the menu takes, and in a test's window the dialog
- * never opens (the user, 2026-11-07: nothing in front of the user's work).
- */
-const bibPick = bibPickOf(process.env, capture !== undefined);
-if (process.env.CIRRUS_BIB_PICK && !bibPick) {
-  console.warn('CIRRUS_BIB_PICK ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
-}
-ipcMain.handle('cirrus:bib:read', (_e, path: unknown) => readBib(path));
-ipcMain.handle('cirrus:bib:pick', async (e) => {
-  if (bibPick) return readBib(bibPick);
-  if (background) {
-    console.warn('Sélecteur de fichiers non ouvert dans une fenêtre de test : CIRRUS_BIB_PICK nomme le .bib à importer.');
-    return null;
-  }
-  const options = { title: 'Importer un fichier .bib', properties: ['openFile' as const], filters: [{ name: 'BibTeX', extensions: ['bib'] }] };
-  const win = BrowserWindow.fromWebContents(e.sender);
-  const chosen = await (win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options));
-  return chosen.canceled || chosen.filePaths.length === 0 ? null : readBib(chosen.filePaths[0]);
-});
-// A file opened by the system's application, on a read-only copy; a program or a script is shown in the explorer
-// instead, never run (plan 4a, D5). With a server paired, a file the store lacks is downloaded first (plan 5a, R14).
-// Failures reach the user in French, their cause in the console.
-ipcMain.handle('cirrus:files:open', async (_e, ref: FileRef) => {
-  const name = typeof ref?.name === 'string' ? ref.name : '';
-  try {
-    const { path, shown } = await openTargetFetched(dir, ref, copies, sync?.blobFetcher() ?? null);
-    if (shown === 'folder') shell.showItemInFolder(path);
-    else {
-      const error = await shell.openPath(path);
-      if (error) {
-        console.error(`Ouverture de « ${name} » : ${error}`);
-        return { ok: false, message: openFailure(name, error) };
-      }
-    }
-    return { ok: true, shown };
-  } catch (e) {
-    console.error(`Ouverture de « ${name} » :`, e);
-    return { ok: false, message: openFailure(name, e) };
-  }
-});
-// A link clicked in a PDF (plan 4a, task 6): its address goes to the system's handler (the browser, the mail client)
-// only in http:, https: or mailto: (externalUrlAllowed), checked here whatever the interface did; any other is refused.
-ipcMain.handle('cirrus:open-url', async (_e, url: unknown) => {
-  if (typeof url !== 'string' || !externalUrlAllowed(url)) {
-    console.warn(`Lien refusé : ${String(url).slice(0, 200)}`);
-    return;
-  }
-  try {
-    await shell.openExternal(url);
-  } catch (e) {
-    console.error(`Ouverture du lien ${url} :`, e);
-  }
-});
-ipcMain.handle('cirrus:history', (_e, id: Id) => historySummary(store!.historyOf(id)));
-// An edit computed by the interface (spec 4: only this process writes), each "before" checked against the base, as
-// the write `unit` the interface named (plan 5a), at this PC's time corrected by the server's (D4). A conflicting
-// record refuses it. Returns the journal number of its last line, and that time.
-ipcMain.handle('cirrus:commit', (_e, action: Action, unit: unknown) => {
-  try {
-    return sync!.commit(action, unit);
-  } catch (e) {
-    if (e instanceof OpConflictError) throw new Error('La base a changé : action refusée.');
-    throw e;
-  }
-});
-/** Every process's private memory, the collections of this one forced first (the interface forced its own). */
-const processMemory = () => { forceGc(); return processMemoryMb(app.getAppMetrics()); };
-ipcMain.handle('cirrus:bench:memory', () => processMemory());
-// The pass is over: its load phases since this process started and every process's memory.
-ipcMain.handle('cirrus:bench:done', (_e, run: Omit<PassRecord, 'phases' | 'processMb'>) => {
-  const record: PassRecord = { ...run, phases: loadPhases({ ...benchMarks, ...run.marks }, performance.timeOrigin), processMb: processMemory() };
-  const report = recordRun(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), record, process.env.CIRRUS_BENCH_FINAL === '1', bench!);
-  if (report) console.log(`Rapport écrit : ${report}`);
-  exitAfterLatex(0);
-});
-// LaTeX (plan 4b, D2, D8): the interface sends what the source needs; the request's form is checked here whatever the
-// interface did (strings, lists, a source of textViewMaxMb at most, resources of plain names present in the store).
-ipcMain.handle('cirrus:latex:compile', (_e, req: unknown) => {
-  const why = invalidRequest(req, dir, currentParams().textViewMaxMb * 2 ** 20);
-  if (why !== null || !latexSetup) {
-    console.warn(`Compilation LaTeX refusée : ${why ?? 'base non ouverte'}`);
-    return INVALID_REQUEST;
-  }
-  return latexSetup.compile(req as CompileRequest);
-});
-ipcMain.on('cirrus:latex:cancel', (_e, slot: unknown) => { if (typeof slot === 'string') latexSetup?.cancel(slot); });
-ipcMain.on('cirrus:latex:warm', (_e, preamble: unknown) => { if (typeof preamble === 'string') latex?.warm(preamble); });
-ipcMain.handle('cirrus:latex:status:get', () => latexSetup?.state() ?? { state: 'absent' });
-// TinyTeX's installation (D1, task 7): only this call, which the user's « Installer » makes, downloads it.
-ipcMain.handle('cirrus:latex:install', () => latexSetup?.install());
 
-/**
- * A publication's network (plan 4c, D5, D6): Electron's stack (its proxy, its certificates), by net.request, whose
- * redirects fetch.ts follows by hand. On a test base out of the user's way (CIRRUS_DATA, in capture mode or with
- * CIRRUS_BACKGROUND=1), CIRRUS_PUBLICATIONS_REPLAY names recorded answers instead (replay.ts): the interface's scenarios
- * and the captures import without the network. Never on the user's own base, where the variable is ignored.
- */
-const publicationsReplay = replayDirOf(process.env, capture !== undefined);
-if (process.env.CIRRUS_PUBLICATIONS_REPLAY && !publicationsReplay) {
-  console.warn('CIRRUS_PUBLICATIONS_REPLAY ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
-}
-const publicationsFetch: FetchFn = publicationsReplay ? replayFetch(publicationsReplay) : requestFetch((options) => net.request(options));
-// A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
-// network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
-// string parseIdentifier reads); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within
-// maxImportMb, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the dialog, task 5).
-ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown, options: unknown) => {
-  if (!store) return { ok: false, message: 'La base n’est pas ouverte.' };
-  const p = currentParams();
-  return importPublication(text, {
-    fetch: publicationsFetch, store: (name, bytes) => storeBytes(dir, name, bytes),
-    maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs,
-    log: (m) => console.warn(m),
-  }, options);
+// The interface's calls, by domain (ipc/): read when it makes them, once the base is open; the synchronisation's are
+// wired with its host, below (sync/wire.ts).
+wireBase({
+  store: () => store, sync: () => sync, pc: () => pc, settings, settingsWritten: () => { latexParams = null; }, bench: Boolean(bench),
 });
+wireFiles({ dir: () => dir, sync: () => sync, settings, copies, capture: capture !== undefined, background });
+wireBench({ scale: bench, exit: exitAfterLatex });
+wireLatex({ dir: () => dir, params: currentParams, latex: () => latex, setup: () => latexSetup });
+wirePublications({ dir: () => dir, store: () => store, params: currentParams, capture: capture !== undefined });
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
@@ -488,7 +328,7 @@ void app.whenReady().then(() => {
       download: fetchDownload((url, init) => net.fetch(url, init), () => currentParams().latexDownloadStallMs), run: toolRun,
     }, onProgress),
     packages: (bins) => new Packages(bins, toolRun),
-    status: (s) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('cirrus:latex:status', s); },
+    status: tellLatexStatus,
   });
   // The synchronisation (plan 5a): its client starts once the interface holds its state (cirrus:sync:start), if a server
   // is paired; the token kept by safeStorage (DPAPI), never in clear.
