@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { type Action, applyOps, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, emptyState, type FileRef, type Id } from '@cirrus/core';
 import { filePath, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
-import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome, PROGRESS_EVERY_MS, type Ticks } from '../src/main/sync/downloads.ts';
+import {
+  DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome, PROGRESS_EVERY_MS, type Ticks, TransferRates,
+} from '../src/main/sync/downloads.ts';
 import type { DownloadAllProgress, ServerStatus } from '../src/main/sync/protocol.ts';
 import { planText, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
 import { created, Lab, sleep, until, type VirtualPc } from './support/virtualPc.ts';
@@ -121,6 +123,39 @@ test('le débit : la médiane des 5 derniers transferts d’au moins 1 Mio, envo
   // In bytes per second: 2 Mio and 1 Mio in half a second each — 1 Mio less one byte does not count.
   expect((await a.client.serverStatus()).throughput).toBe((4 * MiB + 2 * MiB) / 2);
   expect((await b.client.serverStatus()).throughput).toBe((2 * MiB + MiB) / 2);
+});
+
+test('serverStatusSamples et throughputMinMb : la latence et le débit, médianes de ce nombre de mesures, le débit des transferts de cette taille au moins ; lus à chaque mesure (relecture de la tâche 7)', async () => {
+  const l = await lab();
+  const b = await l.pc('pc-b', { params: { serverStatusSamples: 3 } });
+  let t = 0;
+  b.clock = () => t;
+  const trips = [50, 10, 40, 30];
+  b.net.before = (_method, path) => { if (path === '/status') t += trips.shift()!; };
+  await l.settle([b]);
+  for (let i = 0; i < 2; i++) await b.client.serverStatus();
+  expect((await b.client.serverStatus()).latencyMs).toBe(40);
+  // The fourth: of the last three only (10, 40, 30), where five would give 35.
+  expect((await b.client.serverStatus()).latencyMs).toBe(30);
+  // The throughput, on a clock of the test's.
+  let now = 1000;
+  const params = { serverStatusSamples: 2, throughputMinMb: 0.5 };
+  const rates = new TransferRates(() => now, () => params);
+  rates.measured(MiB / 2 - 1, 0);
+  expect(rates.median()).toBeNull();
+  rates.measured(MiB / 2, 0);
+  rates.measured(MiB, 500);
+  expect(rates.median()).toBe((MiB / 2 + 2 * MiB) / 2);
+  rates.measured(3 * MiB, 0);
+  expect(rates.median()).toBe((2 * MiB + 3 * MiB) / 2);
+  // Changed: read at the next measure.
+  params.throughputMinMb = 4;
+  params.serverStatusSamples = 1;
+  rates.measured(3.5 * MiB, 0);
+  expect(rates.median()).toBe(3 * MiB);
+  now = 2000;
+  rates.measured(4 * MiB, 0);
+  expect(rates.median()).toBe(2 * MiB);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

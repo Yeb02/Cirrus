@@ -87,7 +87,7 @@ export interface ServerSpace { baseBytes: number; storeBytes: number; storeFiles
 /**
  * The server's state for the block « Serveur » (cirrus:sync:server:status, D8), the main process's measures: the latency,
  * the median of the last round trips of GET /status (ms), null while not connected; the throughput, the median of the
- * last transfers of files of 1 Mio at least, either way (bytes per second), null before any; the server's space, null
+ * last transfers of files of throughputMinMb at least, either way (bytes per second), null before any; the server's space, null
  * when it could not be asked now.
  */
 export interface ServerStatus { latencyMs: number | null; throughput: number | null; server: ServerSpace | null }

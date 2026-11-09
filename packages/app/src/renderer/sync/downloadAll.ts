@@ -85,7 +85,7 @@ const msText = (ms: number) => (ms < 10 ? `${ms.toFixed(1).replace('.', ',')} ms
 
 /**
  * The server's state, line by line under the synchronisation's (D8): each label and its value, « — » until it is known
- * — not connected, no answer yet, no transfer of 1 Mio yet.
+ * — not connected, no answer yet, no transfer of throughputMinMb yet.
  */
 export function statusLines(st: ServerStatus | null): [string, string][] {
   const s = st?.server ?? null;

@@ -3,6 +3,7 @@ import { statfs } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type FileRef, isObject, type Op, type Unit } from '@cirrus/core';
 import { BlobError, filePath, receiveBlob } from '@cirrus/store';
+import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
 import { writeJsonAtomic } from '../jsonFile.ts';
 import { messageOf } from './connection.ts';
 import type { DownloadAllProgress } from './protocol.ts';
@@ -100,11 +101,12 @@ async function* fromNetwork(source: AsyncIterable<Uint8Array>): AsyncGenerator<U
 
 // The server's state (plan 5b, D8): the medians of what the main process measures.
 
-/** How many measures a median is taken of (D8): the latency's round trips, the throughput's transfers. */
-export const MEDIAN_OF = 5;
-
-/** The smallest transfer the throughput counts (D8): a smaller one measures the round trip more than the bytes. */
-export const THROUGHPUT_MIN_BYTES = 2 ** 20;
+/**
+ * The settings of the measures (review of task 7: two constants become settings), read at each measure: how many a
+ * median is taken of (serverStatusSamples: the latency's round trips, the throughput's transfers), and the smallest
+ * transfer the throughput counts (throughputMinMb: a smaller one measures the round trip more than the bytes).
+ */
+export type MeasureParams = Pick<RenderParams, 'serverStatusSamples' | 'throughputMinMb'>;
 
 /** The median of `xs`: the one in the middle, or the mean of the two in the middle; null without any. */
 export function median(xs: readonly number[]): number | null {
@@ -113,37 +115,51 @@ export function median(xs: readonly number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
 }
 
-/** The last MEDIAN_OF measures, the oldest dropped first. */
+/** The last `samples()` measures (serverStatusSamples, read at each use), the oldest dropped first. */
 export class LastMeasures {
+  private readonly samples: () => number;
   private readonly xs: number[] = [];
+
+  constructor(samples: () => number) {
+    this.samples = samples;
+  }
+
+  /** How many count: the setting, one at least. */
+  private count(): number {
+    return Math.max(1, Math.floor(this.samples()));
+  }
 
   add(x: number): void {
     this.xs.push(x);
-    if (this.xs.length > MEDIAN_OF) this.xs.shift();
+    while (this.xs.length > this.count()) this.xs.shift();
   }
 
   median(): number | null {
-    return median(this.xs);
+    return median(this.xs.slice(-this.count()));
   }
 }
 
 /**
- * The throughput (D8): the rates of the last transfers of files of THROUGHPUT_MIN_BYTES at least, either way — the
+ * The throughput (D8): the rates of the last transfers of files of throughputMinMb at least, either way — the
  * downloads (Downloads), the files sent (uploads.ts) —, each from its request to its last byte kept, on `clock` (ms,
- * monotonic). No transfer is made to measure it: those of the synchronisation only.
+ * monotonic). No transfer is made to measure it: those of the synchronisation only. `params`: the settings, read at
+ * each measure (the defaults by default).
  */
 export class TransferRates {
   readonly clock: () => number;
-  private readonly rates = new LastMeasures();
+  private readonly params: () => MeasureParams;
+  private readonly rates: LastMeasures;
 
-  constructor(clock: () => number) {
+  constructor(clock: () => number, params: () => MeasureParams = () => DEFAULT_PARAMS) {
     this.clock = clock;
+    this.params = params;
+    this.rates = new LastMeasures(() => params().serverStatusSamples);
   }
 
   /** A transfer of `bytes`, begun at `since` (clock), ended now: counted if large enough. */
   measured(bytes: number, since: number): void {
     const ms = this.clock() - since;
-    if (bytes >= THROUGHPUT_MIN_BYTES && ms > 0) this.rates.add(bytes / (ms / 1000));
+    if (bytes >= this.params().throughputMinMb * 2 ** 20 && ms > 0) this.rates.add(bytes / (ms / 1000));
   }
 
   /** Bytes per second; null before any transfer counted. */
@@ -185,7 +201,7 @@ export const DOWNLOADS_FILE = 'downloads.json';
  * download the network broke, or that a stop interrupted, is tried again at the next connection (retry), after a
  * restart too (DOWNLOADS_FILE); one the server does not have, or whose bytes are not those of their hash, is not.
  * « Tout télécharger » (plan 5b, D8: wantOnce) queues its own with them, neither kept nor tried again. Each download's
- * end is told (onSettled), and each one of THROUGHPUT_MIN_BYTES at least measured (`rates`).
+ * end is told (onSettled), and each one of throughputMinMb at least measured (`rates`).
  */
 export class Downloads {
   private readonly storeDir: string;

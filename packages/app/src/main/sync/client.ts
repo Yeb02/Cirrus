@@ -27,7 +27,9 @@ import { Uploads } from './uploads.ts';
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<
-  RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs' | 'downloadAllReserveMb'
+  RenderParams,
+  'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs' | 'downloadAllReserveMb'
+  | 'serverStatusSamples' | 'throughputMinMb'
 >;
 
 export interface SyncDeps {
@@ -123,7 +125,7 @@ export class SyncClient {
   /** The throughput (plan 5b, D8): the transfers' rates, downloads and files sent. */
   private readonly rates: TransferRates;
   /** The latency (D8): the last round trips of GET /status. */
-  private readonly latency = new LastMeasures();
+  private readonly latency = new LastMeasures(() => this.deps.params().serverStatusSamples);
   /** « Tout télécharger » (D8). */
   private readonly all: DownloadAll;
   /** The GET /status under way: a call meanwhile shares its answer. */
@@ -133,7 +135,7 @@ export class SyncClient {
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
-    this.rates = new TransferRates(deps.clock ?? (() => performance.now()));
+    this.rates = new TransferRates(deps.clock ?? (() => performance.now()), () => deps.params());
     this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads, this.rates);
     this.all = new DownloadAll(this.downloads, (p) => deps.downloadAll?.(p), deps.downloadAllEveryMs === undefined ? {} : { everyMs: deps.downloadAllEveryMs });
     this.sending = {
@@ -245,7 +247,7 @@ export class SyncClient {
 
   /**
    * The server's state for the block « Serveur » (plan 5b, D8): while a connection is open, GET /status asked through
-   * it, its round trip measured — the latency, the median of the last MEDIAN_OF —; the throughput's median; the
+   * it, its round trip measured — the latency, the median of the last serverStatusSamples —; the throughput's median; the
    * server's space, null when not connected or when it could not be read (an older server, a failure). One request at
    * a time: a call while one runs shares its answer.
    */

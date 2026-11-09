@@ -33,7 +33,7 @@ export const PLAIN: TokenCipher = { encrypt: (text) => Buffer.from(text, 'utf8')
 export const TEST_PARAMS: SyncParams = {
   syncBatchUnits: DEFAULT_PARAMS.syncBatchUnits, syncDownloads: DEFAULT_PARAMS.syncDownloads, syncRetryMinMs: 10, syncRetryMaxMs: 40,
   syncClockSkewWarnMs: DEFAULT_PARAMS.syncClockSkewWarnMs, syncReceiveBatchMs: DEFAULT_PARAMS.syncReceiveBatchMs,
-  downloadAllReserveMb: DEFAULT_PARAMS.downloadAllReserveMb,
+  downloadAllReserveMb: DEFAULT_PARAMS.downloadAllReserveMb, serverStatusSamples: DEFAULT_PARAMS.serverStatusSamples, throughputMinMb: DEFAULT_PARAMS.throughputMinMb,
 };
 
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
