@@ -118,6 +118,7 @@ test('importPublication : `pdf: false` (un PDF déposé, task 5, D8) — les mé
   const without = replayed(), d = depsOf(without.fetch);
   const r = await importPublication('arXiv:1706.03762', d.deps, { pdf: false });
   if (!r.ok) throw new Error(r.message);
+  if ('kind' in r) throw new Error('un PDF sans identifiant');
   expect(r.pdf).toBeUndefined();
   expect(r.pdfMessage).toBeUndefined();
   expect(d.stored).toEqual([]);

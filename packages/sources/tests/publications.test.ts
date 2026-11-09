@@ -101,12 +101,15 @@ test('parseIdentifier : DOI nu ou en lien, arXiv nouveau ou ancien, avec ou sans
     // arXiv's own DOI is an arXiv article: its PDF comes too (D6).
     ['10.48550/arXiv.1706.03762', { arxiv: '1706.03762' }],
     ['https://doi.org/10.48550/arxiv.hep-th/9901001', { arxiv: 'hep-th/9901001' }],
+    // Plan 5b, D4: an address of another host whose path holds a DOI is that DOI (plan 4c refused these two).
+    ['https://example.org/10.1000/x', { doi: '10.1000/x' }],
+    ['https://doi.org.evil.example/10.1000/x', { doi: '10.1000/x' }],
   ];
   for (const [text, id] of cases) expect(parseIdentifier(text), text).toEqual(id);
   for (const text of [
     '', '   ', 'bonjour', '10.1/x', '10.1234', '10.1234/', '10.1234/a b', '10.1234/\u0000x', '10.1234/../x', '10.1234/./x', 'doi:', 'arXiv:', 'arXiv:bonjour',
-    '2401.012', '2401.0123456', 'hep-th/990100', 'https://example.org/10.1000/x', 'https://evil.example/abs/2401.01234', 'https://arxiv.org/list/hep-th/9901001',
-    'https://doi.org.evil.example/10.1000/x', 'https://doi.org/%E0%A4%A', 'javascript:alert(1)', 'file:///C:/10.1000/x', `10.1234/${'x'.repeat(MAX_IDENTIFIER_CHARS)}`,
+    '2401.012', '2401.0123456', 'hep-th/990100', 'https://evil.example/abs/2401.01234', 'https://arxiv.org/list/hep-th/9901001',
+    'https://doi.org/%E0%A4%A', 'javascript:alert(1)', 'file:///C:/10.1000/x', `10.1234/${'x'.repeat(MAX_IDENTIFIER_CHARS)}`,
   ]) {
     expect(parseIdentifier(text), JSON.stringify(text)).toBeNull();
   }

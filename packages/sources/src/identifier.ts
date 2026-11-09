@@ -39,7 +39,32 @@ function doiOf(s: string): PublicationId | null {
   return (ax && arxivOf(ax[1])) || { doi };
 }
 
-/** A link to a DOI's resolver or to an arXiv page (abs, pdf): its identifier; any other address, none. */
+/** A DOI from a segment's start in a path, to its end (plan 5b, D4). */
+const DOI_IN_PATH = /(?:^|\/)(10\.\d{4,9}\/[^]*)$/;
+/** The last segment a publisher puts after a DOI for a view of the article (D4): « …/10.1145/123.456/abstract ». */
+const VIEW_SEGMENT = /\/(?:full|abs|abstract|pdf|epdf|fulltext)$/i;
+
+/**
+ * The DOI a publisher's address holds in its path, decoded (plan 5b, D4): `dl.acm.org/doi/pdf/10.1145/…`,
+ * `link.springer.com/article/10.1007/…`, `onlinelibrary.wiley.com/doi/full/10.1111/…`. Its trailing « / », then a
+ * final « .pdf », then one last segment of VIEW_SEGMENT placed after the DOI's suffix, are dropped: ACM's
+ * `/doi/pdf/10.1145/…` has its « pdf » before the DOI, kept out of it by the match; `10.1000/abs`'s « abs » is its
+ * suffix, kept. Read as an identifier, without any request, as a resolver's link is: the host is never asked.
+ */
+function publisherDoi(path: string): PublicationId | null {
+  const m = DOI_IN_PATH.exec(path);
+  if (!m) return null;
+  let doi = m[1].replace(/\/+$/, '').replace(/\.pdf$/i, '');
+  const view = VIEW_SEGMENT.exec(doi);
+  // The segment only when a suffix stays before it (« 10.1145/123/abs », not « 10.1145/abs »).
+  if (view && doi.indexOf('/') < view.index) doi = doi.slice(0, view.index);
+  return doiOf(doi);
+}
+
+/**
+ * A link to a DOI's resolver or to an arXiv page (abs, pdf): its identifier; another http(s) address whose path holds
+ * a DOI (a publisher's, plan 5b, D4): that DOI; any other address, none.
+ */
 function fromLink(text: string): PublicationId | null {
   let url: URL;
   let path: string;
@@ -55,13 +80,14 @@ function fromLink(text: string): PublicationId | null {
     const m = /^\/(?:abs|pdf)\/(.+?)(?:\.pdf)?\/?$/.exec(path);
     return m ? arxivOf(m[1]) : null;
   }
-  return null;
+  return publisherDoi(path);
 }
 
 /**
- * The identifier `text` gives (plan 4c, task 4), or null: a DOI, bare or after « doi: », or as a link to its resolver;
- * an arXiv identifier, new (`2401.01234v2`) or old (`hep-th/9901001`), bare or after « arXiv: », or as a link to its
- * abstract or its PDF. Blanks around are ignored, the case of the prefixes too.
+ * The identifier `text` gives (plan 4c, task 4), or null: a DOI, bare or after « doi: », or as a link to its resolver
+ * or as a publisher's address holding it (plan 5b, D4); an arXiv identifier, new (`2401.01234v2`) or old
+ * (`hep-th/9901001`), bare or after « arXiv: », or as a link to its abstract or its PDF. Blanks around are ignored, the
+ * case of the prefixes too.
  */
 export function parseIdentifier(text: string): PublicationId | null {
   if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return null;

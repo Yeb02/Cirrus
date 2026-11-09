@@ -1,6 +1,8 @@
 import type { FileRef } from '@cirrus/core';
 import { type Csl, cslToFields } from './csl.ts';
-import { arxivDoi, parseIdentifier, type PublicationId } from './identifier.ts';
+import { MAX_REDIRECTS, mediaType, NOT_FOUND, OFFLINE, type OpenDeps, openFetch, REDIRECTS, seconds } from './guard.ts';
+import { citationMeta } from './html.ts';
+import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 
 /**
@@ -30,29 +32,40 @@ export interface PublicationDeps {
   /** Where the causes the user is not shown go (the console). */
   log?: (message: string) => void;
   sources?: PublicationSources;
+  /**
+   * The open web (plan 5b, D3): an address of any site that is no identifier is asked through its guards (guard.ts).
+   * Null or absent, such an address is « Identifiant non reconnu. », as in plan 4c.
+   */
+  open?: OpenDeps | null;
 }
 
 /**
- * What the import gives the interface (task 5): the identifier read, the CSL and the BibTeX entry; for an arXiv article
- * its PDF's reference in the store, or why it is not there (`pdfMessage`, in French: the publication comes without it).
- * Or why nothing came, in French; nothing was stored then.
+ * A publication found (plan 4c, task 5): the identifier read, the CSL and the BibTeX entry; for an arXiv article, or a
+ * page that gives its PDF (plan 5b, D3), its PDF's reference in the store, or why it is not there (`pdfMessage`, in
+ * French: the publication comes without it).
+ */
+export type PublicationFound = { ok: true; id: PublicationId; csl: Csl; bibtex: string; pdf?: FileRef; pdfMessage?: string };
+
+/**
+ * What the import gives the interface: a publication found; a PDF without identifier, which an address gave (plan 5b,
+ * D3), in the store, to take as a PDF dropped (D8 of plan 4c); or why nothing came, in French — nothing was stored then.
  */
 export type PublicationResult =
-  | { ok: true; id: PublicationId; csl: Csl; bibtex: string; pdf?: FileRef; pdfMessage?: string }
-  | { ok: false; message: string };
+  | PublicationFound
+  | { ok: true; kind: 'pdf'; pdf: FileRef }
+  | Failure;
+type Failure = { ok: false; message: string };
 
 const UNRECOGNIZED = 'Identifiant non reconnu.';
-const NOT_FOUND = 'Publication introuvable.';
-const OFFLINE = 'Pas de connexion.';
+const NO_PDF = 'Cette page ne mène à aucun PDF.';
 
 const CSL_TYPE = 'application/vnd.citationstyles.csl+json';
 const BIBTEX_TYPE = 'application/x-bibtex';
 /** The media types a CSL answer may have (Crossref's, DataCite's, plain JSON), and a BibTeX one. */
 const JSON_TYPE = /^application\/(?:[a-z0-9.+-]+\+)?json$/;
 const BIBTEX_TYPES = new Set(['application/x-bibtex', 'text/x-bibtex']);
-const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-/** The redirects followed at most, per request (the DOI resolver's chains take one or two). A fixed bound, as browsers have one. */
-const MAX_REDIRECTS = 5;
+/** What a page's address is asked with: a page, else a PDF, else anything (the answer says what it is). */
+const PAGE_ACCEPT = 'text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8';
 
 /** A refusal, its message for the user, in French. */
 class Refusal extends Error {}
@@ -61,7 +74,6 @@ class Refusal extends Error {}
 type Server = 'doi' | 'arxiv';
 const serverOf = (s: Server) => (s === 'doi' ? 'serveur de DOI' : 'serveur d’arXiv');
 const unexpected = (s: Server) => new Refusal(`Réponse inattendue du ${serverOf(s)}.`);
-const seconds = (ms: number) => `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s`;
 
 /**
  * `href` as a URL a request may reach: HTTPS, on the default port, without credentials, to a host of `hosts` (its
@@ -77,9 +89,6 @@ function permitted(href: string, hosts: readonly string[], from: string | null):
   }
   return url;
 }
-
-/** The media type of a Content-Type, lower case, without its parameters. */
-const mediaType = (header: string | null) => (header ?? '').split(';')[0].trim().toLowerCase();
 
 /**
  * One answer to `href`: its media type and its body, `cap` bytes at most, read as they come and never further (the
@@ -234,7 +243,7 @@ async function pdfOf(deps: PublicationDeps, id: string): Promise<{ pdf: FileRef 
  * the publication comes all the same, `pdfMessage` saying why; with `pdf: false` (a PDF the user dropped, which the node
  * keeps: plan 4c, D8), it is not asked for. Never throws: every failure is a refusal in French (the cause, if any, logged).
  */
-export async function fetchPublication(id: PublicationId, deps: PublicationDeps, options: { pdf?: boolean } = {}): Promise<PublicationResult> {
+export async function fetchPublication(id: PublicationId, deps: PublicationDeps, options: { pdf?: boolean } = {}): Promise<PublicationFound | Failure> {
   const sources = deps.sources ?? PUBLICATION_SOURCES;
   const url = sources.doiUrl('doi' in id ? id.doi : arxivDoi(id.arxiv));
   const cap = deps.maxKb * 1024;
@@ -257,12 +266,101 @@ export async function fetchPublication(id: PublicationId, deps: PublicationDeps,
 }
 
 /**
- * The import's entry (the app's IPC `cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string that
- * parseIdentifier reads (MAX_IDENTIFIER_CHARS at most), or nothing is asked of the network. `options`: `{ pdf: false }`
- * only, exactly, leaves an arXiv article's PDF out (a PDF dropped, task 5); anything else, the PDF is downloaded.
+ * A PDF's name in the store, as Windows takes it (what a node's file name may not hold made « _ », 100 characters at
+ * most, never a reserved name), « .pdf » after it; null if nothing is left.
+ */
+function fileNameOf(base: string): string | null {
+  const name = base.replace(/\.pdf$/i, '').replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '_').slice(0, 100).replace(/[. ]+$/, '');
+  return name === '' || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name) ? null : `${name}.pdf`;
+}
+
+/**
+ * The store's name of a PDF of the open web (plan 5b, D3): its address's own file name when it is one (« N19-1423.pdf »,
+ * « radford21a.pdf »), else its publication's identifier, else « publication.pdf ».
+ */
+function openPdfName(href: string, id: PublicationId | null): string {
+  let last = '';
+  try {
+    last = decodeURIComponent(new URL(href).pathname.split('/').pop() ?? '');
+  } catch {
+    // an address whose path is no UTF-8 once decoded: no name of its own
+  }
+  const own = /\.pdf$/i.test(last) ? fileNameOf(last) : null;
+  if (own !== null) return own;
+  if (id !== null) return 'arxiv' in id ? pdfName(id.arxiv) : (fileNameOf(id.doi) ?? 'publication.pdf');
+  return 'publication.pdf';
+}
+
+/** A PDF of the open web into the store, under its name (openPdfName): a FileRef, or why not, in French. */
+function storeOpenPdf(deps: PublicationDeps, url: string, bytes: Uint8Array, id: PublicationId | null): { pdf: FileRef } | { pdfMessage: string } {
+  try {
+    return { pdf: deps.store(openPdfName(url, id), bytes) };
+  } catch (e) {
+    deps.log?.(`Publication, PDF ${url} : ${e instanceof Error ? e.message : String(e)}`);
+    return { pdfMessage: 'Le PDF n’a pas pu être enregistré dans la base.' };
+  }
+}
+
+/** A page's PDF (its `citation_pdf_url`), asked under the same guards (D3): a FileRef, or why not, in French. */
+async function pagePdf(deps: PublicationDeps, open: OpenDeps, href: string, id: PublicationId | null): Promise<{ pdf: FileRef } | { pdfMessage: string }> {
+  // A PDF only: an answer that is none is not read further than its first bytes.
+  const a = await openFetch(href, open, 'application/pdf', { page: 0, pdf: deps.maxPdfBytes });
+  if (!a.ok) return { pdfMessage: a.message };
+  if (!a.pdf) return { pdfMessage: NO_PDF };
+  return storeOpenPdf(deps, a.url, a.bytes, id);
+}
+
+/**
+ * The import of an address that is no identifier (plan 5b, D3), through the guards of the open web (openFetch):
+ * - a PDF (by its type or its first bytes): into the store, `{ kind: 'pdf' }`, to take as a PDF dropped;
+ * - a page, read under publicationMaxKb: its citation tags (citationMeta). Its DOI, else its arXiv identifier, imports
+ *   the metadata (fetchPublication), and its PDF comes with them if it has one (`citation_pdf_url`), under the same
+ *   guards, or `pdfMessage` says why not; without them, an arXiv article's PDF is arXiv's, as for its identifier.
+ *   Without identifier, its PDF is `{ kind: 'pdf' }`;
+ * - nothing of that: « Cette page ne mène à aucun PDF. ».
+ * `pdf` false (a PDF dropped): the metadata only, the page's PDF not asked; an address that is itself a PDF is still
+ * the thing asked for.
+ */
+async function importOpen(href: string, deps: PublicationDeps, open: OpenDeps, pdf: boolean): Promise<PublicationResult> {
+  const a = await openFetch(href, open, PAGE_ACCEPT, { page: deps.maxKb * 1024, pdf: deps.maxPdfBytes });
+  if (!a.ok) return a;
+  if (a.pdf) {
+    const stored = storeOpenPdf(deps, a.url, a.bytes, null);
+    return 'pdf' in stored ? { ok: true, kind: 'pdf', pdf: stored.pdf } : { ok: false, message: stored.pdfMessage };
+  }
+  const meta = citationMeta(textOf(a.bytes), a.url);
+  const id = (meta.doi !== undefined ? parseIdentifier(meta.doi) : null)
+    ?? (meta.arxiv !== undefined ? parseIdentifier(`arXiv:${meta.arxiv.replace(/^arxiv:\s*/i, '')}`) : null);
+  if (id === null) {
+    if (meta.pdfUrl === undefined) return { ok: false, message: NO_PDF };
+    const p = await pagePdf(deps, open, meta.pdfUrl, null);
+    return 'pdf' in p ? { ok: true, kind: 'pdf', pdf: p.pdf } : { ok: false, message: p.pdfMessage };
+  }
+  // The metadata first: when they fail, no PDF is downloaded for nothing.
+  const r = await fetchPublication(id, deps, { pdf: pdf && meta.pdfUrl === undefined });
+  if (!r.ok || !pdf || meta.pdfUrl === undefined) return r;
+  return { ...r, ...(await pagePdf(deps, open, meta.pdfUrl, id)) };
+}
+
+/** An address, as a user pastes one: a scheme, then « // » (« doi: » or « arXiv: » are not). */
+const ADDRESS = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * The import's entry (the app's IPC `cirrus:publications:fetch`): `text`, whatever the interface sent, must be a string
+ * of MAX_IDENTIFIER_CHARS at most, or nothing is asked of the network. In this order (plan 5b):
+ * 1. an identifier, or a link to a DOI's resolver or an arXiv page (parseIdentifier): the metadata, as in plan 4c;
+ * 2. a publisher's address holding a DOI (D4): that DOI, the same way, without asking the publisher;
+ * 3. any other address, with `deps.open`: the open web, under its guards (importOpen, D3);
+ * 4. anything else: « Identifiant non reconnu. ».
+ * `options`: `{ pdf: false }` only, exactly, leaves the PDF out (an arXiv article's, a page's: a PDF dropped, task 5 of
+ * plan 4c); anything else, the PDF is downloaded.
  */
 export async function importPublication(text: unknown, deps: PublicationDeps, options?: unknown): Promise<PublicationResult> {
-  const id = typeof text === 'string' ? parseIdentifier(text) : null;
+  if (typeof text !== 'string' || text.length > MAX_IDENTIFIER_CHARS) return { ok: false, message: UNRECOGNIZED };
   const pdf = !(typeof options === 'object' && options !== null && !Array.isArray(options) && Object.hasOwn(options, 'pdf') && (options as { pdf: unknown }).pdf === false);
-  return id ? fetchPublication(id, deps, { pdf }) : { ok: false, message: UNRECOGNIZED };
+  const id = parseIdentifier(text);
+  if (id) return fetchPublication(id, deps, { pdf });
+  const address = text.trim();
+  if (!deps.open || !ADDRESS.test(address) || !URL.canParse(address)) return { ok: false, message: UNRECOGNIZED };
+  return importOpen(address, deps, deps.open, pdf);
 }

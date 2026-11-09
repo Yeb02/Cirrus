@@ -7,7 +7,7 @@ import {
   type TagValue,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
-import { importPublication, type PublicationDeps, type PublicationResult } from '@cirrus/sources';
+import { importPublication, type PublicationDeps, type PublicationFound } from '@cirrus/sources';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type PlanScene, type SceneItem } from '@cirrus/view';
 import { beforeEach, expect, test } from 'vitest';
@@ -22,7 +22,7 @@ import {
 const DATA = join(fileURLToPath(new URL('.', import.meta.url)), 'data', 'publications');
 const LI = 'An Introduction to Kolmogorov Complexity and Its Applications';
 const PDF: FileRef = { name: '1706.03762.pdf', hash: 'b'.repeat(64), size: 842 };
-type Found = Extract<PublicationResult, { ok: true }>;
+type Found = PublicationFound;
 /** A result of the IPC as the main process gives it, from the answers recorded at task 4. */
 const recorded = (csl: string, bib: string, id: Found['id'], more: Partial<Found> = {}): Found => ({
   ok: true, id, csl: JSON.parse(readFileSync(join(DATA, csl), 'utf8')), bibtex: readFileSync(join(DATA, bib), 'utf8').trim(), ...more,

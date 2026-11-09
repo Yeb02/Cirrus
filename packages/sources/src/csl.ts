@@ -18,17 +18,22 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 /** A code point an entity may give: not a control character, nor a surrogate. */
 const printable = (n: number) => Number.isInteger(n) && n >= 32 && n !== 127 && n <= 0x10ffff && (n < 0xd800 || n > 0xdfff);
 
+/**
+ * `s` with its character references decoded: the few named ones markup uses (&amp; &lt; &gt; &quot; &apos; &nbsp;), and
+ * every numeric one of a printable character; any other left as it is. A page's <meta> values too (html.ts, plan 5b).
+ */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]{1,8}));/gi, (all, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
+    if (name !== undefined) return ENTITIES[name.toLowerCase()] ?? all;
+    const n = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
+    return printable(n) ? String.fromCodePoint(n) : all;
+  });
+}
+
 /** A text field as plain text: its tags dropped, its entities decoded, its blanks made one space; '' if not a string. */
 function plain(v: unknown): string {
   if (typeof v !== 'string') return '';
-  return v.replace(TAG, '')
-    .replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]+));/gi, (all, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
-      if (name !== undefined) return ENTITIES[name.toLowerCase()] ?? all;
-      const n = dec !== undefined ? Number(dec) : parseInt(hex!, 16);
-      return printable(n) ? String.fromCodePoint(n) : all;
-    })
-    .replace(/\s+/g, ' ')
-    .trim();
+  return decodeEntities(v.replace(TAG, '')).replace(/\s+/g, ' ').trim();
 }
 
 /** A name: its literal form, else given name, particles, family name and suffix, in reading order. */

@@ -2,7 +2,7 @@ import {
   type Action, type BibEntry, type BibFields, bibFields, bibFileName, bibIdentifiers, bibShort, bibtexEntry, CITE_KEY_TAG, CiteKeys, citeKey, cleanArxiv, cleanDoi,
   CommandError, familyName, type FileRef, type NodeRec, normalizedTitle, parseBibtex, safeCiteKey, type State, type TagValue, type Vec2, yearIn,
 } from '@cirrus/core';
-import type { PublicationResult } from '@cirrus/sources';
+import type { PublicationFound, PublicationResult } from '@cirrus/sources';
 import { cslToFields } from '@cirrus/sources/csl';
 import { parseIdentifier, type PublicationId } from '@cirrus/sources/identifier';
 import type { PlanScene, RenderParams, SceneIndex } from '@cirrus/view';
@@ -248,7 +248,7 @@ export function publicationBuild(
 }
 
 /** The import's input from the main process's answer: the CSL's fields (read only by cslToFields), the BibTeX's first entry. */
-export function publicationOf(r: Extract<PublicationResult, { ok: true }>, dropped: FileRef | null): PublicationInput | { failed: string } {
+export function publicationOf(r: PublicationFound, dropped: FileRef | null): PublicationInput | { failed: string } {
   const csl = cslToFields(r.csl);
   if (csl === null) return { failed: 'Réponse inattendue du serveur de DOI.' };
   const entry = typeof r.bibtex === 'string' ? parseBibtex(r.bibtex).entries[0] : undefined;
@@ -325,6 +325,9 @@ export async function importByIdentifier(text: string, dropped: FileRef | null, 
   }
   if (!deps.open()) return { kind: 'dropped' };
   if (!r.ok) return { kind: 'failed', message: r.message };
+  // A PDF without identifier comes only of an address that is none (plan 5b, D3), which the dialog takes as a PDF
+  // dropped (task 4); `text` was read as an identifier here, which never gives one.
+  if ('kind' in r) return { kind: 'failed', message: 'Identifiant non reconnu.' };
   const input = publicationOf(r, dropped);
   if ('failed' in input) return { kind: 'failed', message: input.failed };
   const plan = planPublication(PublicationIndex.of(deps.state()), input, deps.maxAuthors());
