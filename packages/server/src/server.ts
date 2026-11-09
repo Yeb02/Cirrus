@@ -16,13 +16,15 @@ import { parsePresence, PresenceError } from './presence.ts';
 import { parsePublicationRequest, PublicationError, PublicationImports, type PublicationNetwork, serverNetwork } from './publications.ts';
 import { SeedError, Seeds } from './seed.ts';
 import { parseSettingChanges, SettingsError } from './settings.ts';
+import { baseBytes, freeBytes, StoreSize } from './storeSize.ts';
 import { hashToken, PairingError, Tokens } from './tokens.ts';
 
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
 // anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
 // paired PCs, the shared settings, the files each PC has open in full screen), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
-// serves only a paired PC's import of a publication (plan 5b, D2: publications.ts).
+// serves only a paired PC's import of a publication (plan 5b, D2: publications.ts). Its space, which GET /status gives
+// (plan 5b, D8), is storeSize.ts's.
 
 /**
  * `sources`: the network of a publication's import (plan 5b, task 3), the server's own by default (serverNetwork: Node's
@@ -127,16 +129,21 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const baseDir = join(opts.dataDir, 'base');
   const lock = lockBase(baseDir);
   if (!lock) throw new Error(`Un autre serveur tourne déjà sur ces données (${opts.dataDir}).`);
-  let tokens: Tokens | null = null, canon: Canon | null = null, hub: Hub | null = null;
+  let tokens: Tokens | null = null, canon: Canon | null = null, hub: Hub | null = null, sizes: StoreSize | null = null;
   try {
     tokens = Tokens.open(opts.dataDir);
     // The streams relay what the base accepts, and read its journal to catch up.
     canon = Canon.open(baseDir, (u) => hub?.publish(u));
     const t = tokens, c = canon;
     hub = new Hub((after, minLines) => c.base.unitsAfter(after, minLines), (hash) => t.pcOfHash(hash) !== null);
-    const imports = new PublicationImports(baseDir, opts.sources ?? serverNetwork());
-    return await listen({ port: opts.port, host, now, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), imports, lock });
+    // The store's size (plan 5b, D8), counted from now on, in the background; kept up to date at each file placed.
+    const s = (sizes = new StoreSize(baseDir));
+    const imports = new PublicationImports(baseDir, opts.sources ?? serverNetwork(), (hash, size) => s.add(hash, size));
+    return await listen({
+      port: opts.port, host, now, dataDir: opts.dataDir, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), imports, sizes: s, lock,
+    });
   } catch (e) {
+    await sizes?.close();
     hub?.closeAll();
     canon?.close();
     tokens?.close();
@@ -147,14 +154,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
 /** What a started server holds, opened by startServer: closed by its `close`. */
 interface Parts {
-  port: number; host: string; now: () => number; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; imports: PublicationImports; lock: { release(): void };
+  port: number; host: string; now: () => number; dataDir: string; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; imports: PublicationImports;
+  sizes: StoreSize; lock: { release(): void };
 }
 
 /** A seed's steps, to a server that holds a base already (task 5, D7, R16). */
 const NOT_FRESH = 'Le serveur tient déjà une base : il ne reçoit celle d’un PC que vide.';
 
 /** Listens, and serves the routes. */
-async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, seeds, imports, lock }: Parts): Promise<RunningServer> {
+async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon, hub, seeds, imports, sizes, lock }: Parts): Promise<RunningServer> {
   /** The PC of the request's token, and the token's hash; 401 otherwise, checked before anything of the body is read. */
   const authenticate = (req: IncomingMessage): { pc: string; tokenHash: string } => {
     const token = BEARER.exec(req.headers.authorization ?? '')?.[1];
@@ -335,6 +343,17 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         reply(res, 200, result);
       },
     },
+    /**
+     * The server's state (plan 5b, D8), which the block « Serveur » of a paired PC asks every serverStatusPollMs while it
+     * is shown, its round trip the latency: the size of its base's database files, of its store and the number of its
+     * files (what is known so far: `counting` until their first count, at the start, ends), and the free space of its
+     * disk. Nothing read but sizes.
+     */
+    '/status': {
+      GET: async (_req, res) => {
+        reply(res, 200, { baseBytes: baseBytes(baseDir), ...sizes.get(), freeBytes: await freeBytes(dataDir) });
+      },
+    },
     '/snapshot': {
       GET: (_req, res) => {
         const data = Buffer.from(encodeState(canon.state));
@@ -357,7 +376,8 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
       if (Number(req.headers['content-length']) > MAX_FILE_BYTES) throw tooBig(MAX_FILE_BYTES);
       if (!existsSync(blob(hash))) {
         try {
-          await receiveBlob(baseDir, hash, req, MAX_FILE_BYTES);
+          // Counted in the store's size once placed (plan 5b, D8).
+          sizes.add(hash, (await receiveBlob(baseDir, hash, req, MAX_FILE_BYTES)).size);
         } catch (e) {
           if (e instanceof BlobError) throw e.tooBig ? tooBig(MAX_FILE_BYTES) : new HttpError(400, e.message);
           throw e;
@@ -440,6 +460,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
       server.closeAllConnections();
       await closed;
       await Promise.allSettled([...inflight]);
+      await sizes.close();
       seeds.drop();
       canon.close();
       tokens.close();

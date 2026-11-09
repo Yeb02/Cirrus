@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -489,6 +489,55 @@ test('instantané du serveur : écrit toutes les SERVER_SNAPSHOT_UNITS écriture
     base.close();
   }
 }, 30_000);
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The server's state (plan 5b, D8): GET /status.
+
+interface StatusBody { baseBytes: number; storeBytes: number; storeFiles: number; freeBytes: number; counting: boolean }
+
+/** GET /status, once the first count of the store is over (`counting` until then). */
+async function status(c: Client): Promise<StatusBody> {
+  for (;;) {
+    const res = await c.get('/status');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as StatusBody;
+    if (!body.counting) return body;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/** The base's database files: what GET /status gives as `baseBytes`. */
+const dbBytes = () => ['cirrus.db', 'cirrus.db-wal', 'cirrus.db-shm'].reduce((n, f) => n + (statSync(join(baseDir(), f), { throwIfNoEntry: false })?.size ?? 0), 0);
+
+test('GET /status : la base, le magasin (sa taille et ses fichiers, comptés une fois au démarrage, puis à chaque fichier reçu) et la place libre de son disque ; sans jeton, 401', async () => {
+  let srv = await start();
+  const a = await paired(srv.url, 'pc-a');
+  const empty = await status(a);
+  expect(empty).toEqual({ baseBytes: dbBytes(), storeBytes: 0, storeFiles: 0, freeBytes: expect.any(Number), counting: false });
+  expect(empty.baseBytes).toBeGreaterThan(0);
+  expect(empty.freeBytes).toBeGreaterThan(0);
+  // Received: counted at once, each file once (sent twice, the same blob); refused (bytes not their hash's): not counted.
+  const one = new Uint8Array(3000).fill(1), two = new TextEncoder().encode('deux');
+  for (const b of [one, two, one]) expect((await a.send('PUT', `/files/${sha256(b)}`, b, 'application/octet-stream')).status).toBe(204);
+  expect((await a.send('PUT', `/files/${sha256('autre')}`, 'faux', 'application/octet-stream')).status).toBe(400);
+  expect(await status(a)).toMatchObject({ storeBytes: 3004, storeFiles: 2 });
+  await stop(srv);
+  // Started again: counted by a walk of the store's folders, sizes only — a temporary, or a name that is not a hash, aside.
+  writeFileSync(join(baseDir(), 'files', '.import-0123456789abcdef'), 'à moitié');
+  writeFileSync(join(baseDir(), 'files', sha256(one).slice(0, 2), 'pas-une-empreinte'), 'x');
+  srv = await start();
+  const again = new Client(srv.url, a.token, 'pc-a');
+  expect(await status(again)).toMatchObject({ storeBytes: 3004, storeFiles: 2 });
+  const three = new TextEncoder().encode('trois');
+  expect((await again.send('PUT', `/files/${sha256(three)}`, three, 'application/octet-stream')).status).toBe(204);
+  expect(await status(again)).toMatchObject({ storeBytes: 3009, storeFiles: 3 });
+  // Without a token, or with one that is unknown: 401; any other method: 405.
+  const anonymous = await fetch(`${srv.url}/status`);
+  expect(anonymous.status).toBe(401);
+  expect(anonymous.headers.get('www-authenticate')).toBe('Bearer');
+  expect((await new Client(srv.url, 'x'.repeat(43), 'pc-a').get('/status')).status).toBe(401);
+  expect((await again.send('POST', '/status', {})).status).toBe(405);
+});
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Address and command line

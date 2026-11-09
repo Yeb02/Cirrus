@@ -1,8 +1,10 @@
-import { isObject } from '@cirrus/core';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { type FileRef, isObject } from '@cirrus/core';
 import {
   type FetchFn, httpsConnect, importPublication, type OpenDeps, type PublicationRequest, type PublicationResult, systemResolve,
 } from '@cirrus/sources';
-import { storeBytes } from '@cirrus/store';
+import { filePath, storeBytes } from '@cirrus/store';
 import {
   MAX_FILE_BYTES, MAX_IDENTIFIER_CHARS, MAX_PUBLICATION_FETCHES, MAX_PUBLICATION_META_BYTES, MAX_PUBLICATION_PDF_MS, MAX_PUBLICATION_TIMEOUT_MS,
 } from './bounds.ts';
@@ -90,15 +92,32 @@ function bound(network: PublicationNetwork, signal: AbortSignal): PublicationNet
   };
 }
 
-/** The imports under way: MAX_PUBLICATION_FETCHES at most, all PCs together. */
+/**
+ * The imports under way: MAX_PUBLICATION_FETCHES at most, all PCs together. `placed`: told each PDF placed in the store
+ * that was not there (plan 5b, D8: the store's size, StoreSize.add).
+ */
 export class PublicationImports {
   private readonly storeDir: string;
   private readonly network: PublicationNetwork;
+  private readonly placed: (hash: string, size: number) => void;
   private active = 0;
 
-  constructor(storeDir: string, network: PublicationNetwork) {
+  constructor(storeDir: string, network: PublicationNetwork, placed: (hash: string, size: number) => void = () => {}) {
     this.storeDir = storeDir;
     this.network = network;
+    this.placed = placed;
+  }
+
+  /**
+   * A PDF imported, kept in the store (storeBytes), `placed` told when it was not there. Its hash is read first to know
+   * that: a second pass over bytes the import has just downloaded, short beside it.
+   */
+  private store(name: string, bytes: Uint8Array): FileRef {
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const had = existsSync(filePath(this.storeDir, { name, hash, size: bytes.length }));
+    const ref = storeBytes(this.storeDir, name, bytes);
+    if (!had) this.placed(ref.hash, ref.size);
+    return ref;
   }
 
   /**
@@ -115,7 +134,7 @@ export class PublicationImports {
       const log = (m: string) => console.warn(m);
       const { maxKb, maxPdfBytes, timeoutMs, pdfMaxMs } = request;
       return await importPublication(request.text, {
-        fetch: net.fetch, store: (name, bytes) => storeBytes(this.storeDir, name, bytes), maxKb, maxPdfBytes, timeoutMs, pdfMaxMs, log,
+        fetch: net.fetch, store: (name, bytes) => this.store(name, bytes), maxKb, maxPdfBytes, timeoutMs, pdfMaxMs, log,
         open: net.open && { ...net.open, timeoutMs, pdfMaxMs, log },
       }, request.pdf === false ? { pdf: false } : undefined);
     } finally {

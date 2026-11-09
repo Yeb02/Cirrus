@@ -168,6 +168,17 @@ test('un article d’arXiv importé par le réseau du serveur (rejoué) : son PD
   const res = await a.get(`/files/${pdf.hash}`);
   expect(res.status).toBe(200);
   expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
+  // Counted in the server's store (plan 5b, task 7: GET /status), once: imported again, the same blob.
+  const store = async () => {
+    for (;;) {
+      const s = (await (await a.get('/status')).json()) as { storeBytes: number; storeFiles: number; counting: boolean };
+      if (!s.counting) return [s.storeFiles, s.storeBytes];
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  expect(await store()).toEqual([1, PDF.length]);
+  expect(await imported(a, 'arXiv:1706.03762')).toMatchObject({ ok: true, pdf });
+  expect(await store()).toEqual([1, PDF.length]);
 });
 
 test('un DOI sans PDF ; `pdf: false` : ni demandé ni gardé ; un PDF d’une adresse ouverte : `{ kind: "pdf" }`, gardé ; introuvable : le refus du réseau, tel quel', async () => {
