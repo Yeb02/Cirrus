@@ -70,6 +70,11 @@ export class Net {
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
   /** Awaited before each request leaves (a test holds one: a seed at its first request, say). */
   before: ((method: string, path: string) => Promise<void> | void) | null = null;
+  /**
+   * Whether a request's answer is lost: the server has it and answers, but the answer never comes back (the network
+   * failing as `fetch` does, a TypeError). Short review after plan 5a, B1.
+   */
+  loses: ((method: string, path: string) => boolean) | null = null;
   private gate: Deferred | null = null;
   /** Holds the downloads (GET /files/<hash>) until released, or until their request is aborted. */
   private filesGate: Deferred | null = null;
@@ -116,6 +121,10 @@ export class Net {
       }
     }
     const res = await fetch(input, init);
+    if (this.loses?.(method, url.pathname)) {
+      await res.body?.cancel();
+      throw new TypeError('fetch failed');
+    }
     if (url.pathname === '/events' && res.ok && res.body) return new Response(this.stream(res.body), { status: res.status, headers: res.headers });
     if (url.pathname === '/units' && method === 'POST' && res.ok) {
       const body = (await res.json()) as { results: UnitResult[] };

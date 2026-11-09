@@ -7,7 +7,9 @@ import { SharedSettings } from '../settings.ts';
 import { FORMAT, SyncClient, writeRefusal } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
-import { adoptBase, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage } from './firstSync.ts';
+import {
+  adoptBase, firstSyncOffer, isBaseId, offerMessage, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage,
+} from './firstSync.ts';
 import type { Committed, FirstSyncOffer, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
 
 // The synchronisation in the app's main process (plan 5a, task 4), without Electron (wire.ts binds it to IPC, the
@@ -400,16 +402,22 @@ export class SyncHost {
     if (
       !isObject(hello) || typeof hello.empty !== 'boolean' || !Number.isSafeInteger(hello.lastSeq) || !Number.isSafeInteger(hello.nodes)
       || typeof hello.serverTime !== 'number' || !Number.isFinite(hello.serverTime)
-      || typeof hello.baseId !== 'string' || hello.baseId.length === 0 || hello.baseId.length > MAX_ID_CHARS
+      || !isBaseId(hello.baseId)
     ) {
       return refuse('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
     }
     const server = { lastSeq: hello.lastSeq as number, empty: hello.empty, nodes: hello.nodes as number }, baseId = hello.baseId;
+    // A seed this PC sent, which the server took, its done's answer lost (the app quit, the network failed: short
+    // review after plan 5a, B1): the server's base has the identity it gave that seed at its start. Its lines numbered
+    // now, as the answer would have done, and its settings stamped at that pairing's time (R23): then it rejoins.
+    const seed = this.deps.store.pendingSeed();
+    const seeded = seed !== null && seed.id === baseId && seed.last <= server.lastSeq;
+    if (seeded) this.deps.store.numberSeeded(seed.last, seed.id);
     // R31: the base this PC follows, its token lost since (dissociated, revoked, serveur.db reset), the server holding
     // every line this PC received: paired again at once, no offer — the sync picks up where it stopped, and the writes
     // made meanwhile go as any pending write. Its settings are not stamped again: the server's, newer maybe, stay.
     if (this.deps.store.baseId() === baseId && this.deps.store.lastServerSeq() <= server.lastSeq) {
-      this.joined(config, null, null);
+      this.joined(config, seeded ? seed.at : null, null);
       return { ok: true };
     }
     const offer = firstSyncOffer(this.deps.store, this.deps.dir, server, new Date(this.deps.now()));
@@ -425,8 +433,9 @@ export class SyncHost {
 
   /**
    * Paired, the first sync settled (R8): this PC's settings wait, stamped `at`, the pairing's time (R23: two empty
-   * bases, or this PC's sent; null for a rejoin, R31: nothing stamped); the server's base identity kept, `baseId` (two
-   * empty bases; a seed keeps the one its done gives with the numbers, numberSeeded; null: kept already) — both before
+   * bases, or this PC's sent — a seed whose done's answer was lost too, at its own pairing's time, B1; null for a
+   * rejoin, R31: nothing stamped); the server's base identity kept, `baseId` (two empty bases; a seed keeps the one the
+   * server gave it with the numbers, numberSeeded; null: kept already) — both before
    * serveur.json: a stop between leaves them for no server, and the next pairing writes them again —, then the server.
    */
   private joined(config: ServerConfig, at: number | null, baseId: string | null): void {
@@ -486,7 +495,7 @@ export class SyncHost {
     try {
       if (choice === 'seed') {
         try {
-          await seedBase({ fetch: deps.fetch, store: deps.store, dir: deps.dir, config, signal: abort.signal });
+          await seedBase({ fetch: deps.fetch, store: deps.store, dir: deps.dir, config, pairedAt: at, signal: abort.signal });
         } catch (e) {
           if (!this.closed) await revoke();
           return no(`Base non envoyée : ${sentence(messageOf(e))} ${UNTOUCHED}`);

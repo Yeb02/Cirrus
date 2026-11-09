@@ -609,3 +609,17 @@ test('numberSeeded : les lignes du PC jusqu’à `last` prennent leur numéro du
   expect(store.nodeCount()).toBe(1);
   store.close();
 });
+
+test('revue courte du plan 5a, B1 : l’envoi en cours gardé dans la méta (identité, dernière ligne, heure), relu tel quel ; illisible, aucun ; numberSeeded l’efface', () => {
+  const { store } = scenario();
+  expect(store.pendingSeed()).toBeNull();
+  const last = store.lastSeq();
+  store.setPendingSeed({ id: 'base-semee', last, at: 1234 });
+  expect(store.pendingSeed()).toEqual({ id: 'base-semee', last, at: 1234 });
+  store.setPendingSeed({ id: 'x'.repeat(129), last, at: 1 });
+  expect(store.pendingSeed()).toBeNull();
+  store.setPendingSeed({ id: 'base-semee', last, at: 1234 });
+  store.numberSeeded(last, 'base-semee');
+  expect([store.pendingSeed(), store.baseId(), store.lastServerSeq()]).toEqual([null, 'base-semee', last]);
+  store.close();
+});

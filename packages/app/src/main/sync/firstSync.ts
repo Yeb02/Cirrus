@@ -173,19 +173,28 @@ function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last:
   return snapshot ? { ...snapshot, last } : { data: encodeState(store.loadState()), seq: last, last };
 }
 
-/** What a seed needs: the network, this PC's base and its folder, the server paired (its token), the abort of the app's quit. */
-export interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; signal: AbortSignal }
+/**
+ * What a seed needs: the network, this PC's base and its folder, the server paired (its token), the pairing's time (its
+ * /hello's: kept with the seed, B1), the abort of the app's quit.
+ */
+export interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal }
+
+/** An identity of the server's base (R31) as a PC takes it from an answer: text of 1 to MAX_ID_CHARS characters. */
+export const isBaseId = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && x.length <= MAX_ID_CHARS;
 
 /**
  * Sends this PC's base to the server, which holds none (D7, R16). First, before any request, what it sends is read
  * and checked (prepareSeed): a seed bound to be refused stops there. Then, in the brief's order: every blob of its
  * store (old versions too) the server lacks — listed after that reading, so that a file a sent line names is among
  * them (review, Important 1) —; its snapshot (POST /seed, MAX_SEED_BYTES at most), which makes this PC the seed's
- * owner; its journal up to the reading, by pages of MAX_JOURNAL_PAGE lines and MAX_BODY_BYTES at most, labels cut
- * (R20); then done, which makes the server not empty. Then this PC's lines up to there take their numbers (the
- * server's are its journal numbers): none is pending, and its stream resumes after them. Writes made meanwhile stay
- * pending, sent once the sync starts, their files with them. Throws, in French: nothing written here then, the base as
- * it was. Returns its last line sent.
+ * owner, and whose answer is the identity the base will have (B1); its journal up to the reading, by pages of
+ * MAX_JOURNAL_PAGE lines and MAX_BODY_BYTES at most, labels cut (R20); then done, which makes the server not empty.
+ * Then this PC's lines up to there take their numbers (the server's are its journal numbers): none is pending, and its
+ * stream resumes after them. Writes made meanwhile stay pending, sent once the sync starts, their files with them.
+ * Just before done, the seed is kept in the base's meta (pendingSeed: its identity, its last line, the pairing's
+ * time), until the numbers clear it: should done's answer be lost once the server has taken the base, the next pairing
+ * recognises it (short review after plan 5a, B1). Throws, in French: nothing written here then but that, the base as it
+ * was. Returns its last line sent.
  */
 export async function seedBase(o: SeedDeps): Promise<number> {
   const { data, seq, last } = prepareSeed(o.store);
@@ -205,7 +214,8 @@ export async function seedBase(o: SeedDeps): Promise<number> {
     }
   }
   const sent = await send('/seed', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'Cirrus-Seq': String(seq) }, body: new Uint8Array(data) });
-  await sent.body?.cancel();
+  const seedId = ((await sent.json().catch(() => null)) as { baseId?: unknown } | null)?.baseId;
+  if (!isBaseId(seedId)) throw new Error('Réponse du serveur illisible à /seed : mets à jour Cirrus, ou le serveur.');
   for (let after = 0; after < last; ) {
     const rows = o.store.changesSince(after, Math.min(MAX_JOURNAL_PAGE, last - after)).map(sentRow);
     if (rows.length === 0) throw new Error(`Le journal de ce PC s’arrête à la ligne ${after}, avant la ${last}.`);
@@ -219,13 +229,11 @@ export async function seedBase(o: SeedDeps): Promise<number> {
     await json('/seed/journal', body);
     after = rows[n - 1].localSeq;
   }
+  o.store.setPendingSeed({ id: seedId, last, at: o.pairedAt });
   const done = (await json('/seed/done', { last })) as { lastSeq?: unknown; baseId?: unknown } | null;
-  const baseId = done?.baseId;
-  if (done?.lastSeq !== last || typeof baseId !== 'string' || baseId.length === 0 || baseId.length > MAX_ID_CHARS) {
-    throw new Error('Réponse du serveur illisible à /seed/done : mets à jour Cirrus, ou le serveur.');
-  }
+  if (done?.lastSeq !== last || done.baseId !== seedId) throw new Error('Réponse du serveur illisible à /seed/done : mets à jour Cirrus, ou le serveur.');
   // With the numbers, the identity of the base the server now holds (R31): pairing this PC again picks up from here.
-  o.store.numberSeeded(last, baseId);
+  o.store.numberSeeded(last, seedId);
   return last;
 }
 

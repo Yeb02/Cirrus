@@ -124,13 +124,12 @@ export class Canon {
   /**
    * A PC's base taken whole by this fresh server (task 5, D7: POST /seed/done, every input checked by Seeds.take): its
    * journal, each line numbered as this server numbers its own (server_seq = local_seq), and its state, written in one
-   * transaction, with a new identity (R31: another base; a PC that knew the empty one's no longer follows it); then the
-   * state in memory replaced, and the numbering goes on after its last line. A failure writes nothing and keeps the
-   * state.
+   * transaction, with a new identity, `id` (R31: another base; a PC that knew the empty one's no longer follows it) —
+   * the one Seeds drew at the seed's start and gave the PC then (short review after plan 5a, B1); then the state in
+   * memory replaced, and the numbering goes on after its last line. A failure writes nothing and keeps the state.
    */
-  seed(s: State, last: number, lines: (after: number, limit: number) => ChangeRow[]): void {
+  seed(s: State, last: number, lines: (after: number, limit: number) => ChangeRow[], id: string): void {
     if (!this.fresh()) throw new Error('Ce serveur tient déjà une base.');
-    const id = uuidv7();
     this.store.atomically(() => {
       for (let after = 0; after < last; ) {
         const page = lines(after, MAX_JOURNAL_PAGE);

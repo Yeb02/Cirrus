@@ -34,6 +34,9 @@ export interface ChangeRow {
   superseded: boolean;
 }
 
+/** A seed sent whose `done` may have gone unanswered (short review after plan 5a, B1): see LocalStore.pendingSeed. */
+export interface PendingSeed { id: string; last: number; at: number }
+
 /** The base's snapshot of the state (plan 3c, decision 4): its bytes, the last journal line it covers, its format. */
 export interface StoredSnapshot { data: ArrayBuffer; seq: number; version: number }
 
@@ -429,7 +432,35 @@ export class LocalStore {
       this.q('UPDATE changes SET server_seq = local_seq WHERE local_seq <= ?').run(last);
       this.setLastServerSeq(last);
       this.setBaseId(baseId);
+      // The seed is settled: nothing left to recognise at the next pairing (pendingSeed).
+      this.q("DELETE FROM meta WHERE key = 'pending_seed'").run();
     });
+  }
+
+  /**
+   * A seed this PC sent, kept in the meta from just before its `done` until its lines are numbered (numberSeeded clears
+   * it): short review after plan 5a, B1. Should done's answer be lost once the server has taken the base, the next
+   * pairing knows that base by `id`, the identity the server gave it at the seed's start, and numbers the lines up
+   * to `last` as the answer would have; `at`, the pairing's time, stamps this PC's settings as a seed does (R23).
+   * Null: none, or one this version cannot read.
+   */
+  pendingSeed(): PendingSeed | null {
+    const row = this.q("SELECT value FROM meta WHERE key = 'pending_seed'").get() as { value: string } | undefined;
+    if (!row) return null;
+    try {
+      const { id, last, at } = JSON.parse(row.value) as Record<string, unknown>;
+      if (typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_CHARS && Number.isSafeInteger(last) && (last as number) >= 0 && Number.isFinite(at)) {
+        return { id, last: last as number, at: at as number };
+      }
+    } catch {
+      // unreadable: none
+    }
+    return null;
+  }
+
+  setPendingSeed(seed: PendingSeed): void {
+    this.q("INSERT INTO meta (key, value) VALUES ('pending_seed', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify({ id: seed.id, last: seed.last, at: seed.at }));
   }
 
   /**

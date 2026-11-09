@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { applyOps, checkState, decodeState, isObject, type State, SyncFormatError } from '@cirrus/core';
+import { applyOps, checkState, decodeState, isObject, type State, SyncFormatError, uuidv7 } from '@cirrus/core';
 import { type ChangeRow, parseChangeRow } from '@cirrus/store';
 import { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from './bounds.ts';
 
@@ -29,6 +29,12 @@ const NOT_OWNER = 'Un autre PC a commencé d’envoyer sa base au serveur depuis
 interface Attempt {
   /** The token that started it. */
   tokenHash: string;
+  /**
+   * The identity the base will have once taken (R31), drawn here at its start and given to the PC then (short review
+   * after plan 5a, B1): a PC that never hears done's answer knows the base so at its next pairing. Always the server's
+   * own, never one a PC chose.
+   */
+  baseId: string;
   dir: string;
   /** The journal line the snapshot covers. */
   seq: number;
@@ -54,8 +60,8 @@ function seedRow(x: unknown, expected: number, history: boolean): ChangeRow {
   }
 }
 
-/** A whole base, as `done` hands it to the canon: its state, its last journal line, its lines by pages. */
-export interface Seeded { state: State; last: number; lines(after: number, limit: number): ChangeRow[] }
+/** A whole base, as `done` hands it to the canon: its state, last journal line, lines by pages, and identity. */
+export interface Seeded { state: State; last: number; lines(after: number, limit: number): ChangeRow[]; baseId: string }
 
 export class Seeds {
   private readonly root: string;
@@ -70,11 +76,11 @@ export class Seeds {
   /**
    * POST /seed: the seed under way, if any, dropped, and a new one owned by `tokenHash` (R16), its snapshot — covering
    * the journal up to `seq` — streamed into its file, MAX_SEED_BYTES at most. Another start during the upload drops this
-   * one: 409 at its end.
+   * one: 409 at its end. Returns the identity its base will have once taken (B1).
    */
-  async begin(tokenHash: string, body: AsyncIterable<Uint8Array>, seq: number): Promise<void> {
+  async begin(tokenHash: string, body: AsyncIterable<Uint8Array>, seq: number): Promise<string> {
     this.drop();
-    const a: Attempt = { tokenHash, dir: join(this.root, randomBytes(8).toString('hex')), seq, rows: 0, journal: null };
+    const a: Attempt = { tokenHash, baseId: uuidv7(), dir: join(this.root, randomBytes(8).toString('hex')), seq, rows: 0, journal: null };
     this.current = a;
     mkdirSync(a.dir, { recursive: true });
     const out = await open(join(a.dir, 'snapshot'), 'w');
@@ -97,6 +103,7 @@ export class Seeds {
     }
     a.journal = new DatabaseSync(join(a.dir, 'journal.db'));
     a.journal.exec('PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; CREATE TABLE lines (local_seq INTEGER PRIMARY KEY, json TEXT NOT NULL);');
+    return a.baseId;
   }
 
   /** The seed `tokenHash` owns, with its snapshot received; 409 otherwise (another PC's, or none). */
@@ -170,7 +177,7 @@ export class Seeds {
     if (broken.length > 0) {
       console.warn(`Base reçue avec ${broken.length} violation${broken.length > 1 ? 's' : ''} des règles du graphe, déjà dans la base du PC (la première : ${broken[0].message}) : gardée telle quelle.`);
     }
-    return { state, last: a.rows, lines };
+    return { state, last: a.rows, lines, baseId: a.baseId };
   }
 
   /** The seed under way dropped (another start, a revoked token: only `tokenHash`'s then), its files removed. */

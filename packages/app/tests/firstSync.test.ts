@@ -8,6 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
+import { readSettings } from '../src/main/settings.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
 import { quitsInsteadOfRelaunch, READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
@@ -579,6 +580,39 @@ test('R31 : jumelé de nouveau après la remise à zéro de serveur.db (la base 
     await l.resetServerDb();
     await until(() => a.status?.state === 'refused', 5000, () => JSON.stringify(a.statuses.slice(-3)));
   });
+});
+
+test('revue courte du plan 5a, B1 : la réponse de /seed/done perdue, le serveur ayant pris la base ; jumelé de nouveau, le PC reprend (R31), sans offre de remplacement, et rien ne reste en rade : ni les écritures faites pendant l’envoi, ni ses réglages', async () => {
+  const l = (lab = await Lab.start());
+  const a = await app(l, 'pc-a');
+  const { X } = await fill(a);
+  a.host.setSettings({ syncDownloads: 7 });
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  // A write while the base is sent, just before done; then done's answer lost: the server takes the base, the PC
+  // never hears it.
+  a.net.before = async (_method, path) => {
+    if (path !== '/seed/done') return;
+    a.net.before = null;
+    await run(a, (s) => editNode(s, X, { title: 'X pendant l’envoi' }));
+  };
+  a.net.loses = (method, path) => method === 'POST' && path === '/seed/done';
+  expect(await a.sync.first('seed')).toEqual({ ok: false, message: expect.stringMatching(/^Base non envoyée : Serveur injoignable/) });
+  a.net.loses = null;
+  const id = await l.baseId(), lines = await l.lastSeq();
+  expect([a.host.paired(), lines > 0, (await l.state()).nodes.get(X)?.title]).toEqual([false, true, 'X2']);
+  // Paired again: the server's base is the one this PC sent (its identity, given at the seed's start) — no offer, no
+  // replacement; the lines it sent numbered as done's answer would have, the write made meanwhile sent.
+  expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
+  await until(() => a.status?.state === 'live' && a.status.pending === 0 && a.store.pendingCount() === 0, 3000, () => `état ${JSON.stringify(a.statuses.slice(-3))}, ${a.store.pendingCount()} en attente`);
+  const server = await l.state();
+  expect(server.nodes.get(X)?.title).toBe('X pendant l’envoi');
+  expect(image(server)).toBe(image(a.session.state));
+  expect([a.store.baseId(), await l.baseId()]).toEqual([id, id]);
+  expect(a.store.changesSince(0).map((r) => [r.localSeq, r.serverSeq, r.unit])).toEqual((await l.journal()).map((r) => [r.localSeq, r.serverSeq, r.unit]));
+  expect([leftBeside(a), a.relaunched]).toEqual([[], 0]);
+  // Its settings sent, as a seed sends them (R23): stamped at the first pairing.
+  await until(async () => (await l.settings()).syncDownloads?.value === 7);
+  expect(readSettings(a.dir).syncDownloads).toBe(7);
 });
 
 test('Minor 7 et R31 : une base déjà numérotée par un serveur s’envoie à un serveur neuf (l’offre de D7, pas une reprise) : ses numéros effacés puis redonnés, le serveur et le PC d’accord, et la synchro continue', async () => {

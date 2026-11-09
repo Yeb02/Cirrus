@@ -179,9 +179,10 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
     /**
      * The first sync (task 5, D7, R16): a PC sends its base to this server, which holds none yet. POST /seed: its
      * snapshot (raw bytes, MAX_SEED_BYTES at most, streamed into a temporary file), the journal line it covers in
-     * Cirrus-Seq; the seed under way, another PC's included, is dropped (the last to start owns it). Then its journal by
-     * pages (POST /seed/journal), then POST /seed/done, which takes the whole and makes the server not empty. Until
-     * then, nothing of it shows.
+     * Cirrus-Seq; the seed under way, another PC's included, is dropped (the last to start owns it). Its answer,
+     * `{ baseId }`: the identity the base will have once taken, drawn by the server (short review after plan 5a, B1).
+     * Then its journal by pages (POST /seed/journal), then POST /seed/done, which takes the whole and makes the server
+     * not empty. Until then, nothing of it shows.
      */
     '/seed': {
       POST: async (req, res, _url, who) => {
@@ -191,8 +192,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         const seq = count(header, 0, 'Cirrus-Seq');
         if (Number(req.headers['content-length']) > MAX_SEED_BYTES) throw tooBig(MAX_SEED_BYTES);
         fresh();
-        await seeds.begin(who.tokenHash, req, seq);
-        res.writeHead(204).end();
+        reply(res, 200, { baseId: await seeds.begin(who.tokenHash, req, seq) });
       },
     },
     '/seed/journal': {
@@ -219,7 +219,7 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         // From here to the answer, synchronous: no write comes in between.
         const taken = seeds.take(who.tokenHash, body);
         try {
-          canon.seed(taken.state, taken.last, taken.lines);
+          canon.seed(taken.state, taken.last, taken.lines, taken.baseId);
         } finally {
           seeds.drop();
         }

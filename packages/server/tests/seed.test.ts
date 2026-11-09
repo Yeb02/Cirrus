@@ -85,7 +85,7 @@ test('seed : l’instantané, le journal par pages, puis done ; le serveur tient
   // The snapshot covers the first four lines; the tail (5 to 7) is replayed by the server on it.
   const { store, s, X } = pcBase('pc-a', 4);
   const rows = store.changesSince(0), snap = store.readSnapshot()!;
-  expect((await sendSnapshot(a, new Uint8Array(snap.data), snap.seq)).status).toBe(204);
+  expect((await sendSnapshot(a, new Uint8Array(snap.data), snap.seq)).status).toBe(200);
   for (const page of [rows.slice(0, 5), rows.slice(5)]) expect((await send(a, '/seed/journal', { rows: page })).status).toBe(200);
   // Not done: the server is still empty, its journal too (a partial seed is invisible).
   expect(await a.hello()).toMatchObject({ lastSeq: 0, empty: true });
@@ -124,7 +124,7 @@ test('R19 : une base qui porte déjà une violation des règles du graphe s’en
   applyOps(s, odd.ops);
   const rows = store.changesSince(0);
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
   const done = await send(a, '/seed/done', { last: rows.length });
   expect(done.status).toBe(200);
@@ -138,7 +138,7 @@ test('revue, Minors 5 et 7 : une écriture acceptée entre /seed et /seed/done r
   const a = await paired(url, 'pc-a'), c = await paired(url, 'pc-c');
   const { store, s } = pcBase('pc-a');
   const rows = store.changesSince(0);
-  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
   const t = emptyState(), lobby = createPlan(t, 'Lobby', 'lobby');
   expect(await c.units([c.unit(lobby)])).toEqual([{ accepted: 1 }]);
@@ -154,7 +154,7 @@ test('seed : refusé à un serveur qui n’est plus vide, sans rien écrire ; un
   const a = await paired(url, 'pc-a'), b = await paired(url, 'pc-b');
   // A base built in bulk (the bench's): an empty journal, its snapshot at 0.
   const { s } = pcBase('pc-a');
-  expect((await sendSnapshot(a, seedBody(s), 0)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), 0)).status).toBe(200);
   expect((await send(a, '/seed/done', { last: 0 })).status).toBe(200);
   expect(await a.hello()).toMatchObject({ lastSeq: 0, empty: false, nodes: 2 });
   // No longer empty: another seed is refused, with its reason.
@@ -179,10 +179,10 @@ test('seed, R16 : le dernier PC qui commence en est le maître ; les pages et do
   const a = await paired(url, 'pc-a'), b = await paired(url, 'pc-b');
   const { store, s } = pcBase('pc-a');
   const rows = store.changesSince(0);
-  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows: rows.slice(0, 3) })).status).toBe(200);
   // B starts a seed: A's is dropped, B owns it.
-  expect((await sendSnapshot(b, seedBody(s), rows.length)).status).toBe(204);
+  expect((await sendSnapshot(b, seedBody(s), rows.length)).status).toBe(200);
   const late = await send(a, '/seed/journal', { rows: rows.slice(3) });
   expect(late.status).toBe(409);
   expect(await errorOf(late)).toMatch(/autre PC/);
@@ -210,14 +210,14 @@ test('seed : un instantané illisible, ou un journal qui ne s’applique pas sur
   const rows = store.changesSince(0);
   const broken = seedBody(s);
   broken[100] ^= 0xff;
-  expect((await sendSnapshot(a, broken, rows.length)).status).toBe(204);
+  expect((await sendSnapshot(a, broken, rows.length)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
   const unreadable = await send(a, '/seed/done', { last: rows.length });
   expect(unreadable.status).toBe(400);
   expect(await errorOf(unreadable)).toMatch(/^Instantané de ce PC illisible/);
   expect(await a.hello()).toMatchObject({ lastSeq: 0, empty: true });
   // A snapshot of the whole state, said to cover only the first line: the tail does not apply on it.
-  expect((await sendSnapshot(a, seedBody(s), 1)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), 1)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
   const stale = await send(a, '/seed/done', { last: rows.length });
   expect(stale.status).toBe(400);
@@ -251,7 +251,7 @@ test('seed : les flux ouverts avant sont fermés à done, et reprennent par le j
   try {
     const { store, s } = pcBase('pc-a');
     const rows = store.changesSince(0);
-    expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+    expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(200);
     expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
     expect((await send(a, '/seed/done', { last: rows.length })).status).toBe(200);
     const deadline = Date.now() + 2000;
@@ -277,14 +277,20 @@ test('R31 : la base du serveur a une identité, rendue par /hello, gardée quand
   const again = await start();
   const b = await paired(again.url, 'pc-b');
   expect((await b.hello()).baseId).toBe(fresh);
-  // A seed brings another base: another identity, which done gives the seeding PC.
+  // A seed brings another base: another identity, which the server gives at the seed's start (short review after plan
+  // 5a, B1: a PC that never hears done's answer knows it so), and done again.
   const { store } = pcBase('pc-b');
   const rows = store.changesSince(0);
-  expect((await sendSnapshot(b, seedBody(replay(rows)), rows.length)).status).toBe(204);
+  const begun = await sendSnapshot(b, seedBody(replay(rows)), rows.length);
+  expect(begun.status).toBe(200);
+  const { baseId: seedId } = (await begun.json()) as { baseId: string };
+  expect(seedId).toMatch(/^[0-9a-f-]{36}$/);
+  expect(seedId).not.toBe(fresh);
+  // Not yet the server's: until done, nothing of the seed shows.
+  expect((await b.hello()).baseId).toBe(fresh);
   expect((await send(b, '/seed/journal', { rows })).status).toBe(200);
   const done = (await (await send(b, '/seed/done', { last: rows.length })).json()) as { lastSeq: number; baseId: string };
-  expect(done).toEqual({ lastSeq: rows.length, baseId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
-  expect(done.baseId).not.toBe(fresh);
+  expect(done).toEqual({ lastSeq: rows.length, baseId: seedId });
   expect((await b.hello()).baseId).toBe(done.baseId);
   // The base folder replaced by a new one: another identity again.
   await running.pop()!.close();
@@ -307,12 +313,12 @@ test('R32 : une ligne d’historique qu’un PC a écrite avant les bornes d’a
   }
   const rows = store.changesSince(0), line = rows.findIndex((r) => r.op.t === 'node' && (r.op.after?.tags.length ?? 0) > 0) + 1;
   // Its snapshot before that line: the line is in the tail, replayed as a write — refused, named.
-  expect((await sendSnapshot(a, seedBody(replay(rows.slice(0, line - 1))), line - 1)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(replay(rows.slice(0, line - 1))), line - 1)).status).toBe(200);
   const tail = await send(a, '/seed/journal', { rows });
   expect(tail.status).toBe(400);
   expect(await errorOf(tail)).toMatch(new RegExp(`^Ligne ${line} du journal de ce PC : Opération mal formée : node\\.after\\.tags\\[0\\]\\.key`));
   // Its snapshot after it: history, taken; the server numbers every line as the PC's journal does.
-  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(204);
+  expect((await sendSnapshot(a, seedBody(s), rows.length)).status).toBe(200);
   expect((await send(a, '/seed/journal', { rows })).status).toBe(200);
   expect((await send(a, '/seed/done', { last: rows.length })).status).toBe(200);
   const got = await journal(a);
