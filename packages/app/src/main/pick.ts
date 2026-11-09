@@ -12,3 +12,14 @@ export function testPickOf(env: Record<string, string | undefined>, variable: st
 
 /** CIRRUS_PDF_PICK, the PDF « Choisir un PDF… » takes instead of opening the system's dialog (plan 5b, D5; testPickOf). */
 export const pdfPickOf = (env: Record<string, string | undefined>, capture: boolean): string | null => testPickOf(env, 'CIRRUS_PDF_PICK', capture);
+
+/**
+ * CIRRUS_FREE_BYTES, the free space of this PC's disk that « Tout télécharger » reads instead of the disk's (plan 5b,
+ * task 8: its question captured to the pixel, the disk's own space changing from one run to the next), under the rule
+ * of testPickOf; undefined otherwise, or for a value that is not a whole number of bytes: the disk's.
+ */
+export function freeBytesOf(env: Record<string, string | undefined>, capture: boolean): ((dir: string) => Promise<number>) | undefined {
+  const value = testPickOf(env, 'CIRRUS_FREE_BYTES', capture);
+  const bytes = value === null || !/^\d{1,16}$/.test(value) ? null : Number(value);
+  return bytes === null ? undefined : async () => bytes;
+}

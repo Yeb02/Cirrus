@@ -17,6 +17,7 @@ import { LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
 import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
+import { freeBytesOf } from './pick.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
 import { stagedDir } from './sync/firstSync.ts';
@@ -270,6 +271,8 @@ void app.whenReady().then(() => {
   sync = new SyncHost({
     fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher), secretsAt: (d) => fileSecrets(d, tokenCipher),
     canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(),
+    // A test base's free space fixed for the captures (CIRRUS_FREE_BYTES, plan 5b, task 8); the disk's otherwise.
+    freeBytes: freeBytesOf(process.env, capture !== undefined),
     // Shared settings received (task 6): read again by what reads them here, and told to the interface.
     window: { ...appWindows, settings: (changes) => { latexParams = null; appWindows.settings(changes); } },
     // A base taken from the server (D7): the app quits as it does (the last snapshot, the sync stopped, the base closed),

@@ -59,6 +59,8 @@ export interface HostDeps {
   canEncrypt(): boolean;
   params(): RenderParams;
   now(): number;
+  /** The free space of this PC's disk for « Tout télécharger » (plan 5b, D8): the disk's when absent (CIRRUS_FREE_BYTES: freeBytesOf). */
+  freeBytes?: (dir: string) => Promise<number>;
   /** The name proposed for this PC: the machine's. */
   machineName: string;
   window: HostWindow;
@@ -124,6 +126,7 @@ export class SyncHost {
     return new SyncClient({
       fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params, settings: this.settings,
       presence: () => [...this.openTex.values()],
+      ...(deps.freeBytes ? { freeBytes: deps.freeBytes } : {}),
       downloadAll: (p) => deps.window.downloadAll(p),
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       status: (s) => {
