@@ -1125,3 +1125,14 @@ Décidée avec l'utilisateur, et écrite à la section 18 de la spec à la place
 - **Les mises à jour passent par le jumelage.** Le PC les demande au serveur avec son jeton. Un PC révoqué ne reçoit rien, et aucun mot de passe n'est stocké.
 - **Les signatures.** Chaque version est signée dans l'intégration continue de GitHub, avec la clé gardée dans les secrets de GitHub (spec 18.1), jamais sur le serveur. L'app vérifie la signature avec la clé publique qu'elle porte avant d'installer, et la mise à jour s'installe à la fermeture de l'app. Seule la toute première installation ne repose que sur le HTTPS.
 - **Le dépôt GitHub est public,** si bien que l'installateur ne contient rien de secret. Le code ne sert qu'à ne pas laisser une page ouverte sur Internet.
+
+### Relecture des corrections (2026-11-09)
+
+- **N1** (`e606489`) : `SyncHost.joined` efface l'envoi en attente (`setPendingSeed(null)`). Un PC qui rejoint un autre serveur ne renumérote donc plus sa base quand il revient plus tard au serveur de cet envoi, et il reçoit l'offre de remplacement. Le test a été vu échouer (`{ ok: true }`).
+- **N2** (`f97d35d`) : quand le principal dit « non jumelé » alors que la session suit, elle ne suit plus (`heard` : `unfollow` et le voile baissé). Une page rechargée pendant une dissociation, jumelée de nouveau, démarre la synchro. Le test (`syncHost.test.ts`) a été vu échouer, jamais démarré.
+- **N3** (`d0613f2`) : dans `SyncSession.open`, `since` décide avant toute attente. Jumelé, la liste est relue (`follow`) ; sinon, rien. Il n'est plus redonné au bloc, et un mot plus récent n'est plus écrasé. Le test a été vu échouer sur ses trois cas.
+- **N4** (`5952f2d`) : `AppPc.open` s'ouvre comme App (l'état du serveur demandé d'abord, puis le chargement, puis `since`), et `servers` reçoit l'état qu'App pose à l'ouverture. Aucun test n'a cassé.
+- **N5** (`a142379`) : `writeJsonAtomic` écrit le texte avant d'ouvrir le fichier temporaire, et l'efface (au mieux) si l'écriture ou le renommage échoue. Le test (`settings.test.ts`) refuse le renommage par un dossier à la place de la cible, ce qui marche sur tout système ; il a été vu échouer.
+- **N6** (`d814faf`, `e6de2c6`, `dd30e91`) : `isObject` du cœur remplace `isPlainObject` (état) et `isRecord` (compilateur LaTeX), qui sont identiques. `commit` vérifie l'identifiant par `isBaseId`. `Committed` ne s'importe plus que de `sync/protocol.ts`.
+
+Les six captures restées à refaire (`bloc-bib`, `import-publication` et les quatre du plan 5a) sont à 0 pixel de `plan4c` et de `plan5a`.
