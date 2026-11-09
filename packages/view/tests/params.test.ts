@@ -355,8 +355,9 @@ test('synchronisation : écritures par requête, téléchargements, reconnexion,
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
   }
-  // Plan 5b, task 7: two more of the group (the test below).
-  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual([...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb'].sort());
+  // Plan 5b, task 7 and its review: four more of the group (the tests below).
+  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort())
+    .toEqual([...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb', 'serverStatusSamples', 'throughputMinMb'].sort());
   expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
   expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1, syncConnectTimeoutMs: 0, syncSuspendFlushMs: 1e9 }))
     .toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100, syncConnectTimeoutMs: 500, syncSuspendFlushMs: 10_000 });
@@ -373,4 +374,19 @@ test('l’état du serveur et « Tout télécharger » : deux réglages avancés
   }
   expect(withOverrides({ serverStatusPollMs: 10, downloadAllReserveMb: -5 })).toMatchObject({ serverStatusPollMs: 1000, downloadAllReserveMb: 0 });
   expect(withOverrides({ serverStatusPollMs: 1e9, downloadAllReserveMb: 1e9 })).toMatchObject({ serverStatusPollMs: 60_000, downloadAllReserveMb: 100_000 });
+});
+
+test('la latence et le débit du serveur : la médiane de combien de mesures, et le plus petit transfert compté, deux réglages avancés du groupe « Synchronisation » (relecture de la tâche 7)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['serverStatusSamples', 5, 'Mesures dont la latence et le débit du serveur sont la médiane', 1, 50, 1],
+    ['throughputMinMb', 1, 'Taille minimale d’un transfert compté dans le débit du serveur (Mo)', 0.1, 100, 0.1],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Synchronisation', kind: 'number', min, max, step });
+  }
+  // A tenth of a Mo is kept as it is: the number's step is not an integer.
+  expect(withOverrides({ serverStatusSamples: 0, throughputMinMb: 0.25 })).toMatchObject({ serverStatusSamples: 1, throughputMinMb: 0.25 });
+  expect(withOverrides({ serverStatusSamples: 1e9, throughputMinMb: 1e9 })).toMatchObject({ serverStatusSamples: 50, throughputMinMb: 100 });
+  expect(withOverrides({ throughputMinMb: 0 })).toMatchObject({ throughputMinMb: 0.1 });
 });

@@ -283,6 +283,13 @@ export interface RenderParams {
   serverStatusPollMs: number;
   /** « Télécharger tous les PDF… » is refused when it would leave less than this free on this PC's disk (Mo). */
   downloadAllReserveMb: number;
+  /**
+   * The server's latency and throughput are the medians of this many last measures (D8; review of task 7), the
+   * throughput counting the transfers of files of throughputMinMb at least (Mo, a decimal: a smaller one measures the
+   * round trip more than the bytes).
+   */
+  serverStatusSamples: number;
+  throughputMinMb: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -468,6 +475,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   syncSuspendFlushMs: 1500,
   serverStatusPollMs: 5000,
   downloadAllReserveMb: 1024,
+  serverStatusSamples: 5,
+  throughputMinMb: 1,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -683,6 +692,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('syncSuspendFlushMs', 'Temps laissé à l’envoi des actions en attente avant la mise en veille (ms)', A, 'Synchronisation', 0, 10_000, 100),
   num('serverStatusPollMs', 'Intervalle entre deux demandes de l’état du serveur, tant que son bloc est affiché (ms)', A, 'Synchronisation', 1000, 60_000, 500),
   num('downloadAllReserveMb', 'Espace à garder libre sur ce disque après « Télécharger tous les PDF… » (Mo)', A, 'Synchronisation', 0, 100_000, 64),
+  num('serverStatusSamples', 'Mesures dont la latence et le débit du serveur sont la médiane', A, 'Synchronisation', 1, 50, 1),
+  num('throughputMinMb', 'Taille minimale d’un transfert compté dans le débit du serveur (Mo)', A, 'Synchronisation', 0.1, 100, 0.1),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
