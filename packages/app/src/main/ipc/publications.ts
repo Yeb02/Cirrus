@@ -4,6 +4,8 @@ import type { RenderParams } from '@cirrus/view';
 import { ipcMain, net } from 'electron';
 import { replayDirOf, replayFetch, replayOpen } from '../publications/replay.ts';
 import { requestFetch } from '../publications/request.ts';
+import { importPublicationVia } from '../publications/via.ts';
+import type { SyncHost } from '../sync/host.ts';
 
 /** What a publication's import reads when the interface asks for it (index.ts). */
 interface PublicationsDeps {
@@ -13,6 +15,8 @@ interface PublicationsDeps {
   store(): LocalStore | null;
   /** The settings the import reads (publicationMaxKb, publicationTimeoutMs, publicationPdfMaxMs, maxImportMb). */
   params(): RenderParams;
+  /** The synchronisation, once the base is open: with a server paired and connected, the server imports (plan 5b, D2). */
+  sync(): SyncHost | null;
   /** A capture, whose base is a test copy. */
   capture: boolean;
 }
@@ -38,15 +42,24 @@ export function wirePublications(deps: PublicationsDeps): void {
   // string of MAX_IDENTIFIER_CHARS at most: an identifier, a publisher's address, an address of the open web under its
   // guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb and
   // publicationPdfMaxMs, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the
-  // dialog, task 5).
+  // dialog, task 5). With a server paired and connected, the server makes it, and keeps the PDF (plan 5b, D2:
+  // importPublicationVia); without one, or the server failing, this PC does. On the recorded answers, everything stays
+  // here: the scripts' server is never asked to reach the network.
   ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown, options: unknown) => {
     if (!deps.store()) return { ok: false, message: 'La base n’est pas ouverte.' };
-    const p = deps.params();
     const log = (m: string) => console.warn(m);
-    return importPublication(text, {
-      fetch: publicationsFetch, store: (name, bytes) => storeBytes(deps.dir(), name, bytes),
-      maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log,
-      open: { ...openNetwork, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log },
-    }, options);
+    return importPublicationVia(text, options, {
+      local: (t, o) => {
+        const p = deps.params();
+        return importPublication(t, {
+          fetch: publicationsFetch, store: (name, bytes) => storeBytes(deps.dir(), name, bytes),
+          maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log,
+          open: { ...openNetwork, timeoutMs: p.publicationTimeoutMs, pdfMaxMs: p.publicationPdfMaxMs, log },
+        }, o);
+      },
+      server: () => (publicationsReplay ? null : deps.sync()?.publicationImporter() ?? null),
+      params: deps.params,
+      log,
+    });
   });
 }

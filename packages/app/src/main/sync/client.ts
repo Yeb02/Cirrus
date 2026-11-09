@@ -1,8 +1,9 @@
 import { type Id, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
+import type { PublicationRequest } from '../publications/via.ts';
 import type { SecretStore } from './config.ts';
-import { Connection, FORMAT, json, messageOf, ok, Refusal } from './connection.ts';
+import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
 import { Downloads, filesToFetch, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
 import type { SyncStatus } from './protocol.ts';
@@ -127,6 +128,27 @@ export class SyncClient {
    */
   fetchBlob(hash: string): Promise<boolean> {
     return isHash(hash) ? this.downloads.fetch(hash) : Promise.resolve(false);
+  }
+
+  /**
+   * Whether a connection is open: its hello made, its event stream open (« catching-up » or « live »), not ended since.
+   * A publication's import goes to the server only then (plan 5b, task 3, D2); connecting, offline, refused or off,
+   * this PC imports it itself.
+   */
+  connected(): boolean {
+    const conn = this.conn;
+    return conn !== null && !conn.closed && conn.open;
+  }
+
+  /**
+   * A publication's import asked of the server (POST /publications, plan 5b, task 3), through the connection open, with
+   * its token: the server's answer as it comes. Rejects when no connection is open, or the network fails; aborted with
+   * the connection.
+   */
+  publication(request: PublicationRequest): Promise<Response> {
+    const conn = this.conn;
+    if (conn === null || conn.closed || !conn.open) return Promise.reject(new Error('aucune connexion au serveur'));
+    return conn.request('/publications', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(request) });
   }
 
   /** The server's clock minus this PC's, measured at the last hello (0 before): a write's time is now() + clockOffset(). */

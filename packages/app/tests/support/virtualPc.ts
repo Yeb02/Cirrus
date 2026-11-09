@@ -6,8 +6,10 @@ import {
   type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type RunningServer, startServer, Tokens } from '@cirrus/server';
+import type { FetchFn } from '@cirrus/sources';
 import { type ChangeRow, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
+import { replayFetch, replayOpen } from '../../src/main/publications/replay.ts';
 import { SyncClient, type SyncParams } from '../../src/main/sync/client.ts';
 import type { SyncStatus } from '../../src/main/sync/protocol.ts';
 import { fileSecrets, pair, type ServerConfig, type TokenCipher } from '../../src/main/sync/config.ts';
@@ -19,6 +21,9 @@ import { FORMAT } from '../../src/main/sync/connection.ts';
 // and a free port, its data in a temporary folder: never the user's base, never %LOCALAPPDATA%\Cirrus.
 
 export const T0 = Date.UTC(2026, 10, 8, 9);
+
+/** The recorded answers of the publications' network (plan 4c, task 4): the server's network in the lab, the PC's in the tests. */
+export const PUBLICATIONS_DATA = join(import.meta.dirname, '..', 'data', 'publications');
 
 /** The tests keep the token in clear (the app encrypts it with safeStorage). */
 export const PLAIN: TokenCipher = { encrypt: (text) => Buffer.from(text, 'utf8'), decrypt: (data) => data.toString('utf8') };
@@ -64,6 +69,10 @@ export class Net {
   /** The writes of each POST /units, and every answer to them. */
   readonly batches: number[] = [];
   readonly results: UnitResult[] = [];
+  /** The body of each POST /publications (plan 5b, task 3). */
+  readonly publications: unknown[] = [];
+  /** An answer given instead of the server's (a 5xx, say), or null: the server's. */
+  respond: ((method: string, path: string) => Response | null) | null = null;
   corruptBlobs = false;
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
   /** Awaited before each request leaves (a test holds one: a seed at its first request, say). */
@@ -106,6 +115,9 @@ export class Net {
     this.requests.push({ method, path: url.pathname });
     await this.before?.(method, url.pathname);
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
+    if (url.pathname === '/publications' && method === 'POST') this.publications.push(JSON.parse(String(init?.body)));
+    const instead = this.respond?.(method, url.pathname);
+    if (instead) return instead;
     if (method === 'GET' && url.pathname.startsWith('/files/')) {
       const signal = init?.signal ?? undefined;
       while (this.filesGate) {
@@ -261,6 +273,11 @@ export class Lab {
   private port = 0;
   /** A paired PC's token, for the lab's own reads (/hello, /snapshot, /journal). */
   private observer!: ServerConfig;
+  /**
+   * What the server's network asked, for a publication's import (plan 5b, task 3): its network is the recorded answers
+   * (tests/data/publications, replay.ts), never the Internet.
+   */
+  readonly serverAsked: string[] = [];
 
   private constructor() {}
 
@@ -277,7 +294,12 @@ export class Lab {
 
   /** Starts the server, on the port it had before if it ran already (the PCs keep its address). */
   async startServer(): Promise<void> {
-    this.server = await startServer({ dataDir: this.dataDir, port: this.port, now: () => this.clock });
+    const replayed = replayFetch(PUBLICATIONS_DATA), open = replayOpen(PUBLICATIONS_DATA);
+    const sources = {
+      fetch: ((url, init) => { this.serverAsked.push(url); return replayed(url, init); }) as FetchFn,
+      open: { resolve: (host: string) => { this.serverAsked.push(host); return open.resolve(host); }, connect: open.connect },
+    };
+    this.server = await startServer({ dataDir: this.dataDir, port: this.port, now: () => this.clock, sources });
     this.port = Number(new URL(this.server.url).port);
   }
 

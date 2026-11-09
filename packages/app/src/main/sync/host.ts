@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Action, Id, RemoteUnit } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
+import type { ServerImport } from '../publications/via.ts';
 import { SharedSettings } from '../settings.ts';
 import { SyncClient } from './client.ts';
 import type { SecretStore } from './config.ts';
@@ -292,5 +293,16 @@ export class SyncHost {
   /** cirrus-file:'s fetcher of an absent blob (D6): the client's, with a server paired; none otherwise (plan 4c's 404). */
   blobFetcher(): ((hash: string) => Promise<boolean>) | null {
     return this.pairing.paired() ? (hash) => this.client.fetchBlob(hash) : null;
+  }
+
+  /**
+   * A publication's import by the server (plan 5b, task 3, D2: publications/via.ts), as blobFetcher hands cirrus-file:
+   * its fetcher: with a server paired and the client connected (SyncClient.connected: its stream open), the request
+   * through that connection; none otherwise, and this PC imports it itself, as in plan 4c.
+   */
+  publicationImporter(): ServerImport | null {
+    if (!this.pairing.paired() || !this.client.connected()) return null;
+    const client = this.client;
+    return (request) => client.publication(request);
   }
 }

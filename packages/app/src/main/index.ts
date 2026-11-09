@@ -144,7 +144,7 @@ wireBase({
 wireFiles({ dir: () => dir, sync: () => sync, settings, copies, capture: capture !== undefined, background });
 wireBench({ scale: bench, exit: exitAfterLatex });
 wireLatex({ dir: () => dir, params: currentParams, latex: () => latex, setup: () => latexSetup });
-wirePublications({ dir: () => dir, store: () => store, params: currentParams, capture: capture !== undefined });
+wirePublications({ dir: () => dir, store: () => store, params: currentParams, sync: () => sync, capture: capture !== undefined });
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
