@@ -3,8 +3,8 @@ import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import {
-  type BodyRule, duration, INVALID_DELAY, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer,
-  validLimits,
+  type BodyRule, duration, INVALID_DELAY, lateRefusal, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal,
+  Transfer, validLimits,
 } from './transfer.ts';
 
 /**
@@ -186,7 +186,7 @@ export async function openFetch(href: string, deps: OpenDeps, accept: string, ca
   let site = '';
   let asked = href;
   const t = new Transfer(deps, {
-    late: () => new Refusal(`Le site « ${site} » ne répond pas (délai de ${seconds(deps.timeoutMs)} dépassé).`),
+    late: () => lateRefusal(`Le site « ${site} »`, deps.timeoutMs),
     tooLong: () => new Refusal(`Le téléchargement du PDF a dépassé ${duration(deps.pdfMaxMs)} : arrêté.`),
     offline: (e) => {
       deps.log?.(`Publication, ${asked} : ${messageOf(e)}`);

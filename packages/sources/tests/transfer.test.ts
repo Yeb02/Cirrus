@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { fetchPublication, importPublication, type PublicationDeps } from '../src/fetch.ts';
 import { type OpenDeps, openFetch } from '../src/guard.ts';
-import { duration, type Limits, readBody, Refusal, Transfer } from '../src/transfer.ts';
+import { duration, lateRefusal, type Limits, readBody, Refusal, Transfer, unreachable } from '../src/transfer.ts';
 import { endless, html, pdf, PDF_BYTES, PUBLIC, web } from './support.ts';
 
 /** The reading of a body and its delays, shared by the metadata's exchange and the open web's (review of task 2, I1, I2). */
@@ -146,6 +146,54 @@ test('l’import des métadonnées : des délais invalides sont refusés d’emb
       expect(asked, `${key} : ${what}`).toEqual([]);
     }
   }
+});
+
+test('unreachable : vrai pour « Pas de connexion. » et tout refus de délai (lateRefusal, seul à les écrire), faux pour tout autre refus (relecture de la tâche 3)', async () => {
+  // The late refusals: the builder's, whatever its subject and delay, and those both exchanges give (exchange, openFetch).
+  const silentDoi = await fetchPublication({ doi: '10.1000/x' }, {
+    fetch: () => new Promise<Response>(() => {}), store: (name, bytes) => ({ name, hash: 'h', size: bytes.length }), maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 50, pdfMaxMs: 700,
+  });
+  const silentSite = await openFetch('https://public.example/', web({ 'public.example/': () => new Promise<Response>(() => {}) }, { 'public.example': [PUBLIC] }, { timeoutMs: 50 }).deps, 'text/html', { page: 1024, pdf: 2 ** 20 });
+  const late = [
+    !silentDoi.ok && silentDoi.message,
+    !silentSite.ok && silentSite.message,
+    lateRefusal('Le serveur de DOI', 20_000).message,
+    lateRefusal('Le serveur d’arXiv', 1_500).message,
+    lateRefusal('Le site « public.example »', 60_000).message,
+    lateRefusal('Le site « [2606:2800::1] »', 1_234_567).message,
+  ];
+  expect(late.slice(0, 2)).toEqual([lateRefusal('Le serveur de DOI', 50).message, lateRefusal('Le site « public.example »', 50).message]);
+  for (const message of ['Pas de connexion.', ...late]) expect(unreachable(message as string), String(message)).toBe(true);
+  // Everything else is what the network said, the same from anywhere.
+  const said = [
+    'Publication introuvable.',
+    'Le PDF est introuvable sur arXiv.',
+    'Adresse refusée : elle mène à une machine du réseau local.',
+    'Seules les adresses https sont acceptées.',
+    'Adresse refusée : une adresse qui n’est pas en HTTPS.',
+    'Redirection refusée : « doi.org » renvoie vers une adresse qui n’est pas en HTTPS.',
+    'Adresse refusée : seul le port 443 est accepté.',
+    'Adresse refusée : elle contient un nom d’utilisateur ou un mot de passe.',
+    'Le PDF fait plus de 200 Mo.',
+    'Le PDF d’arXiv fait plus de 200 Mo.',
+    `Le téléchargement du PDF a dépassé ${duration(300_000)} : arrêté.`,
+    `Le téléchargement du PDF d’arXiv a dépassé ${duration(700)} : arrêté.`,
+    'Pas de connexion : le PDF d’arXiv n’a pas été téléchargé.',
+    'Le fichier reçu d’arXiv n’est pas un PDF.',
+    'Le PDF d’arXiv n’a pas pu être enregistré dans la base.',
+    'Le PDF n’a pas pu être enregistré dans la base.',
+    'Le serveur de DOI a répondu par une erreur (HTTP 500).',
+    'Le site « public.example » a répondu par une erreur (HTTP 503).',
+    'Réponse inattendue du serveur de DOI.',
+    'Réponse inattendue du site « public.example ».',
+    'Réponse trop grosse du serveur de DOI (plus de 64 Ko).',
+    'Trop de redirections depuis « public.example ».',
+    'Cette page ne mène à aucun PDF.',
+    'Identifiant non reconnu.',
+    'L’import de la publication a échoué : erreur inattendue.',
+    'Délai invalide.',
+  ];
+  for (const message of said) expect(unreachable(message), message).toBe(false);
 });
 
 test('duration : une durée en secondes sous la minute, en minutes au-delà', () => {

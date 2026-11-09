@@ -5,7 +5,7 @@ import { citationMeta } from './html.ts';
 import { arxivDoi, isAddress, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 import {
-  duration, INVALID_DELAY, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer, validLimits,
+  duration, INVALID_DELAY, lateRefusal, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, Transfer, validLimits,
 } from './transfer.ts';
 
 /**
@@ -110,7 +110,7 @@ async function exchange(
   if (!validLimits(deps)) throw new Refusal(INVALID_DELAY);
   const hosts = (deps.sources ?? PUBLICATION_SOURCES).hosts;
   const t = new Transfer(deps, {
-    late: () => new Refusal(`Le ${serverOf(server)} ne répond pas (délai de ${seconds(deps.timeoutMs)} dépassé).`),
+    late: () => lateRefusal(`Le ${serverOf(server)}`, deps.timeoutMs),
     // Only a PDF's download is bounded so: arXiv's.
     tooLong: () => new Refusal(`Le téléchargement du PDF d’arXiv a dépassé ${duration(deps.pdfMaxMs)} : arrêté.`),
     offline: (e) => {
