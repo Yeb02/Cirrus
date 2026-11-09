@@ -206,6 +206,71 @@ async function openPopup(page, at, title) {
     throw new Error(`pas de pop-up « ${title} » au clic sur le nœud`);
   }
 }
+// Plan 6a, task 2: previous and next. The window's pixels say where the view is: one plan at one camera is one image.
+/** The graph as it is once the pointer rests on a free corner (a hover lights what is under it) and nothing blinks: its pixels, not the tabs'. */
+async function viewImage(page) {
+  await page.move(1590, 995);
+  await sleep(1500);
+  const r = await page.evaluate(`(() => { const b = document.querySelector('.graph').getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height, scale: 1 }; })()`);
+  const shot = await page.send('Page.captureScreenshot', { format: 'png', clip: r });
+  if (!shot.result?.data) throw new Error(`Pas de capture : ${shot.error?.message ?? 'réponse vide'}`);
+  return Buffer.from(shot.result.data, 'base64');
+}
+/**
+ * The share (in %) of pixels where two images differ by more than 16 levels on a channel, counted by the page (as the
+ * captures' comparison does): a plan shown again is drawn from the same scene, to within a few levels at the edges.
+ */
+async function imageDiff(page, a, b) {
+  return page.evaluate(`(async () => {
+    const load = async (b64) => {
+      const bmp = await createImageBitmap(new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: 'image/png' }));
+      const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d');
+      g.drawImage(bmp, 0, 0);
+      return g.getImageData(0, 0, bmp.width, bmp.height);
+    };
+    const x = await load(${JSON.stringify(a.toString('base64'))}), y = await load(${JSON.stringify(b.toString('base64'))});
+    if (x.width !== y.width || x.height !== y.height) return 100;
+    let n = 0;
+    for (let i = 0; i < x.data.length; i += 4) {
+      if (Math.abs(x.data[i] - y.data[i]) > 16 || Math.abs(x.data[i + 1] - y.data[i + 1]) > 16 || Math.abs(x.data[i + 2] - y.data[i + 2]) > 16) n++;
+    }
+    return (100 * n) / (x.width * x.height);
+  })()`);
+}
+/** The graph is now the image `expected`, to the pixel (a hundredth of a percent at most): else `message`. */
+async function sameView(page, expected, message) {
+  const diff = await imageDiff(page, await viewImage(page), expected);
+  if (diff >= 0.01) throw new Error(`${message} (${diff.toFixed(3)} % des pixels diffèrent)`);
+}
+/** The mouse's side button `which` ('back' or 'forward') pressed and released at (x, y), as the system sends it. */
+async function sideClick(page, x, y, which) {
+  const buttons = which === 'back' ? 8 : 16;
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: which, buttons, clickCount: 1 });
+  await sleep(30);
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: which, buttons: 0, clickCount: 1 });
+  await sleep(600);
+}
+/** The active tab's text. */
+const activeTab = (page) => page.evaluate(`document.querySelector('.tabs .tab.on')?.textContent ?? ''`);
+const onTab = async (page, name, what) => {
+  if (!(await page.until(`document.querySelector('.tabs .tab.on')?.textContent.includes(${JSON.stringify(name)}) === true`))) throw new Error(`${what} : l’onglet actif est « ${await activeTab(page)} », pas « ${name} »`);
+};
+/** Ctrl+K, `query` typed, its row `title` listed first: Entrée jumps to it (the box closes, the graph has the focus). */
+async function searchJump(page, query, title) {
+  const FIELD = `document.activeElement?.matches('.search-box .search-field') === true`;
+  for (let i = 0; i < 10 && !(await page.until(FIELD, 1000)); i++) await page.press('k', 'KeyK', 75, 2);
+  if (!(await page.evaluate(FIELD))) throw new Error('Ctrl+K n’ouvre pas la recherche');
+  await page.type(query);
+  if (!(await page.until(`document.querySelector('.search-box .search-results li .title')?.textContent === ${JSON.stringify(title)}`, 10000))) {
+    throw new Error(`la recherche de « ${query} » ne met pas « ${title} » en tête : ${JSON.stringify(await page.evaluate(`[...document.querySelectorAll('.search-box .search-results li .title')].map((t) => t.textContent)`))}`);
+  }
+  await page.press('Enter', 'Enter', 13);
+  if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('Entrée ne ferme pas la recherche');
+}
+/** The centre of the graph, where a jump frames its object. */
+const graphCentre = (page) => page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+
 const TWO_PCS = {
   name: 'synchronisation entre deux PC (plan 5a, tâche 7)',
   async setup() {
@@ -650,6 +715,105 @@ const SCENARIOS = [
       // Framed: the node fills the view's centre.
       const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
       await openPopup(page, centre, 'Motivation');
+    },
+  },
+  {
+    // Plan 6a, D2: « précédent » et « suivant ». A jump by the search pushes the place left (a plan and its camera); Alt+←
+    // brings the view back to it exactly (the same image, the plan's tab back), Alt+→ forward again, and so do the mouse's
+    // side buttons, which are not left clicks. A plain move of the view is not a jump; the arrows with Alt move nothing.
+    name: 'précédent et suivant : un saut par la recherche, Alt+←, Alt+→, les boutons latéraux',
+    async run(page) {
+      await onTab(page, 'Lobby', 'au départ');
+      // The graph has the focus; Alt+← with nothing behind moves nothing — the arrows with Alt no longer pan.
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      const start = await viewImage(page);
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await sameView(page, start, 'Alt+← déplace la vue (ou fait autre chose) sans rien derrière');
+      // The arrow alone pans: this moved view is the place the jump leaves (a move is not a jump).
+      await page.press('ArrowLeft', 'ArrowLeft', 37);
+      const moved = await viewImage(page);
+      if ((await imageDiff(page, moved, start)) < 1) throw new Error('la flèche seule ne déplace plus la vue');
+      await searchJump(page, 'motiv', 'Motivation');
+      await onTab(page, 'Article MDL', 'après le saut');
+      const jumped = await viewImage(page);
+      // Alt+←: the lobby, its camera as it was left.
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Lobby', 'Alt+←');
+      await sameView(page, moved, 'Alt+← ne rend pas la vue du lobby telle qu’elle était, ou y fait un cercle');
+      // Alt+→: the article's plan, the node framed as the jump left it.
+      await page.press('ArrowRight', 'ArrowRight', 39, 1);
+      await onTab(page, 'Article MDL', 'Alt+→');
+      await sameView(page, jumped, 'Alt+→ ne rend pas la vue du saut');
+      // The side buttons, over the node framed at the centre: a left press there would open its pop-up.
+      const centre = await graphCentre(page);
+      await sideClick(page, centre.x, centre.y, 'back');
+      await onTab(page, 'Lobby', 'le bouton latéral « précédent »');
+      if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('un bouton latéral compte comme un clic gauche (un pop-up s’est ouvert)');
+      await sameView(page, moved, 'le bouton « précédent » ne rend pas la vue du lobby');
+      await sideClick(page, centre.x, centre.y, 'forward');
+      await onTab(page, 'Article MDL', 'le bouton latéral « suivant »');
+      await sameView(page, jumped, 'le bouton « suivant » ne rend pas la vue du saut');
+      if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('un bouton latéral ouvre un pop-up');
+      // A jump after a step back clears what was ahead: back, jump, then Alt+→ does nothing.
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Lobby', 'Alt+← (2)');
+      await searchJump(page, 'sans perte', 'Compression sans perte');
+      const compression = await viewImage(page);
+      await page.press('ArrowRight', 'ArrowRight', 39, 1);
+      await sameView(page, compression, 'un saut après un retour n’a pas effacé ce qui était devant');
+      if ((await activeTab(page)).includes('Article MDL')) throw new Error('un saut après un retour n’a pas effacé ce qui était devant');
+    },
+  },
+  {
+    // Plan 6a, D3: « Voir dans un autre plan » in a node's menu, only when it is in another plan. In one other plan (Compression
+    // sans perte: the lobby and « Thèse »), it jumps there at once; in two (MDL, seen from « Thèse »: the lobby and « Article
+    // MDL »), a question lists them by name, the lobby first. Alt+← then goes back through the jumps, plans and views.
+    name: '« Voir dans un autre plan » : un autre plan, saut direct ; deux autres plans, une question ; puis Alt+← et Alt+→',
+    async run(page) {
+      const menuAt = async (at) => {
+        for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(at.x, at.y, 'right');
+        return page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      };
+      await onTab(page, 'Lobby', 'au départ');
+      // A node of the lobby alone has no such entry: « Monde algorithmique ».
+      await searchJump(page, 'monde algo', 'Monde algorithmique');
+      let centre = await graphCentre(page);
+      let items = await menuAt(centre);
+      if (items.includes('Voir dans un autre plan')) throw new Error(`« Voir dans un autre plan » est proposé à un nœud d’un seul plan : ${JSON.stringify(items)}`);
+      await page.press('Escape', 'Escape', 27);
+      // One other plan: a jump at once, no question.
+      await searchJump(page, 'sans perte', 'Compression sans perte');
+      centre = await graphCentre(page);
+      items = await menuAt(centre);
+      if (items.at(-1) !== 'Voir dans un autre plan') throw new Error(`pas de « Voir dans un autre plan » en dernier : ${JSON.stringify(items)}`);
+      const see = await page.centre('.context-menu button', '^Voir dans un autre plan$');
+      await page.click(see.x, see.y);
+      await onTab(page, 'Thèse', 'un seul autre plan');
+      if (await page.evaluate(`!!document.querySelector('.ask')`)) throw new Error('une question pour un seul autre plan');
+      // Two other plans: the question lists them by name, the lobby first, then the plans without a tab by name.
+      await searchJump(page, 'minimum desc', 'Minimum Description Length Principle (MDL)');
+      centre = await graphCentre(page);
+      await menuAt(centre);
+      const see2 = await page.centre('.context-menu button', '^Voir dans un autre plan$');
+      await page.click(see2.x, see2.y);
+      if (!(await page.until(`!!document.querySelector('.ask')`))) throw new Error('pas de question pour deux autres plans');
+      const choices = await page.evaluate(`[...document.querySelectorAll('.ask .choices button')].map((b) => b.textContent)`);
+      if (JSON.stringify(choices) !== JSON.stringify(['Lobby', 'Article MDL', 'Annuler'])) throw new Error(`la question montre ${JSON.stringify(choices)}`);
+      const article = await page.centre('.ask .choices button', '^Article MDL$');
+      await page.click(article.x, article.y);
+      await onTab(page, 'Article MDL', 'deux autres plans');
+      if (await page.evaluate(`!!document.querySelector('.ask')`)) throw new Error('la question reste ouverte');
+      // Back through the jumps: « Thèse » (the view the search framed, then the one before it), then the lobby.
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Thèse', 'Alt+← (1)');
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Thèse', 'Alt+← (2)');
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Lobby', 'Alt+← (3)');
+      for (let i = 0; i < 2; i++) await page.press('ArrowRight', 'ArrowRight', 39, 1);
+      await onTab(page, 'Thèse', 'Alt+→ ×2');
+      await page.press('ArrowRight', 'ArrowRight', 39, 1);
+      await onTab(page, 'Article MDL', 'Alt+→ ×3');
     },
   },
   {
