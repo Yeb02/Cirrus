@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { FileRef } from '@cirrus/core';
 import { cslToFields, type FetchFn, fetchPublication, importPublication, type PublicationDeps, PUBLICATION_SOURCES } from '@cirrus/sources';
 import { expect, test } from 'vitest';
-import { replayDirOf, replayFetch } from '../src/main/publications/replay.ts';
+import { replayDirOf, replayFetch, replayOpen } from '../src/main/publications/replay.ts';
 import { requestFetch } from '../src/main/publications/request.ts';
 
 /**
@@ -208,4 +208,41 @@ test('replayFetch et replayDirOf : les réponses enregistrées, seulement sur un
   expect(replayDirOf({ ...env, CIRRUS_BACKGROUND: '0' }, false)).toBeNull();
   expect(replayDirOf({ CIRRUS_DATA: 'D:\\base-de-test', CIRRUS_BACKGROUND: '1' }, true)).toBeNull();
   expect(replayDirOf({ ...env, CIRRUS_PUBLICATIONS_REPLAY: '', CIRRUS_BACKGROUND: '1' }, false)).toBeNull();
+});
+
+test('replayOpen : le réseau ouvert rejoué (plan 5b, D3) — les noms et les réponses écrits, sous les gardes de @cirrus/sources, jamais le réseau', async () => {
+  const LOCAL = { ok: false, message: 'Adresse refusée : elle mène à une machine du réseau local.' };
+  const open = { ...replayOpen(DATA), timeoutMs: 2000 };
+  const signal = new AbortController().signal;
+  // A name: the addresses written for it, else as getaddrinfo fails.
+  expect(await open.resolve('editeur.example')).toEqual([{ address: '93.184.215.14', family: 4 }]);
+  await expect(open.resolve('example.org')).rejects.toThrow(/ENOTFOUND/);
+  // A connection: only to an address written for its name.
+  const ask = (address: string, path: string) => open.connect({ address, family: 4, hostname: 'editeur.example', path, headers: { Accept: 'application/pdf' }, signal });
+  expect((await ask('93.184.215.14', '/papiers/note.pdf')).status).toBe(200);
+  await expect(ask('10.9.9.9', '/papiers/note.pdf')).rejects.toThrow(TypeError);
+  await expect(ask('93.184.215.14', '/jamais')).rejects.toThrow(TypeError);
+
+  // Through the import: a page, its DOI's metadata (replayFetch's Crossref answers) and its PDF.
+  const { fetch } = fakeFetch((url, accept, s) => replayFetch(DATA)(url, { headers: { Accept: accept }, redirect: 'manual', signal: s }));
+  const { deps, stored } = depsOf(fetch, { open });
+  const page = await importPublication('https://editeur.example/articles/shannon-1948', deps);
+  if (!page.ok || 'kind' in page) throw new Error(JSON.stringify(page));
+  expect([page.id, cslToFields(page.csl)?.title, page.pdf?.name, page.pdfMessage]).toEqual([
+    { doi: '10.1002/j.1538-7305.1948.tb01338.x' }, 'A Mathematical Theory of Communication', 'shannon-1948.pdf', undefined,
+  ]);
+  const shannon = readFileSync(join(DATA, 'editeur-shannon-1948.pdf'));
+  expect(stored.map((s) => [s.name, Buffer.from(s.bytes).equals(shannon)])).toEqual([['shannon-1948.pdf', true]]);
+  // A PDF without identifier, after a redirect.
+  const note = readFileSync(join(DATA, 'editeur-note.pdf'));
+  expect(await importPublication('https://editeur.example/ancienne-adresse', deps))
+    .toEqual({ ok: true, kind: 'pdf', pdf: { name: 'note.pdf', hash: createHash('sha256').update(note).digest('hex'), size: note.length } });
+  // The guards, on answers written all the same: a local name, a page whose PDF is local, an address in http.
+  expect(await importPublication('https://interne.example/a.pdf', deps)).toEqual(LOCAL);
+  expect(await importPublication('https://editeur.example/interne', deps)).toEqual(LOCAL);
+  expect(await importPublication('http://editeur.example/papiers/note.pdf', deps)).toEqual({ ok: false, message: 'Seules les adresses https sont acceptées.' });
+  // Not written: as without a network, never the real one.
+  expect(await importPublication('https://editeur.example/jamais', deps)).toEqual({ ok: false, message: 'Pas de connexion.' });
+  expect(await importPublication('https://example.org/', deps)).toEqual({ ok: false, message: 'Pas de connexion.' });
+  expect(stored.map((s) => s.name)).toEqual(['shannon-1948.pdf', 'note.pdf']);
 });

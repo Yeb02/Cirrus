@@ -1,8 +1,8 @@
-import { type FetchFn, importPublication } from '@cirrus/sources';
+import { type FetchFn, httpsConnect, importPublication, type OpenDeps, systemResolve } from '@cirrus/sources';
 import { type LocalStore, storeBytes } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { ipcMain, net } from 'electron';
-import { replayDirOf, replayFetch } from '../publications/replay.ts';
+import { replayDirOf, replayFetch, replayOpen } from '../publications/replay.ts';
 import { requestFetch } from '../publications/request.ts';
 
 /** What a publication's import reads when the interface asks for it (index.ts). */
@@ -17,30 +17,35 @@ interface PublicationsDeps {
   capture: boolean;
 }
 
-/** The publications' IPC (plan 4c): a publication's metadata fetched, and an arXiv article's PDF, when the user imports one. */
+/** The publications' IPC (plan 4c): a publication's metadata fetched, and its PDF, when the user imports one. */
 export function wirePublications(deps: PublicationsDeps): void {
   /**
    * A publication's network (plan 4c, D5, D6): Electron's stack (its proxy, its certificates), by net.request, whose
-   * redirects @cirrus/sources follows by hand. On a test base out of the user's way (CIRRUS_DATA, in capture mode or with
-   * CIRRUS_BACKGROUND=1), CIRRUS_PUBLICATIONS_REPLAY names recorded answers instead (replay.ts): the interface's scenarios
-   * and the captures import without the network. Never on the user's own base, where the variable is ignored.
+   * redirects @cirrus/sources follows by hand. The open web (plan 5b, D3): the system's resolver (every address of a
+   * name) and Node's https.request to the address checked, which net.request cannot be told. On a test base out of the
+   * user's way (CIRRUS_DATA, in capture mode or with CIRRUS_BACKGROUND=1), CIRRUS_PUBLICATIONS_REPLAY names recorded
+   * answers instead, for both (replay.ts): the interface's scenarios and the captures import without the network. Never
+   * on the user's own base, where the variable is ignored.
    */
   const publicationsReplay = replayDirOf(process.env, deps.capture);
   if (process.env.CIRRUS_PUBLICATIONS_REPLAY && !publicationsReplay) {
     console.warn('CIRRUS_PUBLICATIONS_REPLAY ignoré : seulement sur une base de test (CIRRUS_DATA), en capture ou en arrière-plan.');
   }
   const publicationsFetch: FetchFn = publicationsReplay ? replayFetch(publicationsReplay) : requestFetch((options) => net.request(options));
+  const openNetwork: Pick<OpenDeps, 'resolve' | 'connect'> = publicationsReplay ? replayOpen(publicationsReplay) : { resolve: systemResolve, connect: httpsConnect() };
   // A publication's import (plan 4c, task 4), which the user's import makes (task 5): the only call that reaches the
   // network for it, never at startup nor in the background. The text is checked here whatever the interface did (a
-  // string parseIdentifier reads); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within
-  // maxImportMb, stored before any action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the dialog, task 5).
+  // string of MAX_IDENTIFIER_CHARS at most: an identifier, a publisher's address, an address of the open web under its
+  // guards); the answers within publicationMaxKb and publicationTimeoutMs, the PDF within maxImportMb, stored before any
+  // action refers to it; `{ pdf: false }` leaves it out (a PDF dropped in the dialog, task 5).
   ipcMain.handle('cirrus:publications:fetch', (_e, text: unknown, options: unknown) => {
     if (!deps.store()) return { ok: false, message: 'La base n’est pas ouverte.' };
     const p = deps.params();
+    const log = (m: string) => console.warn(m);
     return importPublication(text, {
       fetch: publicationsFetch, store: (name, bytes) => storeBytes(deps.dir(), name, bytes),
-      maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs,
-      log: (m) => console.warn(m),
+      maxKb: p.publicationMaxKb, maxPdfBytes: p.maxImportMb * 2 ** 20, timeoutMs: p.publicationTimeoutMs, log,
+      open: { ...openNetwork, timeoutMs: p.publicationTimeoutMs, log },
     }, options);
   });
 }

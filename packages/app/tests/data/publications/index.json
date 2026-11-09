@@ -1,6 +1,16 @@
 {
-  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). shannon-1948.* recorded on 2026-11-07 too (review of task 5), for an import by DOI that is no duplicate of the test base: Crossref writes its month whole (month=July).",
+  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). shannon-1948.* recorded on 2026-11-07 too (review of task 5), for an import by DOI that is no duplicate of the test base: Crossref writes its month whole (month=July). The open web (plan 5b, D3) is written by hand, never recorded: `addresses`, what a name resolves to (editeur.example to a public address, interne.example to a local one), and the editeur.example answers, a page with citation_doi and citation_pdf_url, a PDF without identifier, a page whose PDF is on the local network.",
+  "addresses": {
+    "editeur.example": ["93.184.215.14"],
+    "interne.example": ["10.0.0.5"]
+  },
   "responses": [
+    { "url": "https://editeur.example/articles/shannon-1948", "status": 200, "headers": { "content-type": "text/html; charset=utf-8" }, "body": "editeur-shannon-1948.html" },
+    { "url": "https://editeur.example/pdf/shannon-1948.pdf", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "editeur-shannon-1948.pdf" },
+    { "url": "https://editeur.example/papiers/note.pdf", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "editeur-note.pdf" },
+    { "url": "https://editeur.example/ancienne-adresse", "status": 301, "headers": { "location": "/papiers/note.pdf" } },
+    { "url": "https://editeur.example/interne", "status": 200, "headers": { "content-type": "text/html; charset=utf-8" }, "body": "editeur-interne.html" },
+    { "url": "https://interne.example/a.pdf", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "editeur-note.pdf" },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
     { "url": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762", "accept": "application/vnd.citationstyles.csl+json", "status": 200, "headers": { "content-type": "application/vnd.citationstyles.csl+json; charset=utf-8" }, "body": "arxiv-1706.03762.csl.json" },

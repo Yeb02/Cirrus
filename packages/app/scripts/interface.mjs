@@ -834,6 +834,29 @@ const SCENARIOS = [
         const x = await ask(expr);
         if (x?.message !== 'Identifiant non reconnu.') throw new Error(`${expr} : ${JSON.stringify(x)}`);
       }
+      // Plan 5b, D4: a publisher's address, its DOI read without asking the publisher.
+      const wiley = await ask(JSON.stringify('https://onlinelibrary.wiley.com/doi/full/10.1002/j.1538-7305.1948.tb01338.x'));
+      if (!wiley?.ok || wiley.id?.doi !== '10.1002/j.1538-7305.1948.tb01338.x') throw new Error(`l’adresse de Wiley ne donne pas son DOI : ${JSON.stringify(wiley).slice(0, 200)}`);
+      // D3: the open web, replayed as well (editeur.example and interne.example exist on no network): a page, its DOI's
+      // metadata and its PDF; a PDF without identifier; the guards.
+      const opened = await ask(JSON.stringify('https://editeur.example/articles/shannon-1948'));
+      const shannon = readFileSync(join(appDir, 'tests', 'data', 'publications', 'editeur-shannon-1948.pdf'));
+      if (!opened?.ok || opened.id?.doi !== '10.1002/j.1538-7305.1948.tb01338.x' || opened.pdf?.name !== 'shannon-1948.pdf' || opened.pdf.size !== shannon.length) {
+        throw new Error(`la page de l’éditeur n’est pas importée avec son PDF : ${JSON.stringify(opened).slice(0, 300)}`);
+      }
+      const note = await ask(JSON.stringify('https://editeur.example/papiers/note.pdf'));
+      if (note?.ok !== true || note.kind !== 'pdf' || note.pdf?.name !== 'note.pdf') throw new Error(`le PDF sans identifiant n’est pas rendu comme tel : ${JSON.stringify(note)}`);
+      for (const ref of [opened.pdf, note.pdf]) {
+        if (!existsSync(join(data, 'files', ref.hash.slice(0, 2), ref.hash))) throw new Error(`${ref.name} n’est pas au magasin de la base de test`);
+      }
+      const local = 'Adresse refusée : elle mène à une machine du réseau local.';
+      for (const [text, message] of [
+        ['http://editeur.example/papiers/note.pdf', 'Seules les adresses https sont acceptées.'], ['https://interne.example/a.pdf', local], ['https://127.0.0.1/', local],
+        ['https://2130706433/', local], ['https://editeur.example/interne', local],
+      ]) {
+        const x = await ask(JSON.stringify(text));
+        if (x?.ok !== false || x.message !== message) throw new Error(`« ${text} » : ${JSON.stringify(x)} au lieu de « ${message} »`);
+      }
       if (nodes() !== before) throw new Error('l’import a créé des nœuds');
     },
   },
