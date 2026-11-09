@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 /**
  * `value` as JSON in `file` (JSON.stringify's `space`), written whole to a temporary file beside it, then renamed over
@@ -7,15 +7,26 @@ import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:
  * settings and the synchronisation keep beside the base (short review after plan 5a, D4): settings.json,
  * settings-pending.json, serveur.json, a staged base's pc.json and mark, all synced; downloads.json not — rewritten at
  * each batch received that brings files, and losing it only leaves those files to come at their first opening (R9).
- * Costs the text, and with `sync` one flush.
+ * A value JSON cannot write (a BigInt, a cycle) throws before any file is opened; a write or a rename refused (a full
+ * disk; on Windows, the target held by an antivirus or the indexer) removes the temporary file, at best, so that none
+ * piles up beside the base (re-review of the fixes, N5). Costs the text, and with `sync` one flush.
  */
 export function writeJsonAtomic(file: string, value: unknown, o: { sync: boolean; space?: number }): void {
-  const tmp = `${file}.${process.pid}.tmp`, fd = openSync(tmp, 'w');
+  const text = JSON.stringify(value, null, o.space), tmp = `${file}.${process.pid}.tmp`, fd = openSync(tmp, 'w');
   try {
-    writeFileSync(fd, JSON.stringify(value, null, o.space), 'utf8');
-    if (o.sync) fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    try {
+      writeFileSync(fd, text, 'utf8');
+      if (o.sync) fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, file);
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // left beside the base: the error that matters is the write's
+    }
+    throw e;
   }
-  renameSync(tmp, file);
 }
