@@ -4,3 +4,5 @@ packages/fixtures/assets/** -text
 packages/app/tests/data/publications/** -text
 # A real .bib of the parser's tests (plan 4c, task 5): its lines as written.
 packages/core/tests/data/** -text
+# The pages of the open web's tests (plan 5b, task 2): read as the sites write them.
+packages/sources/tests/data/** -text
