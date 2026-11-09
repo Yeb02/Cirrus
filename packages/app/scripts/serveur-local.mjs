@@ -28,6 +28,14 @@ export async function localServer() {
       try { return db.prepare('SELECT op FROM changes ORDER BY local_seq').all().map((r) => JSON.parse(r.op)); } finally { db.close(); }
     },
     hasBlob: (hash) => existsSync(join(dir, 'base', 'files', hash.slice(0, 2), hash)),
+    /**
+     * Since when every .tex open is said open, fixed at `ms` by the server's clock (serveur.db, open_tex): the banner of
+     * a .tex open elsewhere then reads the same at every capture (plan 5b, task 8). A file still open keeps it.
+     */
+    fixPresenceSince(ms) {
+      const db = new DatabaseSync(join(dir, 'serveur.db'));
+      try { return db.prepare('UPDATE open_tex SET since = ?').run(ms).changes; } finally { db.close(); }
+    },
     /** Another PC paired with it (« Observateur »): its shared settings read and changed (task 6). */
     async observer() {
       const body = JSON.stringify({ code: pairingCode(dir, 'Observateur'), pc: 'observateur', name: 'Observateur' });
@@ -56,15 +64,14 @@ export async function localServer() {
 
 /**
  * A PC without Electron (tests/support/virtualPc.ts: its base, its state reconciled as the interface does, its sync
- * client on Node's fetch), paired with `server` ({ url, code(name) }) under the identifier `id` (its name there: `id` in
- * capitals), its client started; with `presence`, it sends the .tex it has open (its `openTex`, plan 5b, D6). Its token
- * stays in its temporary folder, as in the tests.
+ * client on Node's fetch), paired with `server` ({ url, code(name) }) under the identifier `id` (its name there: `name`,
+ * or `id` in capitals), its client started; with `presence`, it sends the .tex it has open (its `openTex`, plan 5b, D6).
+ * Its token stays in its temporary folder, as in the tests.
  */
-export async function virtualPc(server, id, { presence = false } = {}) {
+export async function virtualPc(server, id, { presence = false, name = id.toUpperCase() } = {}) {
   const { PLAIN, VirtualPc } = await import('../tests/support/virtualPc.ts');
   const { fileSecrets, pair } = await import('../src/main/sync/config.ts');
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-pc-virtuel-'));
-  const name = id.toUpperCase();
   fileSecrets(dir, PLAIN).write(await pair(fetch, server.url, server.code(name), id, name));
   const pc = new VirtualPc({ id, dir, now: Date.now, presence });
   pc.client.start();

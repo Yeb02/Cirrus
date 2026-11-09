@@ -2,8 +2,9 @@
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
 // suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a,
-// docs/captures/plan4b, docs/captures/plan4c and docs/captures/plan5a (those new in plans 4a, 4b, 4c and 5a; the last
-// ones of plan 5a go through DevTools: serverCaptures), each compared on its own images. A
+// docs/captures/plan4b, docs/captures/plan4c, docs/captures/plan5a and docs/captures/plan5b (those new in plans 4a, 4b,
+// 4c, 5a and 5b, or changed by them; the last ones of plans 5a and 5b go through DevTools: serverCaptures,
+// plan5bCaptures), each compared on its own images. A
 // folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
 // captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
 // reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
@@ -190,6 +191,246 @@ async function serverCaptures(names, taken) {
   }
 }
 
+/**
+ * Plan 5b, task 8: the import dialog's new entries, then the states of a paired PC that plan 5b added, through DevTools
+ * as serverCaptures (cdp.mjs, its window out of the user's way; each image once `.capture` is set, the focus taken, the
+ * pointer on the tabs' bar), each state awaited before it is taken. Two sessions, each a fresh test base and profile:
+ * - the dialog of « Importer une publication… » on the replayed answers (CIRRUS_PUBLICATIONS_REPLAY), opened on the sky
+ *   as `import-publication`: the address of a page of OpenReview imported, its PDF read as a PDF dropped (« Créer le
+ *   nœud »); then, opened again, « Choisir un PDF… » taking the arXiv PDF of the tests (CIRRUS_PDF_PICK), its identifier
+ *   found;
+ * - a PC paired with a server of this machine (serveur-local.mjs) by sending the test base, as serverCaptures, under
+ *   the name « Bureau ». « Tout télécharger »'s question once the base's PDFs are taken out of its store (the server
+ *   keeps them), the free space of its disk fixed (CIRRUS_FREE_BYTES: 48 Gio); the block once they are downloaded, the
+ *   server's state under the synchronisation's (its values live, not drawn: `volatile`). Then a virtual PC paired as
+ *   « Portable » (tests/support/virtualPc.ts, in this process) adds to MDL a note.tex and a conflict copy of it, of a
+ *   fixed name: their comparison; note.tex open on « Portable », since 14h32 by the server's clock (serveur.db fixed:
+ *   the banner reads the same at every capture), opened in full screen here; and, « Portable » having closed it, note.tex
+ *   typed in here while « Portable » writes another version: the banner of D6. The .tex compiled by the bench's TinyTeX;
+ *   texSaveIdleMs at its longest, so that nothing typed is saved before the image.
+ * The names of the images taken go to `taken`.
+ */
+const PLAN5B_DIALOG_SCENES = ['import-adresse', 'choisir-pdf'];
+const PLAN5B_SERVER_SCENES = ['tout-telecharger', 'serveur-etat', 'comparaison', 'tex-ouvert-ailleurs', 'tex-version-ailleurs'];
+const PLAN5B_SCENES = [...PLAN5B_DIALOG_SCENES, ...PLAN5B_SERVER_SCENES];
+const ARXIV_PDF = join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf');
+const MDL = 'Minimum Description Length Principle (MDL)';
+const TEX = 'note.tex', COPY = 'note (conflit du 2026-01-05 14h32).tex';
+const texLines = (last) => [
+  '\\section{Longueur de description}', 'Pour un modèle $M$ et des données $D$, on cherche', '\\begin{equation}',
+  '  L(M) + L(D \\mid M)', '\\end{equation}', 'le plus court des deux codes.', '', 'La première partie mesure le modèle,',
+  'la seconde ce qu’il laisse inexpliqué.', '', 'Un modèle trop riche paie sa propre longueur ;', 'un modèle trop pauvre paie les données.',
+  '', last, '',
+].join('\n');
+
+/** A capture taken in `app` (cdp.mjs) once the capture's class is set, the focus taken, the pointer on the tabs' bar. */
+function shooter(names, taken, appOf) {
+  return async (name) => {
+    if (!names.includes(name)) return;
+    const { page } = appOf();
+    const { sleep } = await import('./cdp.mjs');
+    await page.evaluate(`document.documentElement.classList.add('capture'); document.activeElement?.blur()`);
+    await page.move(1000, 18);
+    await sleep(1000);
+    writeFileSync(join(out, `${name}.png`), await page.screenshot());
+    console.log(`${name}.png`);
+    taken.push(name);
+  };
+}
+
+async function plan5bCaptures(names, taken) {
+  const { launch, sleep } = await import('./cdp.mjs');
+  const { chipSays, closeSettings, localServer, openServerBlock, pairThrough, virtualPc } = await import('./serveur-local.mjs');
+  const fresh = (settings) => {
+    const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-')), profile = mkdtempSync(join(tmpdir(), 'cirrus-captures-profil-'));
+    execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
+    fixHistoryTimes(data);
+    if (settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(settings), 'utf8');
+    return { data, profile, done: () => { for (const d of [data, profile]) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); } };
+  };
+  /** No notification left over the window, within `ms`. */
+  const quiet = async (page, ms = 15_000) => {
+    if (!(await page.until(`!document.querySelector('.toast')`, ms))) throw new Error(`une notification reste : ${await page.evaluate(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`)}`);
+  };
+  let app = null;
+  const shoot = shooter(names, taken, () => app);
+
+  if (PLAN5B_DIALOG_SCENES.some((n) => names.includes(n))) {
+    const base = fresh();
+    try {
+      app = await launch(base.data, base.profile, {
+        CIRRUS_TINYTEX: tinyTex, CIRRUS_VIEW: '-420,-300,1', CIRRUS_PUBLICATIONS_REPLAY: join(appDir, 'tests', 'data', 'publications'), CIRRUS_PDF_PICK: ARXIV_PDF,
+      });
+      const { page } = app;
+      /** The dialog opened from the sky's menu, as import-publication (1530, 72 in the graph, under the tabs). */
+      const openDialog = async () => {
+        for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(1530, 110, 'right');
+        const item = await page.centre('.context-menu button', 'Importer une publication');
+        await page.click(item.x, item.y);
+        if (!(await page.until(`document.activeElement?.matches('.publication-dialog input') === true`))) throw new Error('le dialogue d’import ne s’ouvre pas');
+      };
+      const status = () => page.evaluate(`document.querySelector('.publication-dialog .status')?.textContent ?? null`);
+      await openDialog();
+      await page.type('https://openreview.net/forum?id=YicbFdNTTy');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`!!document.querySelector('.publication-dialog button.create') && !document.querySelector('.publication-dialog button.pick').disabled`, 15_000))) {
+        throw new Error(`l’adresse d’OpenReview ne mène pas à « Créer le nœud » : « ${await status()} »`);
+      }
+      await quiet(page);
+      await shoot('import-adresse');
+      const close = await page.centre('.publication-dialog button.cancel', 'Fermer');
+      await page.click(close.x, close.y);
+      if (!(await page.until(`!document.querySelector('.publication-dialog')`))) throw new Error('le dialogue ne se ferme pas');
+      await openDialog();
+      const pick = await page.centre('.publication-dialog button.pick', 'Choisir un PDF');
+      await page.click(pick.x, pick.y);
+      if (!(await page.until(`document.querySelector('.publication-dialog input')?.value === 'arXiv:1706.03762' && !document.querySelector('.publication-dialog button.pick').disabled`, 15_000))) {
+        throw new Error(`l’identifiant n’est pas trouvé dans le PDF choisi : « ${await status()} »`);
+      }
+      await quiet(page);
+      await shoot('choisir-pdf');
+    } finally {
+      await app?.close();
+      app = null;
+      base.done();
+    }
+  }
+
+  if (PLAN5B_SERVER_SCENES.some((n) => names.includes(n))) {
+    const base = fresh({ texSaveIdleMs: 600_000 });
+    const server = await localServer();
+    let virtual = null;
+    try {
+      app = await launch(base.data, base.profile, { CIRRUS_TINYTEX: tinyTex, CIRRUS_VIEW: '0,140,1', CIRRUS_FREE_BYTES: String(48 * 2 ** 30) });
+      const { page } = app;
+      await pairThrough(page, server.url, server.code('Bureau'), 'Bureau');
+      if (!(await page.until(`!!document.querySelector('.server-offer button')`, 10_000))) throw new Error('pas d’offre d’envoyer la base de test');
+      const send = await page.centre('.server-offer button', '^Envoyer la base');
+      await page.click(send.x, send.y);
+      const paired = `[...document.querySelectorAll('.server-block button')].some((b) => b.textContent === 'Dissocier ce PC')`;
+      if (!(await page.until(paired, 30_000)) || !(await chipSays(page, 'À jour'))) throw new Error('la base de test n’est pas envoyée au serveur');
+      // « Tout télécharger »: the PDFs the base refers to (the nodes' folders, the anchors of the annotations) taken out of
+      // this PC's store, the server keeping them.
+      const db = new DatabaseSync(join(base.data, 'cirrus.db'), { readOnly: true });
+      let hashes;
+      try {
+        const nodes = db.prepare('SELECT json FROM nodes WHERE trashed = 0').all().map((r) => JSON.parse(r.json));
+        hashes = new Set([...nodes.flatMap((n) => n.files.filter((f) => /\.pdf$/i.test(f.name)).map((f) => f.hash)), ...nodes.filter((n) => n.anchor).map((n) => n.anchor.hash)]);
+      } finally {
+        db.close();
+      }
+      for (const h of hashes) {
+        if (!server.hasBlob(h)) throw new Error(`le serveur n’a pas le PDF ${h}`);
+        rmSync(join(base.data, 'files', h.slice(0, 2), h), { force: true });
+      }
+      await openServerBlock(page);
+      const all = await page.centre('.server-block .server-download button', 'Télécharger tous les PDF');
+      await page.click(all.x, all.y);
+      const said = (re) => `[...document.querySelectorAll('.server-block .server-state')].some((p) => ${re}.test(p.textContent))`;
+      if (!(await page.until(said(/^\d+ PDF à télécharger, .+ ; 48,0\sGo libres sur ce disque\.$/), 10_000))) {
+        throw new Error(`pas de question de « Tout télécharger » : « ${await page.evaluate(`document.querySelector('.server-block')?.textContent`)} »`);
+      }
+      await quiet(page);
+      await shoot('tout-telecharger');
+      const go = await page.centre('.server-block .server-download button', '^Télécharger$');
+      await page.click(go.x, go.y);
+      if (!(await page.until(said(/^\d+ PDF téléchargés?\.$/), 30_000))) throw new Error(`« Tout télécharger » ne finit pas : « ${await page.evaluate(`document.querySelector('.server-block')?.textContent`)} »`);
+      // The server's state known: its latency measured, its store counted.
+      if (!(await page.until(`[...document.querySelectorAll('.server-block .server-state')].some((p) => /^Latence : \\d/.test(p.textContent))`, 15_000))) throw new Error('la latence du serveur n’est pas dite');
+      await quiet(page);
+      await shoot('serveur-etat');
+      await closeSettings(page);
+      // « Portable »: a virtual PC that receives the base, then adds note.tex and a conflict copy of it to MDL.
+      virtual = await virtualPc(server, 'portable', { presence: true, name: 'Portable' });
+      const pc = virtual.pc;
+      const mdlOf = () => [...pc.s.nodes.values()].find((n) => n.title === MDL && n.trashedAt === undefined);
+      for (let i = 0; i < 100 && !(mdlOf() && pc.status?.state === 'live'); i++) await sleep(100);
+      const mdl = mdlOf()?.id;
+      if (!mdl) throw new Error('le PC virtuel ne reçoit pas la base de test');
+      const { editNode } = await import('@cirrus/core');
+      const { storeBytes } = await import('@cirrus/store');
+      const write = (name, text) => {
+        const ref = storeBytes(pc.dir, name, Buffer.from(text, 'utf8'));
+        pc.act((s) => {
+          const files = s.nodes.get(mdl).files;
+          return editNode(s, mdl, { files: files.some((f) => f.name === name) ? files.map((f) => (f.name === name ? ref : f)) : [...files, ref] });
+        });
+      };
+      write(TEX, texLines('Le meilleur modèle minimise la somme.'));
+      write(COPY, texLines('Le meilleur modèle minimise la somme des deux longueurs.'));
+      // MDL's pop-up (175, 140 in the world: 967, 499 in the page), the copy's row, « Comparer ».
+      const shown = `document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(MDL)}`;
+      for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.click(967, 499);
+      const copyRow = `.node-popup .file[data-name="${COPY}"]`;
+      if (!(await page.until(`!!document.querySelector('${copyRow} .compare')`, 15_000))) throw new Error('le pop-up de MDL ne propose pas « Comparer » sur la copie');
+      await page.evaluate(`document.querySelector('${copyRow}').scrollIntoView({ block: 'center' })`);
+      const compare = await page.centre(`${copyRow} .compare`, 'Comparer');
+      await page.click(compare.x, compare.y);
+      const side = (s) => `[...document.querySelectorAll('.compare-view .cm-merge-${s} .cm-line')].map((l) => l.textContent).join('\\n')`;
+      if (!(await page.until(`(${side('a')}).includes('minimise la somme.') && (${side('b')}).includes('des deux longueurs') && !!document.querySelector('.compare-view .cm-merge-revert button')`, 15_000))) {
+        throw new Error(`la comparaison ne s’ouvre pas : « ${await page.evaluate(`document.querySelector('.compare-view')?.textContent ?? '(pas de plein écran)'`)} »`);
+      }
+      await quiet(page);
+      await shoot('comparaison');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.compare-view')`))) throw new Error('Échap ne ferme pas la comparaison');
+      /** note.tex in full screen from MDL's pop-up (its preview, then ⤢), its text in the editor and its PDF drawn. */
+      const editor = `[...document.querySelectorAll('.full-screen .tex-source .cm-line')].map((l) => l.textContent).join('\\n')`;
+      const settled = `!!document.querySelector('.full-screen .tex-preview .pdf-page canvas') && document.querySelector('.full-screen .tex-status .compile')?.textContent === ''`;
+      const openTex = async () => {
+        const row = `.node-popup .file[data-name="${TEX}"]`;
+        const expand = `[...document.querySelectorAll('.file-preview')].find((p) => p.querySelector('.title')?.textContent === '${TEX}')?.querySelector('.expand')`;
+        if (!(await page.evaluate(`!!${expand}`))) {
+          await page.evaluate(`document.querySelector('${row}').scrollIntoView({ block: 'center' })`);
+          const at = await page.centre(row, '');
+          await page.click(at.x, at.y);
+          if (!(await page.until(`!!${expand}`, 10_000))) throw new Error('pas d’aperçu de note.tex');
+        }
+        const at = await page.evaluate(`(() => { const b = ${expand}.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+        await page.click(at.x, at.y);
+        if (!(await page.until(`(${editor}).includes('Longueur de description') && ${settled}`, 20_000))) throw new Error('note.tex ne s’ouvre pas en plein écran, ou ne se compile pas');
+      };
+      const banner = `document.querySelector('.full-screen .tex-workbench .viewer-banner')?.textContent ?? ''`;
+      // note.tex open on « Portable », since 14h32 today by the server's clock; then opened here.
+      pc.openTex.push({ node: mdl, name: TEX });
+      await pc.client.presence();
+      const at1432 = new Date();
+      at1432.setHours(14, 32, 30, 0);
+      if (server.fixPresenceSince(at1432.getTime()) < 1) throw new Error('la présence de « Portable » n’est pas au serveur');
+      await openTex();
+      if (!(await page.until(`(${banner}) === 'Ce .tex est ouvert sur « Portable » depuis 14h32 : sa dernière version y est peut-être restée.'`, 10_000))) {
+        throw new Error(`le bandeau dit « ${await page.evaluate(banner)} »`);
+      }
+      await quiet(page);
+      await shoot('tex-ouvert-ailleurs');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.full-screen')`))) throw new Error('Échap ne ferme pas le plein écran');
+      // « Portable » closes it; here, a line typed, then « Portable » writes another version: the banner of D6.
+      pc.openTex.length = 0;
+      await pc.client.presence();
+      await openTex();
+      if ((await page.evaluate(banner)) !== '') throw new Error(`un bandeau reste : « ${await page.evaluate(banner)} »`);
+      const line = await page.centre('.full-screen .tex-source .cm-line', 'minimise la somme');
+      await page.click(line.x, line.y);
+      await page.press('End', 'End', 35);
+      await page.type(' Ici, la somme est le critère.');
+      write(TEX, texLines('Le meilleur modèle minimise la somme, écrit sur « Portable ».'));
+      if (!(await page.until(`(${banner}).startsWith('« note.tex » a aussi été modifié sur un autre PC')`, 10_000))) throw new Error(`le bandeau dit « ${await page.evaluate(banner)} »`);
+      // Past the typing pause (latexTypingPauseMs), the text typed compiled and drawn.
+      await sleep(800);
+      if (!(await page.until(`(${editor}).includes('Ici, la somme est le critère.') && ${settled}`, 10_000))) throw new Error('le texte tapé ne se compile pas');
+      await quiet(page);
+      await shoot('tex-version-ailleurs');
+    } finally {
+      await app?.close();
+      app = null;
+      await virtual?.close();
+      await server.close();
+      base.done();
+    }
+  }
+}
+
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
 function fileThenFull(name) {
   return `.file[data-name="${name}"],.file-preview .expand`;
@@ -213,8 +454,9 @@ function fixHistoryTimes(dir) {
 
 const chosen = only ? SCENES.filter((s) => only.includes(s.name)) : SCENES;
 const serverChosen = only ? SERVER_SCENES.filter((n) => only.includes(n)) : SERVER_SCENES;
-if (only && chosen.length + serverChosen.length !== only.length) {
-  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n) && !SERVER_SCENES.includes(n)).join(', ')}.`);
+const plan5bChosen = only ? PLAN5B_SCENES.filter((n) => only.includes(n)) : PLAN5B_SCENES;
+if (only && chosen.length + serverChosen.length + plan5bChosen.length !== only.length) {
+  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n) && !SERVER_SCENES.includes(n) && !PLAN5B_SCENES.includes(n)).join(', ')}.`);
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -261,6 +503,15 @@ if (serverChosen.length > 0) {
   }
   failed += serverChosen.length - taken.length;
 }
-const total = chosen.length + serverChosen.length;
+if (plan5bChosen.length > 0) {
+  const taken = [];
+  try {
+    await plan5bCaptures(plan5bChosen, taken);
+  } catch (e) {
+    console.error(`captures du plan 5b : échec après ${taken.length} image(s) (${e instanceof Error ? e.message : String(e)})`);
+  }
+  failed += plan5bChosen.length - taken.length;
+}
+const total = chosen.length + serverChosen.length + plan5bChosen.length;
 console.log(`${total - failed} captures sur ${total} dans ${out}`);
 process.exit(failed > 0 ? 1 : 0);
