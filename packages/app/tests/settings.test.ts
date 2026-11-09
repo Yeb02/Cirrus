@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
-import { readSettings, writeSettings } from '../src/main/settings.ts';
+import { readSettings, SharedSettings } from '../src/main/settings.ts';
 
 test('réglages : absents, corrompus, puis écrits', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cirrus-settings-'));
@@ -14,7 +14,8 @@ test('réglages : absents, corrompus, puis écrits', () => {
   expect(readSettings(dir)).toEqual({});
   expect(warn).toHaveBeenCalled();
   warn.mockRestore();
-  writeSettings(dir, { factor: 3 });
+  // Written as Réglages writes them, without a server.
+  new SharedSettings(dir, 'pc-a', () => {}).local({ factor: 3 }, null);
   expect(readSettings(dir)).toEqual({ factor: 3 });
   expect(readdirSync(dir)).toEqual(['settings.json']); // no temporary file left
   rmSync(dir, { recursive: true, force: true });

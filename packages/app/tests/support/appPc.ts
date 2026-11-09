@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
@@ -19,6 +19,11 @@ export const XOR: TokenCipher = {
   encrypt: (text) => Buffer.from(Buffer.from(text, 'utf8').map((b) => b ^ 0x5a)),
   decrypt: (data) => Buffer.from(data.map((b) => b ^ 0x5a)).toString('utf8'),
 };
+
+/** A base folder's settings.json, as a PC had it before the test: its settings that differ from the defaults. */
+export function writeSettings(dir: string, overrides: Record<string, unknown>): void {
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify(overrides, null, 2), 'utf8');
+}
 
 const clone = <T>(x: T): T => structuredClone(x);
 const later = (fn: () => void) => { setTimeout(fn, 0); };

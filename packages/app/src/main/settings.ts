@@ -10,7 +10,7 @@ import { DEFAULT_PARAMS, type RenderParams, sameSetting, settingValue } from '@c
 // has it; a change received is written to settings.json at once, bounded as a file read (withOverrides), and told to
 // the interface. Writing a setting rewrites these small files only; a batch received touches its keys only.
 
-export const SETTINGS_FILE = 'settings.json';
+const SETTINGS_FILE = 'settings.json';
 export const PENDING_SETTINGS_FILE = 'settings-pending.json';
 
 /**
@@ -33,11 +33,7 @@ export function readSettings(dir: string): Record<string, unknown> {
   return {};
 }
 
-/** Written to a temporary file then renamed: a crash never leaves half a file. */
-export function writeSettings(dir: string, overrides: Record<string, unknown>): void {
-  writeJson(dir, SETTINGS_FILE, overrides);
-}
-
+/** settings.json or settings-pending.json, written to a temporary file then renamed: a crash never leaves half a file. */
 function writeJson(dir: string, name: string, value: unknown): void {
   const tmp = join(dir, `${name}.${process.pid}.tmp`);
   writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
@@ -126,7 +122,7 @@ export class SharedSettings {
       }
     }
     if (pending && Object.keys(written).length > 0) this.savePending();
-    if (changed) writeSettings(this.dir, overrides);
+    if (changed) writeJson(this.dir, SETTINGS_FILE, overrides);
     return written;
   }
 
@@ -200,7 +196,7 @@ export class SharedSettings {
     }
     if (pendingChanged) this.savePending();
     if (Object.keys(told).length === 0) return;
-    writeSettings(this.dir, overrides);
+    writeJson(this.dir, SETTINGS_FILE, overrides);
     this.changed(told);
   }
 

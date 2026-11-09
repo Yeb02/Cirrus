@@ -6,10 +6,10 @@ import { MAX_SETTINGS_KEPT } from '@cirrus/server';
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
-import { parseSettingRows, PENDING_SETTINGS_FILE, readSettings, SharedSettings, writeSettings } from '../src/main/settings.ts';
+import { parseSettingRows, PENDING_SETTINGS_FILE, readSettings, SharedSettings } from '../src/main/settings.ts';
 import { swapStaged } from '../src/main/sync/firstSync.ts';
 import { applyReceived, dueChanges, keepUnsaved, localChanges, withSetting } from '../src/renderer/settingChanges.ts';
-import { AppPc } from './support/appPc.ts';
+import { AppPc, writeSettings } from './support/appPc.ts';
 import { created, Lab, T0, until } from './support/virtualPc.ts';
 
 // The shared settings (plan 5a, task 6, D9, R23, R24), between app PCs (the main process's SyncHost, its client, the

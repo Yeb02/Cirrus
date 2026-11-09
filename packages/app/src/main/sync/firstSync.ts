@@ -48,7 +48,7 @@ export function quitsInsteadOfRelaunch(env: Record<string, string | undefined>, 
 }
 
 /** The name the base's folder takes once a base taken from the server replaces it, on `day` (local time). */
-export function archiveName(dir: string, day: Date): string {
+function archiveName(dir: string, day: Date): string {
   const two = (n: number) => String(n).padStart(2, '0');
   return `${basename(resolve(dir))}-avant-jumelage-${day.getFullYear()}-${two(day.getMonth() + 1)}-${two(day.getDate())}`;
 }
@@ -159,7 +159,7 @@ function checkLine(r: ChangeRow, expected: number, history: boolean): void {
  * The rules of the graph are not judged: what the base already carries goes with it (R19). Costs a reading of the
  * journal and, with a stored snapshot, its decoding: a seed's, once.
  */
-export function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last: number } {
+function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last: number } {
   const last = store.lastSeq();
   let snapshot: { data: ArrayBuffer; seq: number } | null = null;
   const snap = store.readSnapshot();

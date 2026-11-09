@@ -11,7 +11,7 @@ import { SettingsError, type StoredChange } from './settings.ts';
 // keeps the shared settings too (task 6, D9).
 
 /** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings. */
-export const SERVER_DB = 'serveur.db';
+const SERVER_DB = 'serveur.db';
 
 /** Forward-only migrations of serveur.db: index i upgrades user_version i to i + 1. Never edit a shipped migration. */
 const MIGRATIONS: string[] = [

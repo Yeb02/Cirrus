@@ -107,7 +107,7 @@ async function reasonOf(res: Response): Promise<string> {
 const sentUnit = (u: Unit): Unit => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u);
 
 /** The body of POST /units that sends `units`, as the client sends it: what the server's MAX_BODY_BYTES bounds. */
-export const unitsBody = (units: readonly Unit[]): string => JSON.stringify({ units: units.map(sentUnit) });
+const unitsBody = (units: readonly Unit[]): string => JSON.stringify({ units: units.map(sentUnit) });
 
 /** A server whose base is another than the one this PC follows (R31): its data replaced. */
 const BASE_REPLACED = 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.';
