@@ -8,6 +8,7 @@ import { type ChangeRow, filePath, LocalStore, parseChangeRow, receiveBlob, stor
 import { parseSettingRows, SharedSettings } from '../settings.ts';
 import { SERVER_FILE, type SecretStore, type ServerConfig } from './config.ts';
 import { chunks, DOWNLOADS_FILE, hasBlob, isPdf } from './downloads.ts';
+import type { FirstSyncOffer } from './protocol.ts';
 
 // The first pairing of a base (plan 5a, task 5, D7): what the PC and the server hold decides it — both empty, the sync
 // starts; a full PC and an empty server, the PC sends its base (seed); an empty PC and a server holding one, the PC
@@ -15,18 +16,6 @@ import { chunks, DOWNLOADS_FILE, hasBlob, isPdf } from './downloads.ts';
 // A base taken is staged beside the PC's (`<base>-nouvelle`), complete once its mark is written, last; the app then
 // starts again, and the next start swaps it in before the base opens, the old one kept as
 // `<base>-avant-jumelage-AAAA-MM-JJ` (R17). Nothing here depends on Electron: the network is given.
-
-/**
- * D7's question to the user, after /pair and /hello:
- * - seed: this PC's base to the server, which holds none (its nodes and its store's files);
- * - adopt: the server's base on this PC, which holds none (the server's nodes), its own kept as `archive`;
- * - replace: both hold one, which Cirrus does not merge — refused, but the server's may replace this PC's (`local`
- *   nodes), kept as `archive`.
- */
-export type FirstSyncOffer =
-  | { kind: 'seed'; nodes: number; files: number }
-  | { kind: 'adopt'; nodes: number; archive: string }
-  | { kind: 'replace'; nodes: number; local: number; archive: string };
 
 /** What /hello says of the server's base: its last number, whether it is empty (D7), its nodes. */
 export interface ServerBase { lastSeq: number; empty: boolean; nodes: number }

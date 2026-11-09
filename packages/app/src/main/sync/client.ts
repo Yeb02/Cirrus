@@ -10,6 +10,7 @@ import { parseSettingRows } from '../settings.ts';
 import type { SecretStore, ServerConfig } from './config.ts';
 import { Downloads, filesToFetch, filesToSend, hasBlob, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
+import type { SyncStatus } from './protocol.ts';
 
 // The main process's sync client (plan 5a, task 3, D2 to D8). It sends this PC's pending writes to the server, in
 // order, files first; it receives the writes the server numbered, every PC's, its own included (their
@@ -21,26 +22,6 @@ import { readEvents } from './events.ts';
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs'>;
-
-/**
- * What the client is doing, for the interface (D8: the veil, the chip):
- * - off: no server paired, or stopped;
- * - connecting: its first connection since start, under way;
- * - catching-up: connected, `behind` server lines short of what the server held when it connected;
- * - live: caught up; `pending` writes of this PC not yet acknowledged;
- * - offline: the server lost, tried again at growing intervals (syncRetryMinMs to syncRetryMaxMs);
- * - refused: the server refuses (a token, a format, data replaced: its reason), or a write received does not apply here
- *   (`diverged`: this PC's state no longer follows the server's); not tried again until start().
- * `clockWarning` (D4), once the server's time is known, when this PC's clock differs from it by more than syncClockSkewWarnMs.
- */
-export type SyncStatus = (
-  | { state: 'off' }
-  | { state: 'connecting' }
-  | { state: 'catching-up'; behind: number }
-  | { state: 'live'; pending: number }
-  | { state: 'offline'; pending: number }
-  | { state: 'refused'; message: string; diverged?: true }
-) & { clockWarning?: string };
 
 export interface SyncDeps {
   fetch: typeof fetch;

@@ -4,7 +4,7 @@ import {
 import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import type { FirstSyncChoice, ServerInfo } from '../main/sync/host.ts';
+import type { FirstSyncChoice, ServerInfo } from '../main/sync/protocol.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';

@@ -2,7 +2,7 @@ import {
   type Action, applyOps, CommandError, decodeState, encodeState, type Id, type Op, type Reconciliation, reconcile, type RemoteUnit, type State, type Unit,
   UndoConflictError, UndoStack, uuidv7,
 } from '@cirrus/core';
-import type { Committed } from '../main/sync/host.ts';
+import type { Committed } from '../main/sync/protocol.ts';
 
 export type { Committed };
 

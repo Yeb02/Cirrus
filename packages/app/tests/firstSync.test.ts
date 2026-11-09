@@ -11,7 +11,7 @@ import { pcId } from '../src/main/base.ts';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
 import { quitsInsteadOfRelaunch, READY_FILE, stagedDir, stagedWaiting, startBase, swapStaged } from '../src/main/sync/firstSync.ts';
-import type { ServerInfo } from '../src/main/sync/host.ts';
+import type { ServerInfo } from '../src/main/sync/protocol.ts';
 import { ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 import { AppPc } from './support/appPc.ts';
 import { image, Lab, until } from './support/virtualPc.ts';

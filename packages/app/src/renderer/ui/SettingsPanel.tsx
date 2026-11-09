@@ -1,8 +1,7 @@
 import type { LatexStatus } from '@cirrus/core';
 import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, sameSetting, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
-import type { SyncStatus } from '../../main/sync/client.ts';
-import type { FirstSyncChoice, PairResult, ServerInfo } from '../../main/sync/host.ts';
+import type { FirstSyncChoice, PairResult, ServerInfo, SyncStatus } from '../../main/sync/protocol.ts';
 import { latexStateText } from '../latex/install.ts';
 import { ServerBlock } from './settings/ServerBlock.tsx';
 import { type RubricView, settingsTree } from './settingsTree.ts';

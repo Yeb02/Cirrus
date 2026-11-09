@@ -5,8 +5,7 @@ import {
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-import type { SyncStatus } from '../src/main/sync/client.ts';
-import type { PairResult, ServerInfo, SyncIncoming } from '../src/main/sync/host.ts';
+import type { PairResult, ServerInfo, SyncIncoming, SyncStatus } from '../src/main/sync/protocol.ts';
 import { type Committed, EditSession, type Opened, SnapshotSaver } from '../src/renderer/session.ts';
 import { chipOf, type SyncBridge, SyncSession, type SyncView } from '../src/renderer/sync/syncSession.ts';
 import { offerAction, ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';

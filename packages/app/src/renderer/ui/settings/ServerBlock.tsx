@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { SyncStatus } from '../../../main/sync/client.ts';
-import type { FirstSyncOffer } from '../../../main/sync/firstSync.ts';
-import type { FirstSyncChoice, PairResult, ServerInfo } from '../../../main/sync/host.ts';
+import type { FirstSyncChoice, FirstSyncOffer, PairResult, ServerInfo, SyncStatus } from '../../../main/sync/protocol.ts';
 import { chipOf } from '../../sync/syncSession.ts';
 
 /** The address proposed: a server on this machine, at the port its command line takes by default (packages/server). */

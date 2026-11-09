@@ -8,7 +8,8 @@ import {
 import { type RunningServer, startServer, Tokens } from '@cirrus/server';
 import { type ChangeRow, LocalStore, SCHEMA_VERSION } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
-import { SyncClient, type SyncParams, type SyncStatus } from '../../src/main/sync/client.ts';
+import { SyncClient, type SyncParams } from '../../src/main/sync/client.ts';
+import type { SyncStatus } from '../../src/main/sync/protocol.ts';
 import { fileSecrets, pair, type ServerConfig, type TokenCipher } from '../../src/main/sync/config.ts';
 
 // Virtual PCs (plan 5a, task 3): PCs without Electron, each a base in a temporary folder, the interface's state and its

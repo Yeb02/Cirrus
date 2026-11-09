@@ -1,6 +1,5 @@
 import { SyncDivergedError, type Unit } from '@cirrus/core';
-import type { SyncStatus } from '../../main/sync/client.ts';
-import type { FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../../main/sync/host.ts';
+import type { FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../../main/sync/protocol.ts';
 import { type EditSession, messageOf, type Opened } from '../session.ts';
 
 // The synchronisation in the interface (plan 5a, task 4, D8): the writes received reconciled by the session and written

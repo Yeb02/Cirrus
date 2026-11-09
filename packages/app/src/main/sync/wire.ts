@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, powerMonitor, safeStorage } from 'electron';
-import type { SyncStatus } from './client.ts';
 import type { TokenCipher } from './config.ts';
-import type { HostWindow, ReconcileOutcome, SyncHost, SyncIncoming } from './host.ts';
+import type { HostWindow, SyncHost } from './host.ts';
+import type { ReconcileOutcome, SyncIncoming, SyncStatus } from './protocol.ts';
 
 // The synchronisation's wires to Electron (plan 5a, task 4): its IPC, the window it speaks to, the token's encryption
 // (safeStorage, DPAPI) and sleep (powerMonitor). Everything else is SyncHost's (host.ts, watchWindow too), which the

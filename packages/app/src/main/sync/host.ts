@@ -4,56 +4,17 @@ import { type Action, type Id, MAX_ID_CHARS, type Op, type Reconciliation, type 
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
-import { FORMAT, SyncClient, type SyncStatus, writeRefusal } from './client.ts';
+import { FORMAT, SyncClient, writeRefusal } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
-import {
-  adoptBase, type FirstSyncOffer, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage,
-} from './firstSync.ts';
+import { adoptBase, firstSyncOffer, offerMessage, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage } from './firstSync.ts';
+import type { Committed, FirstSyncOffer, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
 
 // The synchronisation in the app's main process (plan 5a, task 4), without Electron (wire.ts binds it to IPC, the
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,
 // stopped and started again at wake, stopped at quit, never two of these at once —; the reconciliation's round trip
 // through the interface, which holds the state; the pairing, its first sync (task 5, D7: firstSync.ts), and the
 // unpairing; each local write's time; the settings changed in Réglages, shared with a server paired (task 6, D9).
-
-/** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */
-export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }
-
-/**
- * A reconciliation as the interface sends it back: the received writes named only, by identifier and number (main
- * holds them: it sent them); the rest whole.
- */
-export type ReconciliationAnswer = Omit<Reconciliation, 'remote'> & { remote: { unit: Id; seq: number }[] };
-
-/**
- * The interface's answer (cirrus:sync:reconciled): its reconciliation, for the base to write; or why it could not make
- * one — `diverged`, a received write that does not apply to its state (SyncDivergedError); `error`, anything else.
- */
-export type ReconcileOutcome = { reconciliation: ReconciliationAnswer } | { diverged: string } | { error: string };
-
-/**
- * A pairing's outcome: paired (`restarting`: the app starts again on the base taken from the server); refused, why;
- * or D7's question (`offer`), which `first` answers — until then nothing is kept, the token in memory only.
- */
-export type PairResult = { ok: true; restarting?: true } | { ok: false; message: string; offer?: FirstSyncOffer };
-
-/** The answers to D7's offer: send this PC's base, take the server's (or replace this PC's with it), or give up. */
-export type FirstSyncChoice = 'seed' | 'adopt' | 'cancel';
-
-/**
- * The block « Serveur » of the settings: the server paired, its address and this PC's name there; not paired, the name
- * to propose (the machine's) and no address (the interface proposes its own), or, a pairing awaiting its answer, its
- * server, name and D7's question (`offer`, with its explanation) — shown again whenever the block is —, or a first sync
- * under way (`busy`: what it does). Not paired, `waiting` says a base taken from the server waits beside this one, its
- * swap failed at the start (review of task 5, Important 2).
- */
-export interface ServerInfo {
-  paired: boolean; url: string; name: string; offer?: { message: string; offer: FirstSyncOffer }; busy?: string; waiting?: string;
-}
-
-/** What a local write's commit gives the interface: its journal number, and its time, the server's clock's (D4). */
-export interface Committed { seq: number; at: number }
 
 /** The window, as the host speaks to it: false from `incoming` when there is none to reconcile. */
 export interface HostWindow {

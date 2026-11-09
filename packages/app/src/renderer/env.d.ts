@@ -3,8 +3,7 @@ import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@c
 import type { BibFile } from '../main/bib.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 import type { PublicationResult } from '../main/publications/fetch.ts';
-import type { SyncStatus } from '../main/sync/client.ts';
-import type { Committed, FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming } from '../main/sync/host.ts';
+import type { Committed, FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../main/sync/protocol.ts';
 
 /** What the preload exposes (src/preload/index.ts). */
 export interface CirrusBridge {
