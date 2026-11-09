@@ -27,8 +27,10 @@ export async function freeBytes(dir: string): Promise<number> {
  * The store's size: its blobs (files/<2 hex>/<hash>) walked once at the start, in the background — the folders listed and
  * each blob's size read, never a file opened —, plus each blob placed since (`add`). What is known so far is given at
  * any time, `counting` until the walk ends. A blob placed while the walk runs is counted once: the walk passes over the
- * hashes `add` has had. Those hashes are kept for the server's run (a few dozen bytes each), so that a blob received
- * twice at once (two PCs sending the same file) is counted once too.
+ * hashes `add` has had, and over those being placed (`placing`, said before the blob's rename into place: between the
+ * rename and `add`, the walk could otherwise read it too — task 8a, from the review of task 7). The hashes added are
+ * kept for the server's run (a few dozen bytes each), so that a blob received twice at once (two PCs sending the same
+ * file) is counted once too.
  */
 export class StoreSize {
   private readonly root: string;
@@ -37,6 +39,8 @@ export class StoreSize {
   /** The blobs placed in this run, by hash: their sizes. */
   private readonly added = new Map<string, number>();
   private addedBytes = 0;
+  /** The blobs being placed, by hash: how many placements of it are under way (two PCs may send the same file). */
+  private readonly placingNow = new Map<string, number>();
   private closing = false;
   private counting = true;
   /** The walk, ended (it never rejects): what close awaits. */
@@ -47,8 +51,25 @@ export class StoreSize {
     this.walked = this.walk();
   }
 
-  /** A blob just placed in the store (never one that was there before: the caller checks). */
+  /**
+   * A blob about to be placed (PUT /files), said before it can be renamed into place: the walk passes over its hash
+   * until the placement ends, `add` (placed) or `abandon` (not placed). A placement made without a wait between its rename
+   * and `add` (storeBytes, synchronous) needs none.
+   */
+  placing(hash: string): void {
+    this.placingNow.set(hash, (this.placingNow.get(hash) ?? 0) + 1);
+  }
+
+  /** A placement said by `placing` that placed nothing (refused bytes, a failure): the hash no longer passed over for it. */
+  abandon(hash: string): void {
+    const n = (this.placingNow.get(hash) ?? 0) - 1;
+    if (n > 0) this.placingNow.set(hash, n);
+    else this.placingNow.delete(hash);
+  }
+
+  /** A blob just placed in the store (never one that was there before: the caller checks); its `placing`, if any, ended. */
   add(hash: string, size: number): void {
+    if (this.placingNow.has(hash)) this.abandon(hash);
     if (this.added.has(hash)) return;
     this.added.set(hash, size);
     this.addedBytes += size;
@@ -79,8 +100,8 @@ export class StoreSize {
         }));
         names.forEach((n, i) => {
           const size = sizes[i];
-          // Placed meanwhile: counted by add.
-          if (size === null || this.added.has(n)) return;
+          // Placed meanwhile, or being placed: counted by add.
+          if (size === null || this.added.has(n) || this.placingNow.has(n)) return;
           this.walkedBytes += size;
           this.walkedFiles++;
         });

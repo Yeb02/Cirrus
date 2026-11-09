@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import {
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
 import { MAX_BODY_BYTES, MAX_PAIR_BODY_BYTES, MAX_PAIR_CODE_CHARS, MAX_UNITS_PER_REQUEST, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_SNAPSHOT_UNITS } from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
+import { StoreSize } from '../src/storeSize.ts';
 import { Tokens } from '../src/tokens.ts';
 import { Client, created, EventReader, FORMAT, newCode, pair, sha256, T0 } from './support.ts';
 
@@ -537,6 +538,35 @@ test('GET /status : la base, le magasin (sa taille et ses fichiers, comptés une
   expect(anonymous.headers.get('www-authenticate')).toBe('Bearer');
   expect((await new Client(srv.url, 'x'.repeat(43), 'pc-a').get('/status')).status).toBe(401);
   expect((await again.send('POST', '/status', {})).status).toBe(405);
+});
+
+test('StoreSize : un fichier placé pendant le premier compte, entre son renommage et son ajout, compte une fois (relecture de la tâche 7)', async () => {
+  // Two blobs in place, the walk not yet run: `late` was just renamed there by a PUT that has not said its size yet.
+  const dir = mkdtempSync(join(tmpdir(), 'cirrus-taille-')), files = join(dir, 'files');
+  const blobs = ['là', 'en route'].map((t) => new TextEncoder().encode(t));
+  const [there, late] = blobs.map((b) => sha256(b));
+  try {
+    for (const [i, h] of [there, late].entries()) {
+      mkdirSync(join(files, h.slice(0, 2)), { recursive: true });
+      writeFileSync(join(files, h.slice(0, 2), h), blobs[i]);
+    }
+    const sizes = new StoreSize(dir);
+    // Registered before its rename (PUT /files) by three PCs sending it at once, the third's bytes refused (abandon):
+    // the walk still passes over it, two placements being under way.
+    for (let i = 0; i < 3; i++) sizes.placing(late);
+    sizes.abandon(late);
+    // The walk ended (close would stop it where it is).
+    while (sizes.get().counting) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sizes.get()).toEqual({ storeBytes: blobs[0].length, storeFiles: 1, counting: false });
+    // Placed: counted by `add`, once, whichever PC says it first; the second finds it in place and says it again.
+    sizes.add(late, blobs[1].length);
+    expect(sizes.get()).toEqual({ storeBytes: blobs[0].length + blobs[1].length, storeFiles: 2, counting: false });
+    sizes.add(late, blobs[1].length);
+    expect(sizes.get().storeFiles).toBe(2);
+    await sizes.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

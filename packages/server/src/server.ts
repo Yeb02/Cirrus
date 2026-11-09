@@ -375,10 +375,13 @@ async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon
     PUT: async (req, res, hash) => {
       if (Number(req.headers['content-length']) > MAX_FILE_BYTES) throw tooBig(MAX_FILE_BYTES);
       if (!existsSync(blob(hash))) {
+        // Counted in the store's size once placed (plan 5b, D8); passed over by its first count until then, which could
+        // otherwise read it between its rename into place and `add` (task 8a).
+        sizes.placing(hash);
         try {
-          // Counted in the store's size once placed (plan 5b, D8).
           sizes.add(hash, (await receiveBlob(baseDir, hash, req, MAX_FILE_BYTES)).size);
         } catch (e) {
+          sizes.abandon(hash);
           if (e instanceof BlobError) throw e.tooBig ? tooBig(MAX_FILE_BYTES) : new HttpError(400, e.message);
           throw e;
         }
