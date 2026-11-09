@@ -46,7 +46,8 @@ export function PublicationDialog(props: {
   /** What runs, at once (two quick presses import once); `busy`, what the buttons show. */
   const running = useRef(false);
   const setBusy = (on: boolean) => { running.current = on; setBusyState(on); };
-  const [pdf, setPdf] = useState<{ ref: FileRef; title: string; found: boolean } | null>(null);
+  /** The PDF taken, and `filled`: the identifier it put in the field, if it found one. */
+  const [pdf, setPdf] = useState<{ ref: FileRef; title: string; found: boolean; filled?: string } | null>(null);
   const [over, setOver] = useState(false);
   const deps: ImportDeps = { ...props.deps, open: () => alive.current };
   const say = (t: string, tone: Tone) => setStatus({ text: t, tone });
@@ -95,14 +96,15 @@ export function PublicationDialog(props: {
     setBusy(false);
     if (t.kind === 'failed') { say(t.message, 'error'); return; }
     const { found, title } = t;
-    setPdf({ ref: t.ref, title, found: found !== null });
+    const filled = found === null ? undefined : 'doi' in found ? found.doi : `arXiv:${found.arxiv}`;
+    setPdf({ ref: t.ref, title, found: found !== null, filled });
     if (found === null) {
-      // The identifier an earlier PDF filled in is not this one's.
-      if (pdf?.found) setText('');
+      // The identifier an earlier PDF filled in is not this one's; an address typed since stays (review of task 4).
+      if (pdf?.filled !== undefined && text === pdf.filled) setText('');
       say(`${t.unreadable}Aucun DOI ni identifiant arXiv dans ce PDF : « Créer le nœud » le crée sous le titre « ${title} », le PDF attaché ; ou saisis son identifiant.`, 'hint');
       return;
     }
-    setText('doi' in found ? found.doi : `arXiv:${found.arxiv}`);
+    setText(filled!);
     say(`${'doi' in found ? `DOI trouvé dans le PDF : ${found.doi}` : `Identifiant arXiv trouvé dans le PDF : ${found.arxiv}`}. « Importer » demande ses métadonnées ; le nœud gardera ce PDF.`, 'found');
   };
   /** Reading the PDF at `path` begins: the dialog waits, and says so; pdf.js's chunk is asked for meanwhile. */
