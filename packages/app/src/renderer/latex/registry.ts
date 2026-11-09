@@ -5,7 +5,7 @@ import { scanTex, type TexScan } from './scan.ts';
 /** A source that compiles (plan 4b, D7): a node's summary, a connection's relation, a node's .tex. */
 export type Origin = { kind: 'summary'; node: Id } | { kind: 'relation'; connection: Id } | { kind: 'file'; node: Id; name: string };
 /** Where a label is defined: a source, or a node's title, by its tag `label` (D7). */
-export type DefOrigin = Origin | { kind: 'title'; node: Id };
+type DefOrigin = Origin | { kind: 'title'; node: Id };
 
 /** A source's slot in the compile IPC (CompileRequest.slot): one per source. */
 export function slotOf(o: Origin): string {
@@ -13,7 +13,7 @@ export function slotOf(o: Origin): string {
 }
 
 /** title: the node's, or the connection's for a relation (`node` then null); line: 0 for a tag `label`. */
-export interface LabelDef { label: string; origin: DefOrigin; line: number; title: string; node: Id | null }
+interface LabelDef { label: string; origin: DefOrigin; line: number; title: string; node: Id | null }
 
 /** The tags a short citation reads (spec 5.4). */
 const AUTHOR_TAG = 'auteur', DATE_TAG = 'date_de_publication';

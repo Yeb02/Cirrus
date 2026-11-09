@@ -3,7 +3,7 @@ import type { FirstSyncChoice, FirstSyncOffer, PairResult, ServerInfo, SyncStatu
 import { chipOf } from '../../sync/syncSession.ts';
 
 /** The address proposed: a server on this machine, at the port its command line takes by default (packages/server). */
-export const DEFAULT_SERVER_URL = 'http://127.0.0.1:7310';
+const DEFAULT_SERVER_URL = 'http://127.0.0.1:7310';
 
 /** « n nœuds », « 1 nœud »: a count and its noun, in the singular below 2 (French). */
 const count = (n: number, noun: string) => `${n} ${noun}${n > 1 ? 's' : ''}`;

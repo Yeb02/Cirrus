@@ -19,7 +19,7 @@ import type { Result } from './session.ts';
 export interface Stats { p50: number; p95: number; p99: number; max: number; n: number }
 
 /** The interface's steps of the load, in absolute time (the main process makes them ms since its own start). */
-export type LoadMark = 'dataReceived' | 'stateReady' | 'sceneReady' | 'engineReady' | 'firstFrame';
+type LoadMark = 'dataReceived' | 'stateReady' | 'sceneReady' | 'engineReady' | 'firstFrame';
 const marks: Partial<Record<LoadMark, number>> = {};
 /** Records the first time a load step is reached (cheap: called in every mode). */
 export function mark(name: LoadMark): void {
@@ -60,7 +60,7 @@ export interface EditMeasures {
 }
 
 /** The dense pass's plan (plan 3c task 10): its nodes in a grid, and the zooms its camera goes through. */
-export interface DenseInfo { nodes: number; cols: number; rows: number; zoomLo: number; zoomHi: number }
+interface DenseInfo { nodes: number; cols: number; rows: number; zoomLo: number; zoomHi: number }
 
 export interface BenchRun {
   label: string;
@@ -132,7 +132,7 @@ const GROUP_DRAG_FRAMES = 30;
 /** An edit whose scene has not come after this is noted and skipped. */
 const EDIT_TIMEOUT_MS = 180_000;
 
-export function summarize(samples: number[]): Stats {
+function summarize(samples: number[]): Stats {
   if (samples.length === 0) return { p50: Number.NaN, p95: Number.NaN, p99: Number.NaN, max: Number.NaN, n: 0 };
   const s = [...samples].sort((a, b) => a - b);
   const rank = (q: number) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(q * s.length) - 1))];
@@ -175,12 +175,12 @@ function patch(target: object, names: string[], wrap: (name: string, own: Method
 }
 
 /** The WebGL calls that send data to the GPU, the one that binds a buffer, and the constants that size a texel. */
-export type UploadGl = Pick<
+type UploadGl = Pick<
   WebGL2RenderingContext, 'bindBuffer' | 'bufferData' | 'bufferSubData' | 'texImage2D' | 'texSubImage2D' | 'RGBA' | 'RG' | 'RED' | 'FLOAT' | 'HALF_FLOAT'
 >;
 
 /** Bytes sent to the GPU since the counter was made or reset: to buffers, to textures, and to each buffer object. */
-export interface UploadCounter {
+interface UploadCounter {
   readonly buffers: number;
   readonly textures: number;
   readonly byBuffer: ReadonlyMap<unknown, number>;
@@ -309,7 +309,7 @@ export function groupChangingDrop(scene: PlanScene, item: number, cam: Camera, p
  * of one-line boxes at step 0 with half a box's padding between them, as many as the prepared rectangle holds at the
  * readability threshold plus one screen of pan; and the camera's path over it.
  */
-export interface DenseLayout {
+interface DenseLayout {
   cols: number;
   rows: number;
   /** World units between two box centres. */

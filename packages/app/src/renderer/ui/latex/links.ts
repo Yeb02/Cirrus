@@ -10,7 +10,7 @@ export function nodeLinkOf(url: string): Id | null {
 }
 
 /** Where a link of a PDF leads: a node of the base, an address for the system (openUrl), a destination in the document. */
-export type LinkTarget = { node: Id } | { url: string } | { dest: unknown };
+type LinkTarget = { node: Id } | { url: string } | { dest: unknown };
 
 /**
  * A link annotation of pdf.js (plan 4a, task 6; plan 4b, task 6): a `cirrus://node/<id>` address, which pdf.js leaves

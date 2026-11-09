@@ -48,7 +48,7 @@ export function chipOf(status: SyncStatus, gaveUp: boolean): Chip | null {
   }
 }
 
-export interface SyncSessionDeps {
+interface SyncSessionDeps {
   bridge: SyncBridge;
   session: EditSession;
   /** The state, read again from the base (after a reconciliation the base refused, or a divergence). */

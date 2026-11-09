@@ -9,7 +9,7 @@ import { CITES, REF_LISTS, REFS, type TexMark, type TexScan } from '../../latex/
  */
 
 /** The name being typed in a ref's or a citation's braces: where it starts, and what is typed of it. */
-export interface RefContext { kind: 'ref' | 'cite'; from: number; prefix: string }
+interface RefContext { kind: 'ref' | 'cite'; from: number; prefix: string }
 
 const BACKSLASH = 92, PERCENT = 37, LF = 10, OPEN = 123, CLOSE = 125, STAR = 42, CLOSE_OPT = 93;
 const isLetter = (c: number) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122);

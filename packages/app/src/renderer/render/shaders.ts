@@ -42,7 +42,8 @@ export const NO_GROUP = 1e9;
 export const ATLAS_UNIT = 0, ITEMS_UNIT = 1;
 
 /** A simple connection's glyph vertices per branch (a dot's triangles; an arrow uses six), and per instance. */
-export const SIMPLE_GLYPH_PER_BRANCH = 3 * DOT_SIDES, SIMPLE_GLYPH_VERTICES = 2 * SIMPLE_GLYPH_PER_BRANCH;
+const SIMPLE_GLYPH_PER_BRANCH = 3 * DOT_SIDES;
+export const SIMPLE_GLYPH_VERTICES = 2 * SIMPLE_GLYPH_PER_BRANCH;
 
 // The item texture (instances.ts, itemTexels): two RGBA32F texels per slot, 512 slots per row of 1024 texels.
 const ITEMS = /* glsl */ `

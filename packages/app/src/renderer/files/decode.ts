@@ -1,7 +1,7 @@
 import { extensionOf } from './kind.ts';
 
-export type Encoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252';
-export type Decoded = { text: string; encoding: Encoding } | { binary: true };
+type Encoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252';
+type Decoded = { text: string; encoding: Encoding } | { binary: true };
 
 /** How far a zero byte is looked for: one there, without a UTF-16 BOM, makes the file a binary. */
 const BINARY_PROBE = 8192;
@@ -82,8 +82,8 @@ export function decodeText(bytes: Uint8Array, truncated = false): Decoded {
   }
 }
 
-export type Delimiter = ',' | ';' | '\t';
-export interface Table { rows: string[][]; delimiter: Delimiter; truncated: boolean }
+type Delimiter = ',' | ';' | '\t';
+interface Table { rows: string[][]; delimiter: Delimiter; truncated: boolean }
 
 /** The delimiters tried, by preference when two are as constant: a tab or a semicolon rarely shows in a value, a comma often does (French decimals). */
 const DELIMITERS: Delimiter[] = ['\t', ';', ','];

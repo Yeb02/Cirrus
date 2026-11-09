@@ -26,7 +26,7 @@ export function latexStateText(s: LatexStatus | null): string {
 }
 
 /** The notice's text and buttons: `install` (« Installer »), `retry` (« Réessayer »), `later` (« Plus tard »). */
-export interface LatexNoticeContent { text: string; actions: ('install' | 'retry' | 'later')[] }
+interface LatexNoticeContent { text: string; actions: ('install' | 'retry' | 'later')[] }
 
 /**
  * The notice at the top of the window (task 7), for `s` (null: not known yet): LaTeX absent, the offer to install it,

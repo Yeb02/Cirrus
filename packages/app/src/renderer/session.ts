@@ -29,7 +29,7 @@ export const messageOf = (e: unknown): string => {
  * What cirrus:load sends: a snapshot, the journal's operations after it (JSON), and the journal number they reach; the
  * pending writes (JSON: all of them with a server paired, none otherwise, plan 5a) and this PC's identifier.
  */
-export interface Loaded { data: ArrayBuffer; tail: string; seq: number; pending: string; pc: string }
+interface Loaded { data: ArrayBuffer; tail: string; seq: number; pending: string; pc: string }
 
 /**
  * The state the interface opens with (plan 3c, decision 4): `seq`, the journal number it covers; `stale`, whether the
@@ -60,7 +60,7 @@ export async function openState(load: (fromTables: boolean) => Promise<Loaded>):
 }
 
 /** What a reconciliation leaves to say (plan 5a): the writes dropped, the other notifications, each a sentence in French. */
-export interface Reconciled { notices: string[]; dropped: string[] }
+interface Reconciled { notices: string[]; dropped: string[] }
 
 /**
  * Every edit of the interface (spec 6.4): computed by a command on the interface's copy of the state (which it leaves as
@@ -343,7 +343,7 @@ export class EditSession {
 }
 
 /** When the snapshot is saved (RenderParams). */
-export interface SnapshotTiming { snapshotAfterActions: number; snapshotIdleMs: number }
+interface SnapshotTiming { snapshotAfterActions: number; snapshotIdleMs: number }
 
 /**
  * When the interface sends its state to be kept as the base's snapshot (plan 3c, decision 4; R16). A snapshot is due

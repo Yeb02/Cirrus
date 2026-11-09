@@ -5,7 +5,7 @@ import { extensionOf, fileKind } from '../../files/kind.ts';
  * image's zoom and place, a table's visible part.
  */
 
-export type ViewChoice = { view: 'image' } | { view: 'pdf' } | { view: 'text'; wrap: boolean } | { view: 'table' };
+type ViewChoice = { view: 'image' } | { view: 'pdf' } | { view: 'text'; wrap: boolean } | { view: 'table' };
 
 /** Prose, whose long lines are wrapped: the rest of the text kinds is code, read line by line. */
 const WRAPPED = new Set(['txt', 'md', 'log']);

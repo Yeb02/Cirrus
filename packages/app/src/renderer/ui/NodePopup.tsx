@@ -202,9 +202,9 @@ function PdfThumb(props: { file: FileRef; px: number; kept: number; maxMb: numbe
 }
 
 /** How a file of the pop-up is opened: its preview beside the pop-up, or its full screen (Panels). */
-export type OpenFile = (name: string, how: 'preview' | 'full') => void;
+type OpenFile = (name: string, how: 'preview' | 'full') => void;
 /** An annotation opened from a pop-up (plan 4c, D4): the preview of `name`, a file of node `pdf`, beside it, showing `anchor`. */
-export type RevealAnnotation = (pdf: Id, name: string, anchor: Anchor) => void;
+type RevealAnnotation = (pdf: Id, name: string, anchor: Anchor) => void;
 
 /** A version the store does not hold: why, and whether it cannot be opened (absentVersion). */
 type Absent = { text: string; blocks: boolean };

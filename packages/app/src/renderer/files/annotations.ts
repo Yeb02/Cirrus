@@ -15,7 +15,7 @@ import { sameName } from './merge.ts';
 export const NODE_MIME = 'application/x-cirrus-node';
 
 /** A rectangle of an anchor: [x0, y0, x1, y1] in the page's PDF coordinates (points, y up), x0 < x1 and y0 < y1. */
-export type Rect = Anchor['rects'][number];
+type Rect = Anchor['rects'][number];
 /** A rectangle of the screen (a DOMRect's sides), or of a viewport's coordinates. */
 export interface DOMRectLike { left: number; top: number; right: number; bottom: number }
 /** The page an element of the reader is on (from 1), and its viewport at its place in the window, at the zoom shown. */
@@ -149,7 +149,7 @@ export function annotationSource(s: State, a: Anchor): AnnotationSource {
 }
 
 /** What the menu of an annotation's line does: open its node's pop-up, or delete it everywhere. */
-export type AnnotationAction = 'node' | 'delete';
+type AnnotationAction = 'node' | 'delete';
 
 /**
  * The menu of an annotation's line (final review, I2: right click, in a reader's margin or a PDF's pop-up), as the

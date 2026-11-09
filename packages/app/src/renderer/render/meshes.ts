@@ -65,7 +65,7 @@ export class Mesh {
 }
 
 /** One instance's attributes, interleaved: their names and sizes in floats (or ints), in order. */
-export type InstanceLayout = AttributeSpec[];
+type InstanceLayout = AttributeSpec[];
 
 /**
  * Instances drawn by one or more programs (plan 3c task 8: a simple connection's ribbons and glyphs come from the same

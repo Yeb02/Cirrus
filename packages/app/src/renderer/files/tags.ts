@@ -63,7 +63,7 @@ export function withoutTag(tags: TagValue[], tag: TagValue): TagValue[] {
  * A suggestion while a tag is typed: a key of the registry (`value` absent), or a value of an enumeration once its key
  * and the colon are typed.
  */
-export interface TagSuggestion { key: string; value?: string; rank?: number }
+interface TagSuggestion { key: string; value?: string; rank?: number }
 
 /** Compared without case or accents: « Epis » finds « statut_epistémique ». */
 const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('fr');

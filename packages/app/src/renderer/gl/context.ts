@@ -1,5 +1,5 @@
 /** EXT_disjoint_timer_query_webgl2's constants (the bench's GPU time, timer.ts). */
-export interface TimerExt { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }
+interface TimerExt { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number }
 
 /**
  * A WebGL 2 context on a canvas (plan 3c, task 7): no multisampling (the shaders antialias analytically), premultiplied

@@ -17,7 +17,7 @@ import { clampRect, placeAt, placeBeside, type Rect } from './geometry.ts';
 export type PanelTarget = { kind: 'node'; node: Id } | { kind: 'file'; node: Id; name: string };
 
 /** An annotation a file's preview is asked to show (plan 4c, task 3): its version, its page, its passage blinking; `seq` counts the asks. */
-export interface Reveal { anchor: Anchor; seq: number }
+interface Reveal { anchor: Anchor; seq: number }
 
 /**
  * `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. `reveal`: a PDF's

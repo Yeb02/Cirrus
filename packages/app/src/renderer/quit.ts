@@ -34,7 +34,7 @@ export class TypedFields {
 /** The app's fields (LatexField holds itself there while edited; App commits them at closing). */
 export const typedFields = new TypedFields();
 
-export interface QuitSteps {
+interface QuitSteps {
   /** The .tex typed in its full screen saved (D6). */
   workbench(): Promise<void>;
   /** What is typed in the LaTeX fields being edited committed (typedFields). */

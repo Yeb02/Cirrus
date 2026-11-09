@@ -12,7 +12,7 @@ export interface CompiledView {
 /** Nothing compiled yet. */
 export const IDLE_VIEW: CompiledView = { pdf: null, error: null, log: '', pending: false, unavailable: null };
 
-export interface CompileBridge { compile(r: CompileRequest): Promise<CompileAnswer>; cancel(slot: string): void }
+interface CompileBridge { compile(r: CompileRequest): Promise<CompileAnswer>; cancel(slot: string): void }
 export interface Timers { set(fn: () => void, ms: number): unknown; clear(h: unknown): void }
 
 /**

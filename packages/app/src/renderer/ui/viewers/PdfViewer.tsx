@@ -492,7 +492,7 @@ export const PdfViewer = memo(function PdfViewer(props: ViewProps & {
   );
 });
 
-export interface PageProps {
+interface PageProps {
   doc: PDFDocumentProxy; index: number; top: number; left: number; width: number; height: number;
   /** CSS pixels per point. */
   scale: number;

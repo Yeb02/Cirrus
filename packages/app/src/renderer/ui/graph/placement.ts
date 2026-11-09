@@ -6,7 +6,7 @@ import { BIB_WAITING } from './bibImport.ts';
 import type { Engine, Graph } from './core.ts';
 
 /** What a gesture without a held button will do once placed (spec 9.1). */
-export type Placing =
+type Placing =
   | { kind: 'newNode' }
   | { kind: 'exclude'; base: PlanScene; items: number[]; from: Vec2 }
   /** Drawing a connection from this node (spec 11.1). */

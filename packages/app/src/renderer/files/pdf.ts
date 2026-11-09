@@ -44,7 +44,7 @@ const RANGE = 2 ** 16;
  * root (it fetches every page of the top level ahead), or of a damaged one (its objects indexed again); a thumbnail
  * then gives up, and shows the PDF's icon.
  */
-export class BudgetError extends Error {
+class BudgetError extends Error {
   override name = 'BudgetError';
 }
 

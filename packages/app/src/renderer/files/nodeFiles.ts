@@ -24,7 +24,7 @@ export interface NodeFiles {
 type Dragged = { dataTransfer: { readonly types: readonly string[] } | null };
 
 /** What a drag carries: a node dragged out of a list of annotations (NODE_MIME, plan 4c, D4), files from the explorer. */
-export type Carried = 'node' | 'files';
+type Carried = 'node' | 'files';
 
 /**
  * What a drag carries (plan 4c, task 3): a node from a list of Cirrus first — a node is never taken for files —, then
@@ -47,7 +47,7 @@ export const carriesFiles = (e: Dragged): boolean => carried(e) === 'files';
 export const refusesStrayDrop = (e: Dragged & { defaultPrevented: boolean }): boolean => !e.defaultPrevented && carriesFiles(e);
 
 /** What takes the files let go on an element: a node's pop-up, or the graph. */
-export type DropZone = 'popup' | 'graph';
+type DropZone = 'popup' | 'graph';
 /** What a drop lands on: an element of the page, or what stands for one (its `closest`). */
 type DropTarget = { closest?(selectors: string): unknown };
 /** What floats over the graph and refuses files (task 4): a connection's pop-up, a question; the import dialog takes its own (plan 4c). */
@@ -71,7 +71,7 @@ export function dropZone(target: EventTarget | DropTarget | null): DropZone | nu
  * dragged out of a list, placed in the plan shown (plan 4c, D4: placeDroppedBuild); or refused — files by the window's
  * guard (refusesStrayDrop), a node by nothing taking it.
  */
-export type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'bib' } | { to: 'place' } | { to: 'refused' };
+type DropRoute = { to: 'node'; node: Id } | { to: 'notice' } | { to: 'bib' } | { to: 'place' } | { to: 'refused' };
 
 /** Whether a file's name or path is a .bib's (D9). */
 const isBib = (name: string) => extensionOf(name.slice(Math.max(name.lastIndexOf('\\'), name.lastIndexOf('/')) + 1)) === 'bib';

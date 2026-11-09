@@ -18,10 +18,10 @@ import { messageOf, type Result } from '../session.ts';
  * notification naming the node there.
  */
 
-export const AUTHOR_TAG = 'auteur';
-export const DATE_TAG = 'date_de_publication';
-export const DOI_TAG = 'doi';
-export const ARXIV_TAG = 'arxiv';
+const AUTHOR_TAG = 'auteur';
+const DATE_TAG = 'date_de_publication';
+const DOI_TAG = 'doi';
+const ARXIV_TAG = 'arxiv';
 
 /** What an import brings: the node's fields, its BibTeX entry if any, its identifiers (as given), its PDF if any. */
 export interface PublicationInput {

@@ -16,7 +16,7 @@ import { Viewer } from './viewers/Viewer.tsx';
 const TexWorkbench = lazy(() => loading(import('./latex/TexWorkbench.tsx')).then((m) => ({ default: m.TexWorkbench })));
 
 /** What the full screen of a .tex needs (plan 4b, task 5): the state and the registry for its compilation, its save, its handle for App. */
-export interface TexContext {
+interface TexContext {
   state: State; registry: LatexRegistry | null; onSave(text: string): Promise<SaveAnswer>; workbench: RefObject<WorkbenchHandle | null>;
 }
 
