@@ -1,6 +1,6 @@
-import { type Action, type FileRef, type Id, phantomsOf, type State, type Vec2 } from '@cirrus/core';
+import { type Action, type Id, phantomsOf, type State } from '@cirrus/core';
 import {
-  bibBlock, blockHalves, type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
+  type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
   type PlanScene, type RenderParams, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, type ConnectTarget, connectTarget, otherPlans,
@@ -16,10 +16,9 @@ import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
   absentBuild, addMemberBuild, ALREADY_HERE, type Build, connectBuild, createBuild, importBuild,
-  joinBuild, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, readableStep,
+  joinBuild, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild,
   renameBuild, scaleBuild, splitBuild,
 } from '../actions.ts';
-import type { BibFile } from '../../main/bib.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog } from './Dialogs.tsx';
@@ -27,15 +26,14 @@ import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
 import { backgroundNotice, carried, carriesFiles, droppedPaths, dropRoute, dropZone, type Refusal } from '../files/nodeFiles.ts';
-import { loading } from '../files/read.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
-import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
-import { type ImportDeps, publicationBuild } from '../publications/build.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 import { type Engine, type Graph, NOTHING_SHOWN, plural } from './graph/core.ts';
 import { useHover } from './graph/hover.ts';
 import { ignored, measuring, replayPointer } from './graph/launch.ts';
+import { BIB_WAITING, useBibImport } from './graph/bibImport.ts';
 import { useLayoutHandles } from './graph/layoutHandles.ts';
+import { usePublicationImport } from './graph/publication.ts';
 import { MODE, type PendingPlace, type Placing } from './graph/placement.ts';
 import { useQuestions } from './graph/questions.ts';
 import { useRepercussion } from './graph/repercussion.ts';
@@ -53,32 +51,6 @@ function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: R
   if (v && v.length === 3 && v.every(Number.isFinite)) return { x: v[0], y: v[1], zoom: v[2], widthPx, heightPx };
   return fitBounds(scene.bounds, widthPx, heightPx, p);
 }
-
-const fr =(n: number) => n.toLocaleString('fr-FR');
-
-/**
- * A .bib being imported (plan 4c, D9, task 6), from the ghost of its block to the action: what it plans, in its plan;
- * each title's lines (the block's rows); its entries' .bib stored meanwhile — `stored` so far, `refs` once all are,
- * `failed` why not —, which `stop` (Escape, another plan, a lost focus) ends; `settled` resolves once storing is over.
- * `put`: where a click put it down and at what zoom, the action waiting for every .bib stored — Escape no longer gives
- * it up, another plan does, and no gesture that puts something down begins meanwhile (review of task 6, M4). The
- * block's half sizes at step 0, for its outline (they scale with the step).
- */
-interface BibImport {
-  planned: PlannedBib; plan: Id; lines: number[]; halves: { halfW: number; halfH: number };
-  stored: number; refs: FileRef[] | null; failed: string | null; stop: boolean; settled: Promise<void>; put: { at: Vec2; zoom: number } | null;
-}
-/** What a gesture begun while a .bib's import waits for its .bib is told (review of task 6, M4). */
-const BIB_WAITING = 'Import du .bib en cours : attends que ses publications soient posées.';
-/**
- * The import's marks for its measures (scripts/interface.mjs, scripts/mesures-annotations.mjs): the drop or the choice,
- * the file read by the main process, its entries read and planned (decoded, parsed, compared with the base), the ghost
- * shown, every .bib stored, the click, the action applied.
- */
-const bibMark = (name: 'drop' | 'read' | 'planned' | 'ghost' | 'stored' | 'click' | 'placed') => {
-  performance.clearMarks(`cirrus:bib:${name}`);
-  performance.mark(`cirrus:bib:${name}`);
-};
 
 /**
  * Hosts the WebGL canvas and draws the active plan (spec 8). Navigation (spec 8.1, 9.1): wheel zoom around the cursor,
@@ -153,17 +125,9 @@ export function GraphView(props: {
   /** What follows the cursor: its label, and a .bib's block its outline (`box`, in pixels, centred on the cursor). */
   const [ghost, setGhost] = useState<{ x: number; y: number; text: string; box?: { w: number; h: number } } | null>(null);
   const placing = useRef<Placing | null>(null);
-  /** A .bib being imported (plan 4c, D9), from its ghost to its action; null otherwise. */
-  const bib = useRef<BibImport | null>(null);
   /** The straight line that follows the cursor while a connection is drawn (screen coordinates). */
   const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
-  /**
-   * « Importer une publication… » (plan 4c, task 5): the dialog, and where its node goes — the world point and the zoom
-   * of the right click that opened it, in its plan. Another plan shown closes it (a result still to come dropped).
-   */
-  const [publication, setPublication] = useState<{ key: number; plan: Id; at: Vec2; zoom: number } | null>(null);
-  useEffect(() => { setPublication((d) => (d !== null && d.plan !== props.plan ? null : d)); }, [props.plan]);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
@@ -175,11 +139,9 @@ export function GraphView(props: {
    * 3b review), and so do a node dropped from a list and another .bib.
    */
   const busy = () => gestures.current.busy || dragging.current !== null || handles.held() || stubDrag.current !== null
-    || repercussion.queued() || questions.asking() || bib.current !== null;
-  /** A .bib put down, waiting for its .bib (M4): no gesture that puts something down begins, the menus do not open. */
-  const bibWaiting = () => bib.current?.put != null;
+    || repercussion.queued() || questions.asking() || bib.importing();
   /** Why `what` waits: the .bib's import put down (Escape does not give it up), or a gesture in progress. */
-  const busyReason = (what: string) => (bibWaiting() ? BIB_WAITING : `Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant ${what}.`);
+  const busyReason = (what: string) => (bib.bibWaiting() ? BIB_WAITING : `Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant ${what}.`);
 
   /**
    * Back to the scene of the state, after a preview given up or refused (Escape, a lost focus, a right click, a
@@ -251,7 +213,7 @@ export function GraphView(props: {
     redraw();
     // Wheel and arrows stay active while a connection is drawn: its line follows the node; a .bib's block, its outline.
     if (placing.current?.kind === 'connect' && lastPointer.current) aimLine(lastPointer.current.x, lastPointer.current.y);
-    if (placing.current?.kind === 'bib' || bibWaiting()) showBib();
+    if (placing.current?.kind === 'bib' || bib.bibWaiting()) bib.showBib();
   };
   const nav = (input: NavInput) => {
     const e = engine.current;
@@ -275,16 +237,19 @@ export function GraphView(props: {
 
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
-    root, engine, sceneRef, paramsRef, stateRef, sessionRef, selectionRef, gestures, onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt,
-    restoreScene, feed,
-    get scenes() { return scenes; }, get questions() { return questions; }, get repercussion() { return repercussion; }, get handles() { return handles; },
-    // Still GraphView's: what is placed, and the gesture waiting for another plan.
-    get placement() { return { placing, pendingPlace, startPending }; },
+    root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, gestures, onOpenPlan: props.onOpenPlan, redraw,
+    notify, edit, indexOf, hitAt, restoreScene, feed, busy, busyReason,
+    get scenes() { return scenes; }, get questions() { return questions; }, get bib() { return bib; }, get publication() { return publication; },
+    get repercussion() { return repercussion; }, get handles() { return handles; },
+    // Still GraphView's: what is placed, its ghost, and the gesture waiting for another plan.
+    get placement() { return { placing, setGhost, startPlacing, pendingPlace, startPending }; },
   };
   const scenes = useScenes(graph, props, ready);
   const scene = scenes.scene;
   const { tip, chain, hover, clearHover } = useHover(graph);
   const questions = useQuestions(graph);
+  const bib = useBibImport(graph);
+  const publication = usePublicationImport(graph, props.plan);
   const repercussion = useRepercussion(graph);
   const handles = useLayoutHandles(graph);
   const { settleWheel, wheelScale } = useScaleWheel(graph);
@@ -292,7 +257,7 @@ export function GraphView(props: {
   /** A gesture without a held button begins (spec 9.1): `text` follows the cursor, if any. */
   const startPlacing = (what: Placing, text: string | null, at: { x: number; y: number }) => {
     // Not while a .bib put down waits for its .bib: its ghost is shown (review of task 6, M4).
-    if (bibWaiting()) { notify(BIB_WAITING); return; }
+    if (bib.bibWaiting()) { notify(BIB_WAITING); return; }
     placing.current = what;
     setGhost(text === null ? null : { x: at.x, y: at.y, text });
     gestures.current.start(MODE[what.kind]);
@@ -344,118 +309,6 @@ export function GraphView(props: {
     const c = clip.current;
     if (!c) { notify('Rien à coller : copiez d’abord une sélection (Ctrl+C).'); return; }
     startPlacing({ kind: 'paste' }, `Coller ${c.nodes.length} ${plural(c.nodes.length, 'nœud', 'nœuds')}`, at);
-  };
-  /** What a .bib's ghost says: its publications, and its .bib being stored, if they are. */
-  const bibLabel = (b: BibImport) => {
-    const n = b.planned.items.length, what = `Importer ${n === 1 ? 'une publication' : `${fr(n)} publications`}`;
-    if (b.refs !== null) return what;
-    return b.put ? `Enregistrement des fichiers .bib : ${fr(b.stored)} / ${fr(n)}…` : `${what} · fichiers .bib : ${fr(b.stored)} / ${fr(n)}`;
-  };
-  /**
-   * The ghost of the .bib's block (D9, the paste's ghost of plan 3b): its label, and its outline as the block would be
-   * put down at the zoom shown — at the readable step, so about the same size on screen at any zoom —, at `at` or where
-   * it was. Put down and waiting for its .bib: where it was put down, at the step of then, whatever the view does.
-   */
-  const showBib = (at?: { x: number; y: number }) => {
-    const b = bib.current, e = engine.current;
-    if (!b || !e) return;
-    const p = paramsRef.current, cam = e.renderer.camera, s = p.factor ** readableStep(b.put?.zoom ?? cam.zoom, p);
-    const box = { w: 2 * b.halves.halfW * s * cam.zoom, h: 2 * b.halves.halfH * s * cam.zoom };
-    const there = b.put ? worldToScreen(cam, b.put.at.x, b.put.at.y) : at;
-    setGhost((g) => ({ x: there?.x ?? g?.x ?? 0, y: there?.y ?? g?.y ?? 0, text: bibLabel(b), box }));
-  };
-  /** The import given up (Escape, another plan, a lost focus, a refusal): its .bib no longer stored; what is stored stays. */
-  const dropBib = () => {
-    const b = bib.current;
-    if (!b) return;
-    b.stop = true;
-    bib.current = null;
-  };
-  /**
-   * A .bib the main process read (D9: dropped on the background, or chosen), for the plan `plan` shown then: decoded,
-   * planned against the base (planBib), its block following the cursor from `at` until a click puts it down (placeBib),
-   * its entries' .bib stored meanwhile, by batches (storeBibs). Nothing to import: the notification says why, and
-   * nothing follows the cursor. Another plan shown or a gesture begun while it was read: given up, said.
-   */
-  const startBib = (file: BibFile | null, at: { x: number; y: number }, plan: Id) => {
-    bibMark('read');
-    const e = engine.current, sc = sceneRef.current;
-    if (file === null || !e || !sc) return;
-    if ('refused' in file) { notify(file.refused); return; }
-    if (sc.plan.id !== plan || busy()) { notify(`Le plan a changé, ou un geste a commencé, pendant la lecture du fichier .bib : rien n’est importé.`); return; }
-    const text = bibText(file);
-    if ('refused' in text) { notify(text.refused); return; }
-    const p = paramsRef.current, planned = planBib(stateRef.current, file.name, text.text, p.publicationMaxAuthors);
-    bibMark('planned');
-    if (planned.items.length === 0) { onLongNoticeRef.current(bibNotice(planned, 0, p.bibNoticeLines)); return; }
-    const measure = scenes.measureOf(p);
-    const lines = planned.items.map((x) => measure(x.plan.title));
-    const b: BibImport = {
-      planned, plan, lines, halves: blockHalves(bibBlock(lines.length, 0, p, lines), 0, p, lines),
-      stored: 0, refs: null, failed: null, stop: false, settled: Promise.resolve(), put: null,
-    };
-    bib.current = b;
-    // Only the block's ghost is redrawn: no other gesture begins while it follows the cursor or waits (M4).
-    const shown = () => bib.current === b && (placing.current?.kind === 'bib' || b.put !== null);
-    // Counted among what the views load (viewsSettled): a capture shows the ghost once its .bib are stored (plan 4c,
-    // task 7, « bloc-bib »), never halfway.
-    b.settled = loading(storeBibs(planned.items.map((x) => x.plan.bib!), (batch) => window.cirrus.storeTexts(batch), (n) => {
-      b.stored = n;
-      if (shown()) showBib();
-    }, () => b.stop).then((refs) => {
-      b.refs = refs;
-      if (refs) bibMark('stored');
-      if (shown() && b.put === null) showBib();
-    }, (err: unknown) => {
-      console.error('Enregistrement des fichiers .bib :', err);
-      b.failed = bibStoreFailure(err);
-      // Still following the cursor: the gesture is given up, said.
-      if (bib.current === b && b.put === null) { feed({ t: 'cancel' }); notify(b.failed); }
-    }));
-    startPlacing({ kind: 'bib' }, bibLabel(b), at);
-    showBib(at);
-    bibMark('ghost');
-  };
-  /**
-   * The block put down at `at` (D9), at the zoom of the click, once its .bib are all stored (the ghost stays there and
-   * says so while they are not): one action, « Importer <n> publications », then the notification of the import
-   * (bibNotice), which stays bibNoticeMs. Another plan shown meanwhile gives it up (the scene's effect); the store
-   * failed: nothing is made, said.
-   */
-  const placeBib = (at: Vec2, zoom: number) => {
-    const b = bib.current;
-    if (!b) return;
-    bibMark('click');
-    b.put = { at, zoom };
-    if (b.refs === null) showBib();
-    void b.settled.then(async () => {
-      if (bib.current !== b) return;
-      bib.current = null;
-      setGhost(null);
-      const sc = sceneRef.current;
-      if (b.failed || b.refs === null) { notify(b.failed ?? 'Les fichiers .bib n’ont pas été enregistrés : rien n’est importé.'); return; }
-      if (!sc || sc.plan.id !== b.plan) { notify('Le plan de l’import n’est plus affiché : rien n’est importé.'); return; }
-      const p = paramsRef.current, refs = b.refs;
-      const r = await edit(bibImportBuild(b.planned.items.map((x, i) => ({ plan: x.plan, file: refs[i] })), sc, at, zoom, p, b.lines, indexOf(sc)));
-      bibMark('placed');
-      if (r?.ok) onLongNoticeRef.current(bibNotice(b.planned, b.planned.items.length, p.bibNoticeLines));
-    });
-  };
-  /** A .bib dropped on the graph's background at (sx, sy) (D9): read by the main process, then its block follows the cursor. */
-  const dropBibFile = async (path: string, at: { x: number; y: number }) => {
-    const plan = sceneRef.current?.plan.id;
-    if (!plan) return;
-    if (busy()) { notify(busyReason('d’importer un fichier .bib')); return; }
-    bibMark('drop');
-    let file: BibFile;
-    try {
-      file = await window.cirrus.readBib(path);
-    } catch (e) {
-      console.error('Lecture du fichier .bib :', e);
-      notify('Le fichier .bib n’a pas pu être lu : rien n’est importé.');
-      return;
-    }
-    startBib(file, at, plan);
   };
   /** Begins the gesture waiting for this plan, framing what it concerns. */
   const startPending = () => {
@@ -640,12 +493,7 @@ export function GraphView(props: {
       feed({ t: 'cancel' });
       setSelection(emptySelection());
       setPopup(null);
-      // A .bib put down and waiting for its .bib: given up, its ghost gone with its plan (review of task 6, M4).
-      if (bibWaiting()) {
-        dropBib();
-        setGhost(null);
-        notify('Le plan de l’import n’est plus affiché : rien n’est importé.');
-      }
+      bib.planLeft();
     }
     sceneRef.current = scene;
     scenes.showScene(e.renderer, scene);
@@ -684,7 +532,7 @@ export function GraphView(props: {
     const under = nodeOpenedBy(i === undefined ? undefined : sceneRef.current!.items[i], false);
     const route = dropRoute('graph', under, 'files', refused.length === 0 ? paths : undefined);
     if (route.to === 'node') return props.onDropFiles(route.node, paths, refused);
-    if (route.to === 'bib') return dropBibFile(paths[0], { x: sx, y: sy });
+    if (route.to === 'bib') return bib.dropBibFile(paths[0], { x: sx, y: sy });
     notify(backgroundNotice([...paths, ...refused.map((r) => r.name)]));
     return Promise.resolve();
   };
@@ -766,7 +614,7 @@ export function GraphView(props: {
       }
       case 'context': {
         // No menu while a .bib put down waits for its .bib: its choices put something down (review of task 6, M4).
-        if (bibWaiting()) { notify(BIB_WAITING); break; }
+        if (bib.bibWaiting()) { notify(BIB_WAITING); break; }
         // A right click outside the selection lets it go (spec 9.1), then opens the menu of what is under it.
         const target = targetOf(intent.hit);
         let sel = selectionRef.current;
@@ -795,7 +643,7 @@ export function GraphView(props: {
       case 'dragStart': {
         // A stub dragged gets a place of its own: an absent phantom (spec 8.5); not while a .bib's ghost waits (M4).
         if (intent.hit.kind === 'stub') {
-          if (bibWaiting()) { notify(BIB_WAITING); break; }
+          if (bib.bibWaiting()) { notify(BIB_WAITING); break; }
           stubDrag.current = { connection: intent.hit.connection, node: intent.hit.node, title: intent.hit.title };
           break;
         }
@@ -887,7 +735,7 @@ export function GraphView(props: {
         }
         placing.current = null;
         // A .bib's block (D9): its ghost stays where it is put down while its .bib are stored.
-        if (what.kind === 'bib') { placeBib(intent.at, zoom); break; }
+        if (what.kind === 'bib') { bib.placeBib(intent.at, zoom); break; }
         setGhost(null);
         if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label, indexOf(sc)));
         else if (what.kind === 'repercussion') {
@@ -921,7 +769,7 @@ export function GraphView(props: {
         setGhost(null);
         if (what?.kind === 'connect') endConnect();
         // A .bib's block (D9): nothing is made, its .bib no longer stored.
-        if (what?.kind === 'bib') dropBib();
+        if (what?.kind === 'bib') bib.dropBib();
         // Escape leaves this plan as it is; the next one opens (spec 10).
         if (what?.kind === 'repercussion') repercussion.nextRepercussion();
         if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
@@ -952,7 +800,7 @@ export function GraphView(props: {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
     // A menu left open while a .bib put down waits for its .bib: nothing it offers begins (review of task 6, M4).
-    if (bibWaiting()) { notify(BIB_WAITING); return; }
+    if (bib.bibWaiting()) { notify(BIB_WAITING); return; }
     const p = paramsRef.current, sel = selectionRef.current;
     // The menu may have stayed open across a rebuild: what it was opened on is found again by id (I9 of the review).
     const clicked = hit.kind === 'item' ? sc.byId.get(hit.id) ?? -1 : -1;
@@ -967,22 +815,12 @@ export function GraphView(props: {
         setGhost({ x: at.x, y: at.y, text: 'Nouveau nœud' });
         gestures.current.start('place');
         break;
-      case 'importPublication': {
-        const cam = e.renderer.camera;
-        setPublication({ key: performance.now(), plan: sc.plan.id, at: screenToWorld(cam, at.x, at.y), zoom: cam.zoom });
+      case 'importPublication':
+        publication.openPublication(sc.plan.id, e.renderer.camera, at);
         break;
-      }
-      case 'importBib': {
-        // The system's dialog, by the main process (D9): the .bib chosen follows the cursor from the menu's point.
-        if (busy()) { notify(busyReason('d’importer un fichier .bib')); break; }
-        const plan = sc.plan.id;
-        bibMark('drop');
-        window.cirrus.pickBib().then((file) => startBib(file, at, plan), (err: unknown) => {
-          console.error('Lecture du fichier .bib :', err);
-          notify('Le fichier .bib n’a pas pu être lu : rien n’est importé.');
-        });
+      case 'importBib':
+        bib.chooseBib(sc.plan.id, at);
         break;
-      }
       case 'rename': {
         if (clicked < 0) break;
         const it = sc.items[clicked], sp = worldToScreen(e.renderer.camera, it.x, it.y);
@@ -1091,24 +929,6 @@ export function GraphView(props: {
     }
     redraw();
   };
-  /**
-   * What the import dialog asks of the graph (plan 4c, D5 to D8): the IPC, and the node put down where the menu was
-   * opened (publicationBuild), at the zoom of then, through the session — one action. Its plan no longer shown, nothing.
-   */
-  const publicationDeps = (d: { plan: Id; at: Vec2; zoom: number }): Omit<ImportDeps, 'open'> => ({
-    state: () => stateRef.current,
-    fetch: (text, options) => window.cirrus.publicationFetch(text, options),
-    storeText: (name, text) => window.cirrus.storeText(name, text),
-    maxAuthors: () => paramsRef.current.publicationMaxAuthors,
-    put: async (plan, files) => {
-      const sc = sceneRef.current, session = sessionRef.current;
-      if (!sc || !session || sc.plan.id !== d.plan) return { ok: false, message: 'Le plan de l’import n’est plus affiché : rien n’est importé.' };
-      const r = await session.run(publicationBuild(plan, files, sc, d.at, d.zoom, paramsRef.current, indexOf(sc)));
-      if (r.ok) onResultRef.current(r);
-      return r;
-    },
-    log: (what, e) => console.error(what, e),
-  });
   const buttonOf = (b: number): 0 | 1 | 2 => (b === 2 ? 2 : b === 1 ? 1 : 0);
   /** The buttons held, as the last pointer event gave them. */
   const buttons = useRef(0);
@@ -1280,10 +1100,10 @@ export function GraphView(props: {
         />
       )}
       {questions.question && <AskDialog q={questions.question} onClose={() => { questions.setQuestion(null); root.current?.focus(); }} />}
-      {publication && (
+      {publication.dialog && (
         <PublicationDialog
-          key={publication.key} params={props.params} deps={publicationDeps(publication)} onNotify={notify}
-          onClose={() => { setPublication(null); root.current?.focus({ preventScroll: true }); }}
+          key={publication.dialog.key} params={props.params} deps={publication.publicationDeps(publication.dialog)} onNotify={notify}
+          onClose={publication.closePublication}
         />
       )}
     </div>

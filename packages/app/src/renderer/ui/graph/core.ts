@@ -1,12 +1,14 @@
 import type { Id, State } from '@cirrus/core';
 import type { FontData, GestureMachine, Hit, Input, PlanScene, RenderParams, SceneIndex, Selection, VisibleSet } from '@cirrus/view';
-import type { RefObject } from 'react';
+import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { Build } from '../../actions.ts';
 import type { Gl } from '../../gl/context.ts';
 import type { PlanRenderer } from '../../render/PlanRenderer.ts';
 import type { EditSession, Result } from '../../session.ts';
+import type { BibPart } from './bibImport.ts';
 import type { HandlesPart } from './layoutHandles.ts';
 import type { PendingPlace, Placing } from './placement.ts';
+import type { PublicationPart } from './publication.ts';
 import type { QuestionsPart } from './questions.ts';
 import type { RepercussionPart } from './repercussion.ts';
 import type { ScenesPart } from './scenes.ts';
@@ -32,6 +34,8 @@ export interface Graph {
   paramsRef: RefObject<RenderParams>;
   stateRef: RefObject<State>;
   sessionRef: RefObject<EditSession | null>;
+  onResultRef: RefObject<(r: Result) => void>;
+  onLongNoticeRef: RefObject<(text: string) => void>;
   selectionRef: RefObject<Selection>;
   gestures: RefObject<GestureMachine>;
   /** Shows a plan in its tab: GraphView's onOpenPlan, as of this render. */
@@ -43,10 +47,19 @@ export interface Graph {
   hitAt(sx: number, sy: number): Hit;
   restoreScene(): void;
   feed(input: Input): void;
+  /** A gesture, a question, a repercussion or a .bib's import under way (GraphView's busy), and why `what` waits for it. */
+  busy(): boolean;
+  busyReason(what: string): string;
   scenes: ScenesPart;
   questions: QuestionsPart;
+  bib: BibPart;
+  publication: PublicationPart;
   repercussion: RepercussionPart;
   handles: HandlesPart;
-  /** What is placed, and the gesture waiting for another plan (still GraphView's). */
-  placement: { placing: RefObject<Placing | null>; pendingPlace: RefObject<PendingPlace | null>; startPending(): void };
+  /** What is placed, its ghost, and the gesture waiting for another plan (still GraphView's). */
+  placement: {
+    placing: RefObject<Placing | null>; setGhost: Dispatch<SetStateAction<{ x: number; y: number; text: string; box?: { w: number; h: number } } | null>>;
+    startPlacing(what: Placing, text: string | null, at: { x: number; y: number }): void;
+    pendingPlace: RefObject<PendingPlace | null>; startPending(): void;
+  };
 }
