@@ -2,9 +2,9 @@ import { type Action, type FileRef, type Id, phantomsOf, type State, type Vec2 }
 import {
   bibBlock, blockHalves, type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
-  type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
+  type PlanScene, type RenderParams, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, type ConnectTarget, connectTarget, otherPlans,
-  type Mode, type Clip, copyClip, deleteSummary, dropScenes, repercussion, isPinch, newlyPressed, renderPaused, partOf, PART_FAR,
+  type Clip, copyClip, isPinch, newlyPressed, renderPaused, partOf, PART_FAR,
   partEnds, type SceneIndex, type FontData, previewSplit, type PreviewSplit,
 } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
@@ -15,14 +15,14 @@ import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
 import {
-  absentBuild, addMemberBuild, ALREADY_HERE, type Build, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, dropBuild, hideBuild, importBuild,
-  joinBuild, dropMemberships, lastPlanNodes, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, readableStep, removeMemberBuild,
-  renameBuild, scaleBuild, splitBuild, withRepercussion,
+  absentBuild, addMemberBuild, ALREADY_HERE, type Build, connectBuild, createBuild, importBuild,
+  joinBuild, layoutBuild, lobbyConnectionBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, readableStep,
+  renameBuild, scaleBuild, splitBuild,
 } from '../actions.ts';
 import type { BibFile } from '../../main/bib.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
-import { AskDialog, type Question } from './Dialogs.tsx';
+import { AskDialog } from './Dialogs.tsx';
 import { nodeOpenedBy } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
 import { NODE_MIME } from '../files/annotations.ts';
@@ -32,10 +32,13 @@ import type { LatexRegistry } from '../latex/registry.ts';
 import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
 import { type ImportDeps, publicationBuild } from '../publications/build.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
-import { type Engine, type Graph, NOTHING_SHOWN } from './graph/core.ts';
+import { type Engine, type Graph, NOTHING_SHOWN, plural } from './graph/core.ts';
 import { useHover } from './graph/hover.ts';
 import { ignored, measuring, replayPointer } from './graph/launch.ts';
 import { useLayoutHandles } from './graph/layoutHandles.ts';
+import { MODE, type PendingPlace, type Placing } from './graph/placement.ts';
+import { useQuestions } from './graph/questions.ts';
+import { useRepercussion } from './graph/repercussion.ts';
 import { useScaleWheel } from './graph/scaleWheel.ts';
 import { useScenes } from './graph/scenes.ts';
 
@@ -51,27 +54,7 @@ function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: R
   return fitBounds(scene.bounds, widthPx, heightPx, p);
 }
 
-/** What a gesture without a held button will do once placed (spec 9.1). */
-type Placing =
-  | { kind: 'newNode' }
-  | { kind: 'exclude'; base: PlanScene; items: number[]; from: Vec2 }
-  /** Drawing a connection from this node (spec 11.1). */
-  | { kind: 'connect'; node: Id }
-  /** Bringing in a node from a stub (spec 11.3), or into the lobby (spec 7). */
-  | { kind: 'import'; node: Id; label?: string }
-  /** Pasting the clip (spec 7). */
-  | { kind: 'paste' }
-  /** A node put down by hand in a plan its change of group reaches (spec 10); `extend`: the action it completes. */
-  | { kind: 'repercussion'; node: Id; to: Id | null; extend: Id }
-  /** Splitting an arm (spec 8.5): the far node's phantom near the bundle, then the centre's near the far node. */
-  | { kind: 'split'; step: 1 | 2; connection: Id; node: Id; title: string; home: Camera; near?: Vec2 }
-  /** A .bib's block of publications (plan 4c, D9): what it brings is the graph's `bib` (BibImport). */
-  | { kind: 'bib' };
-const MODE: Record<Placing['kind'], Mode> = {
-  newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split', repercussion: 'place', bib: 'paste',
-};
-const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
-const fr = (n: number) => n.toLocaleString('fr-FR');
+const fr =(n: number) => n.toLocaleString('fr-FR');
 
 /**
  * A .bib being imported (plan 4c, D9, task 6), from the ghost of its block to the action: what it plans, in its plan;
@@ -174,9 +157,6 @@ export function GraphView(props: {
   const bib = useRef<BibImport | null>(null);
   /** The straight line that follows the cursor while a connection is drawn (screen coordinates). */
   const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const [question, setQuestion] = useState<Question | null>(null);
-  const questionRef = useRef(question);
-  questionRef.current = question;
   const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
   /**
    * « Importer une publication… » (plan 4c, task 5): the dialog, and where its node goes — the world point and the zoom
@@ -189,15 +169,13 @@ export function GraphView(props: {
   /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
   const clip = useRef<Clip | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
-  const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
-  /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
-  const repQueue = useRef<{ extend: Id; home: Id; items: { plan: Id; node: Id; to: Id | null }[]; expected: Id } | null>(null);
+  const pendingPlace = useRef<PendingPlace | null>(null);
   /**
    * A gesture, a question, a repercussion or a .bib's import under way: Ctrl+Z and Ctrl+Y wait for it (I6 of the plan
    * 3b review), and so do a node dropped from a list and another .bib.
    */
   const busy = () => gestures.current.busy || dragging.current !== null || handles.held() || stubDrag.current !== null
-    || repQueue.current !== null || questionRef.current !== null || bib.current !== null;
+    || repercussion.queued() || questions.asking() || bib.current !== null;
   /** A .bib put down, waiting for its .bib (M4): no gesture that puts something down begins, the menus do not open. */
   const bibWaiting = () => bib.current?.put != null;
   /** Why `what` waits: the .bib's import put down (Escape does not give it up), or a gesture in progress. */
@@ -297,12 +275,17 @@ export function GraphView(props: {
 
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
-    root, engine, sceneRef, paramsRef, selectionRef, gestures, redraw, edit, hitAt, restoreScene, feed,
-    get scenes() { return scenes; }, get handles() { return handles; },
+    root, engine, sceneRef, paramsRef, stateRef, sessionRef, selectionRef, gestures, onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt,
+    restoreScene, feed,
+    get scenes() { return scenes; }, get questions() { return questions; }, get repercussion() { return repercussion; }, get handles() { return handles; },
+    // Still GraphView's: what is placed, and the gesture waiting for another plan.
+    get placement() { return { placing, pendingPlace, startPending }; },
   };
   const scenes = useScenes(graph, props, ready);
   const scene = scenes.scene;
   const { tip, chain, hover, clearHover } = useHover(graph);
+  const questions = useQuestions(graph);
+  const repercussion = useRepercussion(graph);
   const handles = useLayoutHandles(graph);
   const { settleWheel, wheelScale } = useScaleWheel(graph);
 
@@ -347,104 +330,8 @@ export function GraphView(props: {
     r?.setHover(null);
     redraw();
   };
-  /** « Partout ou ici seulement » (spec 11, 19), asked only when other plans are concerned; `go` gets the plans chosen. */
-  const askWhere = (text: string, plans: Id[], go: (everywhere: Id[]) => void) => {
-    if (plans.length === 0) { go([]); return; }
-    const names = plans.map((id) => stateRef.current.plans.get(id)?.name ?? '?');
-    const n = plans.length, s = n > 1 ? 's' : '';
-    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: `Partout (${n} autre${s} plan${s})` };
-    setQuestion({
-      text, detail: `Autre${s} plan${s} concerné${s} : ${names.join(', ')}.`,
-      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
-      answer: (v) => { if (v !== null) go(v === 'everywhere' ? plans : []); },
-    });
-  };
-  /** Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the last ones. */
-  const removeMember = (connection: Id, node: Id) => {
-    const s = stateRef.current, plan = sceneRef.current?.plan.id, c = s.connections.get(connection);
-    if (!c || !plan) return;
-    const shownIn = [...s.plans.keys()].filter((p) => s.branches.has({ plan: p, connection, node }));
-    const last = c.members.length <= 2;
-    const choices = [
-      ...(shownIn.includes(plan) ? [{ value: 'here', label: 'Ici seulement' }] : []),
-      { value: 'everywhere', label: last ? 'Partout (supprime la connexion)' : 'Partout' },
-    ];
-    if (paramsRef.current.defaultAnswer === 'everywhere') choices.reverse();
-    const n = shownIn.length;
-    setQuestion({
-      text: `Retirer « ${s.nodes.get(node)?.title ?? '?'} » de la connexion ?`,
-      detail: `Ce membre est affiché dans ${n} plan${n > 1 ? 's' : ''}.${last ? ' La connexion n’aurait plus qu’un membre : « partout » la met à la corbeille.' : ''}`,
-      choices,
-      answer: (v) => { if (v !== null) edit(removeMemberBuild(plan, connection, node, v === 'everywhere')); },
-    });
-  };
-  /** Node titles for a question: « A », « B » et 2 autres. */
-  const titles = (ids: Id[]) => {
-    const t = ids.slice(0, 2).map((id) => `« ${stateRef.current.nodes.get(id)?.title ?? '?'} »`).join(', ');
-    return ids.length > 2 ? `${t} et ${ids.length - 2} autre${ids.length > 3 ? 's' : ''}` : t;
-  };
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
-  /** What goes to the trash, said for a question: nothing, or these nodes, this plan being their last (spec 7). */
-  const trashNote = (last: Id[]) => (last.length === 0 ? 'rien ne part à la corbeille'
-    : `${titles(last)} ${plural(last.length, 'ira', 'iront')} à la corbeille (dernier plan)`);
-  /**
-   * « Cacher » (spec 7): a group asks whether its content follows; what would leave its last plan is announced, for each
-   * answer, content included (I12 of the plan 3b review).
-   */
-  const askHide = (sc: PlanScene, items: number[]) => {
-    const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
-    if (ids.length === 0) return;
-    const s = stateRef.current, groups = items.filter((i) => sc.items[i].kind === 'group');
-    const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
-    if (groups.length === 0 && alone.length === 0) { edit(hideBuild(sc, ids)); return; }
-    setQuestion({
-      text: groups.length > 0 ? `Cacher ${plural(groups.length, 'ce groupe', 'ces groupes')} : le contenu suit-il ?` : `Cacher ${titles(ids)} ?`,
-      detail: groups.length > 0 ? `Avec le contenu, ${trashNote(all)}. Seul, ${trashNote(alone)}.` : `${trashNote(alone)[0].toUpperCase()}${trashNote(alone).slice(1)}.`,
-      choices: groups.length > 0
-        ? [{ value: 'content', label: 'Avec le contenu' }, { value: 'alone', label: plural(groups.length, 'Le groupe seul', 'Les groupes seuls') }]
-        : [{ value: 'alone', label: 'Cacher' }],
-      answer: (v) => { if (v !== null) edit(hideBuild(sc, ids, v === 'content')); },
-    });
-  };
-  /**
-   * Deletion (spec 7): always « partout » or « ici seulement », with the instances counted and the last ones announced;
-   * « ici » for a group asks whether its content follows (I12 of the plan 3b review).
-   */
-  const askDelete = (sc: PlanScene, items: number[]) => {
-    const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
-    if (ids.length === 0) return;
-    const s = stateRef.current, { instances } = deleteSummary(s, ids);
-    const groups = items.some((i) => sc.items[i].kind === 'group');
-    const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
-    const here = groups
-      ? [{ value: 'content', label: 'Ici, avec le contenu' }, { value: 'here', label: 'Ici, le groupe seul' }]
-      : [{ value: 'here', label: 'Ici seulement' }];
-    const everywhere = { value: 'everywhere', label: 'Partout' };
-    setQuestion({
-      text: `Supprimer ${titles(ids)} ?`,
-      detail: `${plural(ids.length, 'Il figure', 'Ils figurent')} dans ${instances} plan${instances > 1 ? 's' : ''} en tout. `
-        + (groups ? `Ici avec le contenu, ${trashNote(all)} ; ici seul, ${trashNote(alone)}.` : `Ici, ${trashNote(alone)}.`),
-      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [everywhere, ...here] : [...here, everywhere],
-      answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere', v === 'content')); },
-    });
-  };
-  /** A connection's deletion (spec 7): « ici seulement » hides it here; when this is its last plan, it goes to the trash. */
-  const askDeleteConnection = (plan: Id, connection: Id) => {
-    const s = stateRef.current, c = s.connections.get(connection);
-    if (!c) return;
-    const phantoms = phantomsOf(s, connection).map((id) => s.phantoms.get(id));
-    const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has({ plan: pl, connection, node: m.node }))
-      || phantoms.some((ph) => ph?.plan === pl));
-    const n = shownIn.length;
-    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: n <= 1 ? 'Supprimer' : 'Partout' };
-    setQuestion({
-      text: `Supprimer la connexion${c.title ? ` « ${c.title} »` : ''} ?`,
-      detail: n <= 1 ? 'Elle n’est affichée dans aucun autre plan : elle ira à la corbeille.' : `Elle est affichée dans ${n} plans.`,
-      choices: n <= 1 ? [all] : paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
-      answer: (v) => { if (v !== null) edit(deleteConnectionBuild(plan, connection, v === 'everywhere')); },
-    });
-  };
   /** Ctrl+C (spec 7): the selection, or what was clicked, with this plan and zoom. */
   const copy = (sc: PlanScene, items: number[]) => {
     const c = copyClip(stateRef.current, sc, items, engine.current?.renderer.camera.zoom ?? 1);
@@ -569,78 +456,6 @@ export function GraphView(props: {
       return;
     }
     startBib(file, at, plan);
-  };
-  /**
-   * A drop that changes groups (spec 10): « partout ou ici seulement » when other plans would change, with its cost
-   * announced; « partout » writes the drop and the plans needing no hand, then opens the others one after the other.
-   */
-  const dropAsking = (base: PlanScene, items: number[], dx: number, dy: number, at: Vec2, alt: boolean, restore: () => void) => {
-    const p = paramsRef.current, zoom = engine.current?.renderer.camera.zoom ?? 1;
-    // Where the drop enters, found once for the action and the question (I2 of the final review).
-    const target = dropTarget(base, at, items, zoom, p, indexOf(base));
-    const build = dropBuild(base, items, dx, dy, target, alt, p);
-    if (!build) { restore(); return; }
-    askRepercussion(base.plan.id, dropMemberships(stateRef.current, base, items, target, alt), build, restore);
-  };
-  /**
-   * The drop `build` in `plan`, whose nodes change group (`moves`), written (spec 10): at once when no other plan would
-   * change; else after the « partout ou ici seulement » question, its cost announced — « partout » writes the drop and
-   * the plans needing no hand, then opens the others one after the other. `restore`: what a refusal or no answer undoes.
-   */
-  const askRepercussion = (plan: Id, moves: { node: Id; from: Id | null; to: Id | null }[], build: Build, restore: () => void) => {
-    const p = paramsRef.current, s = stateRef.current;
-    // The other plans' scenes, for the whole drop: the cached ones when they are at the state's revision, else built
-    // once, measured as the cached ones, with their measure's titles already laid out (I1 of the final review).
-    const cache = scenes.cache.current, key = sceneParamsKey(p), current = cache.key === key && cache.rev === sessionRef.current?.rev;
-    const measure = scenes.measureOf(p);
-    const sceneOf = dropScenes(s, measure, p, (q) => (current ? cache.byPlan.get(q)?.scene : undefined));
-    const reps = moves.map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
-    const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
-    if (changed.length === 0) { void edit(build, restore); return; }
-    const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
-    const plans = new Set(changed.map((c) => c.plan)), manual = changed.filter((c) => c.manual);
-    const third = reps.flatMap((x) => x.r.third), loops = reps.flatMap((x) => x.r.loops);
-    const n = plans.size, m = new Set(manual.map((c) => c.plan)).size;
-    const detail = [
-      `Partout : ${n} plan${n > 1 ? 's' : ''}${m > 0 ? `, dont ${m} à placer à la main` : ''} (${names([...plans])}).`,
-      third.length > 0 ? `Laissé${third.length > 1 ? 's' : ''} tel${third.length > 1 ? 's' : ''} quel${third.length > 1 ? 's' : ''}, un autre groupe y contient le nœud : ${names(third)}.` : '',
-      loops.length > 0 ? `Ignoré${loops.length > 1 ? 's' : ''}, la répercussion y ferait une boucle : ${names(loops)}.` : '',
-    ].filter(Boolean).join(' ');
-    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: 'Partout' };
-    setQuestion({
-      text: 'Répercuter ce changement de groupe dans les autres plans ?', detail,
-      choices: p.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
-      answer: (v) => {
-        if (v === null) { restore(); return; }
-        if (v === 'here') { void edit(build, restore); return; }
-        void edit(withRepercussion(build, changed.filter((c) => !c.manual)), restore).then((r) => {
-          if (r?.ok && manual.length > 0) {
-            repQueue.current = { extend: r.action.id, home: plan, items: manual.map((c) => ({ plan: c.plan, node: c.node, to: c.to })), expected: plan };
-            nextRepercussion();
-          }
-        });
-      },
-    });
-  };
-  /** The next plan to place by hand (spec 10): opened, framed on the group joined, the node at the cursor; at the end, back home. */
-  const nextRepercussion = () => {
-    const q = repQueue.current;
-    if (!q) return;
-    const item = q.items.shift();
-    if (!item) {
-      repQueue.current = null;
-      if (sceneRef.current?.plan.id !== q.home) props.onOpenPlan(q.home);
-      return;
-    }
-    q.expected = item.plan;
-    const s = stateRef.current, title = s.nodes.get(item.node)?.title ?? '?';
-    const r = root.current?.getBoundingClientRect();
-    pendingPlace.current = {
-      plan: item.plan, what: { kind: 'repercussion', node: item.node, to: item.to, extend: q.extend },
-      text: item.to ? `${title} → « ${s.nodes.get(item.to)?.title ?? '?'} »` : `${title} → hors du groupe`,
-      at: { x: (r?.width ?? 0) / 2, y: (r?.height ?? 0) / 2 }, frame: item.to ?? item.node,
-    };
-    if (sceneRef.current?.plan.id === item.plan) startPending(); else props.onOpenPlan(item.plan);
   };
   /** Begins the gesture waiting for this plan, framing what it concerns. */
   const startPending = () => {
@@ -818,16 +633,10 @@ export function GraphView(props: {
     // Another plan: the gesture in progress, the selection, a question and a dragged handle do not follow; the scale
     // gesture waiting for its pause is written for its plan (I7 of the review).
     if (sceneRef.current && sceneRef.current.plan.id !== scene.plan.id) {
-      const q = repQueue.current;
-      if (q && scene.plan.id !== q.expected) {
-        // The user went elsewhere: the repercussion stops there (I8 of the review); what was placed stays.
-        repQueue.current = null;
-        const left = q.items.length + (placing.current?.kind === 'repercussion' ? 1 : 0);
-        notify(`Répercussion interrompue : ${left} plan${left > 1 ? 's' : ''} non placé${left > 1 ? 's' : ''} à la main.`);
-      }
+      repercussion.planShown(scene.plan.id);
       settleWheel();
       handles.dropHandle(false);
-      setQuestion(null);
+      questions.setQuestion(null);
       feed({ t: 'cancel' });
       setSelection(emptySelection());
       setPopup(null);
@@ -916,7 +725,7 @@ export function GraphView(props: {
     const build = placeDroppedBuild(sc, node, at, cam.zoom, p, index);
     const host = dropTarget(sc, at, [], cam.zoom, p, index);
     if (host === null) void edit(build);
-    else askRepercussion(sc.plan.id, [{ node, from: null, to: sc.items[host].id }], build, () => {});
+    else repercussion.askRepercussion(sc.plan.id, [{ node, from: null, to: sc.items[host].id }], build, () => {});
   };
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
@@ -1029,7 +838,7 @@ export function GraphView(props: {
         previewDrag(e.renderer, d, intent.dx, intent.dy);
         // One action for the whole drop (spec 6.4): the moves, then the groups left and entered; refused or given up,
         // back to where it was; written, the scene follows the state.
-        dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, restoreScene);
+        repercussion.dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, restoreScene);
         break;
       }
       case 'placeMove':
@@ -1051,10 +860,10 @@ export function GraphView(props: {
           if (from === undefined) break;
           const s = stateRef.current;
           if (t.kind === 'node') {
-            askWhere('Montrer aussi cette connexion dans les autres plans où ses deux nœuds sont présents ?',
+            questions.askWhere('Montrer aussi cette connexion dans les autres plans où ses deux nœuds sont présents ?',
               otherPlans(s, sc.plan.id, [what.node, sc.items[t.item].node]), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
           } else {
-            askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
+            questions.askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
               otherPlans(s, sc.plan.id, [what.node], sc.ids[t.conn]), (everywhere) => edit(connectBuild(sc, from, t, everywhere)));
           }
           break;
@@ -1083,7 +892,7 @@ export function GraphView(props: {
         if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label, indexOf(sc)));
         else if (what.kind === 'repercussion') {
           // Put down here, it takes its new group in this plan; the whole stays one undo step.
-          void edit(placeInPlanBuild(sc, what.node, intent.at, what.to), undefined, what.extend).then(() => nextRepercussion());
+          void edit(placeInPlanBuild(sc, what.node, intent.at, what.to), undefined, what.extend).then(() => repercussion.nextRepercussion());
         }
         else if (what.kind === 'paste' && clip.current) {
           const r = pasteBuild(stateRef.current, clip.current, sc, intent.at, zoom, p, indexOf(sc));
@@ -1091,7 +900,7 @@ export function GraphView(props: {
           // Nodes already here keep their place and group; selected, they are ready to be moved (spec 7).
           if (r.present.length > 0) {
             const n = r.present.length;
-            notify(`${titles(r.present)} ${plural(n, 'était déjà', 'étaient déjà')} dans ce plan : ${plural(n, 'il garde sa', 'ils gardent leur')} place (${plural(n, 'sélectionné', 'sélectionnés')}, à déplacer au besoin).`);
+            notify(`${questions.titles(r.present)} ${plural(n, 'était déjà', 'étaient déjà')} dans ce plan : ${plural(n, 'il garde sa', 'ils gardent leur')} place (${plural(n, 'sélectionné', 'sélectionnés')}, à déplacer au besoin).`);
             setSelection({ items: new Set(r.present), connections: new Set() });
           }
         }
@@ -1102,7 +911,7 @@ export function GraphView(props: {
           setEditor({ x: sp.x, y: sp.y, width, initial: '', done: (title) => { if (title) edit(createBuild(sc, title, intent.at, zoom, p, indexOf(sc))); } });
         } else if (what.kind === 'exclude') {
           // Out of its group, put down where clicked; entering the group under the cursor if it is another (spec 10).
-          dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, restoreScene);
+          repercussion.dropAsking(what.base, what.items, intent.at.x - what.from.x, intent.at.y - what.from.y, intent.at, true, restoreScene);
         }
         break;
       }
@@ -1114,7 +923,7 @@ export function GraphView(props: {
         // A .bib's block (D9): nothing is made, its .bib no longer stored.
         if (what?.kind === 'bib') dropBib();
         // Escape leaves this plan as it is; the next one opens (spec 10).
-        if (what?.kind === 'repercussion') nextRepercussion();
+        if (what?.kind === 'repercussion') repercussion.nextRepercussion();
         if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
         break;
       }
@@ -1191,10 +1000,10 @@ export function GraphView(props: {
         edit(scaleBuild(sc, targets, action === 'scaleUp' ? 1 : -1, p));
         break;
       case 'hide':
-        askHide(sc, targets);
+        questions.askHide(sc, targets);
         break;
       case 'delete':
-        askDelete(sc, targets);
+        questions.askDelete(sc, targets);
         break;
       case 'copy':
         copy(sc, targets);
@@ -1215,7 +1024,7 @@ export function GraphView(props: {
         break;
       }
       case 'deleteConnection': {
-        if (line !== null) askDeleteConnection(sc.plan.id, line);
+        if (line !== null) questions.askDeleteConnection(sc.plan.id, line);
         break;
       }
       case 'addToLobby': {
@@ -1438,8 +1247,8 @@ export function GraphView(props: {
           if (ev.ctrlKey && key === 'v') { ev.preventDefault(); startPaste(lastPointer.current ?? { x: 0, y: 0 }); return; }
           if (ev.key === 'Delete') {
             const items = selectedItems(sc), conns = [...selectionRef.current.connections];
-            if (items.length > 0) askDelete(sc, items);
-            else if (conns.length === 1) askDeleteConnection(sc.plan.id, conns[0]);
+            if (items.length > 0) questions.askDelete(sc, items);
+            else if (conns.length === 1) questions.askDeleteConnection(sc.plan.id, conns[0]);
             return;
           }
         }
@@ -1465,12 +1274,12 @@ export function GraphView(props: {
         <ConnectionPopup
           key={`${popup.connections.join()}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connections={popup.connections} x={popup.x} y={popup.y}
           registry={props.registry} params={props.params} onNodeLink={props.onNodeLink}
-          onEdit={(b) => edit(b).then((r) => r !== null && r.ok)} onClose={() => setPopup(null)} onRemoveMember={removeMember}
-          onAddMember={(connection, node) => askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
+          onEdit={(b) => edit(b).then((r) => r !== null && r.ok)} onClose={() => setPopup(null)} onRemoveMember={questions.removeMember}
+          onAddMember={(connection, node) => questions.askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
             otherPlans(stateRef.current, props.plan, [node], connection), (everywhere) => edit(addMemberBuild(props.plan, connection, node, everywhere)))}
         />
       )}
-      {question && <AskDialog q={question} onClose={() => { setQuestion(null); root.current?.focus(); }} />}
+      {questions.question && <AskDialog q={questions.question} onClose={() => { questions.setQuestion(null); root.current?.focus(); }} />}
       {publication && (
         <PublicationDialog
           key={publication.key} params={props.params} deps={publicationDeps(publication)} onNotify={notify}
