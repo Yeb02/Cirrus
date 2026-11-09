@@ -1,9 +1,8 @@
 import type { FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { type Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { decodeText } from '../../files/decode.ts';
 import type { ViewRef } from '../../files/kind.ts';
-import { loading, MB, readHead } from '../../files/read.ts';
+import { loading } from '../../files/read.ts';
 import type { ViewStates } from '../../files/viewState.ts';
 import { type LatexRegistry, type Origin, slotOf } from '../../latex/registry.ts';
 import { buildRequest } from '../../latex/request.ts';
@@ -15,10 +14,11 @@ import { PdfViewer } from '../viewers/PdfViewer.tsx';
 import { TextViewer } from '../viewers/TextViewer.tsx';
 import { CompileLog, errorText } from './CompileLog.tsx';
 import { diagnosticsFor, lineStartOf } from './editorLogic.ts';
-import { LatexEditor } from './LatexEditor.tsx';
+import { LatexEditor, type LatexEditorHandle } from './LatexEditor.tsx';
 import {
   changedElsewhere, keptNotice, openedElsewhere, reloadedNotice, type SaveAnswer, SaveScheduler, type SaveState, unsavedQuestion,
 } from './saveScheduler.ts';
+import { readTexText } from './texText.ts';
 
 /** What App and FullScreen ask of the workbench open: whether its text is unsaved, its last save (closing the window), its leaving. */
 export interface WorkbenchHandle {
@@ -33,13 +33,12 @@ const timers = { set: (fn: () => void, ms: number) => window.setTimeout(fn, ms),
 /** The file as it opened: its text to edit; too long, shown without being editable; binary or unreadable, why. */
 type Opened = { text: string } | { tooLong: string } | { message: string };
 
-/** The file read by readHead and decoded, its line breaks as the editor reads them (« \n »); cut by `maxMb`, or binary, why. */
+/** The file read and decoded as the comparison reads it too (readTexText), its line breaks « \n »; cut by `maxMb`, or binary, why. */
 async function readOpened(file: FileRef, maxMb: number, signal: AbortSignal): Promise<Opened> {
-  const { bytes, truncated } = await readHead(file, maxMb * MB, signal);
-  const d = decodeText(bytes, truncated);
-  if ('binary' in d) return { message: BINARY };
-  if (truncated) return { tooLong: `Plus de ${maxMb.toLocaleString('fr-FR')} Mo : ce fichier ne se modifie pas dans Cirrus.` };
-  return { text: d.text.replace(/\r\n?/g, '\n') };
+  const r = await readTexText(file, maxMb, signal);
+  if ('binary' in r) return { message: BINARY };
+  if ('tooLong' in r) return { tooLong: `Plus de ${maxMb.toLocaleString('fr-FR')} Mo : ce fichier ne se modifie pas dans Cirrus.` };
+  return r;
 }
 
 /**
@@ -79,6 +78,8 @@ export function TexWorkbench(props: {
   const latest = useRef(props);
   latest.current = props;
   const scheduler = useRef<SaveScheduler | null>(null);
+  /** The editor, which a version from elsewhere is loaded into at once (LatexEditorHandle.load). */
+  const editor = useRef<LatexEditorHandle | null>(null);
   /** Where leaving stands: a flush under way, or refused once (the next request asks). */
   const leaving = useRef<'no' | 'flushing' | 'refused'>('no');
   const askingNow = useRef(false);
@@ -158,7 +159,10 @@ export function TexWorkbench(props: {
         setOpened(o);
         return;
       }
+      // The scheduler and the editor take it in this one call: no keystroke lands between them on the old text, and the
+      // editor's Ctrl+Z never brings that text back (fix round 1 of the review, Important 1).
       if (!s.reloaded(o.text, hash)) return;
+      editor.current?.load(o.text);
       setText(o.text);
       latest.current.onNotice(reloadedNotice(name));
     })();
@@ -233,7 +237,7 @@ export function TexWorkbench(props: {
       <div className="tex-panes">
         <div className="tex-source">
           <LatexEditor
-            value={text!} registry={registry} diagnostics={diagnostics} params={params} autoFocus ariaLabel={file.name} jumpTo={jump}
+            ref={editor} value={text!} registry={registry} diagnostics={diagnostics} params={params} autoFocus ariaLabel={file.name} jumpTo={jump}
             onChange={(t) => { setText(t); scheduler.current?.edit(t); }}
             onSave={() => { void scheduler.current?.saveNow(); }}
           />

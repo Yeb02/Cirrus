@@ -408,8 +408,15 @@ const TWO_PCS = {
         changed(1);
         if (!(await page.until(`(${EDITOR_TEXT}).includes('version 1')`, 15_000))) throw new Error(`l’éditeur de B ne montre pas la version 1 : « ${await page.evaluate(EDITOR_TEXT)} »`);
         if (!(await toastSays(page, `« ${TEX_NAME} » a été modifié sur un autre PC : sa nouvelle version est chargée.`))) throw new Error(`pas de notification : ${await toastsText(page)}`);
-        // Typed in B, then version 2 there: the typed text stays, and the banner says that version will be kept.
+        // A key at once, then Ctrl+Z twice: the key undone, never version 0 back — the load is no step of the editor's
+        // history (fix round 1 of the review, Important 1).
         const line = await page.centre('.full-screen .tex-source .cm-line', 'version 1');
+        await page.click(line.x, line.y);
+        await page.type('Z');
+        for (let i = 0; i < 2; i++) await page.press('z', 'KeyZ', 90, 2);
+        const undone = await page.evaluate(EDITOR_TEXT);
+        if (undone !== texVersion(1).trimEnd() && undone !== texVersion(1)) throw new Error(`Ctrl+Z après le chargement rend « ${undone} »`);
+        // Typed in B, then version 2 there: the typed text stays, and the banner says that version will be kept.
         await page.click(line.x, line.y);
         await page.press('End', 'End', 35);
         await page.type(' % tapé dans B');

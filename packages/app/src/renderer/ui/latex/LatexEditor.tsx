@@ -9,11 +9,12 @@ import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/sea
 import { Annotation, Compartment, EditorState, type Extension, Prec } from '@codemirror/state';
 import { EditorView, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
-import { useEffect, useRef } from 'react';
+import { type Ref, useEffect, useImperativeHandle, useRef } from 'react';
 import { loading } from '../../files/read.ts';
 import type { LatexRegistry } from '../../latex/registry.ts';
 import { languageFor, PHRASES_FR } from '../viewers/language.ts';
 import { THEME } from '../viewers/TextViewer.tsx';
+import { loadText, replacingText } from './editorLoad.ts';
 import { completionsFor, type Diag, refContext, suggestionOptions } from './editorLogic.ts';
 
 /** The editable parts of the look, over the text view's (THEME): the suggestions and the diagnostics, in its palette. */
@@ -48,6 +49,12 @@ const SUGGESTION_KEYS = Prec.highest(keymap.of([
 /** A change made by the editor's owner (a new `value`), not typed: not told back to it. */
 const fromOutside = Annotation.define<boolean>();
 
+/**
+ * What the editor's owner may do to it at once (plan 5b, task 5, fix round 1 of the review): `load` a version of the
+ * text from elsewhere — out of the history, emptied (loadText), in this very call, its text told as the editor's own.
+ */
+export interface LatexEditorHandle { load(text: string): void }
+
 /** Where a 1-based line starts, clamped to the document. */
 const lineStartIn = (state: EditorState, line: number) => state.doc.line(Math.min(Math.max(1, Math.round(line)), state.doc.lines)).from;
 
@@ -59,14 +66,16 @@ const lineStartIn = (state: EditorState, line: number) => state.doc.line(Math.mi
  * in red, once they belong to the text the editor has. Ctrl+S calls `onSave`. Its keys stay its own: the app's
  * shortcuts (Delete, Ctrl+Z…) skip an editable field, and Escape is left to the full screen or the panel, unless the
  * suggestions or a panel of the editor take it. `value` is the text: one that is not what the editor last told
- * (`onChange`) replaces its text, the cursor kept on its line and column, clamped. `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
+ * (`onChange`) replaces its text, the cursor kept on its line and column, clamped, a step of its history; a version of
+ * the text from elsewhere is given by the handle instead (`ref`: LatexEditorHandle.load), out of the history, at once.
+ * `jumpTo`: a line to put the cursor on, again at each new `seq`. How many suggestions
  * are drawn, and how soon, are settings (`params`: suggestionOptions). `autoFocus`: the focus at once, the cursor at
  * the end of the text when `compact` (a summary, a relation: task 6). `focusSeq`: the focus back, the cursor where it
  * was, at each new value.
  */
 export function LatexEditor(props: {
   value: string; onChange(text: string): void; registry: LatexRegistry | null; diagnostics: Diag[]; params: RenderParams; compact?: boolean;
-  autoFocus?: boolean; onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number }; focusSeq?: number;
+  autoFocus?: boolean; onSave?(): void; ariaLabel: string; jumpTo?: { line: number; seq: number }; focusSeq?: number; ref?: Ref<LatexEditorHandle>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -76,6 +85,8 @@ export function LatexEditor(props: {
   const told = useRef(props.value);
   /** The suggestions' extension, configured again when their settings change. */
   const suggestions = useRef<{ compartment: Compartment; of(p: RenderParams): Extension } | null>(null);
+  /** The history's compartment: a version loaded from elsewhere empties it (loadText). */
+  const histories = useRef(new Compartment());
 
   useEffect(() => {
     const language = new Compartment(), suggesting = new Compartment();
@@ -96,7 +107,7 @@ export function LatexEditor(props: {
         extensions: [
           EditorState.phrases.of(PHRASES_FR),
           props.compact ? [] : [lineNumbers(), lintGutter()],
-          history(),
+          histories.current.of(history()),
           highlightSpecialChars(),
           bracketMatching(),
           search({ top: true }),
@@ -147,17 +158,24 @@ export function LatexEditor(props: {
   }, [latexSuggestionsMax, latexSuggestionDelayMs]);
 
   // A text given from outside (not the one the editor told): the whole text replaced, the cursor kept as well as it can
-  // be — on its line, at its column, each clamped to the new text (plan 5b, D6: a .tex's version from elsewhere loaded).
+  // be — on its line, at its column, each clamped to the new text —, a step of the history (replacingText).
   useEffect(() => {
     const v = view.current;
     if (!v || props.value === told.current) return;
     told.current = props.value;
-    const head = v.state.selection.main.head, line = v.state.doc.lineAt(head), doc = v.state.toText(props.value);
-    const at = doc.line(Math.min(line.number, doc.lines));
-    v.dispatch({
-      changes: { from: 0, to: v.state.doc.length, insert: doc }, selection: { anchor: at.from + Math.min(head - line.from, at.length) }, annotations: fromOutside.of(true),
-    });
+    v.dispatch(replacingText(v.state, props.value, [fromOutside.of(true)]));
   }, [props.value]);
+
+  // A version from elsewhere (plan 5b, D6), loaded in the caller's very call: no keystroke can come between the caller's
+  // own record of it and the editor's text, and Ctrl+Z never brings back the text before it.
+  useImperativeHandle(props.ref, () => ({
+    load(text: string) {
+      const v = view.current;
+      if (!v) return;
+      told.current = text;
+      for (const spec of loadText(v.state, text, histories.current, history(), [fromOutside.of(true)])) v.dispatch(spec);
+    },
+  }), []);
 
   // The diagnostics, once they are those of the editor's text (the owner computes them from the text it was told).
   useEffect(() => {

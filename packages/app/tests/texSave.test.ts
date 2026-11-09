@@ -19,8 +19,10 @@ import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
 import { filesBuild } from '../src/renderer/actions.ts';
 import {
-  changedElsewhere, keptNotice, openedElsewhere, reloadedNotice, saveTex, type SaveAnswer, SaveScheduler, type SaveState, texMergeKey, unsavedQuestion,
+  changedElsewhere, FollowedText, keptNotice, openedElsewhere, reloadedNotice, saveTex, type SaveAnswer, SaveScheduler, type SaveState, texMergeKey, unsavedQuestion,
+  versionFromElsewhere,
 } from '../src/renderer/ui/latex/saveScheduler.ts';
+import { Reconciliation } from '../src/renderer/ui/latex/compare.ts';
 import { readPdf } from './latexPdf.ts';
 
 const MAX = 200 * 2 ** 20;
@@ -191,6 +193,34 @@ test('D6, SaveScheduler : pendant un enregistrement, la version qui arrive est l
   expect(r.saves.map((x) => x.base)).toEqual(['h0', 'h0']);
   // Without a base (a scheduler of before plan 5b), nothing arrives.
   expect(scheduling().s.arrived(ref('h1'))).toBeNull();
+});
+
+test('D6, revue de la tâche 5 : un seul suivi de la base pour le plein écran et la comparaison (FollowedText), une seule règle de la version venue d’ailleurs (versionFromElsewhere)', async () => {
+  // The comparison's original is followed by the very class the scheduler holds.
+  expect(new Reconciliation('v0', 'h0')).toBeInstanceOf(FollowedText);
+  const f = new FollowedText('v0', 'h0');
+  f.edit('v0 tapé');
+  expect([f.arrived('h1'), f.elsewhere, f.base]).toEqual([null, true, 'h0']);
+  // Written: the file holds that text now, its hash the base, nothing from elsewhere pending.
+  f.wrote('v0 tapé', 'h2');
+  expect([f.dirty, f.elsewhere, f.base, f.saved]).toEqual([false, false, 'h2', 'v0 tapé']);
+  // Not followed (no base): nothing arrives, and a write keeps no base.
+  const free = new FollowedText('v0', null);
+  free.wrote('v1', 'h1');
+  expect([free.arrived('h9'), free.base]).toEqual([null, null]);
+  // The version from elsewhere: neither the base nor the saved text's own; none without a base.
+  const b = opened();
+  try {
+    const st = b.session.state, node = b.ids.nodes.kolmogorov, held = b.fileOf();
+    expect(versionFromElsewhere(st, node, TEX, 'autre', 'nôtre')).toEqual(held);
+    expect(versionFromElsewhere(st, node, TEX.toUpperCase(), 'autre', 'nôtre')).toEqual(held);
+    expect(versionFromElsewhere(st, node, TEX, held.hash, 'nôtre')).toBeUndefined();
+    expect(versionFromElsewhere(st, node, TEX, 'autre', held.hash)).toBeUndefined();
+    expect(versionFromElsewhere(st, node, TEX, null, 'nôtre')).toBeUndefined();
+    expect(versionFromElsewhere(st, node, 'absent.tex', 'autre', 'nôtre')).toBeUndefined();
+  } finally {
+    b.close();
+  }
 });
 
 test('D6 : les textes du bandeau et des notifications', () => {

@@ -4,7 +4,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching, syntaxHighlighting } from '@codemirror/language';
 import { MergeView } from '@codemirror/merge';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { Annotation, Compartment, EditorState, type Extension, Transaction } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
@@ -14,8 +14,10 @@ import { useModal } from '../FullScreen.tsx';
 import { Banner, Notice, readFailure } from '../viewers/common.tsx';
 import { languageFor, PHRASES_FR } from '../viewers/language.ts';
 import { THEME } from '../viewers/TextViewer.tsx';
-import { abandonQuestion, compareTitle, readCompared, readTexText, Reconciliation } from './compare.ts';
+import { abandonQuestion, compareTitle, readCompared, Reconciliation } from './compare.ts';
+import { loadText } from './editorLoad.ts';
 import { changedElsewhere, keptNotice, reloadedNotice, type SaveAnswer } from './saveScheduler.ts';
+import { readTexText } from './texText.ts';
 import type { WorkbenchHandle } from './TexWorkbench.tsx';
 
 /** CodeMirror's texts in French (PHRASES_FR) and the merge view's own: the folded lines, the arrow of a block. */
@@ -48,7 +50,7 @@ type Shown = { message: string } | { texts: { a: string; b: string } } | null;
 export function CompareView(props: {
   node: NodeRec; original: FileRef; copy: FileRef; params: RenderParams;
   /** `text`: the original with the blocks taken, null when none was; `base`: the hash it was made from; `removeCopy`: « … et retirer la copie ». */
-  onSave(text: string | null, base: string, removeCopy: boolean): Promise<SaveAnswer>;
+  onSave(text: string | null, base: string | null, removeCopy: boolean): Promise<SaveAnswer>;
   onNotice(text: string): void; onClose(): void; ref?: Ref<WorkbenchHandle>;
 }) {
   const { node, original, copy } = props;
@@ -61,6 +63,8 @@ export function CompareView(props: {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<MergeView | null>(null);
   const model = useRef<Reconciliation | null>(null);
+  /** The original's history, in a compartment: a version from elsewhere loaded empties it (loadText). */
+  const historyOf = useRef<Compartment | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const savingNow = useRef(false);
@@ -94,7 +98,8 @@ export function CompareView(props: {
   useEffect(() => {
     if (!texts) return;
     const p = latest.current.params;
-    const language = new Compartment();
+    const language = new Compartment(), histories = new Compartment();
+    historyOf.current = histories;
     const common: Extension[] = [
       EditorState.phrases.of(PHRASES), lineNumbers(), highlightSpecialChars(), bracketMatching(), search({ top: true }), highlightSelectionMatches(),
       syntaxHighlighting(classHighlighter), language.of([]), EditorView.lineWrapping, THEME,
@@ -103,7 +108,7 @@ export function CompareView(props: {
       a: {
         doc: texts.a,
         extensions: [
-          common, history(),
+          common, histories.of(history()),
           keymap.of([
             { key: 'Mod-s', preventDefault: true, run: () => { void finish(false); return true; } },
             ...searchKeymap, ...historyKeymap, ...defaultKeymap.filter((b) => b.key !== 'Escape'),
@@ -167,19 +172,17 @@ export function CompareView(props: {
         latest.current.onNotice(`« ${name} » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.`);
         return;
       }
-      if (stop.signal.aborted || model.current !== m || view.current !== mv) return;
+      const histories = historyOf.current;
+      if (stop.signal.aborted || model.current !== m || view.current !== mv || !histories) return;
       if (!('text' in r)) {
         latest.current.onNotice(`« ${name} » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.`);
         return;
       }
+      // The model and the original's editor take it in this one call, the cursor kept, out of the history, emptied
+      // (loadText): no keystroke lands between them on the old text, and Ctrl+Z never brings that text back (fix round 1
+      // of the review of task 5).
       if (!m.reloaded(r.text, hash)) return;
-      // The whole text replaced, the cursor kept as well as it can be (on its line and column); not a step of the history.
-      const a = mv.a, head = a.state.selection.main.head, line = a.state.doc.lineAt(head), doc = a.state.toText(r.text);
-      const at = doc.line(Math.min(line.number, doc.lines));
-      a.dispatch({
-        changes: { from: 0, to: a.state.doc.length, insert: doc }, selection: { anchor: at.from + Math.min(head - line.from, at.length) },
-        annotations: [fromOutside.of(true), Transaction.addToHistory.of(false)],
-      });
+      for (const spec of loadText(mv.a.state, r.text, histories, history(), [fromOutside.of(true)])) mv.a.dispatch(spec);
       sync();
       latest.current.onNotice(reloadedNotice(name));
     })();

@@ -12,9 +12,10 @@ import { MB } from '../src/renderer/files/read.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
 import {
-  abandonQuestion, compareTitle, Reconciliation, readCompared, reconcileTex, texTextOf, TOO_BIG, tooBigToCompare,
+  abandonQuestion, compareTitle, Reconciliation, readCompared, reconcileTex, TOO_BIG, tooBigToCompare,
 } from '../src/renderer/ui/latex/compare.ts';
 import { changedElsewhere } from '../src/renderer/ui/latex/saveScheduler.ts';
+import { texTextOf } from '../src/renderer/ui/latex/texText.ts';
 import { resolveFull } from '../src/renderer/ui/screens.ts';
 
 afterEach(() => { vi.unstubAllGlobals(); });
