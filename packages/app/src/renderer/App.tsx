@@ -1,5 +1,5 @@
 import { type Action, type Anchor, annotationTitle, createAnnotation, type Id, type State } from '@cirrus/core';
-import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
+import { withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
@@ -11,7 +11,7 @@ import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
 import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
-import { applyReceived, dueChanges, keepUnsaved, withSetting } from './settingChanges.ts';
+import { withSetting } from './settingChanges.ts';
 import { liveTabs } from './tabs.ts';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
@@ -31,6 +31,7 @@ import { Tabs } from './ui/Tabs.tsx';
 import { type Toast, toastClicked, Toasts, toastMsFor, toastsEscaped } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
 import { useSync } from './sync/useSync.ts';
+import { useSettings } from './useSettings.ts';
 
 const TABS_KEY = 'cirrus.tabs';
 const NODE_GONE = 'Ce nœud n’existe plus.';
@@ -76,41 +77,17 @@ interface Shown { state: State; rev: number; action: Action | null }
 export function App() {
   const [shown, setShown] = useState<Shown | null>(null);
   const state = shown?.state ?? null;
-  const [params, setParams] = useState<RenderParams>(DEFAULT_PARAMS);
+  /** The settings: read at startup, written after a change here, changed by those received (useSettings.ts). */
+  const { params, setParams, paramsRef, firstSettings } = useSettings(state);
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const readySent = useRef(false);
-  /**
-   * The settings as last read, written or received (task 6): what differs from them was changed here, and only that is
-   * written; the settings just read are not written back.
-   */
-  const savedParams = useRef<RenderParams | null>(null);
-  /** Shared settings received before the settings were read (task 6): applied once they are. */
-  const earlySettings = useRef<Record<string, unknown>[]>([]);
-  /**
-   * Settings as the main process wrote them, a batch (task 6): received from the server, or the answer to a save. Applied
-   * over the saved settings at once, in one render — none when they change nothing —; a setting changed here and not yet
-   * written keeps its value, which is written next. Reads only refs: the first render's copy serves the listeners.
-   */
-  const adoptSettings = (changes: Record<string, unknown>) => {
-    const before = savedParams.current;
-    if (!before) {
-      earlySettings.current.push(changes);
-      return;
-    }
-    const after = applyReceived(before, changes);
-    if (after === before) return;
-    savedParams.current = after;
-    setParams((p) => keepUnsaved(p, before, after, Object.keys(changes)));
-  };
   const session = useRef<EditSession | null>(null);
   const saver = useRef<SnapshotSaver | null>(null);
   const activeRef = useRef<Id | null>(null);
   activeRef.current = active;
-  const paramsRef = useRef(params);
-  paramsRef.current = params;
   const panels = useRef<PanelsHandle>(null);
   const graph = useRef<GraphHandle>(null);
   /** One for the app (plan 4a): read from the storage once, and again only if its size setting changes. */
@@ -228,9 +205,7 @@ export function App() {
           if (wanted.type !== 'lobby' && !open.includes(wanted.id)) open = [...open, wanted.id];
           current = wanted.id;
         }
-        // Batches received while the settings were read (a page reloaded, its main process syncing on): applied over them.
-        const p = earlySettings.current.splice(0).reduce(applyReceived, withOverrides(settings));
-        savedParams.current = p;
+        const p = firstSettings(settings);
         session.current = new EditSession(s, (a, unit) => window.cirrus.commit(a, unit), (st, action, rev) => {
           setShown({ state: st, rev, action });
           saver.current?.applied();
@@ -253,29 +228,6 @@ export function App() {
   }, []);
 
   useEffect(() => { if (state) saveTabs(tabs); }, [tabs, state]);
-
-  // Settings are written a moment after the last change (spec 19: outside the history and undo): only those changed
-  // here, never one received meanwhile (with a server paired, each written one is shared: task 6).
-  // A batch received after the timer was set, and not rendered yet when it fires, stands it down (review of task 6,
-  // round 2): its render sets it again, over the received settings.
-  useEffect(() => {
-    const base = savedParams.current;
-    if (!state || !base || params === base) return;
-    const timer = setTimeout(() => {
-      const changes = dueChanges(base, savedParams.current!, params);
-      if (!changes) return;
-      savedParams.current = params;
-      // The main process answers with what it wrote (review of task 6, Minor 2): a row received for one of these keys
-      // while the save was on its way, told before the answer, gives way to it, as in settings.json.
-      if (Object.keys(changes).length > 0) {
-        window.cirrus.setSettings(changes).then((written) => { if (written) adoptSettings(written); }, (e: unknown) => console.error('Réglages non enregistrés :', e));
-      }
-    }, params.settingsSaveDelayMs);
-    return () => clearTimeout(timer);
-  }, [params, state]);
-
-  // Shared settings received from the server (task 6, D9), one batch at a time.
-  useEffect(() => window.cirrus.onSettingsChanged((changes) => adoptSettings(changes)), []);
 
   // LaTeX (plan 4b): its state on this PC and the preamble's warm-up (task 7, D2), then the registry the compile
   // requests read (D7, D8), built again after each change of the state (latex/useLatex.ts).
