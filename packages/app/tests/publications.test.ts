@@ -246,3 +246,25 @@ test('replayOpen : le réseau ouvert rejoué (plan 5b, D3) — les noms et les r
   expect(await importPublication('https://example.org/', deps)).toEqual({ ok: false, message: 'Pas de connexion.' });
   expect(stored.map((s) => s.name)).toEqual(['shannon-1948.pdf', 'note.pdf']);
 });
+
+test('replayOpen (plan 5b, tâche 4) : la page d’OpenReview mène à un PDF sans identifiant, l’adresse de l’ACM se lit comme son DOI par doi.org, sans demander l’éditeur', async () => {
+  const open = { ...replayOpen(DATA), timeoutMs: 2000, pdfMaxMs: 60_000 };
+  const { fetch, calls } = fakeFetch((url, accept, s) => replayFetch(DATA)(url, { headers: { Accept: accept }, redirect: 'manual', signal: s }));
+  const { deps, stored } = depsOf(fetch, { open });
+  // OpenReview's shape: no DOI, `citation_pdf_url` at /pdf?id=…: a PDF as dropped, named by the store for want of a file name of its own.
+  const vit = readFileSync(join(DATA, 'openreview-vit.pdf'));
+  expect(await importPublication('https://openreview.net/forum?id=YicbFdNTTy', deps))
+    .toEqual({ ok: true, kind: 'pdf', pdf: { name: 'publication.pdf', hash: createHash('sha256').update(vit).digest('hex'), size: vit.length } });
+  expect(stored.map((s) => [s.name, Buffer.from(s.bytes).equals(vit)])).toEqual([['publication.pdf', true]]);
+  // The ACM's address (D4): its DOI, asked of doi.org (Crossref's answers), never of dl.acm.org.
+  const acm = await importPublication('https://dl.acm.org/doi/10.1145/3292500.3330701', deps);
+  if (!acm.ok || 'kind' in acm) throw new Error(JSON.stringify(acm));
+  expect([acm.id, cslToFields(acm.csl), acm.pdf]).toEqual([
+    { doi: '10.1145/3292500.3330701' },
+    { title: 'Optuna: A Next-generation Hyperparameter Optimization Framework', authors: ['Takuya Akiba', 'Shotaro Sano', 'Toshihiko Yanase', 'Takeru Ohta', 'Masanori Koyama'], year: '2019' },
+    undefined,
+  ]);
+  expect(acm.bibtex).toContain('@inproceedings{Akiba_2019,');
+  expect(calls.some((c) => c.url.includes('dl.acm.org'))).toBe(false);
+  expect(calls.filter((c) => c.url.startsWith('https://doi.org/10.1145/')).map((c) => c.accept).sort()).toEqual(['application/vnd.citationstyles.csl+json', 'application/x-bibtex']);
+});

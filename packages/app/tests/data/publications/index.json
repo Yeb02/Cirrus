@@ -1,8 +1,9 @@
 {
-  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). shannon-1948.* recorded on 2026-11-07 too (review of task 5), for an import by DOI that is no duplicate of the test base: Crossref writes its month whole (month=July). The open web (plan 5b, D3) is written by hand, never recorded: `addresses`, what a name resolves to (editeur.example to a public address, interne.example to a local one), and the editeur.example answers, a page with citation_doi and citation_pdf_url, a PDF without identifier, a page whose PDF is on the local network.",
+  "about": "Answers recorded on 2026-11-07 (plan 4c, task 4), replayed by replay.ts: the tests', and the built app's under CIRRUS_PUBLICATIONS_REPLAY. Headers kept: content-type and location. arxiv-1706.03762.pdf stands for the real PDF (2 215 244 bytes, not committed). shannon-1948.* recorded on 2026-11-07 too (review of task 5), for an import by DOI that is no duplicate of the test base: Crossref writes its month whole (month=July). The open web (plan 5b, D3) is written by hand, never recorded: `addresses`, what a name resolves to (editeur.example to a public address, interne.example to a local one), and the editeur.example answers, a page with citation_doi and citation_pdf_url, a PDF without identifier, a page whose PDF is on the local network. Plan 5b, task 4, written by hand like them: openreview.net (a forum page of OpenReview's shape, without DOI; its PDF at /pdf?id=…, a stand-in PDF with a Title and no identifier), and the ACM DOI 10.1145/3292500.3330701 (akiba-2019.*, composed on Crossref's model), asked through doi.org as any DOI is.",
   "addresses": {
     "editeur.example": ["93.184.215.14"],
-    "interne.example": ["10.0.0.5"]
+    "interne.example": ["10.0.0.5"],
+    "openreview.net": ["93.184.215.15"]
   },
   "responses": [
     { "url": "https://editeur.example/articles/shannon-1948", "status": 200, "headers": { "content-type": "text/html; charset=utf-8" }, "body": "editeur-shannon-1948.html" },
@@ -10,6 +11,8 @@
     { "url": "https://editeur.example/papiers/note.pdf", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "editeur-note.pdf" },
     { "url": "https://editeur.example/ancienne-adresse", "status": 301, "headers": { "location": "/papiers/note.pdf" } },
     { "url": "https://editeur.example/interne", "status": 200, "headers": { "content-type": "text/html; charset=utf-8" }, "body": "editeur-interne.html" },
+    { "url": "https://openreview.net/forum?id=YicbFdNTTy", "status": 200, "headers": { "content-type": "text/html; charset=utf-8" }, "body": "openreview-vit.html" },
+    { "url": "https://openreview.net/pdf?id=YicbFdNTTy", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "openreview-vit.pdf" },
     { "url": "https://interne.example/a.pdf", "status": 200, "headers": { "content-type": "application/pdf" }, "body": "editeur-note.pdf" },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
     { "url": "https://doi.org/10.48550/arXiv.1706.03762", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://data.crosscite.org/10.48550%2FarXiv.1706.03762" } },
@@ -24,6 +27,10 @@
     { "url": "https://doi.org/10.1002/j.1538-7305.1948.tb01338.x", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform" } },
     { "url": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform", "accept": "application/vnd.citationstyles.csl+json", "status": 200, "headers": { "content-type": "application/vnd.citationstyles.csl+json" }, "body": "shannon-1948.csl.json" },
     { "url": "https://api.crossref.org/v1/works/10.1002%2Fj.1538-7305.1948.tb01338.x/transform", "accept": "application/x-bibtex", "status": 200, "headers": { "content-type": "application/x-bibtex" }, "body": "shannon-1948.bib" },
+    { "url": "https://doi.org/10.1145/3292500.3330701", "accept": "application/vnd.citationstyles.csl+json", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1145%2F3292500.3330701/transform" } },
+    { "url": "https://doi.org/10.1145/3292500.3330701", "accept": "application/x-bibtex", "status": 302, "headers": { "location": "https://api.crossref.org/v1/works/10.1145%2F3292500.3330701/transform" } },
+    { "url": "https://api.crossref.org/v1/works/10.1145%2F3292500.3330701/transform", "accept": "application/vnd.citationstyles.csl+json", "status": 200, "headers": { "content-type": "application/vnd.citationstyles.csl+json" }, "body": "akiba-2019.csl.json" },
+    { "url": "https://api.crossref.org/v1/works/10.1145%2F3292500.3330701/transform", "accept": "application/x-bibtex", "status": 200, "headers": { "content-type": "application/x-bibtex" }, "body": "akiba-2019.bib" },
     { "url": "https://doi.org/10.1007/cirrus-introuvable", "status": 404, "headers": { "content-type": "text/html;charset=utf-8" }, "body": "doi-introuvable.html" }
   ]
 }

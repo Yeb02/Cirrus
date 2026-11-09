@@ -124,6 +124,13 @@ const dialogOpen = (page) => page.evaluate(`!!document.querySelector('.publicati
 const blob = (data, hash) => readFileSync(join(data, 'files', hash.slice(0, 2), hash));
 /** The node's tags, `key: value` each. */
 const tagsOf = (n) => n.tags.map((t) => `${t.key}: ${t.value}`);
+/** The number of blobs in the test base's store (plan 5b, task 4: a request refused stores nothing). */
+const blobCount = (data) => {
+  const store = join(data, 'files');
+  return existsSync(store) ? readdirSync(store).filter((d) => /^[0-9a-f]{2}$/.test(d)).reduce((n, d) => n + readdirSync(join(store, d)).length, 0) : 0;
+};
+/** The arXiv article's PDF of the recorded answers, which « Choisir un PDF… » takes by CIRRUS_PDF_PICK. */
+const ARXIV_PDF = join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf');
 
 // Plan 4c, task 6: a whole .bib — the test base's (fixtures/assets) — dropped on the sky's background, or chosen by
 // the background's menu (CIRRUS_BIB_PICK: the system's dialog never opens), its block following the cursor until a click.
@@ -999,6 +1006,167 @@ const SCENARIOS = [
       await page.press('Enter', 'Enter', 13);
       if (!(await said(page, `Déjà dans la base (même identifiant arXiv) : « ${ATTENTION} ».`))) throw new Error(`pas de notification du second import (le dialogue dit « ${await statusOf(page)} »)`);
       if (titledIn(base, ATTENTION).length !== 1) throw new Error('le second import a créé un nœud');
+    },
+  },
+  {
+    // Plan 5b, task 4 (D5): one PDF let go on the sky opens the import dialog at the drop point, with it, as if it had been
+    // dropped on the dialog — its arXiv identifier found, « Importer » puts the node down where the PDF was let go; a PDF
+    // without identifier, « Créer le nœud ». Nothing is made before. Two PDFs, or a PDF with a .bib: a notice, no dialog.
+    name: 'importer une publication : un PDF lâché sur le fond ouvre le dialogue au point du dépôt, avec ce PDF ; plusieurs fichiers, une notification',
+    ...IMPORT,
+    async run(page, base, data) {
+      const dir = mkdtempSync(join(tmpdir(), 'cirrus-depot-'));
+      try {
+        const attention = join(dir, 'attention.pdf'), plain = join(dir, 'Li_Vitányi_extrait.pdf'), other = join(dir, 'autre.pdf');
+        copyFileSync(join(appDir, 'tests', 'data', 'publications', 'arxiv-1706.03762.pdf'), attention);
+        copyFileSync(join(appDir, '..', 'fixtures', 'assets', 'Li_Vitányi_extrait.pdf'), plain);
+        copyFileSync(plain, other);
+        const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count();
+        // Several files: the notice names the two cases allowed, and no dialog opens.
+        await page.dropFiles(SKY, [attention, other]);
+        if (!(await said(page, 'Dépose un seul .bib ou un seul PDF sur le fond, ou un fichier sur un nœud pour l’y ajouter.'))) throw new Error(`pas de notification (${await toastsText(page)})`);
+        await page.dropFiles(SKY, [attention, BIB]);
+        if (!(await said(page, 'Dépose un seul fichier .bib ou un seul PDF à la fois sur le fond du graphe pour l’importer ; un autre fichier se dépose sur un nœud.'))) throw new Error(`pas de notification (${await toastsText(page)})`);
+        if (await dialogOpen(page) || count() !== before) throw new Error('un dépôt de plusieurs fichiers a ouvert le dialogue ou créé un nœud');
+        // One PDF with an identifier: the dialog opens at once with it, the field filled, nothing made.
+        const at = await worldAt(page, SKY);
+        await page.dropFiles(SKY, [attention]);
+        if (!(await page.until(`document.querySelector('.publication-dialog input')?.value === 'arXiv:1706.03762'`, 8000))) {
+          throw new Error(`le dialogue n’a pas lu le PDF lâché sur le fond (il dit « ${await statusOf(page)} »)`);
+        }
+        console.log(`     ${await statusOf(page)}`);
+        if (titledIn(base, ATTENTION).length !== 0) throw new Error('le dépôt a importé sans « Importer »');
+        const button = await page.centre('.publication-dialog button.import', 'Importer');
+        await page.click(button.x, button.y);
+        if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+        const n = titledIn(base, ATTENTION)[0];
+        if (JSON.stringify(n.files.map((f) => f.name)) !== '["attention.pdf","vaswani2017.bib"]') throw new Error(`le nœud ne garde pas le PDF lâché : ${JSON.stringify(n.files)}`);
+        if (!blob(data, n.files[0].hash).equals(readFileSync(attention))) throw new Error('le PDF lâché n’est pas au magasin');
+        const p = placementOf(base, idsOf(base).lobby, n.id);
+        if (!p || Math.abs(p.x - at.x) > 1 || Math.abs(p.y - at.y) > 1) throw new Error(`le nœud n’est pas posé au point du dépôt : ${JSON.stringify(p)} au lieu de ${JSON.stringify(at)}`);
+        console.log(`     posé en ${p.x.toFixed(1)}, ${p.y.toFixed(1)}`);
+        // One PDF without identifier, let go elsewhere: « Créer le nœud », its title from its file's name.
+        const at2 = await worldAt(page, SKY2);
+        await page.dropFiles(SKY2, [plain]);
+        if (!(await page.until(`!!document.querySelector('.publication-dialog button.create')`, 8000))) throw new Error(`« Créer le nœud » n’est pas proposé (le dialogue dit « ${await statusOf(page)} »)`);
+        const create = await page.centre('.publication-dialog button.create', 'Créer le nœud');
+        await page.click(create.x, create.y);
+        if (!(await until(() => titledIn(base, 'Li_Vitányi_extrait').length === 1))) throw new Error('le nœud du PDF sans identifiant n’est pas dans la base');
+        const m = titledIn(base, 'Li_Vitányi_extrait')[0], q = placementOf(base, idsOf(base).lobby, m.id);
+        if (!q || Math.abs(q.x - at2.x) > 1 || Math.abs(q.y - at2.y) > 1) throw new Error(`le nœud n’est pas posé au point du dépôt : ${JSON.stringify(q)} au lieu de ${JSON.stringify(at2)}`);
+        if (await dialogOpen(page)) throw new Error('le dialogue reste ouvert après « Créer le nœud »');
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      }
+    },
+  },
+  {
+    // Plan 5b, task 4 (D5): « Choisir un PDF… » takes the PDF the test names (CIRRUS_PDF_PICK, never the system's dialog)
+    // as a PDF dropped on the dialog: stored, read, its identifier found; « Importer » keeps it.
+    name: 'importer une publication : « Choisir un PDF… » (entrée de test, sans sélecteur) lit le PDF comme un PDF déposé',
+    env: { ...IMPORT.env, CIRRUS_PDF_PICK: ARXIV_PDF },
+    async run(page, base, data) {
+      const at = await worldAt(page, SKY);
+      await openImport(page);
+      const pick = await page.centre('.publication-dialog button.pick', 'Choisir un PDF');
+      await page.click(pick.x, pick.y);
+      if (!(await page.until(`document.querySelector('.publication-dialog input')?.value === 'arXiv:1706.03762'`, 8000))) {
+        throw new Error(`l’identifiant n’est pas trouvé dans le PDF choisi (le dialogue dit « ${await statusOf(page)} »)`);
+      }
+      if (titledIn(base, ATTENTION).length !== 0) throw new Error('le choix a importé sans « Importer »');
+      const button = await page.centre('.publication-dialog button.import', 'Importer');
+      await page.click(button.x, button.y);
+      if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+      const n = titledIn(base, ATTENTION)[0];
+      if (JSON.stringify(n.files.map((f) => f.name)) !== '["arxiv-1706.03762.pdf","vaswani2017.bib"]') throw new Error(`le nœud ne garde pas le PDF choisi : ${JSON.stringify(n.files)}`);
+      if (!blob(data, n.files[0].hash).equals(readFileSync(ARXIV_PDF))) throw new Error('le PDF choisi n’est pas au magasin');
+      const p = placementOf(base, idsOf(base).lobby, n.id);
+      if (!p || Math.abs(p.x - at.x) > 1 || Math.abs(p.y - at.y) > 1) throw new Error(`le nœud n’est pas posé où le menu s’est ouvert : ${JSON.stringify(p)} au lieu de ${JSON.stringify(at)}`);
+    },
+  },
+  {
+    // Plan 5b, task 4 (D5): without CIRRUS_PDF_PICK a test's window opens no dialog of the system — the pick is as
+    // cancelled: nothing is read, nothing said, the dialog as it was, still usable.
+    name: 'importer une publication : « Choisir un PDF… » sans choix ne fait rien',
+    ...IMPORT,
+    async run(page, base, data) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count(), stored = blobCount(data);
+      await openImport(page);
+      const hint = await statusOf(page);
+      const pick = await page.centre('.publication-dialog button.pick', 'Choisir un PDF');
+      await page.click(pick.x, pick.y);
+      await sleep(1500);
+      if ((await statusOf(page)) !== hint || !(await dialogOpen(page))) throw new Error(`le dialogue a changé : « ${await statusOf(page)} »`);
+      if (await page.evaluate(`document.querySelector('.publication-dialog button.pick').disabled || !!document.querySelector('.publication-dialog .pdf')`)) throw new Error('le dialogue attend un PDF qui ne vient pas');
+      if (count() !== before || blobCount(data) !== stored) throw new Error('un choix annulé a créé un nœud ou stocké un fichier');
+      // Still usable: an identifier typed is imported.
+      await page.type('arXiv:1706.03762');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => titledIn(base, ATTENTION).length === 1, 8000))) throw new Error(`l’import ne se fait pas ensuite (le dialogue dit « ${await statusOf(page)} »)`);
+    },
+  },
+  {
+    // Plan 5b, task 4 (D3, D5): the address of a forum page of OpenReview, replayed (no DOI; its PDF at /pdf?id=…): the
+    // PDF it leads to is read as a PDF dropped on the dialog — its title from its metadata, « Créer le nœud », the PDF
+    // attached. An address refused (not https, a local machine, a text that is none) is said in the dialog, and nothing
+    // is stored.
+    name: 'importer une publication par l’adresse d’une page d’OpenReview : son PDF est lu comme un PDF déposé ; les adresses refusées ne stockent rien',
+    ...IMPORT,
+    async run(page, base, data) {
+      const count = () => base('SELECT count(*) AS n FROM nodes')[0].n, before = count(), stored = blobCount(data);
+      const title = 'An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale';
+      const field = async () => {
+        const input = await page.centre('.publication-dialog input', '');
+        await page.click(input.x, input.y);
+        await page.press('a', 'KeyA', 65, 2);
+      };
+      const local = 'Adresse refusée : elle mène à une machine du réseau local.';
+      await openImport(page);
+      for (const [text, message] of [
+        ['http://openreview.net/forum?id=YicbFdNTTy', 'Seules les adresses https sont acceptées.'], ['https://interne.example/a.pdf', local], ['https://127.0.0.1/', local],
+        ['openreview.net/forum?id=YicbFdNTTy', 'Identifiant non reconnu.'],
+      ]) {
+        await field();
+        await page.type(text);
+        await page.press('Enter', 'Enter', 13);
+        if (!(await page.until(`document.querySelector('.publication-dialog .status')?.textContent === ${JSON.stringify(message)}`, 8000))) throw new Error(`« ${text} » : le dialogue dit « ${await statusOf(page)} »`);
+        if (blobCount(data) !== stored || count() !== before) throw new Error(`« ${text} » refusée, mais quelque chose est stocké ou créé`);
+      }
+      await field();
+      await page.type('https://openreview.net/forum?id=YicbFdNTTy');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`!!document.querySelector('.publication-dialog button.create')`, 8000))) throw new Error(`« Créer le nœud » n’est pas proposé (le dialogue dit « ${await statusOf(page)} »)`);
+      console.log(`     ${await statusOf(page)}`);
+      if (!(await page.evaluate(`document.querySelector('.publication-dialog .pdf')?.textContent === 'PDF : publication.pdf'`))) throw new Error('le dialogue ne nomme pas le PDF de la page');
+      if (count() !== before) throw new Error('la lecture du PDF de la page a créé un nœud');
+      const create = await page.centre('.publication-dialog button.create', 'Créer le nœud');
+      await page.click(create.x, create.y);
+      if (!(await until(() => titledIn(base, title).length === 1))) throw new Error('le nœud du PDF de la page n’est pas dans la base');
+      const n = titledIn(base, title)[0];
+      if (n.tags.length !== 0 || JSON.stringify(n.files.map((f) => f.name)) !== '["publication.pdf"]') throw new Error(`nœud inattendu : ${JSON.stringify(n)}`);
+      if (!blob(data, n.files[0].hash).equals(readFileSync(join(appDir, 'tests', 'data', 'publications', 'openreview-vit.pdf')))) throw new Error('le PDF du nœud n’est pas celui de la page (rejoué)');
+    },
+  },
+  {
+    // Plan 5b, task 4 (D4, D3): the address of an article of the ACM is read as its DOI, with no request to the publisher
+    // (dl.acm.org is not even written in the replay's names): the metadata come through doi.org (replayed: composed on
+    // Crossref's model), as for a DOI typed; no PDF, the .bib alone.
+    name: 'importer une publication par l’adresse d’un article de l’ACM, lue comme un DOI',
+    ...IMPORT,
+    async run(page, base, data) {
+      await openImport(page);
+      await page.type('https://dl.acm.org/doi/10.1145/3292500.3330701');
+      await page.press('Enter', 'Enter', 13);
+      const title = 'Optuna: A Next-generation Hyperparameter Optimization Framework';
+      if (!(await until(() => titledIn(base, title).length === 1, 8000))) throw new Error(`le nœud n’est pas dans la base (le dialogue dit « ${await statusOf(page)} »)`);
+      const n = titledIn(base, title)[0];
+      const authors = ['Takuya Akiba', 'Shotaro Sano', 'Toshihiko Yanase', 'Takeru Ohta', 'Masanori Koyama'];
+      const tags = [...authors.map((a) => `auteur: ${a}`), 'date_de_publication: 2019', 'clé_bibtex: Akiba_2019', 'doi: 10.1145/3292500.3330701'];
+      if (JSON.stringify(tagsOf(n)) !== JSON.stringify(tags)) throw new Error(`tags inattendus : ${JSON.stringify(tagsOf(n))}`);
+      if (JSON.stringify(n.files.map((f) => f.name)) !== '["Akiba_2019.bib"]') throw new Error(`fichiers inattendus : ${JSON.stringify(n.files)}`);
+      const bib = blob(data, n.files[0].hash).toString('utf8');
+      if (!bib.startsWith('@inproceedings{Akiba_2019,\n')) throw new Error(`.bib inattendu : ${bib.slice(0, 120)}`);
+      if (await dialogOpen(page)) throw new Error('le dialogue reste ouvert après l’import');
     },
   },
   {
