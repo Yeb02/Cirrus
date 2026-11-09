@@ -6,10 +6,12 @@ import { pipeline } from 'node:stream/promises';
 import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST,
+  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS,
+  MAX_UNITS_PER_REQUEST,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
+import { parsePublicationRequest, PublicationError, PublicationImports, type PublicationNetwork, serverNetwork } from './publications.ts';
 import { SeedError, Seeds } from './seed.ts';
 import { parseSettingChanges, SettingsError } from './settings.ts';
 import { hashToken, PairingError, Tokens } from './tokens.ts';
@@ -17,9 +19,14 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
 // anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
-// paired PCs, the shared settings), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7).
+// paired PCs, the shared settings), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
+// serves only a paired PC's import of a publication (plan 5b, D2: publications.ts).
 
-interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number }
+/**
+ * `sources`: the network of a publication's import (plan 5b, task 3), the server's own by default (serverNetwork: Node's
+ * fetch, the system's resolver, httpsConnect); a test's replay, so that no test reaches the Internet.
+ */
+interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number; sources?: PublicationNetwork }
 export interface RunningServer { url: string; close(): Promise<void> }
 
 /** The addresses it listens on: this machine's, until HTTPS (plan 9). */
@@ -125,7 +132,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     canon = Canon.open(baseDir, (u) => hub?.publish(u));
     const t = tokens, c = canon;
     hub = new Hub((after, minLines) => c.base.unitsAfter(after, minLines), (hash) => t.pcOfHash(hash) !== null);
-    return await listen({ port: opts.port, host, now, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), lock });
+    const imports = new PublicationImports(baseDir, opts.sources ?? serverNetwork());
+    return await listen({ port: opts.port, host, now, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), imports, lock });
   } catch (e) {
     hub?.closeAll();
     canon?.close();
@@ -136,13 +144,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 }
 
 /** What a started server holds, opened by startServer: closed by its `close`. */
-interface Parts { port: number; host: string; now: () => number; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; lock: { release(): void } }
+interface Parts {
+  port: number; host: string; now: () => number; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; imports: PublicationImports; lock: { release(): void };
+}
 
 /** A seed's steps, to a server that holds a base already (task 5, D7, R16). */
 const NOT_FRESH = 'Le serveur tient déjà une base : il ne reçoit celle d’un PC que vide.';
 
 /** Listens, and serves the routes. */
-async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, seeds, lock }: Parts): Promise<RunningServer> {
+async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, seeds, imports, lock }: Parts): Promise<RunningServer> {
   /** The PC of the request's token, and the token's hash; 401 otherwise, checked before anything of the body is read. */
   const authenticate = (req: IncomingMessage): { pc: string; tokenHash: string } => {
     const token = BEARER.exec(req.headers.authorization ?? '')?.[1];
@@ -288,6 +298,23 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
         reply(res, 200, { missing: [...new Set(hashes as string[])].filter((h) => !existsSync(blob(h))) });
       },
     },
+    /**
+     * A publication imported for this PC (plan 5b, task 3, D2): its body, MAX_PUBLICATION_BODY_BYTES at most, checked whole
+     * (parsePublicationRequest: its text, the PC's caps brought under the server's bounds) before anything is asked;
+     * MAX_PUBLICATION_FETCHES imports at once, 503 beyond; the import made by the server's network, under D3's guards,
+     * its PDF into the server's store. Its answer, the PublicationResult the PC's own import would give, a refusal of the
+     * network included (`{ ok: false, message }`, a 200 too). The PC gone, or the server stopping, the import is aborted,
+     * and answers no one.
+     */
+    '/publications': {
+      POST: async (req, res) => {
+        const request = parsePublicationRequest(await readJson(req, MAX_PUBLICATION_BODY_BYTES));
+        const gone = new AbortController();
+        res.on('close', () => { if (!res.writableEnded) gone.abort(new Error('Demande d’import abandonnée.')); });
+        const result = await imports.run(request, gone.signal);
+        if (!gone.signal.aborted) reply(res, 200, result);
+      },
+    },
     '/snapshot': {
       GET: (_req, res) => {
         const data = Buffer.from(encodeState(canon.state));
@@ -361,7 +388,8 @@ async function listen({ port: wanted, host, now, baseDir, tokens, canon, hub, se
       try {
         await handle(req, res);
       } catch (e) {
-        const known = e instanceof HttpError ? e : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError ? new HttpError(e.status, e.message)
+        const known = e instanceof HttpError ? e
+          : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError ? new HttpError(e.status, e.message)
           : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
         if (res.headersSent) {
           res.destroy();

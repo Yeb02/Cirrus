@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@cirrus/core": "*",
+    "@cirrus/sources": "*",
     "@cirrus/store": "*"
   }
 }
