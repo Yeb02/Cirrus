@@ -80,8 +80,9 @@ export const NOT_STORED = 'CIRRUS_NOT_STORED';
 
 /**
  * A download's end: the blob is there; it could not be had (absent from the server, refused by it, its own failure,
- * bytes that are not their hash's); the network broke, the server out of reach (`lost`); this PC could not keep it; or
- * it was aborted (a stop, « Arrêter »).
+ * bytes that are not their hash's); the network broke, the server out of reach (`lost`) — for one of « Tout
+ * télécharger », a server that answers 5xx, 401 or 403 too —; this PC could not keep it; or it was aborted (a stop,
+ * « Arrêter »).
  */
 export type Outcome = 'done' | 'failed' | 'lost' | 'not-stored' | 'aborted';
 
@@ -373,6 +374,9 @@ export class Downloads {
     const length = res.headers.get('content-length'), size = length === null ? Number.NaN : Number(length);
     if (res.status !== 200 || !res.body || !Number.isSafeInteger(size) || size < 0) {
       await res.body?.cancel().catch(() => {});
+      // « Tout télécharger »'s: a server up but failing (5xx), or refusing this PC (401, 403), would fail every file
+      // after it — lost, the run stops and says so (task 8a); a file absent (404) is that file's only.
+      if (this.once.has(hash) && (res.status >= 500 || res.status === 401 || res.status === 403)) return 'lost';
       // Absent from the server (404), or a server that refuses (a token, a format): not tried again; its own failure is.
       if (res.status >= 500 && this.kept(hash, eager)) this.failed.add(hash);
       return 'failed';

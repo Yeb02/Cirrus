@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type Action, applyOps, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, emptyState, type FileRef, type Id } from '@cirrus/core';
 import { filePath, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
-import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median } from '../src/main/sync/downloads.ts';
+import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome } from '../src/main/sync/downloads.ts';
 import type { DownloadAllProgress, ServerStatus } from '../src/main/sync/protocol.ts';
 import { planText, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
 import { created, Lab, sleep, until, type VirtualPc } from './support/virtualPc.ts';
@@ -249,6 +249,18 @@ test('le disque de ce PC qui refuse un fichier (plein, interdit) : arrêt propre
   warn.mockRestore();
 });
 
+test('un PDF absent du serveur (404) : compté comme « n’a pas pu l’être », les autres téléchargés, la suite finie (relecture de la tâche 7)', async () => {
+  const { lab: l, b, refs } = await pdfsOnServer(3, { syncDownloads: 1 });
+  // The second PDF's blob gone from the server's store (a store never deletes one: removed here by hand).
+  rmSync(filePath(join(l.dataDir, 'base'), refs[1]));
+  expect(await b.client.downloadAllStart(refs)).toEqual({ ok: true });
+  await ended(b);
+  expect(b.client.downloadAllProgress()).toEqual({ done: 2, failed: 1, total: 3, doneBytes: refs[0].size + refs[2].size, totalBytes: sum(refs), end: 'done' });
+  expect(refs.map((r) => hasBlob(b.dir, r.hash))).toEqual([true, false, true]);
+  expect(progressText(b.client.downloadAllProgress()!)).toBe('2 PDF sur 3 téléchargés ; 1 n’a pas pu l’être (absent du serveur, ou abîmé).');
+  expect(b.net.count('GET', FILES)).toBe(3);
+});
+
 test('l’app fermée pendant un téléchargement : interrompu, le fichier à moitié reçu effacé, rien de gardé pour le démarrage suivant', async () => {
   const { b, refs, bytes } = await pdfsOnServer(2, { syncDownloads: 1 });
   // The first file's bytes come half, then wait — until the request is aborted.
@@ -356,6 +368,38 @@ test('DownloadAll : un téléchargement de la fois d’avant, arrêté mais pas 
   expect([hasBlob(dir, first), hasBlob(dir, opened)]).toEqual([true, true]);
   expect(asked).toEqual([first, opened, first]);
   expect(told.map((p) => p.end)).toEqual([undefined, 'stopped', undefined, 'done']);
+});
+
+test('DownloadAll : un serveur qui répond mais échoue (5xx, 401, 403) arrête la suite, « Serveur perdu » ; un fichier absent du serveur (404) compte comme « n’a pas pu l’être », et la suite continue (relecture de la tâche 7)', async () => {
+  /** « Tout télécharger » of three files, one at a time, the second answered `status`: its progress at the end, and what was asked. */
+  const run = async (status: number) => {
+    const { dir, blobs, hashes } = queueOf(3);
+    const asked: string[] = [];
+    const downloads = new Downloads(dir, (hash) => {
+      asked.push(hash);
+      return Promise.resolve(hash === hashes[1] ? new Response('refusé', { status }) : answer(blobs.get(hash)!));
+    }, () => 1);
+    const all = new DownloadAll(downloads, () => {});
+    all.start(new Map(hashes.map((h) => [h, 600])));
+    await until(() => all.current()?.end !== undefined);
+    return { progress: all.current(), asked: asked.map((h) => hashes.indexOf(h)), third: hasBlob(dir, hashes[2]) };
+  };
+  for (const status of [500, 503, 401, 403]) {
+    expect(await run(status), String(status)).toEqual({
+      progress: { done: 1, failed: 0, total: 3, doneBytes: 600, totalBytes: 1800, end: 'lost' }, asked: [0, 1], third: false,
+    });
+  }
+  expect(await run(404)).toEqual({ progress: { done: 2, failed: 1, total: 3, doneBytes: 1200, totalBytes: 1800, end: 'done' }, asked: [0, 1, 2], third: true });
+  // A download of the synchronisation keeps its outcome: a server's failure is `failed` (tried again at the next connection).
+  const { dir, hashes: [synced, once] } = queueOf(2);
+  const downloads = new Downloads(dir, () => Promise.resolve(new Response('refusé', { status: 503 })), () => 2);
+  const outcomes: [number, Outcome][] = [];
+  downloads.onSettled = (hash, outcome) => outcomes.push([hash === synced ? 0 : 1, outcome]);
+  downloads.want([synced]);
+  downloads.wantOnce([once]);
+  await until(() => outcomes.length === 2);
+  expect(outcomes.sort()).toEqual([[0, 'failed'], [1, 'lost']]);
+  await downloads.stop();
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
