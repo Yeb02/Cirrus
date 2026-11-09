@@ -13,7 +13,8 @@ const HASH = /^[0-9a-f]{64}$/;
 
 /**
  * A plain object, neither null nor an array: what a reader of untrusted JSON checks before its fields. Exported for the
- * server's and the app's readers too (short review after plan 5a, D4: one copy instead of five).
+ * server's and the app's readers too (short review after plan 5a, D4: one copy instead of five), the state's record
+ * checks and the LaTeX compiler's request check among them (re-review of the fixes, N6).
  */
 export const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isRect = (r: unknown): boolean => Array.isArray(r) && r.length === 4 && r.every(Number.isFinite);

@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isStandalone, type KnownLabel, type TexError } from '@cirrus/core';
+import { type CompileAnswer, type CompiledPdf, type CompileRequest, type FileRef, isObject, isStandalone, type KnownLabel, type TexError } from '@cirrus/core';
 import { filePath } from '@cirrus/store';
 import { PARAM_SPECS, type RenderParams } from '@cirrus/view';
 import { plainName } from '../files.ts';
@@ -615,10 +615,9 @@ export class LatexService {
 }
 
 const isText = (v: unknown): v is string => typeof v === 'string';
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const listOf = (v: unknown, item: (x: unknown) => boolean) => Array.isArray(v) && v.every(item);
-const isRef = (x: unknown) => isRecord(x) && isText(x.label) && isText(x.title) && (x.node === null || isText(x.node));
-const isCite = (x: unknown) => isRecord(x) && isText(x.key) && isText(x.text) && isText(x.node);
+const isRef = (x: unknown) => isObject(x) && isText(x.label) && isText(x.title) && (x.node === null || isText(x.node));
+const isCite = (x: unknown) => isObject(x) && isText(x.key) && isText(x.text) && isText(x.node);
 
 /** What cirrus:latex:compile answers a request it refuses (its cause in the console). */
 export const INVALID_REQUEST: CompileAnswer = {
@@ -634,7 +633,7 @@ const WIDTH = PARAM_SPECS.find((p) => p.key === 'latexSnippetWidthCm')!;
  * resources of plain names whose hash is in the store.
  */
 export function invalidRequest(x: unknown, store: string, maxSourceBytes: number): string | null {
-  if (!isRecord(x)) return 'pas un objet';
+  if (!isObject(x)) return 'pas un objet';
   if (!isText(x.slot) || x.slot === '') return 'emplacement';
   if (x.mode !== 'snippet' && x.mode !== 'page') return 'mode';
   if (!isText(x.source)) return 'source';
@@ -647,10 +646,10 @@ export function invalidRequest(x: unknown, store: string, maxSourceBytes: number
   if (!listOf(x.cites, isCite)) return 'cites';
   if (!listOf(x.doubledCites, isCite)) return 'doubledCites';
   if (!listOf(x.unknownCites, isText)) return 'unknownCites';
-  if (!listOf(x.known, (k) => isRecord(k) && isText(k.label) && isText(k.number) && isText(k.page) && isText(k.anchor))) return 'known';
+  if (!listOf(x.known, (k) => isObject(k) && isText(k.label) && isText(k.number) && isText(k.page) && isText(k.anchor))) return 'known';
   if (!Array.isArray(x.resources)) return 'resources';
   for (const r of x.resources as unknown[]) {
-    if (!isRecord(r) || !isText(r.name) || !isText(r.hash) || typeof r.size !== 'number') return 'ressource mal formée';
+    if (!isObject(r) || !isText(r.name) || !isText(r.hash) || typeof r.size !== 'number') return 'ressource mal formée';
     if (!plainName(r.name)) return `nom de ressource refusé : ${r.name.slice(0, 200)}`;
     if (!HASH.test(r.hash)) return `empreinte refusée : ${r.hash.slice(0, 200)}`;
     try {

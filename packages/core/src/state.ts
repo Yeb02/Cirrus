@@ -1,4 +1,4 @@
-import { validAnchor } from './annotation.ts';
+import { isObject, validAnchor } from './annotation.ts';
 import { BranchSet, connectionAt, ConnectionsFacade, MapFacade, PlacementsFacade, placementAt, RecordFacade } from './facades.ts';
 import { DEFAULT_PREAMBLE } from './latex.ts';
 import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
@@ -523,8 +523,7 @@ function unrefPlan(d: StateData, r: number): void {
   d.index.groupMembers[r] = undefined;
 }
 
-const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isTagList = (v: unknown): boolean => Array.isArray(v) && v.every(isPlainObject);
+const isTagList = (v: unknown): boolean => Array.isArray(v) && v.every(isObject);
 
 /**
  * What the tables and the indices read of a node record, checked before anything is written: a string identifier, its
@@ -532,7 +531,7 @@ const isTagList = (v: unknown): boolean => Array.isArray(v) && v.every(isPlainOb
  * (validAnchor), as the snapshot's decoder wants it, so that a base never holds one its snapshot would refuse.
  */
 function checkNode(n: NodeRec): void {
-  if (!isPlainObject(n) || typeof n.id !== 'string') throw new Error('invalid node record');
+  if (!isObject(n) || typeof n.id !== 'string') throw new Error('invalid node record');
   if (!isTagList(n.tags)) throw new Error(`invalid node tags: ${n.id}`);
   if (!Array.isArray(n.files)) throw new Error(`invalid node files: ${n.id}`);
   if (n.anchor !== undefined && !validAnchor(n.anchor)) throw new Error(`invalid node anchor: ${n.id}`);
@@ -544,20 +543,20 @@ function checkNode(n: NodeRec): void {
  * known role.
  */
 function checkConnection(c: ConnectionRec): void {
-  if (!isPlainObject(c) || typeof c.id !== 'string') throw new Error('invalid connection record');
+  if (!isObject(c) || typeof c.id !== 'string') throw new Error('invalid connection record');
   kindCode(c.kind);
   if (c.trashedAt !== undefined && (typeof c.trashedAt !== 'number' || Number.isNaN(c.trashedAt))) throw new Error(`invalid trashedAt: ${String(c.trashedAt)}`);
   if (!isTagList(c.tags)) throw new Error(`invalid connection tags: ${c.id}`);
   if (!Array.isArray(c.members)) throw new Error(`invalid connection members: ${c.id}`);
   for (const m of c.members) {
-    if (!isPlainObject(m) || typeof m.node !== 'string') throw new Error(`invalid member of connection ${c.id}`);
+    if (!isObject(m) || typeof m.node !== 'string') throw new Error(`invalid member of connection ${c.id}`);
     roleCode(m.role);
   }
 }
 
 /** What preambleText reads of the preamble record, checked before it is written: its text, a string. */
 function checkPreamble(p: PreambleRec): void {
-  if (!isPlainObject(p) || typeof p.text !== 'string') throw new Error('invalid preamble record');
+  if (!isObject(p) || typeof p.text !== 'string') throw new Error('invalid preamble record');
 }
 
 /**
