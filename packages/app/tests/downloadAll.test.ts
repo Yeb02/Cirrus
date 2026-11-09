@@ -9,7 +9,7 @@ import {
   DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median, type Outcome, PROGRESS_EVERY_MS, type Ticks, TransferRates,
 } from '../src/main/sync/downloads.ts';
 import type { DownloadAllProgress, ServerStatus } from '../src/main/sync/protocol.ts';
-import { planText, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
+import { planText, pollServerState, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
 import { created, Lab, sleep, until, type VirtualPc } from './support/virtualPc.ts';
 
 // « Tout télécharger » and the server's state (plan 5b, task 7, D8): every PDF the base refers to downloaded on this PC,
@@ -565,4 +565,49 @@ test('les textes du bloc : la question, le refus, l’avancement et ses fins, l�
   ]);
   expect(statusLines(null).map(([, v]) => v)).toEqual(['—', '—', '—', '—', '—']);
   expect(statusLines({ latencyMs: null, throughput: null, server: null }).map(([, v]) => v)).toEqual(['—', '—', '—', '—', '—']);
+});
+
+test('pollServerState : la demande au montage, puis serverStatusPollMs après chaque réponse, jamais deux empilées derrière un serveur lent ; arrêtée au démontage, rien de plus dit ni demandé (relecture de la tâche 7)', async () => {
+  vi.useFakeTimers();
+  try {
+    const answers: { resolve(s: ServerStatus): void; reject(e: unknown): void }[] = [];
+    const ask = () => new Promise<ServerStatus>((resolve, reject) => { answers.push({ resolve, reject }); });
+    let pollMs = 5000;
+    const told: (number | null)[] = [];
+    const state = (latencyMs: number): ServerStatus => ({ latencyMs, throughput: null, server: null });
+    const stop = pollServerState(ask, () => pollMs, (s) => told.push(s?.latencyMs ?? null));
+    // Asked at once; a slow server: no second ask while the first is in flight, however long.
+    expect(answers).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(answers).toHaveLength(1);
+    // Answered: told, and the next asked serverStatusPollMs after, not before.
+    answers[0].resolve(state(3));
+    await vi.advanceTimersByTimeAsync(4999);
+    expect([told, answers.length]).toEqual([[3], 1]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(answers).toHaveLength(2);
+    // The setting read at each turn: changed, the next delay is the new one; a failure told as unknown.
+    pollMs = 1000;
+    answers[1].reject(new Error('serveur perdu'));
+    await vi.advanceTimersByTimeAsync(999);
+    expect([told, answers.length]).toEqual([[3, null], 2]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(answers).toHaveLength(3);
+    // Unmounted while an ask is in flight: its answer is not told, and nothing more is asked.
+    stop();
+    answers[2].resolve(state(4));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect([told, answers.length]).toEqual([[3, null], 3]);
+    // Unmounted while waiting for the next turn: its timer cleared.
+    const again = pollServerState(ask, () => pollMs, (s) => told.push(s?.latencyMs ?? null));
+    answers[3].resolve(state(5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    again();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect([told, answers.length]).toEqual([[3, null, 5], 4]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

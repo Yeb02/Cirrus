@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type {
   DownloadAllPlan, DownloadAllStart, FirstSyncChoice, FirstSyncOffer, PairResult, ServerInfo, ServerStatus, SyncStatus,
 } from '../../../main/sync/protocol.ts';
-import { planText, progressText, startRefusal, statusLines } from '../../sync/downloadAll.ts';
+import { planText, pollServerState, progressText, startRefusal, statusLines } from '../../sync/downloadAll.ts';
 import { chipOf } from '../../sync/syncSession.ts';
 
 /** The address proposed: a server on this machine, at the port its command line takes by default (packages/server). */
@@ -70,24 +70,12 @@ export function ServerBlock(props: ServerBlockProps) {
     setName(proposal.name);
   }, [proposal?.url, proposal?.name]);
   // The server's state (D8), asked while the block shows a server paired: at once, then every serverStatusPollMs, each
-  // ask once the one before answered; the main process asks the server only while connected.
+  // ask once the one before answered (pollServerState); the main process asks the server only while connected.
   const [serverState, setServerState] = useState<ServerStatus | null>(null);
   useEffect(() => {
     const source = props.serverState;
     if (!paired || !source) return;
-    let mounted = true, timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = () => {
-      void source.ask().catch(() => null).then((s) => {
-        if (!mounted) return;
-        setServerState(s);
-        timer = setTimeout(poll, source.pollMs());
-      });
-    };
-    poll();
-    return () => {
-      mounted = false;
-      clearTimeout(timer);
-    };
+    return pollServerState(() => source.ask(), () => source.pollMs(), setServerState);
   }, [paired]);
   /** « Télécharger tous les PDF… »: its question (`ok`: « Télécharger » offered), or why it cannot start; null: neither. */
   const [question, setQuestion] = useState<{ ok: boolean; text: string } | null>(null);

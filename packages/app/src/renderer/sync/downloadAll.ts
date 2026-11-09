@@ -78,6 +78,35 @@ export function progressText(p: DownloadAllProgress): string {
   }
 }
 
+/**
+ * The server's state asked while the block « Serveur » shows a server paired (D8; review of task 7: out of the block, to
+ * be tested): at once, then `pollMs()` (serverStatusPollMs, read at each turn) after each answer — one chain of
+ * timers, never two asks piled up behind a slow server —, each answer told (`tell`), a failure as unknown (null). The
+ * function returned stops it (the block unmounted): an answer still to come is not told, nothing more is asked.
+ * `timers`: the real ones, or a test's.
+ */
+export function pollServerState(
+  ask: () => Promise<ServerStatus>, pollMs: () => number, tell: (s: ServerStatus | null) => void,
+  timers: { set(cb: () => void, ms: number): unknown; clear(timer: unknown): void } = {
+    set: (cb, ms) => setTimeout(cb, ms), clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  },
+): () => void {
+  let live = true, timer: unknown = null;
+  const poll = () => {
+    timer = null;
+    void ask().catch(() => null).then((s) => {
+      if (!live) return;
+      tell(s);
+      timer = timers.set(poll, pollMs());
+    });
+  };
+  poll();
+  return () => {
+    live = false;
+    if (timer !== null) timers.clear(timer);
+  };
+}
+
 const NONE = '—';
 
 /** A latency: to a tenth under 10 ms (a server of this machine answers in less than one), whole beyond. */
