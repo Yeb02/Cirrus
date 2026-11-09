@@ -55,9 +55,12 @@ export function useLatexStatus(state: State | null, setParams: Dispatch<SetState
 /**
  * The registry (plan 4b, D7, D8), built again from `state` (`rev`: its revision) and the texts of its .tex, read here;
  * null until the state is loaded. At each build, what the synchronisations changed (`synced`) is compiled in the
- * background, latexBackgroundMax requests at most (plan 5b, D1).
+ * background, latexBackgroundMax requests at most (plan 5b, D1). The texts, by hash, are the search's too (plan 6a, D1:
+ * the field « Contenu »): the same map until one is read or let go.
  */
-export function useLatexRegistry(state: State | null, rev: number | undefined, params: RenderParams, synced: SyncedChanges): LatexRegistry | null {
+export function useLatexRegistry(
+  state: State | null, rev: number | undefined, params: RenderParams, synced: SyncedChanges,
+): { registry: LatexRegistry | null; texts: ReadonlyMap<string, string> } {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   /** The texts of the .tex, by hash, that the registry reads (plan 4b, D8), and the ceiling (textViewMaxMb) they were read under. */
@@ -115,5 +118,5 @@ export function useLatexRegistry(state: State | null, rev: number | undefined, p
     return () => { clearTimeout(timer); done(); };
   }, [state, rev, texts, params.latexTypingPauseMs]);
 
-  return registry;
+  return { registry, texts: texts.byHash };
 }

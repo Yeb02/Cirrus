@@ -8,6 +8,7 @@ import {
 } from '@cirrus/view';
 import type { Gl } from '../gl/context.ts';
 import { Texture2D } from '../gl/texture.ts';
+import { foundItems } from './found.ts';
 import { ItemTexture } from './itemTexture.ts';
 import { type AttributeSpec, InstanceMesh, Mesh } from './meshes.ts';
 import {
@@ -38,7 +39,7 @@ const QUAD = [-1, -1, 1, -1, 1, 1, -1, 1];
 const QUAD_INDEX = new Uint32Array([0, 1, 2, 0, 2, 3]);
 
 interface Meshes {
-  envelope: Mesh; previewEnvelope: Mesh; arrow: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; stars: Mesh[]; sky: Mesh;
+  envelope: Mesh; previewEnvelope: Mesh; arrow: Mesh; marker: Mesh; outline: Mesh; drop: Mesh; intruder: Mesh; found: Mesh; stars: Mesh[]; sky: Mesh;
   box: InstanceMesh; simple: InstanceMesh; curve: InstanceMesh; text: InstanceMesh;
 }
 
@@ -129,6 +130,8 @@ export class PlanRenderer {
   private starKs: number[] = [];
   private hot = -1;
   private selection: Selection = emptySelection();
+  /** What the search found, or the object a jump framed (plan 6a, D1, D2): by identifier, ringed where the scene shows them. */
+  private found: readonly Id[] = [];
   private dropTarget: number | null = null;
   private intruderItems: number[] = [];
   private allCores = false;
@@ -162,6 +165,7 @@ export class PlanRenderer {
       envelope: new Mesh(gl, pr.envelope, ENVELOPE, 1024), previewEnvelope: new Mesh(gl, pr.envelope, ENVELOPE, 256), arrow: new Mesh(gl, pr.arrow, ARROW, 2048),
       marker: new Mesh(gl, pr.marker, MARKER, 256),
       outline: new Mesh(gl, pr.outline, OUTLINE, 64), drop: new Mesh(gl, pr.outline, OUTLINE, 64), intruder: new Mesh(gl, pr.outline, OUTLINE, 64),
+      found: new Mesh(gl, pr.outline, OUTLINE, 64),
       stars: [0, 1, 2].map(() => new Mesh(gl, pr.star, STAR, 4096)), sky: new Mesh(gl, pr.sky, SKY, 4),
       box: new InstanceMesh(gl, [pr.box], BOX, 1024, true), simple: new InstanceMesh(gl, [pr.simpleRibbon, pr.simpleGlyph], SIMPLE, 4096, true),
       curve: new InstanceMesh(gl, [pr.curve], CURVE, 1024), text: new InstanceMesh(gl, [pr.text], TEXT, 4096),
@@ -173,7 +177,7 @@ export class PlanRenderer {
 
   private destroyGpu(): void {
     const m = this.meshes;
-    for (const mesh of [m.envelope, m.previewEnvelope, m.arrow, m.marker, m.outline, m.drop, m.intruder, m.sky, m.box, m.simple, m.curve, m.text, ...m.stars]) {
+    for (const mesh of [m.envelope, m.previewEnvelope, m.arrow, m.marker, m.outline, m.drop, m.intruder, m.found, m.sky, m.box, m.simple, m.curve, m.text, ...m.stars]) {
       mesh.dispose();
     }
     for (const pr of Object.values(this.programs)) pr.dispose();
@@ -414,6 +418,17 @@ export class PlanRenderer {
     return front.visible.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(front.scene.ids[c])));
   }
 
+  /**
+   * The ring of what was found (plan 6a, D1, D2), in searchFoundColor: the search's results while its box is open, the
+   * object a jump framed a moment after. Never the selection, which Delete and Ctrl+C would act on. By identifier — a
+   * node, a phantom, a connection (its ends: foundItems) — and found again in each scene drawn.
+   */
+  setFound(items: Id[]): void {
+    if (items.length === this.found.length && items.every((id, i) => id === this.found[i])) return;
+    this.found = items;
+    this.meshes.found.update(...this.outlineArrays(this.scene ? foundItems(this.scene, items) : []));
+  }
+
   /** The group that would receive a drop, lit while dragging (spec 10). */
   setDropTarget(item: number | null): void {
     if (item === this.dropTarget) return;
@@ -442,6 +457,7 @@ export class PlanRenderer {
     this.meshes.outline.update(...this.outlineArrays(items));
     this.meshes.drop.update(...this.outlineArrays(this.dropTarget === null ? [] : [this.dropTarget]));
     this.meshes.intruder.update(...this.outlineArrays(this.intruderItems));
+    this.meshes.found.update(...this.outlineArrays(scene && this.found.length > 0 ? foundItems(scene, this.found) : []));
   }
 
   /** Rings around items (boxes, discs or padded envelopes), relative to the current origin. */
@@ -634,7 +650,7 @@ export class PlanRenderer {
     }
     if (!off('box')) m.box.draw();
     if (!off('outline')) {
-      for (const [ring, c] of [[m.intruder, p.intruderColor], [m.drop, p.dropColor], [m.outline, p.selectionColor]] as const) {
+      for (const [ring, c] of [[m.intruder, p.intruderColor], [m.found, p.searchFoundColor], [m.drop, p.dropColor], [m.outline, p.selectionColor]] as const) {
         if (ring.empty) continue;
         setOutlineColor(pr, c);
         ring.draw();

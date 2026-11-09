@@ -622,6 +622,37 @@ const SCENARIOS = [
     },
   },
   {
+    // Plan 6a, D1 and D2: Ctrl+K opens the search, its field focused; Échap closes it, the focus back to the graph. Opened
+    // again, a word typed lists « Motivation », in the article's plan only; Entrée jumps there: its tab opens, the node
+    // framed at the view's centre (a click there opens its pop-up), the box closed and the graph focused.
+    name: 'recherche : Ctrl+K, une frappe, Entrée saute vers un nœud d’un autre plan',
+    async run(page) {
+      const FIELD = `document.activeElement?.matches('.search-box .search-field') === true`;
+      // The graph takes its keys once its engine is up: Ctrl+K is asked again until the box opens.
+      for (let i = 0; i < 10 && !(await page.until(FIELD, 1000)); i++) await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.evaluate(FIELD))) throw new Error('Ctrl+K n’ouvre pas la recherche, ou son champ n’a pas le focus');
+      await page.press('Escape', 'Escape', 27);
+      if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('Échap ne ferme pas la recherche');
+      if (!(await page.evaluate(`document.activeElement?.classList.contains('graph') === true`))) throw new Error('le graphe n’a pas le focus après Échap');
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(FIELD))) throw new Error('Ctrl+K ne rouvre pas la recherche');
+      await page.type('motiv');
+      const ROWS = `[...document.querySelectorAll('.search-box .search-results li')].map((li) => [li.querySelector('.title').textContent, li.querySelector('.where').textContent])`;
+      if (!(await page.until(`JSON.stringify(${ROWS}) === ${JSON.stringify(JSON.stringify([['Motivation', 'Article MDL']]))}`, 10000))) {
+        throw new Error(`la recherche montre ${JSON.stringify(await page.evaluate(ROWS))}`);
+      }
+      await page.press('Enter', 'Enter', 13);
+      if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('Entrée ne ferme pas la recherche');
+      if (!(await page.until(`document.querySelector('.tabs .tab.on')?.textContent.includes('Article MDL') === true`))) {
+        throw new Error(`l’onglet actif est « ${await page.evaluate(`document.querySelector('.tabs .tab.on')?.textContent ?? ''`)} »`);
+      }
+      if (!(await page.evaluate(`document.activeElement?.classList.contains('graph') === true`))) throw new Error('le graphe n’a pas le focus après le saut');
+      // Framed: the node fills the view's centre.
+      const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      await openPopup(page, centre, 'Motivation');
+    },
+  },
+  {
     // Plan 4c, D3: a passage of the preview selected by the mouse, « Annoter »: a node in the base, its highlight drawn,
     // in the margin; Ctrl+Z removes it, from the base, the page and the margin (Review Focus 4).
     name: 'surligner dans l’aperçu, puis Ctrl+Z',

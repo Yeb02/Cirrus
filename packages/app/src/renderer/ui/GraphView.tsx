@@ -6,7 +6,7 @@ import {
   dropEffects, dropTarget, type MenuItem, menuFor, otherPlans,
   isPinch, newlyPressed, renderPaused, type SceneIndex, type FontData, previewSplit, type PreviewSplit,
 } from '@cirrus/view';
-import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
 import { createGl, type Gl } from '../gl/context.ts';
 import { loadFont } from '../render/font.ts';
@@ -34,11 +34,21 @@ import { usePlacement } from './graph/placement.ts';
 import { usePublicationImport } from './graph/publication.ts';
 import { useQuestions } from './graph/questions.ts';
 import { useRepercussion } from './graph/repercussion.ts';
+import { Revealer, type RevealTarget } from './graph/reveal.ts';
 import { useScaleWheel } from './graph/scaleWheel.ts';
 import { useScenes } from './graph/scenes.ts';
 
-/** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
-export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
+/**
+ * What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures); a jump
+ * to an object (plan 6a, D2: Revealer), false at once for one gone; the focus back (the search closed).
+ */
+export interface GraphHandle {
+  dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void>;
+  reveal(target: RevealTarget): boolean;
+  focus(): void;
+}
+/** Nothing found: the ring of the search drawn around nothing. */
+const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
 
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
@@ -82,6 +92,11 @@ export function GraphView(props: {
    * built); a link to a node clicked in it opens that node's pop-up beside it (`onNodeLink`, App's).
    */
   registry: LatexRegistry | null; onNodeLink(node: Id, near: Rect): void;
+  /**
+   * What the search box found in this plan, ringed in searchFoundColor while it is open (plan 6a, D1); the box itself
+   * (`overlay`, App's), over the graph like the publication dialog.
+   */
+  found?: readonly Id[]; overlay?: ReactNode;
   ref?: Ref<GraphHandle>;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -243,6 +258,28 @@ export function GraphView(props: {
   const handles = useLayoutHandles(graph);
   const { settleWheel, wheelScale } = useScaleWheel(graph);
   const drop = useGraphDrop(graph, props.onDropFiles);
+  /** The view as of the last render, for the revealer made once. */
+  const latest = useRef(graph);
+  latest.current = graph;
+  const planRef = useRef(props.plan);
+  planRef.current = props.plan;
+  /** The object a jump framed, ringed searchFlashMs (plan 6a, D2), in place of what the search box found. */
+  const [flash, setFlash] = useState<readonly Id[] | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  /** The jumps (D2): the plan opened, then its scene framed once shown (the [scene] effect below). */
+  const revealer = useRef<Revealer | null>(null);
+  revealer.current ??= new Revealer({
+    state: () => stateRef.current, scene: () => sceneRef.current, plan: () => planRef.current,
+    camera: () => engine.current?.renderer.camera ?? null, params: () => paramsRef.current,
+    openPlan: (plan) => onOpenPlanRef.current(plan), moveCamera: (c) => latest.current.moveCamera(c),
+    flash: (ids) => {
+      clearTimeout(flashTimer.current);
+      const ms = paramsRef.current.searchFlashMs;
+      setFlash(ms > 0 ? ids : null);
+      if (ms > 0) flashTimer.current = setTimeout(() => setFlash(null), ms);
+    },
+  });
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
@@ -428,15 +465,26 @@ export function GraphView(props: {
     const { width, height } = e.gl;
     const known = cameras.current.get(scene.plan.id);
     moveCamera(known ? { ...known, widthPx: width, heightPx: height } : initialCamera(scene, width, height, props.params, window.cirrus.launch.view));
+    // A jump waiting for this plan frames its object now (plan 6a, D2); only the camera moves.
+    revealer.current!.sceneShown();
     placement.startPending();
   }, [scene]);
+
+  // The ring of what was found (plan 6a, D1, D2): a jump's object while it blinks, else what the search box found here.
+  const ring = flash ?? props.found ?? NOTHING_FOUND, ringKey = ring.join('|');
+  useEffect(() => {
+    const e = engine.current;
+    if (!e || !ready) return;
+    e.renderer.setFound([...ring]);
+    redraw();
+  }, [ringKey, ready]);
 
   // Wheel: a native, non-passive listener (React's is passive and could not keep the page from scrolling).
   useEffect(() => {
     const el = root.current!;
     const onWheel = (ev: WheelEvent) => {
-      // A pop-up or a question scrolls its own content.
-      if (ignored(ev) || (ev.target as Element).closest?.('.popup, .ask')) return;
+      // A pop-up, a question or the search box scrolls its own content.
+      if (ignored(ev) || (ev.target as Element).closest?.('.popup, .ask, .search-box')) return;
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
@@ -449,7 +497,11 @@ export function GraphView(props: {
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  useImperativeHandle(props.ref, () => ({ dropFilesAt: drop.dropFilesAt }));
+  useImperativeHandle(props.ref, () => ({
+    dropFilesAt: drop.dropFilesAt,
+    reveal: (target) => revealer.current!.reveal(target),
+    focus: () => root.current?.focus({ preventScroll: true }),
+  }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
@@ -740,6 +792,7 @@ export function GraphView(props: {
           onClose={publication.closePublication} initialPdf={publication.dialog.pdf}
         />
       )}
+      {props.overlay}
     </div>
   );
 }
