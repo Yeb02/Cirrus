@@ -9,14 +9,14 @@ export const DEFAULT_SERVER_URL = 'http://127.0.0.1:7310';
 const count = (n: number, noun: string) => `${n} ${noun}${n > 1 ? 's' : ''}`;
 
 /**
- * D7's offer (task 5): its button — the brief's words, with the counts —, and what it does while it runs. The others
- * cancel.
+ * D7's offer (task 5): its button — the brief's words, with the counts. The others cancel. What it does while it runs is
+ * the main process's to say (ServerInfo.busy: short review after plan 5a, D4).
  */
-export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label: string; busy: string } {
+export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label: string } {
   switch (o.kind) {
-    case 'seed': return { choice: 'seed', label: `Envoyer la base de ce PC au serveur (${count(o.nodes, 'nœud')}, ${count(o.files, 'fichier')})`, busy: 'Envoi de la base…' };
-    case 'adopt': return { choice: 'adopt', label: `Prendre la base du serveur (${count(o.nodes, 'nœud')})`, busy: 'Téléchargement de la base…' };
-    case 'replace': return { choice: 'adopt', label: `Remplacer la base de ce PC par celle du serveur (${count(o.nodes, 'nœud')})`, busy: 'Téléchargement de la base…' };
+    case 'seed': return { choice: 'seed', label: `Envoyer la base de ce PC au serveur (${count(o.nodes, 'nœud')}, ${count(o.files, 'fichier')})` };
+    case 'adopt': return { choice: 'adopt', label: `Prendre la base du serveur (${count(o.nodes, 'nœud')})` };
+    case 'replace': return { choice: 'adopt', label: `Remplacer la base de ce PC par celle du serveur (${count(o.nodes, 'nœud')})` };
   }
 }
 
@@ -24,9 +24,11 @@ export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label
  * The head of the rubric « Serveur » (plan 5a, D3): not paired, the server's address, the pairing code its `jumeler`
  * shows, this PC's name there, and « Jumeler »; a refusal said under them. The first pairing's question (D7), in its
  * place while the main process holds it (`info.offer`: the panel closed and opened again shows it still): why, then its
- * button and « Annuler ». Paired, the server, the synchronisation's state, and « Dissocier ce PC ». `refresh` reads what the
- * main process holds at each mounting (the panel opened, the rubric unfolded): a first sync under way then shows as
- * such; until it answers, nothing can be clicked (review of task 5, round 2).
+ * button and « Annuler ». Paired, the server, the synchronisation's state, and « Dissocier ce PC ». A first sync under
+ * way, or the restart on a base taken, says what the main process says (`info.busy`, told as it begins: short review
+ * after plan 5a, D4). `refresh` reads what the main process holds at each mounting (the panel opened, the rubric
+ * unfolded): a first sync under way then shows as such; until it answers, nothing can be clicked (review of task 5,
+ * round 2); while mounted, `info` follows each change the main process tells (B2).
  */
 export function ServerBlock(props: {
   info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onFirst(choice: FirstSyncChoice): Promise<PairResult>;
@@ -37,7 +39,6 @@ export function ServerBlock(props: {
   const [name, setName] = useState(props.info?.name ?? '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [restarting, setRestarting] = useState(false);
   // What the block was given may be stale (a first sync started since): read again at mounting, nothing clickable before.
   const [fresh, setFresh] = useState(!props.refresh);
   useEffect(() => {
@@ -58,24 +59,15 @@ export function ServerBlock(props: {
     setError(null);
     void job().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(null));
   };
-  /** A pairing's outcome: paired (the block turns with `info`), a restart under way, or why not; D7's question comes with `info`. */
+  /** A pairing's outcome: paired, or a restart under way (the block turns with `info`); or why not. D7's question comes with `info`. */
   const outcome = (r: PairResult) => {
-    if (r.ok) {
-      setCode('');
-      if (r.restarting) setRestarting(true);
-    } else if (!r.offer) setError(r.message);
+    if (r.ok) setCode('');
+    else if (!r.offer) setError(r.message);
   };
   if (!props.info) return null;
   const offer = props.info.offer;
   // A base taken from the server that waits beside this one (its swap failed at the start): said above the rest.
   const waiting = !paired && props.info.waiting ? <p className="server-error">{props.info.waiting}</p> : null;
-  if (restarting) {
-    return (
-      <div className="param-group server-block">
-        <p className="server-state">Base du serveur prise : Cirrus redémarre sur elle.</p>
-      </div>
-    );
-  }
   if (paired) {
     const state = chipOf(props.status, false)?.text ?? 'Synchronisation arrêtée';
     // The address is not drawn in a capture (`volatile`): its port, a free one, changes from one run to the next (task 7).
@@ -89,7 +81,8 @@ export function ServerBlock(props: {
       </div>
     );
   }
-  // A first sync under way (the panel opened again meanwhile): what it does, nothing to click (review, Minor 3).
+  // A first sync under way, or the restart on a base taken: what the main process says it does, nothing to click
+  // (review, Minor 3; short review after plan 5a, D4).
   if (props.info.busy) {
     return (
       <div className="param-group server-block">
@@ -107,7 +100,7 @@ export function ServerBlock(props: {
         <p className="server-state">{offer.message}</p>
         {kept && <p className="server-state">Elle sera gardée sous « {kept} », à côté de la base.</p>}
         <div className="server-actions">
-          <button disabled={blocked} onClick={() => run(action.busy, async () => outcome(await props.onFirst(action.choice)))}>{busy || action.label}</button>
+          <button disabled={blocked} onClick={() => run('', async () => outcome(await props.onFirst(action.choice)))}>{action.label}</button>
           <button disabled={blocked} onClick={() => run('', async () => outcome(await props.onFirst('cancel')))}>Annuler</button>
         </div>
       </div>

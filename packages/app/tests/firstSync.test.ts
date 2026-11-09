@@ -117,6 +117,9 @@ test('envoyer sa base puis la prendre sur un autre PC : les états égaux, l’h
   expect(rb).toEqual({ ok: false, message: expect.any(String), offer: { kind: 'adopt', nodes: 2, archive: 'pc-b-avant-jumelage-2026-11-08' } });
   expect(await b.sync.first('adopt')).toEqual({ ok: true, restarting: true });
   expect(b.relaunched).toBe(1);
+  // The block says the restart, as the main process words it (short review after plan 5a, D4), not a base waiting.
+  const restarting = { paired: false, url: l.url, name: 'Fixe', busy: 'Base du serveur prise : Cirrus redémarre sur elle.' };
+  expect([b.host.info(), b.servers.at(-1)]).toEqual([restarting, restarting]);
   expect(existsSync(join(stagedDir(b.dir), READY_FILE))).toBe(true);
   expect([b.host.paired(), existsSync(join(b.dir, SERVER_FILE))]).toEqual([false, false]);
   const b2 = await restart(l, b);

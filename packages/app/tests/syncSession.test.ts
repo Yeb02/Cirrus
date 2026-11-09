@@ -472,6 +472,15 @@ test('le premier jumelage (D7, tâche 5) : les boutons de l’offre et leurs nom
   }));
   for (const text of ['Envoi de la base au serveur…', 'Une base prise du serveur attend.']) expect(sending).toContain(text);
   for (const text of ['Jumeler', '<button', 'Code de jumelage']) expect(sending).not.toContain(text);
+  // What a first sync does, and the restart on a base taken, are the main process's words only (short review after plan
+  // 5a, D4): the offer's button has none of its own.
+  expect(Object.keys(offerAction({ kind: 'seed', nodes: 2, files: 1 }))).toEqual(['choice', 'label']);
+  const restarting = renderToStaticMarkup(createElement(ServerBlock, {
+    info: { paired: false, url: 'http://127.0.0.1:7310', name: 'Portable', busy: 'Base du serveur prise : Cirrus redémarre sur elle.' },
+    status: { state: 'off' }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
+  }));
+  expect(restarting).toContain('Base du serveur prise : Cirrus redémarre sur elle.');
+  expect(restarting).not.toContain('<button');
   const offer = { kind: 'seed', nodes: 2, files: 1 } as const;
   const asked = syncing({ pair: { ok: false, message: 'Le serveur ne tient encore aucune base.', offer } });
   await asked.sync.open({ paired: false, pc: 'pc-a', pending: [], timeoutMs: 4000 });
