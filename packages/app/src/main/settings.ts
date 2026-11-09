@@ -1,6 +1,6 @@
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSettingTime, newer, type SettingChange, type SettingRow, type Stamp } from '@cirrus/core';
+import { isObject, isSettingTime, newer, type SettingChange, type SettingRow, type Stamp } from '@cirrus/core';
 import { DEFAULT_PARAMS, type RenderParams, sameSetting, settingValue } from '@cirrus/view';
 import { writeJsonAtomic } from './jsonFile.ts';
 
@@ -37,7 +37,6 @@ export function readSettings(dir: string): Record<string, unknown> {
 /** settings.json or settings-pending.json, written whole and synced to the disk (writeJsonAtomic). */
 const writeJson = (dir: string, name: string, value: unknown): void => writeJsonAtomic(join(dir, name), value, { sync: true, space: 2 });
 
-const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 const has = (o: object, key: string): boolean => Object.hasOwn(o, key);
 /** A key of RenderParams (its own: never `constructor` or `__proto__`). */
 const isSetting = (key: string): boolean => has(DEFAULT_PARAMS, key);

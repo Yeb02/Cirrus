@@ -1,4 +1,4 @@
-import { isSettingTime } from '@cirrus/core';
+import { isObject, isSettingTime } from '@cirrus/core';
 import { MAX_SETTING_AHEAD_MS, MAX_SETTING_KEY_CHARS, MAX_SETTING_VALUE_BYTES, MAX_SETTINGS_PER_REQUEST } from './bounds.ts';
 
 // The shared settings' requests (plan 5a, task 6, D9, R24): POST /settings { changes: { [key]: { value, at } } }, its
@@ -13,7 +13,6 @@ export class SettingsError extends Error {
 export interface StoredChange { json: string | null; at: number }
 
 const KEY = new RegExp(`^[A-Za-z][A-Za-z0-9_]{0,${MAX_SETTING_KEY_CHARS - 1}}$`);
-const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 /**
  * The changes of a POST /settings body, by key, or SettingsError for the first thing wrong: a body other than

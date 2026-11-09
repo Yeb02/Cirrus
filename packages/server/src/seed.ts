@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { applyOps, checkState, decodeState, type State, SyncFormatError } from '@cirrus/core';
+import { applyOps, checkState, decodeState, isObject, type State, SyncFormatError } from '@cirrus/core';
 import { type ChangeRow, parseChangeRow } from '@cirrus/store';
 import { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from './bounds.ts';
 
@@ -37,8 +37,6 @@ interface Attempt {
   /** The staging database of the lines received, once the snapshot is there. */
   journal: DatabaseSync | null;
 }
-
-const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 /**
  * A line of a seeding PC's journal, checked whole (parseChangeRow: its operation as parseOp checks a write's), as the

@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Action, type Id, MAX_ID_CHARS, type Op, type Reconciliation, type RemoteUnit, SyncDivergedError, type Unit } from '@cirrus/core';
+import { type Action, type Id, isObject, MAX_ID_CHARS, type Op, type Reconciliation, type RemoteUnit, SyncDivergedError, type Unit } from '@cirrus/core';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
@@ -60,7 +60,6 @@ export function insecureServer(url: string): boolean {
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 /** What watchWindow listens to: a window and its page, as Electron's BrowserWindow and WebContents emit them. */
 interface Emitter { on(event: string, listener: (...args: unknown[]) => void): unknown }

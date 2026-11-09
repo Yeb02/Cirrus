@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { encodeState, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
+import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type UnitResult } from '@cirrus/core';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
   MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST,
@@ -88,8 +88,6 @@ async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
     throw new HttpError(400, 'JSON invalide.');
   }
 }
-
-const isObject = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
 /** A non-negative integer of a query or a header; `fallback` when absent; 400 otherwise. */
 function count(value: string | null | undefined, fallback: number, what: string): number {
