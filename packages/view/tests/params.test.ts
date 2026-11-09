@@ -243,6 +243,18 @@ test('pause de frappe avant de compiler : 300 ms, de 50 à 3000, réglage avanc�
   expect(withOverrides({ latexTypingPauseMs: 9000 }).latexTypingPauseMs).toBe(3000);
 });
 
+test('durée maximale du téléchargement d’un PDF importé : 5 min, de 10 s à 1 h, réglage avancé du groupe « Publications », après le délai des serveurs (plan 5b, relecture de la tâche 2)', () => {
+  expect(DEFAULT_PARAMS.publicationPdfMaxMs).toBe(300_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'publicationPdfMaxMs')).toEqual({
+    key: 'publicationPdfMaxMs', label: 'Durée maximale du téléchargement d’un PDF importé (ms)', section: 'avancé', group: 'Publications', kind: 'number',
+    min: 10_000, max: 3_600_000, step: 1000,
+  });
+  const keys = PARAM_SPECS.map((s) => s.key);
+  expect(keys.indexOf('publicationPdfMaxMs')).toBe(keys.indexOf('publicationTimeoutMs') + 1);
+  expect(withOverrides({ publicationPdfMaxMs: 1 }).publicationPdfMaxMs).toBe(10_000);
+  expect(withOverrides({ publicationPdfMaxMs: 1e9 }).publicationPdfMaxMs).toBe(3_600_000);
+});
+
 test('recompilations en arrière-plan après une synchronisation : 300 en attente au plus, de 0 à 5000, réglage avancé du groupe « Compilation » (plan 5b, D1)', () => {
   expect(DEFAULT_PARAMS.latexBackgroundMax).toBe(300);
   expect(PARAM_SPECS.find((s) => s.key === 'latexBackgroundMax')).toEqual({
