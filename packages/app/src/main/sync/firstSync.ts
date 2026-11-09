@@ -14,7 +14,7 @@ import type { FirstSyncOffer } from './protocol.ts';
 // `<base>-avant-jumelage-AAAA-MM-JJ` (R17), or deleted when vierge. Nothing here depends on Electron: the network is
 // given.
 // Here: what decides it (firstSyncOffer, pristine), and what its parts share; the seed is seed.ts's, the adopt
-// adopt.ts's, the swap at the next start swap.ts's.
+// adopt.ts's, the swap at the next start swap.ts's, and the pairing that asks them pairing.ts's.
 
 /** What /hello says of the server's base: its last number, whether it is empty (D7), its nodes. */
 export interface ServerBase { lastSeq: number; empty: boolean; nodes: number }
@@ -37,7 +37,7 @@ export function archiveName(dir: string, day: Date): string {
  * The server holds no base when it accepted no write and its state is empty: a server holding only another PC's lobby
  * holds one (R7: an empty PC takes it, rather than bring a second lobby). Counts the nodes and the store's files: a
  * pairing's cost, never paid otherwise. A vierge base (pristine) is not asked its offer « adopt »: it takes the
- * server's base at once (SyncHost.pairNow).
+ * server's base at once (Pairing.pairNow).
  */
 export function firstSyncOffer(store: LocalStore, dir: string, server: ServerBase, day: Date): FirstSyncOffer | null {
   const empty = store.isEmpty() && store.lastServerSeq() === 0;

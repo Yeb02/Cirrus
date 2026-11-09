@@ -4,7 +4,8 @@ import { createNode, createPlan, decodeState, editNode, encodeState, type Id, MA
 import { afterEach, expect, test, vi } from 'vitest';
 import { SERVER_FILE } from '../src/main/sync/config.ts';
 import { DOWNLOADS_FILE } from '../src/main/sync/downloads.ts';
-import { insecureServer, watchWindow } from '../src/main/sync/host.ts';
+import { watchWindow } from '../src/main/sync/host.ts';
+import { insecureServer } from '../src/main/sync/pairing.ts';
 import { EventEmitter } from 'node:events';
 import { AppPc } from './support/appPc.ts';
 import { created, Lab, sleep, until } from './support/virtualPc.ts';
