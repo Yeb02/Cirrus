@@ -206,14 +206,15 @@ const TWO_PCS = {
     await ctx.app?.close();
     await ctx.virtual?.close();
     await ctx.server.close();
-    // B's base taken from the server leaves its old one beside it (« …-avant-jumelage-… »), and a staged one if it failed.
+    // B's base taken from the server may leave a staged one beside it if it failed, or its old one
+    // (« …-avant-jumelage-… ») if that was not vierge.
     const b = basename(ctx.b.data);
     for (const name of readdirSync(tmpdir())) if (name.startsWith(`${b}-`)) ctx.dirs.push(join(tmpdir(), name));
     for (const d of ctx.dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
   },
   steps: [
     {
-      name: '1. A crée un nœud avec un .txt et quitte ; B, neuve, prend la base du serveur, redémarre sur elle, puis montre le nœud et son fichier (plan 5a)',
+      name: '1. A crée un nœud avec un .txt et quitte ; B, neuve, prend la base du serveur dès le code accepté, sans offre, redémarre sur elle, sa base vierge effacée, puis montre le nœud et son fichier (plan 5a)',
       async run(ctx) {
         const { server, a, b } = ctx;
         // A: a new base paired with the empty server (both empty: the sync starts, A's lobby its first write).
@@ -234,32 +235,28 @@ const TWO_PCS = {
         const codeA = await ctx.app.exited;
         if (codeA !== 0) throw new Error(`A se ferme avec le code ${codeA}`);
         ctx.app = null;
-        // B: a new base; the server holds A's, so the pairing offers to take it (D7, R7).
+        // B: a new base, vierge; the server holds A's, so the pairing takes it at once, nothing asked (D7, R7; after
+        // the short review of plan 5a): no offer to click.
         const env = { ...SYNC_VIEW, CIRRUS_NO_RELAUNCH: '1' };
         ctx.app = await launch(b.data, b.profile, env);
         page = ctx.app.page;
         await pairThrough(page, server.url, server.code('B'));
-        const label = 'Prendre la base du serveur (1 nœud)';
-        if (!(await page.until(`[...document.querySelectorAll('.server-offer button')].some((x) => x.textContent === ${JSON.stringify(label)})`, 10_000))) {
-          throw new Error(`pas d’offre « ${label} » : ${await blockText(page)}`);
-        }
-        const take = await page.centre('.server-offer button', '^Prendre la base du serveur');
-        await page.click(take.x, take.y);
-        // Taken, staged beside B's base; B quits instead of starting again (R27: the relaunch stays this script's).
+        // Taken, staged beside B's base; B quits instead of starting again (R27: the relaunch stays this script's). An
+        // offer would wait for a click that never comes: B would not quit.
         const code = await Promise.race([ctx.app.exited, sleep(30_000).then(() => null)]);
-        if (code === null) throw new Error(`B ne quitte pas après la prise : ${await blockText(page)}`);
+        if (code === null) throw new Error(`B ne quitte pas après le jumelage : ${await blockText(page)}`);
         if (code !== 0) throw new Error(`B quitte avec le code ${code} après la prise`);
         await ctx.app.close();
         ctx.app = null;
         const staged = `${b.data}-nouvelle`;
         if (!existsSync(join(staged, 'complete.json'))) throw new Error('pas de base prise complète à côté de celle de B');
         // B started again as the relaunch would (its profile, which holds the key of its token): the base taken swapped
-        // in before it opens, the old one kept beside it.
+        // in before it opens, the old one, vierge, deleted — nothing kept beside it.
         ctx.app = await launch(b.data, b.profile, env);
         page = ctx.app.page;
-        const kept = readdirSync(tmpdir()).filter((n) => n.startsWith(`${basename(b.data)}-avant-jumelage-`));
-        if (existsSync(staged) || kept.length !== 1 || !existsSync(join(tmpdir(), kept[0], 'cirrus.db'))) {
-          throw new Error(`l’échange n’a pas eu lieu : base prise ${existsSync(staged) ? 'encore à côté' : 'en place'}, ancienne gardée sous ${JSON.stringify(kept)}`);
+        const beside = readdirSync(tmpdir()).filter((n) => n.startsWith(`${basename(b.data)}-`));
+        if (existsSync(staged) || beside.length !== 0 || !existsSync(join(b.data, 'cirrus.db'))) {
+          throw new Error(`l’échange n’a pas eu lieu comme prévu : base prise ${existsSync(staged) ? 'encore à côté' : 'en place'}, à côté de B : ${JSON.stringify(beside)}`);
         }
         if (!(await chipSays(page, 'À jour'))) throw new Error(`B ne se synchronise pas après la prise : la pastille dit « ${await chipText(page)} »`);
         // The node and its file in B's base and store (taken with the base, D7), then shown: its pop-up, by a click where
