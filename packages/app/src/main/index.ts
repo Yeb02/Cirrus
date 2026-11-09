@@ -1,15 +1,14 @@
 import { existsSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import type { LocalStore } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, screen } from 'electron';
+import { app, BrowserWindow, dialog, net, protocol, safeStorage } from 'electron';
 import { dataDir, openBase, pcId } from './base.ts';
 import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
 import { wireBase } from './ipc/base.ts';
-import { captureWhenReady, markNow, wireBench } from './ipc/bench.ts';
+import { markNow, wireBench } from './ipc/bench.ts';
 import { wireFiles } from './ipc/files.ts';
 import { tellLatexStatus, wireLatex } from './ipc/latex.ts';
 import { wirePublications } from './ipc/publications.ts';
@@ -18,13 +17,13 @@ import { LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
 import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
-import { navigationAllowed } from './navigation.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
 import { stagedDir } from './sync/firstSync.ts';
-import { SyncHost, watchWindow } from './sync/host.ts';
+import { SyncHost } from './sync/host.ts';
 import { quitsInsteadOfRelaunch, startBase } from './sync/swap.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
+import { createWindow } from './window.ts';
 
 /**
  * The main process: the only one that touches the disk (spec 4). It opens the base and the settings, and answers the
@@ -35,6 +34,8 @@ import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
  * With a server paired, it syncs the base with it (sync/, plan 5a): the interface reconciles, this process writes.
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
  * for the sync client to stop.
+ * This file starts and ends the process; the interface's calls are answered by domain under ipc/ (the sync's in
+ * sync/wire.ts), and the window is window.ts's.
  * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
@@ -124,73 +125,6 @@ async function texBinaries(): Promise<TexBinaries | null> {
 /** Quits once every pdfLaTeX has exited (no orphan, Global Constraints): the exits that skip will-quit. */
 function exitAfterLatex(code: number): void {
   void (latex?.dispose() ?? Promise.resolve()).finally(() => app.exit(code));
-}
-
-function createWindow(): void {
-  const [width, height] = (process.env.CIRRUS_SIZE ?? '1600,1000').split(',').map(Number);
-  // The bench measures on the laptop's own panel, full screen (spec 21), like the plan 1 bench.
-  const display = bench ? (screen.getAllDisplays().find((d) => d.internal) ?? screen.getPrimaryDisplay()) : null;
-  const beyond = Math.max(...screen.getAllDisplays().map((d) => d.bounds.x + d.bounds.width)) + 100;
-  const win = new BrowserWindow({
-    ...(display ? { ...display.bounds, fullscreen: true } : { width, height }),
-    ...(background && !display ? { x: beyond, y: 0, skipTaskbar: true } : {}),
-    show: false, title: 'Cirrus', backgroundColor: '#0a1120', autoHideMenuBar: true,
-    webPreferences: {
-      preload: join(import.meta.dirname, '..', 'preload', 'index.cjs'),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-      // Bench and captures never depend on the window being in front (an occluded window is otherwise throttled).
-      backgroundThrottling: !bench && !capture,
-      additionalArguments: [`--cirrus-launch=${JSON.stringify(launch)}`],
-    },
-  });
-  win.once('ready-to-show', () => (background ? win.showInactive() : win.show()));
-  // Closing: the interface sends its snapshot (if anything changed) and says so; past snapshotQuitMs, the window closes
-  // anyway (the journal has every action). Bench and captures quit by app.exit, without this.
-  let closing = false;
-  win.on('close', (e) => {
-    if (closing || !store) return;
-    e.preventDefault();
-    closing = true;
-    const done = () => {
-      clearTimeout(timer);
-      ipcMain.removeListener('cirrus:quit:ready', done);
-      if (!win.isDestroyed()) win.destroy();
-    };
-    const timer = setTimeout(done, withOverrides(settings()).snapshotQuitMs);
-    ipcMain.on('cirrus:quit:ready', done);
-    win.webContents.send('cirrus:quit');
-  });
-  // The window shows the app's page and nothing else (Review Focus 2): a file let go outside a drop zone, a link, a
-  // script's location do not take it elsewhere, and no other window opens.
-  const page = join(import.meta.dirname, '..', 'renderer', 'index.html');
-  const appUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(page).href;
-  win.webContents.on('will-navigate', (e) => {
-    if (navigationAllowed(e.url, appUrl)) return;
-    e.preventDefault();
-    console.warn(`Navigation refusée : ${e.url}`);
-  });
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  // A page gone (closed, reloaded, crashed): the reconciliations it held are abandoned, the sync client tries later.
-  if (sync) watchWindow(win, sync);
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void win.loadFile(page);
-  // The user's LaTeX packages (latexPackages, D1), installed if missing once the window is loaded (task 7), in the
-  // background. Measuring runs leave the bench's TinyTeX as it is.
-  if (!bench && !capture) win.webContents.on('did-finish-load', () => { void latexSetup?.ensureAtStart(); });
-
-  if (capture || bench || process.env.CIRRUS_LOG === '1') {
-    win.webContents.on('console-message', (e) => console.log(`[interface] ${e.level}: ${e.message}`));
-  }
-  if (bench && process.env.CIRRUS_BENCH_THROTTLE) {
-    win.webContents.once('did-finish-load', () => {
-      const dbg = win.webContents.debugger;
-      dbg.attach('1.3');
-      void dbg.sendCommand('Emulation.setCPUThrottlingRate', { rate: Number(process.env.CIRRUS_BENCH_THROTTLE) });
-    });
-  }
-  if (capture) captureWhenReady(win, capture, exitAfterLatex);
 }
 
 /** The settings: the defaults, or on the bench CIRRUS_BENCH_SETTINGS (a JSON of overrides) to compare one setting. */
@@ -348,7 +282,10 @@ void app.whenReady().then(() => {
   wireSync(sync);
   // A blob absent from the store is asked of the server, with one paired (D6); a thumbnail's never.
   protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request, sync?.blobFetcher() ?? null));
-  createWindow();
+  createWindow({
+    launch, bench, capture, background, baseOpen: () => store !== null, snapshotQuitMs: () => withOverrides(settings()).snapshotQuitMs,
+    sync, latexSetup: () => latexSetup, exit: exitAfterLatex,
+  });
   // The copies of earlier sessions, while the window loads; measuring runs leave the user's alone.
   if (!bench && !capture) cleanCopies(copies);
 });
