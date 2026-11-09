@@ -516,6 +516,70 @@ const TWO_PCS = {
         if (await page.evaluate(`!!document.querySelector('${copyRow}')`)) throw new Error('le pop-up montre encore la copie');
       },
     },
+    {
+      // Task 8a (reviews of tasks 5 and 6): the comparison's original, and its copy, changed on another PC while it is open.
+      name: '8. une comparaison ouverte dans B pendant que le PC virtuel change l’original : rien de repris, le côté gauche rechargé et dit ; la copie changée, le côté droit aussi ; un bloc repris puis l’original changé de nouveau, le bandeau ; « Enregistrer » garde cette version sous son nom de conflit, dit, la copie restant (plan 5b, D6, D7)',
+      async run(ctx) {
+        const page = ctx.app.page, pc = ctx.virtual.pc, base = reader(ctx.b.data);
+        /** A version of the node's file `name` written by the virtual PC: replaced in its place, or added. */
+        const write = (name, text) => {
+          const ref = storeBytes(pc.dir, name, Buffer.from(text, 'utf8'));
+          pc.act((s) => {
+            const files = s.nodes.get(ctx.node).files;
+            return editNode(s, ctx.node, { files: files.some((f) => f.name === name) ? files.map((f) => (f.name === name ? ref : f)) : [...files, ref] });
+          });
+          return ref;
+        };
+        const copyName = 'note (conflit du 2026-01-01 09h00).tex', copyText = (n) => `\\section{Copie du PC virtuel, version ${n}}\n`;
+        const side = (s) => `[...document.querySelectorAll('.compare-view .cm-merge-${s} .cm-line')].map((l) => l.textContent).join('\\n')`;
+        const banner = `document.querySelector('.compare-view .viewer-banner')?.textContent ?? ''`;
+        // A conflict copy the virtual PC's own save kept (D6 there), compared in B.
+        write(copyName, copyText(1));
+        const copyRow = `.node-popup .file[data-name="${copyName}"]`;
+        if (!(await page.until(`!!document.querySelector('${copyRow} .compare')`, 10_000))) throw new Error('le pop-up de B ne propose pas « Comparer » sur la copie du PC virtuel');
+        await page.evaluate(`document.querySelector('${copyRow}').scrollIntoView({ block: 'center' })`);
+        const open = await page.centre(`${copyRow} .compare`, 'Comparer');
+        await page.click(open.x, open.y);
+        if (!(await page.until(`(${side('a')}).includes('version 2} % repris') && (${side('b')}).includes('Copie du PC virtuel, version 1')`, 15_000))) {
+          throw new Error(`la comparaison ne montre pas les deux textes : « ${await page.evaluate(`document.querySelector('.compare-view')?.textContent ?? '(pas de plein écran)'`)} »`);
+        }
+        // Nothing taken: the original's new version replaces the left side, and a notification says so.
+        write(TEX_NAME, texVersion(3));
+        if (!(await page.until(`(${side('a')}).includes('version 3')`, 15_000))) throw new Error(`le côté gauche ne montre pas la version 3 : « ${await page.evaluate(side('a'))} »`);
+        if (!(await toastSays(page, `« ${TEX_NAME} » a été modifié sur un autre PC : sa nouvelle version est chargée.`))) throw new Error(`pas de notification du rechargement : ${await toastsText(page)}`);
+        if ((await page.evaluate(banner)) !== '') throw new Error(`le bandeau dit « ${await page.evaluate(banner)} »`);
+        // The copy's new version replaces the right side, and is said.
+        write(copyName, copyText(2));
+        if (!(await page.until(`(${side('b')}).includes('Copie du PC virtuel, version 2')`, 15_000))) throw new Error(`le côté droit ne montre pas la nouvelle copie : « ${await page.evaluate(side('b'))} »`);
+        if (!(await toastSays(page, `La copie « ${copyName} » a changé sur un autre PC : sa nouvelle version est montrée.`))) throw new Error(`pas de notification de la copie : ${await toastsText(page)}`);
+        // A block taken by its arrow (the notifications over the middle of the window waited out), then the original
+        // changed there again: the text taken stays, and the banner says that version will be kept.
+        if (!(await page.until(`!document.querySelector('.toast')`, 20_000))) throw new Error(`des notifications couvrent la comparaison : ${await toastsText(page)}`);
+        const arrow = await page.centre('.compare-view .cm-merge-revert button', '');
+        await page.click(arrow.x, arrow.y);
+        if (!(await page.until(`(${side('a')}).includes('Copie du PC virtuel, version 2')`, 5000))) throw new Error(`la flèche ne reprend pas le bloc : « ${await page.evaluate(side('a'))} »`);
+        const v4 = write(TEX_NAME, texVersion(4));
+        const also = `« ${TEX_NAME} » a aussi été modifié sur un autre PC : à l’enregistrement, cette version-là sera gardée sous « note (conflit du … ).tex ».`;
+        if (!(await page.until(`(${banner}).includes(${JSON.stringify(also)})`, 15_000))) throw new Error(`le bandeau dit « ${await page.evaluate(banner)} »`);
+        if (!(await page.evaluate(`(${side('a')}).includes('Copie du PC virtuel, version 2') && !(${side('a')}).includes('version 4')`))) throw new Error(`le texte repris n’est plus là : « ${await page.evaluate(side('a'))} »`);
+        // « Enregistrer »: the original takes the text, version 4 kept under its conflict name, the copy compared left in the
+        // node — one write « Réconcilier « note.tex » »; a notification names the version kept.
+        const before = base(`SELECT max(local_seq) AS n FROM changes`)[0].n;
+        const save = await page.centre('.compare-view > header button', '^Enregistrer$');
+        await page.click(save.x, save.y);
+        if (!(await page.until(`!document.querySelector('.compare-view')`, 10_000))) throw new Error(`la comparaison ne se ferme pas : « ${await page.evaluate(banner)} »`);
+        const taken = createHash('sha256').update(copyText(2)).digest('hex');
+        const kept = (f) => f.name !== copyName && /^note \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex$/.test(f.name) && f.hash === v4.hash;
+        const lines = () => base(`SELECT label, op FROM changes WHERE local_seq > ${before} ORDER BY local_seq`);
+        if (!(await until(() => lines().length === 1 && lines()[0].label === `Réconcilier « ${TEX_NAME} »`, 10_000))) throw new Error(`l’enregistrement n’est pas une seule écriture « Réconcilier » : ${JSON.stringify(lines())}`);
+        const files = JSON.parse(lines()[0].op).after.files;
+        if (files.find((f) => f.name === TEX_NAME)?.hash !== taken || !files.some((f) => f.name === copyName) || !files.some(kept)) throw new Error(`les fichiers du nœud sont ${JSON.stringify(files)}`);
+        if (!(await toastSays(page, /^« note\.tex » a été modifié sur deux PC : l’autre version est gardée sous « note \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex »\.$/))) {
+          throw new Error(`pas de notification de la version gardée : ${await toastsText(page)}`);
+        }
+        if (!(await until(() => pc.s.nodes.get(ctx.node).files.some(kept), 10_000))) throw new Error('le PC virtuel ne reçoit pas la version gardée');
+      },
+    },
   ],
 };
 
