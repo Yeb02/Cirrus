@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Action, applyOps, createAnnotation, createNode, createPlan, deleteEverywhere, editNode, emptyState, type FileRef, type Id } from '@cirrus/core';
 import { filePath, storeBytes } from '@cirrus/store';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import { DOWNLOADS_FILE, DownloadAll, Downloads, hasBlob, median } from '../src/main/sync/downloads.ts';
 import type { DownloadAllProgress, ServerStatus } from '../src/main/sync/protocol.ts';
 import { planText, progressText, referencedPdfs, statusLines } from '../src/renderer/sync/downloadAll.ts';
@@ -233,6 +233,20 @@ test('le serveur perdu en route : arrêt propre, rien de partiel au magasin ; ri
   expect(await b.client.downloadAllStart(refs)).toEqual({ ok: true });
   await ended(b);
   expect(b.client.downloadAllProgress()).toMatchObject({ done: 2, total: 2, end: 'done' });
+});
+
+test('le disque de ce PC qui refuse un fichier (plein, interdit) : arrêt propre, dit, rien de gardé pour le démarrage suivant', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const { b, refs } = await pdfsOnServer(2, { syncDownloads: 1 });
+  // The store's folder of files is a file: nothing can be written in it, as on a full disk (syncFiles.test.ts).
+  writeFileSync(join(b.dir, 'files'), 'pas un dossier');
+  expect(await b.client.downloadAllStart(refs)).toEqual({ ok: true });
+  await ended(b);
+  expect(b.client.downloadAllProgress()).toEqual({ done: 0, failed: 0, total: 2, doneBytes: 0, totalBytes: sum(refs), end: 'disk' });
+  expect(b.net.count('GET', FILES)).toBe(1);
+  expect(existsSync(join(b.dir, DOWNLOADS_FILE))).toBe(false);
+  expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(expect.stringMatching(/non enregistré dans la base/));
+  warn.mockRestore();
 });
 
 test('l’app fermée pendant un téléchargement : interrompu, le fichier à moitié reçu effacé, rien de gardé pour le démarrage suivant', async () => {
