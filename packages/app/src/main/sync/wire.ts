@@ -32,8 +32,8 @@ function send(channel: string, ...args: unknown[]): boolean {
 }
 
 /**
- * The interface's calls (preload: syncStart, syncRetry, syncReconciled, syncPending, syncServer, syncStatus, syncPair,
- * syncFirst, syncUnpair), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
+ * The interface's calls (preload: syncStart, syncRetry, syncReconciled, syncPending, syncServer, syncPair, syncFirst,
+ * syncUnpair), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
  * connection. A window whose page goes away (closed, reloaded, crashed) has its reconciliations rejected (detach).
  */
 export function wireSync(host: SyncHost): void {
@@ -42,7 +42,6 @@ export function wireSync(host: SyncHost): void {
   ipcMain.handle('cirrus:sync:reconciled', (_e, id: unknown, outcome: unknown) => host.reconciled(Number(id), outcome as ReconcileOutcome));
   ipcMain.handle('cirrus:sync:pending', () => host.pending());
   ipcMain.handle('cirrus:sync:server', () => host.info());
-  ipcMain.handle('cirrus:sync:status:get', () => host.status());
   ipcMain.handle('cirrus:sync:pair', (_e, url: unknown, code: unknown, name: unknown) => host.pair(url, code, name));
   ipcMain.handle('cirrus:sync:first', (_e, choice: unknown) => host.first(choice));
   ipcMain.handle('cirrus:sync:unpair', () => host.unpair());

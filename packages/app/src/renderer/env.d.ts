@@ -119,7 +119,6 @@ export interface CirrusBridge {
   syncReconciled(id: number, outcome: ReconcileOutcome): Promise<number | null>;
   syncPending(): Promise<string>;
   syncServer(): Promise<ServerInfo>;
-  syncStatus(): Promise<SyncStatus>;
   syncPair(url: string, code: string, name: string): Promise<PairResult>;
   syncFirst(choice: FirstSyncChoice): Promise<PairResult>;
   syncUnpair(): Promise<void>;

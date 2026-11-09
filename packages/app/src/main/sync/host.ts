@@ -172,11 +172,6 @@ export class SyncHost {
     return this.config !== null;
   }
 
-  /** The client's last status. */
-  status(): SyncStatus {
-    return this.last;
-  }
-
   info(): ServerInfo {
     if (this.config) return { paired: true, url: this.config.url, name: this.config.name };
     const waiting = stagedWaiting(this.deps.dir) ? { waiting: waitingMessage(this.deps.dir) } : {};

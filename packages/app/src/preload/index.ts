@@ -77,7 +77,6 @@ contextBridge.exposeInMainWorld('cirrus', {
   syncReconciled: (id: number, outcome: unknown) => ipcRenderer.invoke('cirrus:sync:reconciled', id, outcome),
   syncPending: () => ipcRenderer.invoke('cirrus:sync:pending'),
   syncServer: () => ipcRenderer.invoke('cirrus:sync:server'),
-  syncStatus: () => ipcRenderer.invoke('cirrus:sync:status:get'),
   syncPair: (url: string, code: string, name: string) => ipcRenderer.invoke('cirrus:sync:pair', url, code, name),
   syncFirst: (choice: string) => ipcRenderer.invoke('cirrus:sync:first', choice),
   syncUnpair: () => ipcRenderer.invoke('cirrus:sync:unpair'),
