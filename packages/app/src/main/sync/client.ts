@@ -1,16 +1,14 @@
-import { openAsBlob } from 'node:fs';
-import {
-  type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_ID_CHARS, MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST, parseRemoteUnit,
-  parseUnit, type RemoteUnit, SyncDivergedError, SyncFormatError, truncateLabel, type Unit, type UnitResult,
-} from '@cirrus/core';
-import { filePath, type LocalStore } from '@cirrus/store';
+import { type Id, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
+import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { SecretStore } from './config.ts';
-import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, reasonOf, Refusal } from './connection.ts';
-import { Downloads, filesToFetch, filesToSend, hasBlob, isHash } from './downloads.ts';
+import { Connection, FORMAT, json, messageOf, ok, Refusal } from './connection.ts';
+import { Downloads, filesToFetch, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
 import type { SyncStatus } from './protocol.ts';
-import { receiveAllSettings, sendSettings, settingsEvent, type SettingsSync } from './settingsSync.ts';
+import { send, type SenderClient } from './sender.ts';
+import { receiveAllSettings, settingsEvent, type SettingsSync } from './settingsSync.ts';
+import { Uploads } from './uploads.ts';
 
 // The main process's sync client (plan 5a, task 3, D2 to D8). It sends this PC's pending writes to the server, in
 // order, files first; it receives the writes the server numbered, every PC's, its own included (their
@@ -19,6 +17,9 @@ import { receiveAllSettings, sendSettings, settingsEvent, type SettingsSync } fr
 // server's read at each connection, those changed elsewhere received by the stream, this PC's sent with the writes. It
 // depends on nothing of Electron: the network (`fetch`), the secrets, the clock and the reconciliation are given, so that
 // the tests run several PCs in one process.
+// Here: its life (start, stop, the retries), each connection's hello and event stream, the reconciliation of what
+// arrived, and its status. A connection and its requests are connection.ts's; the sending, sender.ts's; the shared
+// settings, settingsSync.ts's; the files, uploads.ts's and downloads.ts's.
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<RenderParams, 'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs'>;
@@ -48,44 +49,8 @@ export interface SyncDeps {
   settings?: SettingsSync;
 }
 
-/** A write as the client sends it (POST /units): a label past the bound, written before it was cut at its making, cut (R20). */
-const sentUnit = (u: Unit): Unit => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u);
-
-/** The body of POST /units that sends `units`, as the client sends it: what the server's MAX_BODY_BYTES bounds. */
-const unitsBody = (units: readonly Unit[]): string => JSON.stringify({ units: units.map(sentUnit) });
-
 /** A server whose base is another than the one this PC follows (R31): its data replaced. */
 const BASE_REPLACED = 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.';
-
-/**
- * Why the server would refuse `u` for its form, in French; null when it would not (R32: a base never holds a write the
- * server's gate refuses — SyncHost.commit asks this before anything is written). The server's own checks, in its order:
- * the most operations in one write (MAX_OPS_PER_UNIT: a deletion of that many records is done in parts), the write's
- * shape and each operation's (parseUnit, as POST /units reads it), then the body that sends it alone within
- * MAX_BODY_BYTES. Its label is taken as it will leave, cut (R20). Costs the write's operations, never the base.
- */
-export function writeRefusal(u: Unit): string | null {
-  const count = Array.isArray(u.ops) ? u.ops.length : 0;
-  if (count > MAX_OPS_PER_UNIT) {
-    return `Action refusée : elle compte ${count.toLocaleString('fr-FR')} opérations, et le serveur en prend ${MAX_OPS_PER_UNIT.toLocaleString('fr-FR')} au plus. Fais-la en plusieurs fois.`;
-  }
-  const sent = typeof u.label === 'string' ? sentUnit(u) : u;
-  try {
-    parseUnit(sent);
-  } catch (e) {
-    if (e instanceof SyncFormatError) return `Action refusée : ${e.message}`;
-    throw e;
-  }
-  if (Buffer.byteLength(unitsBody([sent])) > MAX_BODY_BYTES) return `Action refusée : elle fait plus de ${MAX_BODY_BYTES / 2 ** 20} Mio, ce que le serveur ne prend pas.`;
-  return null;
-}
-
-/** An answer to POST /units, as the server gives it. */
-const isResult = (r: unknown): r is UnitResult => {
-  if (typeof r !== 'object' || r === null) return false;
-  const x = r as Record<string, unknown>;
-  return Number.isSafeInteger(x.accepted) || Number.isSafeInteger(x.stale) || typeof x.refused === 'string';
-};
 
 type Mode = 'off' | 'connecting' | 'catching-up' | 'live' | 'offline' | 'refused';
 
@@ -105,12 +70,16 @@ export class SyncClient {
   private mode: Mode = 'off';
   private refusal: Refusal | null = null;
   private lastStatus = '';
-  /** The files the server is known to hold: each sent once. The server never removes one. */
-  private readonly onServer = new Set<string>();
+  /** What its sender works with (sender.ts): the files sent, each once (uploads.ts), its reconciliation and its status. */
+  private readonly sending: SenderClient;
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
     this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads);
+    this.sending = {
+      deps, uploads: new Uploads(deps.storeDir),
+      reconciled: () => this.reconciled(), schedule: (conn) => this.schedule(conn), report: () => this.report(), latestSettingTime: () => this.latestSettingTime(),
+    };
   }
 
   /** Starts syncing; when offline or refused, tries again at once (the chip's click). Without a server paired: off. */
@@ -243,7 +212,7 @@ export class SyncClient {
     }, this.deps.params().syncRetryMaxMs);
     this.downloads.retry();
     this.progress(conn);
-    started(this.send(conn));
+    started(send(conn, this.sending));
     for await (const e of readEvents(res.body, conn.abort.signal)) {
       if (e.event === 'settings') {
         settingsEvent(this.deps.settings, e.data);
@@ -314,112 +283,12 @@ export class SyncClient {
   }
 
   /**
-   * The sender: the shared settings changed here first (task 6), whatever the writes wait for; then the pending writes,
-   * in order, syncBatchUnits at most per request, the files they add first — when no reconciliation is under way, no
-   * refusal waits for one, and the base has received what a stale answer asked for.
-   */
-  private async send(conn: Connection): Promise<void> {
-    const { store } = this.deps;
-    try {
-      while (!conn.closed) {
-        await sendSettings(conn, this.deps.settings, () => this.latestSettingTime());
-        if (conn.closed) return;
-        await this.reconciled();
-        if (conn.closed) return;
-        const at = store.lastServerSeq();
-        if (conn.waitFor > at || conn.refused.length > 0) {
-          await conn.sleep();
-          continue;
-        }
-        for (const [unit, seq] of conn.accepted) if (seq <= at) conn.accepted.delete(unit);
-        const limit = Math.max(1, Math.min(conn.batchLimit, this.deps.params().syncBatchUnits, MAX_UNITS_PER_REQUEST));
-        const batch = store.pendingUnits(conn.accepted.size + limit).filter((u) => !conn.accepted.has(u.unit)).slice(0, limit);
-        if (batch.length === 0) {
-          conn.settled();
-          await conn.sleep();
-          continue;
-        }
-        await this.upload(conn, batch);
-        const results = await this.post(conn, batch);
-        if (!results) continue;
-        const miss = results.find((r) => !('accepted' in r));
-        // Stale, though the base had everything up to that number when the write was read: it can never apply there.
-        if (miss && 'stale' in miss && miss.stale <= at) {
-          throw new Refusal('Une écriture de ce PC ne s’applique pas au serveur, qui n’a pourtant rien de plus que lui : la base de ce PC ne suit plus celle du serveur.', true);
-        }
-        results.forEach((r, i) => {
-          if ('accepted' in r) conn.accepted.set(batch[i].unit, r.accepted);
-          else if ('stale' in r) conn.waitFor = Math.max(conn.waitFor, r.stale);
-          else conn.refused.push({ unit: batch[i].unit, message: r.refused });
-        });
-        if (conn.refused.length > 0) this.schedule(conn);
-        this.report();
-      }
-    } catch (e) {
-      conn.fail(e);
-    }
-  }
-
-  /**
    * The latest time the server takes for a setting changed here (R26): its clock, as measured at the hello, plus
    * MAX_SETTING_AHEAD_MS, less syncClockSkewWarnMs — the margin this PC allows its corrected clock, which can drift from
    * the server's while connected.
    */
   latestSettingTime(): number {
     return this.deps.now() + this.offset + MAX_SETTING_AHEAD_MS - Math.max(0, this.deps.params().syncClockSkewWarnMs);
-  }
-
-  /**
-   * The files the batch adds that the server lacks, each sent once (D6), before the writes: the server refuses a write
-   * whose file it does not hold. One this PC lacks too, or that the server will not take (its bytes no longer those of
-   * their hash, too large), is left: the server then refuses the write (« Fichier manquant au serveur. »), dropped.
-   */
-  private async upload(conn: Connection, batch: Unit[]): Promise<void> {
-    const hashes = filesToSend(batch).filter((h) => !this.onServer.has(h));
-    for (let i = 0; i < hashes.length; i += MAX_HASHES_PER_REQUEST) {
-      const chunk = hashes.slice(i, i + MAX_HASHES_PER_REQUEST);
-      const body = await json(await conn.request('/files/missing', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ hashes: chunk }) }));
-      const missing = (body as { missing?: unknown } | null)?.missing;
-      if (!Array.isArray(missing)) throw new Refusal('Réponse du serveur illisible à /files/missing : mets à jour Cirrus, ou le serveur.');
-      const absent = new Set(missing);
-      for (const hash of chunk) {
-        if (absent.has(hash)) {
-          if (!hasBlob(this.deps.storeDir, hash)) continue;
-          const file = await openAsBlob(filePath(this.deps.storeDir, { name: '', hash, size: 0 }));
-          const res = await conn.request(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob });
-          if (res.status === 400 || res.status === 413) {
-            console.warn(`Fichier ${hash} refusé par le serveur : ${await reasonOf(res)}`);
-            continue;
-          }
-          await ok(res);
-          await res.body?.cancel();
-        }
-        this.onServer.add(hash);
-      }
-    }
-  }
-
-  /**
-   * POST /units: the results, one per write. A body over MAX_BODY_BYTES is not sent: a smaller batch next (null), or,
-   * for one write alone, a refusal, as the server would give it.
-   */
-  private async post(conn: Connection, batch: Unit[]): Promise<UnitResult[] | null> {
-    // A label past the bound, written before it was cut at its making, is cut as it leaves (R20): the server refuses it.
-    const body = unitsBody(batch);
-    if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-      if (batch.length > 1) conn.batchLimit = Math.max(1, Math.floor(batch.length / 2));
-      else {
-        conn.refused.push({ unit: batch[0].unit, message: `Écriture trop grosse pour le serveur : ${MAX_BODY_BYTES} octets au plus.` });
-        this.schedule(conn);
-      }
-      return null;
-    }
-    const answer = await json(await conn.request('/units', { method: 'POST', headers: JSON_BODY, body }));
-    const results = (answer as { results?: unknown } | null)?.results;
-    if (!Array.isArray(results) || results.length !== batch.length || !results.every(isResult)) {
-      throw new Refusal('Réponse du serveur illisible à /units : mets à jour Cirrus, ou le serveur.');
-    }
-    return results;
   }
 
   /** GET /files/<hash> on the server of the connection under way, or else of the secrets now (none: null). */
