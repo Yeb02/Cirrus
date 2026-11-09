@@ -11,7 +11,8 @@ const isPdf = (name: string) => fileKind(name) === 'pdf';
 /**
  * The PDFs the base refers to now (D8): those in the folders of the nodes outside the trash, and the versions the
  * anchors of the live annotations are on — one re-imported since keeps its own —, each hash once; never a version only
- * the history keeps. An anchor's version that no folder holds any more has no size of its own: it counts as much as the
+ * the history keeps, nor the anchor of an annotation whose PDF node is in the trash or absent (task 8a: no more than
+ * that node's PDF). An anchor's version that no folder holds any more has no size of its own: it counts as much as the
  * file under its name in its PDF's node (the version that replaced it), 0 without one — an estimate, for the plan's
  * volume only: the main process checks each file by its hash, its length by the server's answer.
  */
@@ -24,7 +25,9 @@ export function referencedPdfs(s: State): FileRef[] {
   for (const n of s.nodes.values()) {
     const a = n.anchor;
     if (a === undefined || n.trashedAt !== undefined || out.has(a.hash)) continue;
-    const named = s.nodes.get(a.pdf)?.files.find((f) => sameName(f.name, a.file));
+    const pdf = s.nodes.get(a.pdf);
+    if (pdf === undefined || pdf.trashedAt !== undefined) continue;
+    const named = pdf.files.find((f) => sameName(f.name, a.file));
     out.set(a.hash, { name: a.file, hash: a.hash, size: named?.size ?? 0 });
   }
   return [...out.values()];
@@ -39,11 +42,17 @@ const reserveBytes = (mb: number) => Math.max(0, mb) * 2 ** 20;
 /**
  * The question of « Télécharger tous les PDF… » (D8), `ok` when it may start: the PDFs missing here and their volume,
  * and the free space of this disk; refused when they would leave less than `reserveMb` (downloadAllReserveMb) free —
- * the main process refuses it too (SyncClient.downloadAllStart).
+ * the main process refuses it too (SyncClient.downloadAllStart). Refused by the reserve only (the disk holds them), the
+ * refusal says the reserve and where it is set (task 8a): « libres » alone would read as room enough.
  */
 export function planText(p: DownloadAllPlan, reserveMb: number): { ok: boolean; text: string } {
   if (p.count === 0) return { ok: false, text: 'Tous les PDF de la base sont déjà sur ce PC.' };
-  if (p.bytes > p.freeBytes - reserveBytes(reserveMb)) return { ok: false, text: `Pas assez de place : ${sizeText(p.bytes)} à télécharger, ${sizeText(p.freeBytes)} libres.` };
+  const reserve = reserveBytes(reserveMb);
+  if (p.bytes > p.freeBytes - reserve) {
+    const short = `Pas assez de place : ${sizeText(p.bytes)} à télécharger, ${sizeText(p.freeBytes)} libres`;
+    if (p.bytes > p.freeBytes) return { ok: false, text: `${short}.` };
+    return { ok: false, text: `${short} dont ${sizeText(reserve)} gardés en réserve (Réglages › Serveur › Synchronisation).` };
+  }
   return { ok: true, text: `${p.count} PDF à télécharger, ${sizeText(p.bytes)} ; ${sizeText(p.freeBytes)} libres sur ce disque.` };
 }
 

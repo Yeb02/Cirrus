@@ -365,7 +365,7 @@ test('DownloadAll : un téléchargement de la fois d’avant, arrêté mais pas 
 const h = (i: number) => i.toString(16).padStart(64, '0');
 const ref = (name: string, i: number, size = 1000 + i): FileRef => ({ name, hash: h(i), size });
 
-test('referencedPdfs : les PDF des dossiers des nœuds et des ancres des annotations vivantes, sans doublon ; ni une annotation à la corbeille, ni une version que seul l’historique garde, ni un nœud à la corbeille', () => {
+test('referencedPdfs : les PDF des dossiers des nœuds et des ancres des annotations vivantes, sans doublon ; ni une annotation à la corbeille, ni une version que seul l’historique garde, ni un nœud à la corbeille, ni l’ancre d’un PDF à la corbeille ou absent', () => {
   const s = emptyState();
   // An action applied to the state: the identifier of the record of kind `t` it creates.
   const run = (a: Action, t: 'node' | 'plan'): Id => {
@@ -390,6 +390,15 @@ test('referencedPdfs : les PDF des dossiers des nœuds et des ancres des annotat
   // The same PDF in another node; one in capitals; a node in the trash.
   node('W', [ref('Copie.pdf', 3), ref('MAJUSCULES.PDF', 10)]);
   applyOps(s, deleteEverywhere(s, node('T', [ref('Corbeille.pdf', 9)])).ops);
+  // A live annotation whose PDF node is in the trash (task 8a): its anchor no more counted than the node's PDF; nor one
+  // whose PDF node is absent from the state (written here by hand: nothing removes a node).
+  const V = node('V', [ref('Vieux.pdf', 11)]);
+  annotate(V, ref('Vieux.pdf', 11));
+  applyOps(s, deleteEverywhere(s, V).ops);
+  const G = node('G', [ref('Absent.pdf', 12)]);
+  annotate(G, ref('Absent.pdf', 12));
+  applyOps(s, [{ t: 'node', before: s.nodes.get(G)!, after: null }]);
+  expect(s.nodes.has(G)).toBe(false);
   const byHash = (a: FileRef, b: FileRef) => (a.hash < b.hash ? -1 : 1);
   expect(referencedPdfs(s).sort(byHash)).toEqual([
     { name: 'Article.pdf', hash: h(1), size: ref('Article.pdf', 3).size }, ref('Article.pdf', 3), ref('Livre.pdf', 6), ref('Thèse.pdf', 8), ref('MAJUSCULES.PDF', 10),
@@ -401,6 +410,12 @@ test('les textes du bloc : la question, le refus, l’avancement et ses fins, l�
   expect(planText({ count: 37, bytes: 1.2 * GiB, freeBytes: 48 * GiB }, 1024)).toEqual({ ok: true, text: `37 PDF à télécharger, 1,2${nb}Go ; 48,0${nb}Go libres sur ce disque.` });
   expect(planText({ count: 1, bytes: 340 * MiB, freeBytes: 48 * GiB }, 1024)).toEqual({ ok: true, text: `1 PDF à télécharger, 340${nb}Mo ; 48,0${nb}Go libres sur ce disque.` });
   expect(planText({ count: 37, bytes: 1.2 * GiB, freeBytes: 0.8 * GiB }, 1024)).toEqual({ ok: false, text: `Pas assez de place : 1,2${nb}Go à télécharger, 819${nb}Mo libres.` });
+  // Room enough on the disk, but not for the reserve as well (task 8a): the reserve said, and where it is set.
+  expect(planText({ count: 37, bytes: 1.2 * GiB, freeBytes: 2 * GiB }, 1024)).toEqual({
+    ok: false, text: `Pas assez de place : 1,2${nb}Go à télécharger, 2,0${nb}Go libres dont 1,0${nb}Go gardés en réserve (Réglages › Serveur › Synchronisation).`,
+  });
+  // Exactly the free space: the disk is not short, the reserve is.
+  expect(planText({ count: 1, bytes: GiB, freeBytes: GiB }, 64).text).toBe(`Pas assez de place : 1,0${nb}Go à télécharger, 1,0${nb}Go libres dont 64,0${nb}Mo gardés en réserve (Réglages › Serveur › Synchronisation).`);
   // What would leave exactly the reserve free passes; a byte more does not.
   expect(planText({ count: 2, bytes: GiB, freeBytes: GiB + 1024 * MiB }, 1024).ok).toBe(true);
   expect(planText({ count: 2, bytes: GiB + 1, freeBytes: GiB + 1024 * MiB }, 1024).ok).toBe(false);
