@@ -1082,3 +1082,46 @@ Une revue courte du plan 5a, en lecture seule, a relevé quatre points de code m
 - `pcId` (`main/base.ts`) écrit `pc.json` sans renommage ni synchronisation : une coupure à la création d'une base pourrait laisser un fichier vide, et le PC prendrait un autre identifiant au démarrage suivant. C'est hors du périmètre de D4, qui ne visait que les copies de la synchro et des réglages.
 - Le point « Après un rechargement pendant un envoi de base, le bloc n'est rafraîchi qu'au montage suivant » est réglé par B2. « Réessayer » reste inerte quand le démarrage échoue après un jumelage : le message demande de relancer Cirrus.
 - Le soutien des tests (`virtualPc.ts`) écarte toujours les actions vides, ce qui masquait B3 ; l'interface ne les met plus en attente.
+
+### Après la revue courte : le premier jumelage d'un PC vierge (2026-11-09)
+
+La demande de l'utilisateur : « je compte n'utiliser qu'une seule base de donnée en pratique, donc la base de donnée vide locale que crée un nouveau PC pas encore jumelé n'a aucune raison d'être envoyée au serveur. Au jumelage, tout ce qui est local au nouveau PC (rien) est effacé et le serveur lui envoie tout ce qu'il faut. »
+
+Jusqu'ici, un PC vide face à un serveur qui tient une base recevait l'offre « Prendre la base du serveur », qu'il fallait cliquer, et l'échange gardait sa base sous `<base>-avant-jumelage-AAAA-MM-JJ`.
+
+- **Une base « vierge »** (`pristine`, `main/sync/firstSync.ts`) est telle que sa première ouverture l'a faite :
+  - vide au sens de D7 (`isEmpty` : ni nœud, ni connexion, ni placement, seulement son lobby) ;
+  - elle n'a jamais rien reçu d'un serveur (`lastServerSeq() === 0`) ;
+  - son journal ne tient qu'une ligne, celle qu'écrit `openBase` : la création du lobby (`plan`, `before` nul, nommé `LOBBY_NAME`, de type `lobby`), locale, en attente et non remplacée ;
+  - son magasin ne tient aucun fichier (`storedHashes`).
+- **Un PC vierge face à un serveur qui tient une base la prend sans offre ni clic.** Dès le code accepté, `SyncHost.pairNow` prend le chemin de « Prendre » (`SyncHost.adopt`, partagé avec `first('adopt')`), puis l'app redémarre. Le bloc « Serveur » ne dit que le téléchargement, puis le redémarrage. Un échec révoque le jeton, laisse la base telle quelle, et l'erreur s'affiche sous le formulaire, comme avant.
+- **À l'échange** (`swapStaged`), l'ancienne base est relue (`pristineAt`). Vierge, elle est mise de côté comme une autre, pour revenir si la base prise est refusée à sa place, puis effacée une fois l'échange fait, avec les essais d'un renommage. Un effacement refusé la laisse à côté, avec un avertissement dans la console. Toute autre ancienne base garde son archive, sous le même nom : la base vide qui a déjà servi (ruling ci-dessous) comme celle que remplace l'offre « Remplacer ».
+- Les autres cas de D7 ne changent pas : PC plein et serveur vide (l'envoi), deux bases vides (le lobby du PC devient la première écriture du serveur), deux bases pleines (l'offre de remplacement). La reprise de R31 et celle de B1 non plus : elles passent avant D7.
+- Tests (`firstSync.test.ts`, sauf mention) :
+  - « PC vierge face à un serveur plein : aucune offre… » a été vu échouer sur l'offre « adopt », puis passer. Le principal ne dit à la fenêtre que le téléchargement puis le redémarrage, le bloc ne montre aucun bouton, et après l'échange rien ne reste à côté de la base ;
+  - « PC vide mais déjà servi (un nœud créé puis annulé)… » : l'offre, puis l'archive, avec le journal de la base tel qu'il était ;
+  - « PC vierge, la prise interrompue au milieu (un fichier perdu en route)… » : le jeton révoqué, le serveur joignable ; la base vierge intacte ; le bloc revenu au formulaire ;
+  - « au démarrage, une base vierge que la base prise ne peut pas remplacer… » : remise à sa place et toujours vierge, puis effacée à l'échange suivant ;
+  - mis à jour, B étant vierge : le premier test du fichier et celui de R32 (plus d'offre ; les vérifications de l'archive passent au test du PC déjà servi), et `adopted` de `sharedSettings.test.ts`. Les tests de R7 et de B2 (`syncHost.test.ts`) prennent un PC déjà servi (`used`) pour garder l'offre, et celui de R7 vérifie de plus qu'un PC vierge prend aussitôt la base d'un serveur qui ne tient qu'un lobby, sans second lobby.
+- Scénario de l'interface : à l'étape 1 de « synchronisation entre deux PC », B, neuve, ne clique plus d'offre. Elle quitte d'elle-même après le jumelage (une offre l'aurait fait attendre), et rien ne reste à côté de sa base après le redémarrage. `npm run interface` : 31 scénarios sur 31 réussis.
+- Captures : aucune ne montrait l'offre « Prendre la base du serveur » pour une base vierge, puisque les captures du bloc « Serveur » envoient la base de test à un serveur vide. Aucune n'est donc remplacée ni retirée.
+  - `npm run captures` a été arrêté par le système après 27 images sur 33, la mémoire de la machine venant à manquer. Les 27 sont à 0 pixel de leurs références (`reference-3c`, `plan4a`, `plan4b`, `plan4c`).
+  - Restent à refaire, par `--only=`, quand la mémoire le permet : `bloc-bib` et `import-publication` (`plan4c`), et les quatre du plan 5a (`serveur-non-jumele`, `serveur-jumele`, `pastille-hors-ligne`, `voile-synchronisation`).
+- Commits : `7691ff8` (code et tests), `212a85b` (spec : 6.6, 18 et 19), `af60b76` (scénario de l'interface), puis ce registre.
+
+#### Décisions
+
+- Ruling: **une base vide qui a déjà servi garde l'offre et l'archive** — pourquoi : la demande vise la base vide que crée un nouveau PC. Une base touchée depuis, même revenue à vide, tient une histoire (des actions annulées, un fichier au magasin) que seul l'utilisateur peut juger ; l'effacer d'office serait irréversible, alors que l'offre ne coûte qu'un clic et l'archive quelques Ko — coût si faux : un clic de plus, et un dossier `-avant-jumelage-` à effacer à la main, dans un cas rare.
+- Ruling: **la base vierge est relue à l'échange**, pas seulement au jumelage — pourquoi : l'app reste utilisable pendant le téléchargement, et une action faite entre-temps rend la base non vierge ; l'effacer la perdrait — coût si faux : l'ouverture de l'ancienne base, quelques millisecondes, au démarrage qui suit une prise.
+- Ruling: **la base vierge passe d'abord par le nom de l'archive, puis est effacée** — pourquoi : si la base prise ne peut pas prendre sa place, la base vierge revient et s'ouvre, par le chemin déjà éprouvé (revue de la tâche 5, Important 2) — coût si faux : un renommage de plus.
+- Ruling: **les réglages d'un PC vierge ne comptent pas** dans la définition : son `settings.json` part avec lui — pourquoi : prendre la base du serveur prend déjà ses réglages et écarte ceux du PC (R23) ; l'archive les gardait sans qu'ils servent jamais — coût si faux : un réglage changé sur un PC neuf avant son premier jumelage est perdu, comme il l'était déjà en pratique.
+- Ruling: **le nom du lobby est une constante, `LOBBY_NAME`** (`main/base.ts`), qu'`openBase` écrit et que `pristine` compare — pourquoi : « vierge » compare la ligne du journal à ce qu'écrit la première ouverture, exactement — coût si faux : nul.
+
+#### L'installation (décision de l'utilisateur, 2026-11-09, pour le plan 9)
+
+Décidée avec l'utilisateur, et écrite à la section 18 de la spec à la place du paragraphe « Installation : ». Elle s'appuie sur le premier jumelage d'un PC vierge.
+
+- **La première installation passe par le code de jumelage.** Par SSH, `jumeler "<nom>"` affiche le code et l'adresse de la page de téléchargement du serveur. Sur le nouveau PC, l'utilisateur ouvre cette page et y tape le code pour télécharger l'installateur. Le téléchargement ne consomme pas le code : il vit 10 minutes, et 5 essais faux le brûlent. Au premier lancement, l'utilisateur tape le même code pour jumeler le PC, qui, vierge, prend alors la base du serveur. Il n'y a de mot de passe nulle part.
+- **Les mises à jour passent par le jumelage.** Le PC les demande au serveur avec son jeton. Un PC révoqué ne reçoit rien, et aucun mot de passe n'est stocké.
+- **Les signatures.** Chaque version est signée dans l'intégration continue de GitHub, avec la clé gardée dans les secrets de GitHub (spec 18.1), jamais sur le serveur. L'app vérifie la signature avec la clé publique qu'elle porte avant d'installer, et la mise à jour s'installe à la fermeture de l'app. Seule la toute première installation ne repose que sur le HTTPS.
+- **Le dépôt GitHub est public,** si bien que l'installateur ne contient rien de secret. Le code ne sert qu'à ne pas laisser une page ouverte sur Internet.
