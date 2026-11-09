@@ -329,3 +329,10 @@ La revue finale de toute la branche (`c594fd2..4563360`, `.superpowers/sdd/2026-
 - Ruling (décidé par l'utilisateur) : **les copies de conflit se compilent en fond comme tout `.tex`** quand les fichiers de leur nœud changent — accepté, un petit gaspillage — coût si faux : quelques compilations de fond pour des copies que personne n'ouvre.
 - Ruling (décidé par l'utilisateur) : **un original réconcilié est réécrit en UTF-8 avec des fins de ligne LF**, quels que soient son encodage et ses fins de ligne — cohérent avec l'enregistrement du plein écran d'un `.tex`, et « rien de repris » le laisse intact — coût si faux : les octets d'un original changent (encodage, fins de ligne) quand son texte, lui, est repris.
 - **Suites** (fichier par fichier, `--maxWorkers=1`, le plan 6a ayant du travail en cours dans l'arbre) : app `latexBackground` 22, `latexCompiler` 30, `latexCache` 7, `publicationImport` 23, `pdfPick` 2, `publications` 9 (le rejeu), `publicationPdf` 9, `syncPublications` 8 ; `@cirrus/sources` `identifier` 4, `publications` 12, `html` 4 ; serveur `publications` 11 — tous passent. `tsc` de `@cirrus/sources`, du serveur et de l'app sans erreur. Aucune exécution d'Electron : les scénarios d'interface et les captures de la fin du plan 6a couvriront ces commits.
+
+### Plan clos (2026-11-10)
+
+- La revue finale a demandé une correction (I1 : un fichier absent du magasin faisait refuser toute la compilation) et quatre mineures. Elles ont été faites (1e04cba..630c12c), et la re-relecture les a approuvées.
+- Deux remarques mineures de la re-relecture ne sont pas corrigées :
+  - la raison donnée plus haut pour le passage à 16 Kio est approximative. 1 000 caractères CJK tenaient dans 4 Kio ; seuls les échappements JSON de 6 octets débordaient. Le commentaire de `bounds.ts` est exact ;
+  - « Adresse trop longue » contient une espace fine insécable venue de `toLocaleString`.
