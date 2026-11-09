@@ -209,7 +209,7 @@ test.each([
   const r = reconcile(s, pending, [relayed(theirs, 1)], []);
   const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
   expect(files(s)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
-  expect(r.notices).toEqual([`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
+  expect(r.notices).toEqual([`Un .tex de « N » a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
   expect(r.dropped).toEqual([]);
   // The server takes the replayed writes as they come: it then holds what the PC holds.
   for (const u of r.rebased) applyOps(server, wire(u).ops);
@@ -229,9 +229,23 @@ test.each([
   const r = reconcile(s, [mine], [relayed(theirs, 1)], []);
   const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
   expect(s.nodes.get(X)!.files.map((f) => `${f.name}=${f.hash[0]}`)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
-  expect(r.notices).toEqual([`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
+  expect(r.notices).toEqual([`Un .tex de « X » a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`]);
   for (const u of r.rebased) applyOps(server, wire(u).ops);
   expect(image(s)).toBe(image(server));
+});
+
+test('reconcile : la notification d’un conflit de .tex nomme le nœud par son titre ; sans titre, « Sans titre » (plan 5b, D7)', () => {
+  const T = Date.UTC(2026, 10, 8, 9);
+  for (const [title, said] of [['Complexité de Kolmogorov', 'Complexité de Kolmogorov'], ['', 'Sans titre']]) {
+    const { s, X } = world();
+    const tex = (h: string) => [{ name: 'note.tex', hash: h.repeat(64), size: 1 }];
+    run(s, editNode(s, X, { title, files: tex('0') }));
+    const server = copy(s);
+    const mine = unitOf(run(s, editNode(s, X, { files: tex('a') })), 'pc-a', T);
+    const theirs = unitOf(run(server, editNode(server, X, { files: tex('b') })), 'pc-b', T + MIN);
+    const r = reconcile(s, [mine], [relayed(theirs, 1)], []);
+    expect(r.notices).toEqual([`Un .tex de « ${said} » a été modifié sur deux PC : l’autre version est gardée sous « note (conflit du ${stamp(T)}).tex ».`]);
+  }
 });
 
 test.each([
@@ -248,7 +262,7 @@ test.each([
   const second = reconcile(s, first.rebased, [relayed(again, 2)], []);
   const name = `note (conflit du ${stamp(T + copyAt)}).tex`;
   expect(files(s)).toEqual([`note.tex=${kept}`, `${name}=${held}`]);
-  expect(second.notices).toEqual(firstAt === undefined ? [`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`] : []);
+  expect(second.notices).toEqual(firstAt === undefined ? [`Un .tex de « N » a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`] : []);
   for (const u of second.rebased) applyOps(server, wire(u).ops);
   expect(image(s)).toBe(image(server));
 });

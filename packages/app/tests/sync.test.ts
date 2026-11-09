@@ -180,7 +180,7 @@ test('des actions des deux côtés en même temps, puis le repos : les trois ét
   const files = server.nodes.get(M)!.files;
   expect(files.find((f) => f.name === 'note.tex')!.hash).toBe(v2.hash);
   expect(files.find((f) => f.name.startsWith('note (conflit du '))!.hash).toBe(v1.hash);
-  expect([...a.notices, ...b.notices]).toEqual([expect.stringMatching(/^Un \.tex a été modifié sur deux PC : l’autre version est gardée sous « note \(conflit du /)]);
+  expect([...a.notices, ...b.notices]).toEqual([expect.stringMatching(/^Un \.tex de « M » a été modifié sur deux PC : l’autre version est gardée sous « note \(conflit du /)]);
 });
 
 test('B hors ligne (serveur arrêté) agit, l’app fermée puis rouverte avec ses actions en attente ; au retour du serveur, tout passe dans les deux sens', async () => {

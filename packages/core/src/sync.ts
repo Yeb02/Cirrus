@@ -241,7 +241,9 @@ export function reconcile(s: State, pending: readonly Unit[], incoming: readonly
     const key = `${node}\u0000${name}`;
     if (told.has(key) || !s.nodes.get(node)?.files.some((f) => f.name === name)) continue;
     told.add(key);
-    out.notices.push(`Un .tex a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`);
+    // The node is named by its title (plan 5b, D7), as the app shows a node with none.
+    const title = s.nodes.get(node)!.title || 'Sans titre';
+    out.notices.push(`Un .tex de « ${title} » a été modifié sur deux PC : l’autre version est gardée sous « ${name} ».`);
   }
   return out;
 }
