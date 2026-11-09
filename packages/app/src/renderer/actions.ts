@@ -430,18 +430,21 @@ export function texSaveBuild(s: State, node: Id, ref: FileRef, opts: { keepTheir
 /**
  * A .tex reconciled with its conflict copy, from the comparison's full screen (plan 5b, D7): the text taken is stored
  * already (`ref`, under the original's name; null: nothing taken, the original is left as it is) and replaces the
- * original in its place, as texSaveBuild has it; with `removeCopy`, the file of that name leaves the node's files in
- * the same action — its blob stays in the store, where the history refers to it (spec 5.2): never deleted. One action,
- * « Réconcilier « x.tex » » (cut to MAX_LABEL_CHARS): one undo step gives both files back. Null when `s` holds all of
- * it already; refused when the action is computed if the node is gone or in the trash, or the original no longer in
- * it (texSaveRefusal). A copy gone meanwhile is not an error: what was asked of it is done.
+ * original in its place, as texSaveBuild has it; with `removeCopy`, the copy compared — its name and the hash of the
+ * version shown — leaves the node's files in the same action, its blob staying in the store, where the history refers
+ * to it (spec 5.2): never deleted. A copy that holds another version when the action is computed (changed on another PC
+ * meanwhile) stays: only what was compared is removed (task 8a, from the review of task 6). One action, « Réconcilier
+ * « x.tex » » (cut to MAX_LABEL_CHARS): one undo step gives both files back. Null when `s` holds all of it already;
+ * refused when the action is computed if the node is gone or in the trash, or the original no longer in it
+ * (texSaveRefusal). A copy gone meanwhile is not an error: what was asked of it is done.
  *
  * `keepTheirs` (D6, texSaveBuild's): the original changed elsewhere while the comparison was open; the version the node
  * holds when the action is computed stays under its conflict name (texConflictName, at `at`, now by default), unless it
  * is the saved text's own.
  */
 export function reconcileTexBuild(
-  s: State, node: Id, original: string, ref: FileRef | null, opts: { removeCopy?: string; keepTheirs?: boolean; at?: number } = {},
+  s: State, node: Id, original: string, ref: FileRef | null,
+  opts: { removeCopy?: Pick<FileRef, 'name' | 'hash'>; keepTheirs?: boolean; at?: number } = {},
 ): Build {
   const label = truncateLabel(`Réconcilier « ${original} »`);
   const at = opts.at ?? Date.now();
@@ -454,7 +457,7 @@ export function reconcileTexBuild(
       out = mergeFiles(out, [ref, ...kept]).files;
     }
     const copy = opts.removeCopy;
-    return copy === undefined ? out : out.filter((f) => !sameName(f.name, copy));
+    return copy === undefined ? out : out.filter((f) => !(sameName(f.name, copy.name) && f.hash === copy.hash));
   };
   const unchanged = (files: readonly FileRef[]) => {
     const next = reconciled(files);

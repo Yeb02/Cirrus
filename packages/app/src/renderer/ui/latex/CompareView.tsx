@@ -14,10 +14,12 @@ import { useModal } from '../FullScreen.tsx';
 import { Banner, Notice, readFailure } from '../viewers/common.tsx';
 import { languageFor, PHRASES_FR } from '../viewers/language.ts';
 import { THEME } from '../viewers/TextViewer.tsx';
-import { abandonQuestion, compareTitle, readCompared, Reconciliation } from './compare.ts';
+import {
+  abandonQuestion, closingSave, compareTitle, copyKeptNotice, copyNotLoaded, copyReloadedNotice, originalNotLoaded, type ReconcileAnswer, readCompared,
+  readNewVersion, Reconciliation,
+} from './compare.ts';
 import { loadText } from './editorLoad.ts';
-import { changedElsewhere, keptNotice, reloadedNotice, type SaveAnswer } from './saveScheduler.ts';
-import { readTexText } from './texText.ts';
+import { changedElsewhere, keptNotice, reloadedNotice } from './saveScheduler.ts';
 import type { WorkbenchHandle } from './TexWorkbench.tsx';
 
 /** CodeMirror's texts in French (PHRASES_FR) and the merge view's own: the folded lines, the arrow of a block. */
@@ -38,19 +40,24 @@ type Shown = { message: string } | { texts: { a: string; b: string } } | null;
  * above textViewMaxMb is not compared (« Trop grand pour être comparé ici. »), nor edited.
  *
  * « Enregistrer » writes the original (`onSave`, one action « Réconcilier « x.tex » »), « Enregistrer et retirer la copie »
- * also takes the copy out of the node; both close the comparison once saved, and Ctrl+Z in the graph undoes the action.
- * Refused — the node or a file gone —, the comparison stays and says why. Escape or ×, with blocks taken, ask « Abandonner
- * la réconciliation ? ». It answers App through the same handle as the .tex workbench (`dirty`), but a `flush` saves
- * nothing: a reconciliation is never made as the window closes.
+ * also takes the copy shown out of the node — a copy changed elsewhere meanwhile stays, which a notification says; both
+ * close the comparison once saved, and Ctrl+Z in the graph undoes the action. Refused — the node or a file gone —, the
+ * comparison stays and says why. Escape or ×, with blocks taken, ask « Abandonner la réconciliation ? ». It answers App
+ * through the same handle as the .tex workbench (`dirty`); its `flush`, as the window closes, saves the blocks taken as
+ * « Enregistrer » does (closingSave: the copy stays), so that closing the window never drops them (task 8a).
  *
  * The original changed elsewhere meanwhile (`original` is the file as the state holds it) follows the .tex full screen's
  * rule (D6, Reconciliation): with nothing taken, its new version is loaded, with a notification; else the text stays, the
  * banner says that version will be kept under its conflict name, and the save does so, which a notification says too.
+ * The copy changed elsewhere (`copy`, as the state holds it) is shown in its new version, read-only, with a notification.
  */
 export function CompareView(props: {
   node: NodeRec; original: FileRef; copy: FileRef; params: RenderParams;
-  /** `text`: the original with the blocks taken, null when none was; `base`: the hash it was made from; `removeCopy`: « … et retirer la copie ». */
-  onSave(text: string | null, base: string | null, removeCopy: boolean): Promise<SaveAnswer>;
+  /**
+   * `text`: the original with the blocks taken, null when none was; `base`: the hash it was made from; `removeCopy`:
+   * « … et retirer la copie », the copy as shown (its name, the hash of the version on the right), else null.
+   */
+  onSave(text: string | null, base: string | null, removeCopy: Pick<FileRef, 'name' | 'hash'> | null): Promise<ReconcileAnswer>;
   onNotice(text: string): void; onClose(): void; ref?: Ref<WorkbenchHandle>;
 }) {
   const { node, original, copy } = props;
@@ -63,6 +70,10 @@ export function CompareView(props: {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<MergeView | null>(null);
   const model = useRef<Reconciliation | null>(null);
+  /** The hash of the copy's version shown on the right: the one « … et retirer la copie » removes. */
+  const shownCopy = useRef(copy.hash);
+  /** The save under way, « Enregistrer » or the window's closing: the other waits for it. */
+  const pending = useRef<Promise<unknown> | null>(null);
   /** The original's history, in a compartment: a version from elsewhere loaded empties it (loadText). */
   const historyOf = useRef<Compartment | null>(null);
   const latest = useRef(props);
@@ -163,19 +174,12 @@ export function CompareView(props: {
     if (!wanted) return;
     const stop = new AbortController(), name = original.name, hash = original.hash;
     void (async () => {
-      let r;
-      try {
-        r = await readTexText(original, latest.current.params.textViewMaxMb, stop.signal);
-      } catch (e) {
-        if (stop.signal.aborted) return;
-        console.error(`Lecture de « ${name} » :`, e);
-        latest.current.onNotice(`« ${name} » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.`);
-        return;
-      }
+      const r = await readNewVersion(original, latest.current.params.textViewMaxMb, stop.signal);
       const histories = historyOf.current;
       if (stop.signal.aborted || model.current !== m || view.current !== mv || !histories) return;
-      if (!('text' in r)) {
-        latest.current.onNotice(`« ${name} » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.`);
+      // Too big to be compared here, or unreadable: the text shown stays, and that version is kept (originalNotLoaded).
+      if ('not' in r) {
+        latest.current.onNotice(originalNotLoaded(name, r.not));
         return;
       }
       // The model and the original's editor take it in this one call, the cursor kept, out of the history, emptied
@@ -189,6 +193,27 @@ export function CompareView(props: {
     return () => stop.abort();
   }, [original.hash, state.dirty, texts]);
 
+  // The copy as the state holds it, at each new version (task 8a): read again and shown on the right, read-only, so that
+  // « … et retirer la copie » removes what is shown. Not shown (too big, unreadable), the right side stays, and the copy
+  // is never removed for it: its hash is not the one shown.
+  useEffect(() => {
+    const mv = view.current;
+    if (!mv || copy.hash === shownCopy.current) return;
+    const stop = new AbortController(), name = copy.name, hash = copy.hash;
+    void (async () => {
+      const r = await readNewVersion(copy, latest.current.params.textViewMaxMb, stop.signal);
+      if (stop.signal.aborted || view.current !== mv) return;
+      if ('not' in r) {
+        latest.current.onNotice(copyNotLoaded(name, r.not));
+        return;
+      }
+      mv.b.dispatch({ changes: { from: 0, to: mv.b.state.doc.length, insert: r.text }, annotations: fromOutside.of(true) });
+      shownCopy.current = hash;
+      latest.current.onNotice(copyReloadedNotice(name));
+    })();
+    return () => stop.abort();
+  }, [copy.hash, texts]);
+
   /** Saves and closes: « Enregistrer » (`removeCopy` false) or « Enregistrer et retirer la copie ». Refused, it stays and says why. */
   const finish = async (removeCopy: boolean) => {
     const m = model.current, mv = view.current;
@@ -198,19 +223,35 @@ export function CompareView(props: {
     savingNow.current = true;
     setSaving(true);
     setFailure(null);
-    let r: SaveAnswer;
+    const text = m.dirty ? mv.a.state.doc.toString() : null;
+    let r: ReconcileAnswer;
+    const saved = (async () => latest.current.onSave(text, m.base, removeCopy ? { name: latest.current.copy.name, hash: shownCopy.current } : null))();
+    // The window's closing (flush) waits for it.
+    pending.current = saved.catch(() => {});
     try {
-      r = await latest.current.onSave(m.dirty ? mv.a.state.doc.toString() : null, m.base, removeCopy);
+      r = await saved;
     } catch (e) {
       console.error('Enregistrement de la réconciliation :', e);
       r = { ok: false, message: 'enregistrement impossible' };
     }
+    pending.current = null;
     savingNow.current = false;
     setSaving(false);
     if (r.ok) {
+      if (text !== null) m.wrote(text, r.hash);
       if (r.kept !== undefined) latest.current.onNotice(keptNotice(latest.current.original.name, r.kept));
+      if (r.copyKept !== undefined) latest.current.onNotice(copyKeptNotice(r.copyKept));
       latest.current.onClose();
     } else setFailure(r.message ?? 'enregistrement refusé');
+  };
+
+  /** The window closing (App's quitInOrder): a save under way waited for, then the blocks taken saved as « Enregistrer » (closingSave). */
+  const flush = async () => {
+    await pending.current;
+    const m = model.current;
+    if (!m) return;
+    const r = await closingSave(m, (text, base, removeCopy) => latest.current.onSave(text, base, removeCopy));
+    if (r && !r.ok) console.error(`Réconciliation de « ${latest.current.original.name} » non enregistrée à la fermeture : ${r.message ?? 'enregistrement refusé'}`);
   };
 
   const leave = () => {
@@ -223,7 +264,7 @@ export function CompareView(props: {
   useModal(root, close);
   useImperativeHandle(props.ref, () => ({
     get dirty() { return model.current?.dirty ?? false; },
-    flush: () => Promise.resolve(),
+    flush: () => flush(),
     requestClose: () => leave(),
   }), []);
 

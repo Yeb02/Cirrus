@@ -12,7 +12,8 @@ import { MB } from '../src/renderer/files/read.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
 import {
-  abandonQuestion, compareTitle, Reconciliation, readCompared, reconcileTex, TOO_BIG, tooBigToCompare,
+  abandonQuestion, closingSave, compareTitle, copyKeptNotice, copyNotLoaded, copyReloadedNotice, originalNotLoaded, Reconciliation, readCompared,
+  readNewVersion, reconcileTex, TOO_BIG, tooBigToCompare,
 } from '../src/renderer/ui/latex/compare.ts';
 import { changedElsewhere } from '../src/renderer/ui/latex/saveScheduler.ts';
 import { texTextOf } from '../src/renderer/ui/latex/texText.ts';
@@ -73,7 +74,7 @@ async function prepared() {
   const files = () => session.state.nodes.get(node)!.files;
   const original = () => files().find((f) => f.name === TEX)!;
   const textOf = (f: FileRef) => readFileSync(filePath(dir, f), 'utf8');
-  const reconcile = (text: string | null, opts: { removeCopy?: string; base?: string | null } = {}) => reconcileTex(session, put, node, TEX, text, opts);
+  const reconcile = (text: string | null, opts: { removeCopy?: { name: string; hash: string }; base?: string | null } = {}) => reconcileTex(session, put, node, TEX, text, opts);
   /** The distinct actions of the journal lines written since `seq` labelled `label`. */
   const actionsSince = (seq: number, label = `Réconcilier « ${TEX} »`) => new Set(store.changesSince(seq).filter((r) => r.label === label).map((r) => r.actionId));
   return { dir, store, ids, node, session, put, copy, files, original, textOf, reconcile, actionsSince, close: () => { store.close(); rmSync(dir, { recursive: true, force: true }); } };
@@ -105,7 +106,7 @@ test('reconcileTex avec retrait de la copie : l’original porte le texte repris
   const b = await prepared();
   try {
     const before = b.files(), first = b.original(), seq = b.store.lastSeq(), changes = historySummary(b.store.historyOf(b.node)).changes;
-    const r = await b.reconcile('texte repris\n', { removeCopy: COPY, base: first.hash });
+    const r = await b.reconcile('texte repris\n', { removeCopy: b.copy, base: first.hash });
     expect(r).toEqual({ ok: true, hash: expect.any(String) });
     expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png']);
     expect(b.textOf(b.original())).toBe('texte repris\n');
@@ -132,7 +133,7 @@ test('reconcileTex : rien repris (texte null), la copie retirée seule, une acti
     const before = b.files(), first = b.original();
     // No text: the original untouched (its bytes are not written again as the editor read them), the copy taken out.
     const seq = b.store.lastSeq();
-    expect(await b.reconcile(null, { removeCopy: COPY, base: first.hash })).toEqual({ ok: true, hash: first.hash });
+    expect(await b.reconcile(null, { removeCopy: b.copy, base: first.hash })).toEqual({ ok: true, hash: first.hash });
     expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png']);
     expect(b.original()).toEqual(first);
     expect(b.actionsSince(seq).size).toBe(1);
@@ -144,7 +145,7 @@ test('reconcileTex : rien repris (texte null), la copie retirée seule, une acti
     expect(b.store.lastSeq()).toBe(now);
     // The copy gone meanwhile: the removal is done already, the text is saved.
     expect((await b.session.run(removeFileBuild(b.node, COPY)!)).ok).toBe(true);
-    expect((await b.reconcile('autre\n', { removeCopy: COPY, base: first.hash })).ok).toBe(true);
+    expect((await b.reconcile('autre\n', { removeCopy: b.copy, base: first.hash })).ok).toBe(true);
     expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png']);
     expect(b.textOf(b.original())).toBe('autre\n');
   } finally {
@@ -160,7 +161,7 @@ test('reconcileTex, D6 : l’original changé ailleurs pendant la comparaison es
     const elsewhere = storeText(b.dir, TEX, 'version arrivée', MAX);
     expect((await b.session.run(filesBuild(b.session.state, b.node, [elsewhere])!)).ok).toBe(true);
     const before = b.files(), seq = b.store.lastSeq();
-    const r = await b.reconcile('texte repris\n', { removeCopy: COPY, base: first.hash });
+    const r = await b.reconcile('texte repris\n', { removeCopy: b.copy, base: first.hash });
     expect(r).toEqual({ ok: true, hash: expect.any(String), kept: expect.stringMatching(/^complexité \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex$/) });
     expect(isCopyOf(r.kept!, TEX)).toBe(true);
     expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png', r.kept]);
@@ -182,7 +183,7 @@ test('reconcileTex : le nœud ou l’original disparu est refusé avant d’écr
   const b = await prepared();
   try {
     const put = vi.fn(b.put);
-    const run = (text: string | null) => reconcileTex(b.session, put, b.node, TEX, text, { removeCopy: COPY });
+    const run = (text: string | null) => reconcileTex(b.session, put, b.node, TEX, text, { removeCopy: b.copy });
     expect((await b.session.run(removeFileBuild(b.node, TEX)!)).ok).toBe(true);
     expect(await run('x')).toEqual({ ok: false, message: '« complexité.tex » n’est plus dans ce nœud.' });
     expect(await run(null)).toEqual({ ok: false, message: '« complexité.tex » n’est plus dans ce nœud.' });
@@ -200,12 +201,87 @@ test('reconcileTexBuild : nul quand rien ne change, son libellé, refusée quand
   try {
     const original = b.original();
     expect(reconcileTexBuild(b.session.state, b.node, TEX, original, {})).toBeNull();
-    expect(reconcileTexBuild(b.session.state, b.node, TEX, original, { removeCopy: 'inconnu.tex' })).toBeNull();
-    expect(reconcileTexBuild(b.session.state, b.node, TEX, original, { removeCopy: COPY })).not.toBeNull();
+    expect(reconcileTexBuild(b.session.state, b.node, TEX, original, { removeCopy: { ...b.copy, name: 'inconnu.tex' } })).toBeNull();
+    expect(reconcileTexBuild(b.session.state, b.node, TEX, original, { removeCopy: b.copy })).not.toBeNull();
+    // The copy by its name but another version than the one compared: it stays, nothing else to do.
+    expect(reconcileTexBuild(b.session.state, b.node, TEX, original, { removeCopy: { ...b.copy, hash: 'f'.repeat(64) } })).toBeNull();
     const other = storeText(b.dir, TEX, 'autre', MAX);
     expect(reconcileTexBuild(b.session.state, b.node, TEX, other, {})!(b.session.state).label).toBe('Réconcilier « complexité.tex »');
     // Computed on a state where the original is gone: refused, and why.
     expect(() => reconcileTexBuild(b.session.state, b.node, 'absent.tex', other, {})!(b.session.state)).toThrow('« absent.tex » n’est plus dans ce nœud.');
+  } finally {
+    b.close();
+  }
+});
+
+test('reconcileTex, la copie changée sur un autre PC pendant la comparaison : « Enregistrer et retirer la copie » la garde, et le dit (copyKept) ; la version comparée seule est retirée', async () => {
+  const b = await prepared();
+  try {
+    const first = b.original();
+    // Another PC's version of the copy arrives while the comparison shows the first one (b.copy).
+    const newer = storeText(b.dir, COPY, 'leur version, reprise là-bas', MAX);
+    expect((await b.session.run(filesBuild(b.session.state, b.node, [newer])!)).ok).toBe(true);
+    const before = b.files(), seq = b.store.lastSeq();
+    const r = await b.reconcile('texte repris\n', { removeCopy: b.copy, base: first.hash });
+    expect(r).toEqual({ ok: true, hash: expect.any(String), copyKept: COPY });
+    // The original saved, the copy's new version left in the node, in one action that Ctrl+Z undoes.
+    expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png', COPY]);
+    expect(b.files().at(-1)).toEqual(newer);
+    expect(b.textOf(b.original())).toBe('texte repris\n');
+    expect(b.actionsSince(seq).size).toBe(1);
+    expect((await b.session.undo()).ok).toBe(true);
+    expect(b.files()).toEqual(before);
+    // Nothing taken: nothing to write, the copy kept all the same, and said.
+    const now = b.store.lastSeq();
+    expect(await b.reconcile(null, { removeCopy: b.copy, base: first.hash })).toEqual({ ok: true, hash: first.hash, copyKept: COPY });
+    expect(b.store.lastSeq()).toBe(now);
+    expect(b.files()).toEqual(before);
+    // The version compared is the one the node holds: removed, nothing said.
+    const gone = await b.reconcile(null, { removeCopy: newer, base: first.hash });
+    expect(gone).toEqual({ ok: true, hash: first.hash });
+    expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png']);
+    // The notification.
+    expect(copyKeptNotice(COPY)).toBe('La copie « complexité (conflit du 2026-11-09 14h32).tex » a changé sur un autre PC : elle est gardée.');
+  } finally {
+    b.close();
+  }
+});
+
+test('closingSave : la fenêtre fermée pendant une comparaison enregistre ce qui est repris comme « Enregistrer » — D6 garde la version venue d’ailleurs, la copie reste —, en une action qu’un Ctrl+Z défait ; rien repris, rien d’écrit', async () => {
+  const b = await prepared();
+  try {
+    const first = b.original();
+    const asked: unknown[][] = [];
+    const save = (text: string, base: string | null, removeCopy: null) => {
+      asked.push([text, base, removeCopy]);
+      return reconcileTex(b.session, b.put, b.node, TEX, text, { base });
+    };
+    const m = new Reconciliation(b.textOf(first), first.hash);
+    // Nothing taken: nothing asked, nothing written.
+    const seq0 = b.store.lastSeq();
+    expect(await closingSave(m, save)).toBeNull();
+    expect([asked, b.store.lastSeq()]).toEqual([[], seq0]);
+    // A block taken, then the original changed on another PC (the banner's case).
+    m.edit('texte repris\n');
+    const elsewhere = storeText(b.dir, TEX, 'version arrivée', MAX);
+    expect((await b.session.run(filesBuild(b.session.state, b.node, [elsewhere])!)).ok).toBe(true);
+    expect(m.arrived(elsewhere.hash)).toBeNull();
+    expect(m.elsewhere).toBe(true);
+    const before = b.files(), seq = b.store.lastSeq();
+    const r = await closingSave(m, save);
+    expect(asked).toEqual([['texte repris\n', first.hash, null]]);
+    expect(r).toEqual({ ok: true, hash: expect.any(String), kept: expect.stringMatching(/^complexité \(conflit du \d{4}-\d{2}-\d{2} \d{2}h\d{2}\)\.tex$/) });
+    // The original saved, the version from elsewhere kept beside it, the copy still there: one action.
+    expect(b.files().map((f) => f.name)).toEqual([TEX, 'schéma_compression.png', COPY, r!.kept]);
+    expect(b.textOf(b.original())).toBe('texte repris\n');
+    expect(b.files().at(-1)).toEqual({ ...elsewhere, name: r!.kept });
+    expect(b.actionsSince(seq).size).toBe(1);
+    // Saved: nothing left to save, and nothing written again.
+    expect(m.dirty).toBe(false);
+    expect(await closingSave(m, save)).toBeNull();
+    expect(asked).toHaveLength(1);
+    expect((await b.session.undo()).ok).toBe(true);
+    expect(b.files()).toEqual(before);
   } finally {
     b.close();
   }
@@ -254,6 +330,32 @@ test('readCompared : les deux textes lus et décodés — l’original en CRLF, 
   // A file the store does not hold rejects, as readHead's: the view says it.
   serving({ ['1'.repeat(64)]: bytesOf('x') });
   await expect(readCompared(original, copy, 5)).rejects.toThrow('introuvable dans la base');
+});
+
+test('readNewVersion : la nouvelle version d’un fichier comparé, lue pour être montrée ; au-delà de textViewMaxMb, trop grande pour être comparée ici (et gardée), sans la lire ; illisible, dit', async () => {
+  const file = { name: TEX, hash: '1'.repeat(64), size: bytesOf('v1\r\nfin').length };
+  const asked = serving({ ['1'.repeat(64)]: bytesOf('v1\r\nfin') });
+  expect(await readNewVersion(file, 5)).toEqual({ text: 'v1\nfin' });
+  // Above the cap by the size the node holds: not read at all.
+  asked.length = 0;
+  expect(await readNewVersion({ ...file, size: 5 * MB + 1 }, 5)).toEqual({ not: 'tooBig' });
+  expect(asked).toEqual([]);
+  // At the cap exactly: read.
+  serving({ ['1'.repeat(64)]: new Uint8Array(MB).fill(0x61) });
+  expect(await readNewVersion({ ...file, size: MB }, 1)).toEqual({ text: 'a'.repeat(MB) });
+  // A binary, bytes the store does not serve: unreadable, never a rejection.
+  serving({ ['1'.repeat(64)]: Uint8Array.from([1, 0, 2]) });
+  expect(await readNewVersion(file, 5)).toEqual({ not: 'unreadable' });
+  serving({});
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect(await readNewVersion(file, 5)).toEqual({ not: 'unreadable' });
+  expect(error).toHaveBeenCalledOnce();
+  // What the notifications say.
+  expect(originalNotLoaded(TEX, 'tooBig')).toBe('« complexité.tex » a été modifié sur un autre PC, mais sa nouvelle version est trop grande pour être comparée ici : elle est gardée.');
+  expect(originalNotLoaded(TEX, 'unreadable')).toBe('« complexité.tex » a été modifié sur un autre PC, mais sa nouvelle version n’a pas pu être lue.');
+  expect(copyReloadedNotice(COPY)).toBe('La copie « complexité (conflit du 2026-11-09 14h32).tex » a changé sur un autre PC : sa nouvelle version est montrée.');
+  expect(copyNotLoaded(COPY, 'tooBig')).toBe('La copie « complexité (conflit du 2026-11-09 14h32).tex » a changé sur un autre PC, mais sa nouvelle version est trop grande pour être comparée ici : elle est gardée.');
+  expect(copyNotLoaded(COPY, 'unreadable')).toBe('La copie « complexité (conflit du 2026-11-09 14h32).tex » a changé sur un autre PC, mais sa nouvelle version n’a pas pu être lue : elle est gardée.');
 });
 
 test('tooBigToCompare : au-delà de textViewMaxMb, l’un ou l’autre ; pile au plafond, cela se compare', () => {

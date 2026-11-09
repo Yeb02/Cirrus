@@ -42,8 +42,8 @@ export function useScreens() {
   fullRef.current = full;
   /**
    * The .tex workbench open in full screen (plan 4b, D6): its text is saved before the window closes. A comparison
-   * answers through it too (plan 5b, D7): `dirty` once blocks were taken, and a `flush` that saves nothing — a
-   * reconciliation is a choice, never made as the window closes.
+   * answers through it too (plan 5b, D7): `dirty` once blocks were taken, and a `flush` that saves them as « Enregistrer »
+   * does, the copy left in the node (task 8a): closing the window never drops them.
    */
   const workbench = useRef<WorkbenchHandle | null>(null);
   /** What the full screen last showed: kept while its .tex has unsaved text, should its file go meanwhile. */

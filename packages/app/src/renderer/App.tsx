@@ -385,7 +385,7 @@ export function App() {
               ref={workbench} node={fullNow.node} original={fullNow.file} copy={fullNow.copy} params={params} onNotice={(text) => toast(text)}
               onSave={(text, base, removeCopy) => reconcileTex(
                 session.current!, (name, t) => window.cirrus.storeText(name, t), fullNow.node.id, fullNow.file.name, text,
-                { removeCopy: removeCopy ? fullNow.copy!.name : undefined, base },
+                { removeCopy: removeCopy ?? undefined, base },
               )}
               onClose={() => setFull(null)}
             />
