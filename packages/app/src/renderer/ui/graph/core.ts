@@ -12,6 +12,7 @@ import type { PlacementPart } from './placement.ts';
 import type { PublicationPart } from './publication.ts';
 import type { QuestionsPart } from './questions.ts';
 import type { RepercussionPart } from './repercussion.ts';
+import type { Jumps } from './jumps.ts';
 import type { ScenesPart } from './scenes.ts';
 
 /** What draws the graph: one WebGL context for the window's lifetime, its renderer, and the font its boxes are measured with. */
@@ -47,6 +48,8 @@ export interface Graph {
   dragging(): boolean;
   /** Shows a plan in its tab: GraphView's onOpenPlan, as of this render. */
   onOpenPlan(plan: Id): void;
+  /** The open tabs, in their order (App's), by which a list of plans is ordered. */
+  tabsRef: RefObject<readonly Id[]>;
   redraw(): void;
   notify(message: string): void;
   edit(build: Build, onRefused?: () => void, extend?: Id): Promise<Result | null>;
@@ -60,6 +63,8 @@ export interface Graph {
   /** A gesture, a question, a repercussion or a .bib's import under way (GraphView's busy), and why `what` waits for it. */
   busy(): boolean;
   busyReason(what: string): string;
+  /** The jumps and the stack of places behind « précédent » et « suivant » (plan 6a, D2). */
+  jumps: Jumps;
   scenes: ScenesPart;
   questions: QuestionsPart;
   placement: PlacementPart;

@@ -22,9 +22,10 @@ interface Reveal { anchor: Anchor; seq: number }
 /**
  * `rect`: in client pixels (plan 4a, D7); `z`: its depth among the panels, the highest in front. `reveal`: a PDF's
  * preview, the annotation it is asked to show from a pop-up (AnnotationContext.reveal), until its view has shown it
- * (withoutReveal, final review I1).
+ * (withoutReveal, final review I1). `linked`: a node's pop-up opened by a link (withLinked), which offers « Aller au nœud »
+ * (plan 6a, D2).
  */
-export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal }
+export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal; linked?: boolean }
 
 /**
  * What a panel's target is now, or null when it is gone (Review Focus 5): a node absent or in the trash, a file no longer
@@ -57,11 +58,12 @@ export function withNode(panels: Panel[], node: Id, rect: Rect, id: number): Pan
 /**
  * A node's pop-up opened by a link (plan 4b, task 6: a \ref or a \cite compiled, clicked in a summary, a relation or a
  * PDF): loose, in front, at `rect`; no panel closes — the one the link was clicked in is being read. A node whose
- * pop-up is open already, pinned or not, gets no second one: that one comes in front, where it is.
+ * pop-up is open already, pinned or not, gets no second one: that one comes in front, where it is, as it was opened.
+ * The new one is marked `linked` (plan 6a, D2): « Aller au nœud » is offered there only.
  */
 export function withLinked(panels: Panel[], node: Id, rect: Rect, id: number): Panel[] {
   const z = front(panels), own = panels.find((p) => isNode(p, node));
-  return own ? panels.map((p) => (p === own ? { ...p, z } : p)) : [...panels, { id, target: { kind: 'node', node }, rect, pinned: false, z }];
+  return own ? panels.map((p) => (p === own ? { ...p, z } : p)) : [...panels, { id, target: { kind: 'node', node }, rect, pinned: false, z, linked: true }];
 }
 
 const isFile = (p: Panel, node: Id, name: string) => p.target.kind === 'file' && p.target.node === node && sameName(p.target.name, name);
@@ -173,7 +175,7 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
 /**
  * The floating panels of the window (plan 4a, D7), over every tab: pinned, they stay from one tab to the next; loose,
  * a click outside every panel or Escape closes them. A click on a panel brings it in front. Edits go through `onEdit`
- * (the session), which resolves with whether they were written; a plan named in a pop-up opens in its tab; a node's
+ * (the session), which resolves with whether they were written; a plan named in a pop-up shows the node in its tab (`onShowIn`); a node's
  * files are imported and opened by `files` (App). A file clicked in a pop-up opens its preview beside it, or its full
  * screen (`onFullScreen`, App's). While a file is in full screen (`fullHash`, its content), or the preamble's
  * (`covered`, task 7), the panels are under it: Escape and a press there are its own, and a preview of that file
@@ -192,7 +194,11 @@ export function Panels(props: {
   ref?: Ref<PanelsHandle>;
   /** The state, changed in place: `rev` counts the actions, `action` is the last one (App's Shown). */
   state: State; rev: number; action: Action | null; params: RenderParams;
-  onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles;
+  onEdit(build: Build): Promise<boolean>; files: NodeFiles;
+  /** A plan's button in a node's pop-up (plan 6a, D2): the node framed in that plan, as a jump (App's). */
+  onShowIn(node: Id, plan: Id): void;
+  /** « Aller au nœud » in the pop-up a link opened: the node shown where it is in the graph (App's). */
+  onGoToNode(node: Id): void;
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
   onNodeLink(node: Id, near: Rect): void; covered?: boolean; annotations: AnnotationIndex | null; onAnnotate(a: Anchor): boolean;
   onDeleteAnnotation(node: Id): void; onCompare(node: Id, original: string, copy: string): void;
@@ -309,8 +315,8 @@ export function Panels(props: {
           <PanelBoundary key={p.id} what={`Pop-up de « ${title} »`} fallback={failed('node-popup', title, POPUP_FAILED)}>
             <NodePopup
               frame={frame} id={node} found={resolveTarget(props.state, p.target)?.node ?? null}
-              state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={props.onOpenPlan}
-              files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
+              state={props.state} rev={props.rev} action={props.action} params={props.params} onEdit={props.onEdit} onOpenPlan={(plan) => props.onShowIn(node, plan)}
+              onGoToNode={p.linked ? () => props.onGoToNode(node) : undefined} files={props.files} registry={props.registry} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
               onCompare={(original, copy) => props.onCompare(node, original, copy)}
               annotations={props.annotations} onReveal={(pdf, name, anchor) => openFile(pdf, name, p.rect, anchor)}

@@ -28,6 +28,13 @@ export function useQuestions(graph: Graph) {
       answer: (v) => { if (v !== null) go(v === 'everywhere' ? plans : []); },
     });
   };
+  /** « Voir dans un autre plan » (plan 6a, D3) with several plans: they are listed by name, in the order given; `go` gets the one chosen. */
+  const askPlan = (text: string, plans: Id[], go: (plan: Id) => void) => {
+    setQuestion({
+      text, choices: plans.map((id) => ({ value: id, label: stateRef.current.plans.get(id)?.name ?? '?' })),
+      answer: (v) => { if (v !== null) go(v); },
+    });
+  };
   /** Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the last ones. */
   const removeMember = (connection: Id, node: Id) => {
     const s = stateRef.current, plan = sceneRef.current?.plan.id, c = s.connections.get(connection);
@@ -112,7 +119,7 @@ export function useQuestions(graph: Graph) {
       answer: (v) => { if (v !== null) edit(deleteConnectionBuild(plan, connection, v === 'everywhere')); },
     });
   };
-  return { question, setQuestion, asking, askWhere, removeMember, titles, askHide, askDelete, askDeleteConnection };
+  return { question, setQuestion, asking, askWhere, askPlan, removeMember, titles, askHide, askDelete, askDeleteConnection };
 }
 
 export type QuestionsPart = ReturnType<typeof useQuestions>;

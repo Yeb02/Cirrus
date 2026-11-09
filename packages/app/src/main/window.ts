@@ -53,6 +53,11 @@ export function createWindow(deps: WindowDeps): void {
     },
   });
   win.once('ready-to-show', () => (background ? win.showInactive() : win.show()));
+  // Windows' « Précédent » et « Suivant » (plan 6a, D2): the browser keys, and the mouse's side buttons when the system turns
+  // them into app commands. The interface acts on them like Alt+← and Alt+→.
+  win.on('app-command', (_e, command) => {
+    if (command === 'browser-backward' || command === 'browser-forward') win.webContents.send('cirrus:app-command', command);
+  });
   // Closing: the interface sends its snapshot (if anything changed) and says so; past snapshotQuitMs, the window closes
   // anyway (the journal has every action). Bench and captures quit by app.exit, without this.
   let closing = false;

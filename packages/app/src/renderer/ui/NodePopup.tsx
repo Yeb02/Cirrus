@@ -425,13 +425,15 @@ function Files(props: {
  * annotation beside the pop-up (`onReveal`). A line of its annotations has its menu (final review, I2): the
  * annotation's pop-up beside this one (`onNodeLink`, as a link), its deletion everywhere (`onDeleteAnnotation`).
  * `found`: the node as resolveTarget finds it, null once it is gone (Review Focus 5). An edit the session refuses (in
- * a toast) puts its field back to the node's value.
+ * a toast) puts its field back to the node's value. A plan's button in its metadata frames the node there (plan 6a, D2:
+ * `onOpenPlan`, App's jump); a pop-up opened by a link (`onGoToNode`, only then) offers « Aller au nœud » when the node is
+ * in a plan.
  */
 export function NodePopup(props: {
   frame: Frame; id: Id; found: NodeRec | null; state: State; rev: number; action: Action | null; params: RenderParams;
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile; onCompare(original: string, copy: string): void;
   registry: LatexRegistry | null; onNodeLink(node: Id): void; annotations: AnnotationIndex | null; onReveal: RevealAnnotation;
-  onDeleteAnnotation(node: Id): void;
+  onDeleteAnnotation(node: Id): void; onGoToNode?(): void;
 }) {
   const { id, found: n, state: s } = props;
   const latestProps = useRef(props);
@@ -482,6 +484,9 @@ export function NodePopup(props: {
     const annotations = props.annotations?.of(id) ?? [];
     return (
       <>
+        {props.onGoToNode && plans.length > 0 && (
+          <button className="goto" title="Montrer ce nœud dans le graphe" onClick={props.onGoToNode}>Aller au nœud</button>
+        )}
         {n.anchor && <AnnotationOf s={s} anchor={n.anchor} onReveal={props.onReveal} />}
         <h4>Résumé (LaTeX)</h4>
         <LatexField
@@ -497,7 +502,7 @@ export function NodePopup(props: {
           <dt>Historique</dt><dd>{!h ? '…' : h.changes === null ? '—' : plural(h.changes, 'modification', 'modifications')}</dd>
           <dt>Plans</dt>
           <dd>
-            {plans.length === 0 ? 'aucun' : plans.map((p) => <button key={p.id} className="plan" title="Ouvrir ce plan" onClick={() => props.onOpenPlan(p.id)}>{p.name}</button>)}
+            {plans.length === 0 ? 'aucun' : plans.map((p) => <button key={p.id} className="plan" title="Voir ce nœud dans ce plan" onClick={() => props.onOpenPlan(p.id)}>{p.name}</button>)}
           </dd>
           <dt>Connexions</dt><dd>{plural(knowledge, 'connexion de connaissance', 'connexions de connaissance')}</dd>
           <dt>Identifiant</dt><dd className="id volatile">{id}</dd>

@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('cirrus', {
   benchMemory: () => ipcRenderer.invoke('cirrus:bench:memory'),
   benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),
   commit: (action: unknown, unit: string) => ipcRenderer.invoke('cirrus:commit', action, unit),
+  // The Windows app commands « Précédent » et « Suivant » (plan 6a, D2: the mouse's side buttons, the browser keys).
+  onAppCommand: (fn: (command: string) => void) => on('cirrus:app-command', (c) => { if (c === 'browser-backward' || c === 'browser-forward') fn(c); }),
   onQuit: (fn: () => void) => {
     const listener = () => fn();
     ipcRenderer.on('cirrus:quit', listener);

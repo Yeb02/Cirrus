@@ -161,7 +161,11 @@ test('lien vers un nœud (plan 4b, tâche 6) : son pop-up s’ouvre non épingl�
   // The panel the link was clicked in stays (it is being read), and every other one too.
   const linked = withLinked(ps, 'b', at(900), 4);
   expect(linked.map((p) => [p.id, p.pinned, p.z])).toEqual([[1, false, 1], [2, false, 2], [3, true, 3], [4, false, 4]]);
-  expect(linked[3]).toEqual({ id: 4, target: { kind: 'node', node: 'b' }, rect: at(900), pinned: false, z: 4 });
+  // Marked as opened by a link: it offers « Aller au nœud » (plan 6a, D2); one opened by a click in the graph is not.
+  expect(linked[3]).toEqual({ id: 4, target: { kind: 'node', node: 'b' }, rect: at(900), pinned: false, z: 4, linked: true });
+  expect(withNode(ps, 'b', at(900), 4).at(-1)).not.toHaveProperty('linked');
+  // Already open (by a click): in front where it is, and not marked.
+  expect(withLinked(ps, 'c', at(900), 4)[2]).not.toHaveProperty('linked');
   expect(closedIds(ps, linked)).toEqual([]);
   // Its node's pop-up already open, pinned or not: no second one, it comes in front where it is.
   expect(withLinked(ps, 'c', at(900), 4).map((p) => [p.id, p.rect.x, p.z])).toEqual([[1, 10, 1], [2, 400, 2], [3, 800, 4]]);

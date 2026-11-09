@@ -9,6 +9,7 @@ import {
 import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
 import { createGl, type Gl } from '../gl/context.ts';
+import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
@@ -34,23 +35,25 @@ import { usePlacement } from './graph/placement.ts';
 import { usePublicationImport } from './graph/publication.ts';
 import { useQuestions } from './graph/questions.ts';
 import { useRepercussion } from './graph/repercussion.ts';
+import { Jumps } from './graph/jumps.ts';
 import { Revealer, type RevealTarget } from './graph/reveal.ts';
 import { useScaleWheel } from './graph/scaleWheel.ts';
 import { useScenes } from './graph/scenes.ts';
 
 /**
  * What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures); a jump
- * to an object (plan 6a, D2: Revealer), false at once for one gone; the focus back (the search closed).
+ * to an object (plan 6a, D2: Revealer), false at once for one gone, which pushes the place it leaves on the stack of
+ * « précédent » et « suivant » (`back` and `forward`, false when there is nowhere to go); the focus back (the search closed).
  */
 export interface GraphHandle {
   dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void>;
   reveal(target: RevealTarget): boolean;
+  back(): boolean;
+  forward(): boolean;
   focus(): void;
 }
 /** Nothing found: the ring of the search drawn around nothing. */
 const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
-
-const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** The camera a plan opens with: the launch option "x,y,zoom" for visual checks, else the plan framed. */
 function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: RenderParams, launchView?: string): Camera {
@@ -92,6 +95,8 @@ export function GraphView(props: {
    * built); a link to a node clicked in it opens that node's pop-up beside it (`onNodeLink`, App's).
    */
   registry: LatexRegistry | null; onNodeLink(node: Id, near: Rect): void;
+  /** The open tabs in their order (App's): « Voir dans un autre plan » lists the plans in it (plan 6a, D3). */
+  tabs: readonly Id[];
   /**
    * What the search box found in this plan, ringed in searchFoundColor while it is open (plan 6a, D1); the box itself
    * (`overlay`, App's), over the graph like the publication dialog.
@@ -196,6 +201,8 @@ export function GraphView(props: {
   onResultRef.current = props.onResult;
   const onOpenPlanRef = useRef(props.onOpenPlan);
   onOpenPlanRef.current = props.onOpenPlan;
+  const tabsRef = useRef(props.tabs);
+  tabsRef.current = props.tabs;
   // The clicks replayed for captures go through the handlers of the first render: the pop-ups' callbacks are read here.
   const panelsRef = useRef({ open: props.onOpenNode, away: props.onClickAway });
   panelsRef.current = { open: props.onOpenNode, away: props.onClickAway };
@@ -242,7 +249,8 @@ export function GraphView(props: {
   const graph: Graph = {
     root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, gestures,
     dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt, local, restoreScene, moveCamera, feed,
-    busy, busyReason,
+    busy, busyReason, tabsRef,
+    get jumps() { return jumps.current!; },
     get scenes() { return scenes; }, get questions() { return questions; }, get placement() { return placement; }, get copyPaste() { return copyPaste; },
     get bib() { return bib; }, get publication() { return publication; }, get repercussion() { return repercussion; }, get handles() { return handles; },
   };
@@ -280,6 +288,20 @@ export function GraphView(props: {
       if (ms > 0) flashTimer.current = setTimeout(() => setFlash(null), ms);
     },
   });
+
+  /**
+   * The stack of « précédent » et « suivant » (plan 6a, D2) around the revealer: a jump pushes the place it leaves (the
+   * plan shown and its camera); going back or forward restores a plan and its camera exactly (`cameras`: the scene
+   * effect puts a plan's camera back as it shows it).
+   */
+  const jumps = useRef<Jumps | null>(null);
+  jumps.current ??= new Jumps({
+    state: () => stateRef.current,
+    place: () => { const sc = sceneRef.current, cam = engine.current?.renderer.camera; return sc && cam ? { plan: sc.plan.id, camera: cam } : null; },
+    max: () => paramsRef.current.navHistoryMax, busy: () => latest.current.busy(),
+    remember: (plan, camera) => { cameras.current.set(plan, camera); },
+    openPlan: (plan) => onOpenPlanRef.current(plan), moveCamera: (c) => latest.current.moveCamera(c),
+  }, revealer.current);
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
@@ -499,7 +521,9 @@ export function GraphView(props: {
 
   useImperativeHandle(props.ref, () => ({
     dropFilesAt: drop.dropFilesAt,
-    reveal: (target) => revealer.current!.reveal(target),
+    reveal: (target) => jumps.current!.reveal(target),
+    back: () => jumps.current!.back(),
+    forward: () => jumps.current!.forward(),
     focus: () => root.current?.focus({ preventScroll: true }),
   }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
@@ -700,6 +724,9 @@ export function GraphView(props: {
       {...drop.handlers}
       onPointerDown={(ev) => {
         if (ignored(ev)) return;
+        // The mouse's side buttons are « précédent » et « suivant » (plan 6a, D2), acted on by the window when released: not
+        // a left press here, which would begin a gesture.
+        if (sideButton(ev.button)) return;
         root.current!.focus();
         graphPress.current = true;
         buttons.current = ev.buttons;
@@ -728,7 +755,7 @@ export function GraphView(props: {
         feed({ t: 'move', sx, sy });
       }}
       onPointerUp={(ev) => {
-        if (ignored(ev)) return;
+        if (ignored(ev) || sideButton(ev.button)) return;
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
@@ -758,9 +785,11 @@ export function GraphView(props: {
             return;
           }
         }
-        if (!NAV_KEYS.has(ev.key)) return;
+        // The arrows with Alt move nothing (plan 6a, D2): Alt+← and Alt+→ are the window's.
+        const key = navKeyOf(ev);
+        if (key === null) return;
         ev.preventDefault();
-        nav({ t: 'key', key: ev.key });
+        nav({ t: 'key', key });
       }}
     >
       <div className="canvas-host" ref={host} />

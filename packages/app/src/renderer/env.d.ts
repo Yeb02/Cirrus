@@ -35,6 +35,8 @@ export interface CirrusBridge {
    * number of its last line and its time (this PC's clock corrected by the server's, D4), rejects with the reason.
    */
   commit(action: unknown, unit: string): Promise<Committed>;
+  /** Windows' app commands « Précédent » et « Suivant » (plan 6a, D2), as the main process hears them. Returns the unsubscription. */
+  onAppCommand(fn: (command: 'browser-backward' | 'browser-forward') => void): () => void;
   /** The window is closing: `fn` saves what it must, then calls quitReady. Returns the unsubscription. */
   onQuit(fn: () => void): () => void;
   /** Ready to close (after the last snapshot): the main process closes the window. */

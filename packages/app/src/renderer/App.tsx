@@ -10,6 +10,7 @@ import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop
 import { loading } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
+import { destination, historyKey, type HistoryMove, sideButton } from './navigation.ts';
 import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { withSetting } from './settingChanges.ts';
@@ -21,6 +22,7 @@ import { reconcileTex } from './ui/latex/compare.ts';
 import { saveTex } from './ui/latex/saveScheduler.ts';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
+import { OBJECT_GONE, showNodeIn } from './ui/graph/jumps.ts';
 import { measuring } from './ui/graph/launch.ts';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
 import type { Rect } from './ui/panels/geometry.ts';
@@ -153,6 +155,33 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // « Précédent » et « suivant » (plan 6a, D2): Alt+← and Alt+→, the mouse's side buttons (3 and 4, on release) and the
+  // app commands of Windows, from anywhere — a panel's focus included —, but not in a text field or a code editor, which
+  // keep their keys, nor over a full screen, which is modal. The graph does not take a side button for a left press.
+  useEffect(() => {
+    const go = (dir: HistoryMove) => { if (session.current && !fullRef.current && !preambleRef.current) graph.current?.[dir](); };
+    const onKey = (e: KeyboardEvent) => {
+      const dir = historyKey(e);
+      if (dir === null) return;
+      const target = e.target instanceof Element ? (e.target as HTMLElement) : null;
+      if (textOwnsKeys(target) || target?.closest('.cm-editor')) return;
+      e.preventDefault();
+      go(dir);
+    };
+    const onMouse = (e: MouseEvent) => {
+      const dir = sideButton(e.button);
+      if (dir === null) return;
+      e.preventDefault();
+      go(dir);
+    };
+    // The browser keys, and the mouse buttons a driver sends as app commands (the main process hears them, window.ts): a
+    // side button itself reaches the page as mouseup — Chromium consumes it, no app command follows (tested).
+    const off = window.cirrus.onAppCommand((command) => go(command === 'browser-backward' ? 'back' : 'forward'));
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mouseup', onMouse, true);
+    return () => { off(); window.removeEventListener('keydown', onKey); window.removeEventListener('mouseup', onMouse, true); };
   }, []);
 
   // A full screen opened (a file's from a pop-up, the preamble's from the settings) closes the search: it is modal, and
@@ -342,6 +371,17 @@ export function App() {
     if (resolveTarget(state, { kind: 'node', node })) panels.current?.openLinked(node, near);
     else toast(NODE_GONE);
   };
+  /**
+   * A plan's button in a node's pop-up (plan 6a, D2): the node framed in that plan, as a jump; the node gone from it, the
+   * plan opens as before. « Aller au nœud », in the pop-up a link opened: this plan if the node is in it, else the lobby or
+   * the first plan it is in (destination); in none, or gone since, it says so.
+   */
+  const showIn = (node: Id, plan: Id) => showNodeIn({ reveal: (t) => graph.current?.reveal(t) ?? false }, openPlan, plan, node);
+  const goToNode = (node: Id) => {
+    const plan = destination(state, 'node', node, active, tabs);
+    if (plan === null) toast('Ce nœud n’est dans aucun plan.');
+    else if (!graph.current?.reveal({ plan, id: node, kind: 'node' })) toast(OBJECT_GONE);
+  };
   /** The search box closed: nothing ringed any more, the focus back to the graph (plan 6a, D1). */
   const closeSearch = () => {
     setSearchBox(null);
@@ -442,7 +482,7 @@ export function App() {
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
-            onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} ref={graph}
+            onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
             overlay={searchBox && searchWhere && (
               <SearchBox
@@ -461,7 +501,7 @@ export function App() {
           />
         )}
         <Panels
-          ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onOpenPlan={openPlan} files={files}
+          ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onShowIn={showIn} onGoToNode={goToNode} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
           onDeleteAnnotation={(node) => deleteAnnotation(node, false)} onCompare={(node, original, copy) => setFull({ kind: 'compare', node, original, copy })}

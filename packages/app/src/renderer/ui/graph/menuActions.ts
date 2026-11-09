@@ -1,8 +1,10 @@
-import { phantomsOf } from '@cirrus/core';
+import { type Id, phantomsOf } from '@cirrus/core';
 import { type Hit, type MenuAction, PART_FAR, partEnds, partOf, worldToScreen } from '@cirrus/view';
 import { joinBuild, layoutBuild, lobbyConnectionBuild, renameBuild, scaleBuild } from '../../actions.ts';
+import { elsewhere } from '../../navigation.ts';
 import { BIB_WAITING } from './bibImport.ts';
 import type { Graph } from './core.ts';
+import { OBJECT_GONE } from './jumps.ts';
 
 /**
  * A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. The focus comes
@@ -12,9 +14,9 @@ import type { Graph } from './core.ts';
  */
 export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: { x: number; y: number }): void {
   const {
-    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, redraw, notify, edit, moveCamera,
+    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, redraw, notify, edit, tabsRef,
   } = graph;
-  const { placement, copyPaste, questions, bib, publication } = graph;
+  const { placement, copyPaste, questions, bib, publication, jumps } = graph;
   root.current?.focus({ preventScroll: true });
   const e = engine.current, sc = sceneRef.current;
   if (!e || !sc) return;
@@ -123,8 +125,10 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
       break;
     }
     case 'teleport': {
-      // To the original (spec 8.5): the far node; for the centre, the far node's phantom by the bundle. Its place in
-      // the navigation history comes with plan 6.
+      // To the original (spec 8.5): the far node; for the centre, the far node's phantom by the bundle. A jump for
+      // « précédent » et « suivant » (plan 6a, D2): the place left is pushed. The view is centred on the original, at the
+      // zoom it has, not framed as the other jumps frame (the spec says « amène la vue sur l’original »; the centre's
+      // destination is a phantom, which the revealer cannot frame).
       if (clicked < 0) break;
       const it = sc.items[clicked];
       // The centre's: the far node's phantom of the same arm, among its connection's phantoms.
@@ -134,7 +138,18 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
       });
       const dest = it.phantom === 'node' ? sc.byId.get(it.node) ?? -1 : twin === undefined ? -1 : sc.byId.get(twin) ?? -1;
       if (dest < 0) { notify('L’original n’est pas dans ce plan.'); break; }
-      moveCamera({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
+      jumps.moveTo({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
+      break;
+    }
+    case 'seeElsewhere': {
+      // The plans it is shown in other than this one (plan 6a, D3): one, a jump there; several, a question lists them.
+      const target = line !== null ? { kind: 'connection' as const, id: line } : clickedId !== null ? { kind: 'node' as const, id: clickedId } : null;
+      if (!target) break;
+      const plans = elsewhere(stateRef.current, target.kind, target.id, sc.plan.id, tabsRef.current);
+      const go = (plan: Id) => { if (!jumps.reveal({ plan, id: target.id, kind: target.kind })) notify(OBJECT_GONE); };
+      if (plans.length === 0) notify('Cet objet n’est dans aucun autre plan.');
+      else if (plans.length === 1) go(plans[0]);
+      else questions.askPlan('Dans quel plan le voir ?', plans, go);
       break;
     }
     case 'importNode': {
