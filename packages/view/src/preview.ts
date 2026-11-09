@@ -93,7 +93,7 @@ export interface Shown { scene: PlanScene; base: PlanScene; state: PlanScene; vi
 export interface Patched { curves: Ranges; glyphs: Ranges; texts: Ranges; envelopes: boolean }
 
 /** The rectangle the visible set was computed for: the camera's view widened by viewMarginPx (computeVisible). */
-export function preparedRect(cam: Camera, p: RenderParams): Bounds {
+function preparedRect(cam: Camera, p: RenderParams): Bounds {
   const hw = (cam.widthPx / 2 + p.viewMarginPx) / cam.zoom, hh = (cam.heightPx / 2 + p.viewMarginPx) / cam.zoom;
   return { minX: cam.x - hw, maxX: cam.x + hw, minY: cam.y - hh, maxY: cam.y + hh };
 }

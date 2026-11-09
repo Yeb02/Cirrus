@@ -61,7 +61,7 @@ export function clearGlyphMeshes(m: GlyphMeshes): void {
   for (const l of Object.values(m)) l.clear();
 }
 
-export interface GlyphOptions {
+interface GlyphOptions {
   /** Two endpoints (x, y, half extent) for the off-screen fade (spec 8.5). */
   end0: [number, number, number];
   end1: [number, number, number];
@@ -71,7 +71,7 @@ export interface GlyphOptions {
   conn: number;
 }
 
-export const FADE_MODE = { none: 0, slide: 1, out: 2 } as const;
+const FADE_MODE = { none: 0, slide: 1, out: 2 } as const;
 
 /** The glyph vertices of one bundle, in the order appendBundleGlyphs writes them (what an in-place rewrite checks). */
 export function bundleGlyphCount(open: BundleGeometry, closed: BundleGeometry | null): number {
@@ -86,7 +86,7 @@ export function bundleGlyphCount(open: BundleGeometry, closed: BundleGeometry | 
 }
 
 /** The glyph mesh's vertex attributes, with their floats per vertex. */
-export const glyphLists = (g: GlyphMeshes): [FloatList, number][] =>
+const glyphLists = (g: GlyphMeshes): [FloatList, number][] =>
   [[g.position, 2], [g.position2, 2], [g.offset, 2], [g.offset2, 2], [g.scale, 1], [g.fill, 1], [g.end0, 3], [g.end1, 3], [g.fold, 2], [g.conn, 1]];
 
 /**

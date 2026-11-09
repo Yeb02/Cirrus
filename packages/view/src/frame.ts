@@ -63,7 +63,7 @@ export function bundleFor(
  * The zoom from which an element of step k, its text `scale` times a box title's, is readable at the deepest zoom a
  * rebuild serves (cam.zoom × curveZoomHeadroom): below it, its title is not built (spec 8.2).
  */
-export const readableFrom = (k: number, scale: number, p: RenderParams): number =>
+const readableFrom = (k: number, scale: number, p: RenderParams): number =>
   p.textFade[0] / (p.baseFontPx * stepScale(k, p) * scale * p.curveZoomHeadroom);
 
 /**

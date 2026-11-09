@@ -2,7 +2,7 @@ import { ANNOTATION_TITLE_CHARS, MAX_UNITS_PER_REQUEST } from '@cirrus/core';
 import { hexToRgb } from './color.ts';
 
 export type Rgb = [number, number, number];
-export type Range = [number, number];
+type Range = [number, number];
 
 /**
  * Every rendering and interaction constant (spec 19: a default fixed by the design is a setting). Lengths without a
@@ -471,7 +471,7 @@ export const DEFAULT_PARAMS: RenderParams = {
  * `words`: a list of words of WORD, such as package names. They reach tlmgr's command line: a word starts with a
  * letter or a digit, so that none reads as an option (`--repository=…`), the setting being synced (plan 5).
  */
-export type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list' | 'words';
+type ParamKind = 'number' | 'range' | 'color' | 'choice' | 'list' | 'words';
 export const WORD = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export interface ParamSpec {

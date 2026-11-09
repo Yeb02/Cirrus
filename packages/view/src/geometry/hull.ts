@@ -49,7 +49,7 @@ export function vertexNormals(poly: Vec2[]): Vec2[] {
 }
 
 /** A hull of fewer than three points (one or two members, or confounded points) becomes an octagon around them. */
-export function solidPolygon(hull: Vec2[]): Vec2[] {
+function solidPolygon(hull: Vec2[]): Vec2[] {
   if (hull.length >= 3) return hull;
   const c = centroid(hull);
   const r = Math.max(1e-6, ...hull.map((q) => Math.hypot(q.x - c.x, q.y - c.y)));

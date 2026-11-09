@@ -24,7 +24,7 @@ const NO_ROWS: number[] = [];
  * layout is scale-invariant). The app's is measureLines (text.ts), from the layout the titles are drawn with.
  */
 export type Measure = (title: string) => number;
-export type ItemKind = 'node' | 'group' | 'phantom';
+type ItemKind = 'node' | 'group' | 'phantom';
 
 export interface SceneItem {
   /** Node id, or phantom id. */
@@ -58,11 +58,11 @@ export interface SceneItem {
   maxChildK?: number;
 }
 
-export interface SceneEnd { item: number; role: Role; key: Id; dashed: boolean }
+interface SceneEnd { item: number; role: Role; key: Id; dashed: boolean }
 export interface SceneStub { role: Role; node: Id; title: string }
 
 /** A part of a connection as the interface reads it (the façade scene.connections materializes it from the columns). */
-export interface SceneConnection {
+interface SceneConnection {
   index: number;
   id: Id;
   /** main: the bundle with its real members; far: the far side of a split arm, from the far node to the centre phantom. */
@@ -81,7 +81,7 @@ export const PART_MAIN = 0, PART_FAR = 1, PART_GONE = 255;
 export const END_DASHED = 4;
 
 /** The ends of every part, in one pool: a part's are [endStart, endStart + endCount). Re-derived ends go to the top. */
-export interface EndPool {
+interface EndPool {
   item: Int32Array;
   /** The member's node row. */
   key: Int32Array;
@@ -144,7 +144,7 @@ export const GONE_ITEM: SceneItem = Object.freeze({
   id: '', kind: 'node', node: '', title: '', lines: 0, x: Number.NaN, y: Number.NaN, k: 0, halfW: 0, halfH: 0, parent: -1, children: NO_CHILDREN, depth: 0, badge: false,
 });
 /** What the façade gives for a removed part. */
-export const GONE_PART: SceneConnection = Object.freeze({ index: -1, id: '', part: 'main', title: '', ends: Object.freeze([]) as unknown as SceneEnd[], stubs: Object.freeze([]) as unknown as SceneStub[] });
+const GONE_PART: SceneConnection = Object.freeze({ index: -1, id: '', part: 'main', title: '', ends: Object.freeze([]) as unknown as SceneEnd[], stubs: Object.freeze([]) as unknown as SceneStub[] });
 
 export const isLive = (scene: Pick<PlanScene, 'items'>, i: number): boolean => scene.items[i] !== GONE_ITEM;
 
@@ -159,7 +159,7 @@ export function sceneParamsKey(p: RenderParams): string {
  * A map shared between scene versions: a base no one changes, and this version's changes over it (null: removed).
  * Copying it on write costs its changes, not its size; the changes are folded into a new base past an eighth of it.
  */
-export class LayeredMap<K, V> implements ReadonlyMap<K, V> {
+class LayeredMap<K, V> implements ReadonlyMap<K, V> {
   base: Map<K, V>;
   delta: Map<K, V | null>;
   count: number;
@@ -340,7 +340,7 @@ function materialize(scene: PlanScene, i: number): SceneConnection {
 }
 
 /** The part slots of connection row `row`. */
-export function partsOfRow(scene: PlanScene, row: number): number[] {
+function partsOfRow(scene: PlanScene, row: number): number[] {
   const out: number[] = [];
   if (row < 0 || row >= scene.partHead.length) return out;
   for (let i = scene.partHead[row]; i >= 0; i = scene.partNext[i]) out.push(i);
@@ -393,7 +393,7 @@ export function nodeItem(n: NodeRec, pl: Placement, linesOf: (t: string) => numb
 }
 
 /** A centre phantom shows its connection's title (row `c`, −1 for none), or « Connexion » without one. */
-export const centerTitle = (s: State, c: number): string => (c >= 0 && connKind(s, c) !== NO_RECORD && connTitle(s, c)) || 'Connexion';
+const centerTitle = (s: State, c: number): string => (c >= 0 && connKind(s, c) !== NO_RECORD && connTitle(s, c)) || 'Connexion';
 
 /** A phantom's item, before its place in the drawn hierarchy; `title` for a centre phantom (its connection's). */
 export function phantomItem(s: State, ph: PhantomRec, linesOf: (t: string) => number, p: RenderParams, title?: string): SceneItem {
@@ -413,7 +413,7 @@ const CHAIN_LIMIT = 10_000;
  * The drawn parent of the group chain starting at node row `g` (included): its first node placed in the plan (spec 7:
  * a group removed from the plan keeps its links), −1 for none. Stops on coming back to `self`, as ancestors does.
  */
-export function nearestPlaced(s: State, plan: number, itemOfNode: Int32Array, g: number, self: number): number {
+function nearestPlaced(s: State, plan: number, itemOfNode: Int32Array, g: number, self: number): number {
   for (let steps = 0; g >= 0 && g !== self && steps < CHAIN_LIMIT; g = groupOfRow(s, plan, g), steps++) {
     const i = g < itemOfNode.length ? itemOfNode[g] : -1;
     if (i >= 0) return i;
@@ -460,7 +460,7 @@ export function groupShape(items: SceneItem[], i: number, p: RenderParams): Grou
 }
 
 /** Group i (an object of the caller's) takes its derived shape. */
-export function deriveGroup(items: SceneItem[], i: number, p: RenderParams): void {
+function deriveGroup(items: SceneItem[], i: number, p: RenderParams): void {
   Object.assign(items[i], groupShape(items, i, p));
 }
 
@@ -483,7 +483,7 @@ export interface SceneLookup {
 export interface PartSpec { far: boolean; center: number; ends: number[]; stubs: SceneStub[] | null; layout: ConnectionLayout | undefined; title: string }
 
 /** Receives one part: `ends` holds `count` triples (item, node row, meta), and is reused once the call returns. */
-export type PartSink = (
+type PartSink = (
   far: boolean, center: number, ends: Int32Array, count: number, stubs: SceneStub[] | null, layout: ConnectionLayout | undefined, title: string,
 ) => void;
 
@@ -501,7 +501,7 @@ const farEnds = new Int32Array(3);
  * `seen` (buildScene): for a knowledge connection, each placed member that sees it here is counted — shown in it when
  * it is drawn here, or its arm split here (badgeOf's rule, spec 11.3).
  */
-export function emitParts(L: SceneLookup, c: number, shown: ArrayLike<number>, phantoms: readonly PhantomRec[], sink: PartSink, seen?: Int32Array): number {
+function emitParts(L: SceneLookup, c: number, shown: ArrayLike<number>, phantoms: readonly PhantomRec[], sink: PartSink, seen?: Int32Array): number {
   const s = L.s;
   if (c < 0) return 0;
   const kind = kindOf(s, c), trashed = trashedOf(s, c), counting = seen !== undefined && kind === KNOWLEDGE_KIND && !trashed;
@@ -678,7 +678,7 @@ export function boundsOf(items: SceneItem[]): Bounds | null {
 }
 
 /** The hue ranks: top-level groups by identifier. */
-export function huesOf(items: SceneItem[], roots: number[]): Map<number, number> {
+function huesOf(items: SceneItem[], roots: number[]): Map<number, number> {
   const tops = roots.filter((i) => items[i].kind === 'group').sort((a, b) => (items[a].id < items[b].id ? -1 : items[a].id > items[b].id ? 1 : 0));
   return new Map(tops.map((i, r) => [i, r]));
 }

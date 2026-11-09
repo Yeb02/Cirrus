@@ -4,7 +4,7 @@ import type { RenderParams } from './params.ts';
 import { buildScene, type Measure, type PlanScene, type SceneItem } from './scene.ts';
 
 /** What « partout » would do to the other plans after a node changed group in one plan (spec 10). */
-export interface Repercussion {
+interface Repercussion {
   /** Plans where the node changes group: `to` its group there (null: it only leaves); `manual` when its place contradicts it. */
   changed: { plan: Id; to: Id | null; manual: boolean }[];
   /** Plans left alone and reported: the node is in a third group there, unrelated. */
@@ -24,7 +24,7 @@ const envelopeOf = (sc: PlanScene, kids: number[], pad: number): Vec2[] => {
 };
 
 /** The current scene of a plan, for the repercussions of one drop. */
-export type SceneOf = (plan: Id) => PlanScene;
+type SceneOf = (plan: Id) => PlanScene;
 
 /**
  * The scenes one drop's repercussions read (I1 of the final review): the scene `cached` gives, current at the state's

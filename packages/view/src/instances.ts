@@ -117,17 +117,17 @@ const ROLE_CODE = { source: 0, target: 1, associate: 2 } as const;
  * All relative to the origin. Its glyphs are the `glyphs` mesh.
  */
 export const CURVE_FIELDS = [['open0', 4], ['open1', 4], ['closed0', 4], ['closed1', 4], ['width', 4], ['end0', 3], ['end1', 3], ['fold', 2]] as const;
-export type CurveField = (typeof CURVE_FIELDS)[number][0];
+type CurveField = (typeof CURVE_FIELDS)[number][0];
 const curveStarts = {} as Record<CurveField, number>;
 let curveFloats = 0;
 for (const [f, size] of CURVE_FIELDS) { curveStarts[f] = curveFloats; curveFloats += size; }
 export const CURVE_AT: Readonly<Record<CurveField, number>> = curveStarts;
 export const CURVE_FLOATS = curveFloats;
 
-export interface MarkerAt extends CoreAt { multi: boolean }
+interface MarkerAt extends CoreAt { multi: boolean }
 /** A part's layout standing in for the plan's own (a handle being dragged, spec 8.5), by part slot. */
 export type LayoutOverrides = ReadonlyMap<number, Omit<ConnectionLayout, 'plan' | 'connection'>>;
-export interface StubAt { conn: number; stub: number; pos: Vec2; title: string }
+interface StubAt { conn: number; stub: number; pos: Vec2; title: string }
 
 /**
  * What the GPU draws of a visible set (plan 3c task 8), relative to `origin`; the items themselves are read from the
@@ -206,7 +206,7 @@ interface Work {
   cullFrom: number;
 }
 
-export function newInstances(): Instances {
+function newInstances(): Instances {
   return {
     origin: { x: 0, y: 0 }, boxes: new IntList(), simple: new IntList(), curves: new FloatList(), curveKeys: [], glyphs: newGlyphMeshes(),
     envelopes: newEnvelopeMeshes(), texts: new FloatList(), markers: [], stubs: [], titles: [], revealZoom: Infinity, pending: false, work: null,

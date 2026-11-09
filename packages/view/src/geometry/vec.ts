@@ -12,4 +12,3 @@ export const norm = (a: Vec2, fallback: Vec2 = EAST): Vec2 => {
 };
 export const rot = (a: Vec2, r: number): Vec2 => ({ x: a.x * Math.cos(r) - a.y * Math.sin(r), y: a.x * Math.sin(r) + a.y * Math.cos(r) });
 export const perp = (a: Vec2): Vec2 => ({ x: -a.y, y: a.x });
-export const lerp = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });

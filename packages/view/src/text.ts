@@ -3,7 +3,7 @@ import type { RenderParams } from './params.ts';
 import type { Measure } from './scene.ts';
 
 /** A glyph of a bitmap font: its rectangle in the atlas (texels) and its metrics, in the font's units (`FontData.size`). */
-export interface FontChar { id: number; x: number; y: number; width: number; height: number; xoffset: number; yoffset: number; xadvance: number }
+interface FontChar { id: number; x: number; y: number; width: number; height: number; xoffset: number; yoffset: number; xadvance: number }
 
 /**
  * A bitmap font as its BMFont XML descriptor gives it (scripts/build-font.mjs): plain data.
@@ -206,7 +206,7 @@ function cachedLayout(fi: FontIndex, text: string, wrapFU: number, lhFU: number)
   return l;
 }
 
-export interface TextLayout {
+interface TextLayout {
   lines: number;
   width: number;
   height: number;
@@ -266,7 +266,7 @@ export const TITLE_NODE = 0, TITLE_GROUP_OPEN = 1, TITLE_GROUP_CLOSED = 2, TITLE
  * - slot (1): its item's slot in the item texture, −1 for none.
  */
 export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2], ['slot', 1]] as const;
-export type GlyphField = (typeof GLYPH_FIELDS)[number][0];
+type GlyphField = (typeof GLYPH_FIELDS)[number][0];
 
 const starts = {} as Record<GlyphField, number>;
 let floats = 0;

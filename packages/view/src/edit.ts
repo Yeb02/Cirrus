@@ -7,7 +7,7 @@ import { GONE_ITEM, isLive, type PlanScene, type SceneItem } from './scene.ts';
 import type { SceneIndex, VisibleSet } from './visibility.ts';
 
 /** Placement changes for moveNodes and movePhantom, gathered by `combine` into one action. */
-export interface Moves {
+interface Moves {
   nodes: { node: Id; x?: number; y?: number; k?: number }[];
   phantoms: { id: Id; x: number; y: number; k?: number }[];
   /** The dilation: around `center`, by `factor` (what moves with it, a connection's layout, follows). */
@@ -160,7 +160,7 @@ export function visibleIntruders(scene: PlanScene, visible: VisibleSet): Map<num
   return out;
 }
 
-export interface DropEffect { item: number; leave: boolean; enter: number | null }
+interface DropEffect { item: number; leave: boolean; enter: number | null }
 
 /**
  * What a drop does to each moved item's group (spec 10): a free item enters the group it is dropped in; a member only

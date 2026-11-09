@@ -594,7 +594,7 @@ export function updateIndex(index: SceneIndex, scene: PlanScene, changes: SceneC
 
 // ———— Visible set
 
-export type LevelState = 'open' | 'fading' | 'closed';
+type LevelState = 'open' | 'fading' | 'closed';
 const stateOf = (t: number): LevelState => (t >= 1 ? 'closed' : t > 0 ? 'fading' : 'open');
 
 /** One letter per distinct maxChildK: the visible set only changes when this string does. */
@@ -603,7 +603,7 @@ export function foldSignature(index: SceneIndex, zoom: number, p: RenderParams):
 }
 
 /** item: drawn endpoint with the fading level open; item2: with it closed (equal outside a fold transition). */
-export interface VisibleEnd { item: number; item2: number; role: Role; key: Id; hollow: boolean; hollow2: boolean; dashed: boolean }
+interface VisibleEnd { item: number; item2: number; role: Role; key: Id; hollow: boolean; hollow2: boolean; dashed: boolean }
 
 export interface VisibleConnection {
   /** Scene connection indices merged into this line (length ≥ 1, spec 8.5 « 2 connexions »). */
