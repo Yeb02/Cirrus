@@ -105,7 +105,7 @@ async function envoyer(url, dataDir, pcDir) {
 async function prendre(url, dataDir, pcDir) {
   const { adoptBase, stagedDir } = await import('../src/main/sync/firstSync.ts');
   const { fileSecrets } = await import('../src/main/sync/config.ts');
-  const { FORMAT } = await import('../src/main/sync/client.ts');
+  const { FORMAT } = await import('../src/main/sync/connection.ts');
   const { LocalStore } = await import('@cirrus/store');
   const config = await pairing(url, dataDir, 'Mesure B', 'pc-mesure-b');
   mkdirSync(pcDir, { recursive: true });

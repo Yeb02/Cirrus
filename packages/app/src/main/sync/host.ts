@@ -4,8 +4,9 @@ import { type Action, type Id, isObject, type Op, type Reconciliation, type Remo
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
-import { FORMAT, SyncClient, writeRefusal } from './client.ts';
+import { SyncClient, writeRefusal } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
+import { FORMAT } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
 import {
   adoptBase, firstSyncOffer, isBaseId, offerMessage, pristine, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage,

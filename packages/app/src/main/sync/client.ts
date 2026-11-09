@@ -1,13 +1,13 @@
 import { openAsBlob } from 'node:fs';
 import {
   type Id, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_ID_CHARS, MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, MAX_SETTING_AHEAD_MS, MAX_SETTINGS_PER_REQUEST, MAX_UNITS_PER_REQUEST,
-  parseRemoteUnit, parseUnit, type RemoteUnit, type SettingChange, type SettingRow, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, SyncDivergedError, SyncFormatError, truncateLabel,
-  type Unit, type UnitResult,
+  parseRemoteUnit, parseUnit, type RemoteUnit, type SettingChange, type SettingRow, SyncDivergedError, SyncFormatError, truncateLabel, type Unit, type UnitResult,
 } from '@cirrus/core';
-import { filePath, type LocalStore, SCHEMA_VERSION } from '@cirrus/store';
+import { filePath, type LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { parseSettingRows } from '../settings.ts';
-import type { SecretStore, ServerConfig } from './config.ts';
+import type { SecretStore } from './config.ts';
+import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, reasonOf, Refusal } from './connection.ts';
 import { Downloads, filesToFetch, filesToSend, hasBlob, isHash } from './downloads.ts';
 import { readEvents } from './events.ts';
 import type { SyncStatus } from './protocol.ts';
@@ -58,32 +58,6 @@ export interface SettingsSync {
   acknowledge(sent: Record<string, SettingChange>, rows: Record<string, SettingRow>): void;
 }
 
-/** The format headers of /hello (D10): the server refuses another protocol, schema or snapshot version. */
-export const FORMAT = { 'Cirrus-Protocol': String(SYNC_PROTOCOL_VERSION), 'Cirrus-Schema': String(SCHEMA_VERSION), 'Cirrus-Snapshot': String(SNAPSHOT_VERSION) };
-const JSON_BODY = { 'Content-Type': 'application/json' };
-
-const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
-
-/**
- * A refusal that trying again will not change: the server's (a token revoked, another format, its data replaced or
- * restored, a request it will never take), or this PC's state no longer following the server's (`diverged`). The
- * client stops until start() is called again.
- */
-class Refusal extends Error {
-  readonly diverged: boolean;
-
-  constructor(message: string, diverged = false) {
-    super(message);
-    this.diverged = diverged;
-  }
-}
-
-/** The French reason of a refused request: its body's `error`, or its status. */
-async function reasonOf(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
-  return typeof body?.error === 'string' ? body.error : `Réponse ${res.status} du serveur.`;
-}
-
 /** A write as the client sends it (POST /units): a label past the bound, written before it was cut at its making, cut (R20). */
 const sentUnit = (u: Unit): Unit => (u.label.length > MAX_LABEL_CHARS ? { ...u, label: truncateLabel(u.label) } : u);
 
@@ -122,90 +96,6 @@ const isResult = (r: unknown): r is UnitResult => {
   const x = r as Record<string, unknown>;
   return Number.isSafeInteger(x.accepted) || Number.isSafeInteger(x.stale) || typeof x.refused === 'string';
 };
-
-/** One connection to the server: its requests (one abort for all), its stream, what it received and what it waits for. */
-class Connection {
-  readonly config: ServerConfig;
-  readonly abort = new AbortController();
-  /** What ended it, the first cause. */
-  error: unknown = null;
-  /** The server's last number when it said hello: the base has caught up once it has received it. */
-  target = 0;
-  caughtUp = false;
-  /** Its stream open: the sender runs. */
-  open = false;
-  /** The number of the last write its stream gave. */
-  received = 0;
-  /** The writes received, not yet handed to the reconciliation; the writes the server refused, likewise. */
-  inbox: RemoteUnit[] = [];
-  refused: { unit: Id; message: string }[] = [];
-  /** The writes the server accepted, with their numbers, until they come back on the stream: not sent again. */
-  readonly accepted = new Map<Id, number>();
-  /** After a stale answer: the number to have received before sending again. */
-  waitFor = 0;
-  /** The most writes in one request, halved for a body over MAX_BODY_BYTES. */
-  batchLimit = MAX_UNITS_PER_REQUEST;
-  /** The receive window under way. */
-  timer: ReturnType<typeof setTimeout> | null = null;
-  /** Running from the stream's opening: once it fires, the connection has proven itself (the backoff starts again from the shortest pause). */
-  proof: ReturnType<typeof setTimeout> | null = null;
-  /** The run: the hello, the stream, then the sender awaited. */
-  done: Promise<void> = Promise.resolve();
-  /** flush's waits: resolved once the sender has nothing left to send. */
-  private readonly idle: (() => void)[] = [];
-  private wake: (() => void) | null = null;
-  private poked = false;
-
-  constructor(config: ServerConfig) {
-    this.config = config;
-  }
-
-  get closed(): boolean {
-    return this.abort.signal.aborted;
-  }
-
-  /** Resolves at the next poke; at once if one came since the last sleep, or once closed. */
-  sleep(): Promise<void> {
-    if (this.poked || this.closed) {
-      this.poked = false;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => { this.wake = resolve; });
-  }
-
-  poke(): void {
-    const wake = this.wake;
-    this.wake = null;
-    if (wake) wake();
-    else this.poked = true;
-  }
-
-  /** Resolves once the sender has nothing left to send, or the connection is closed. */
-  drained(): Promise<void> {
-    return this.closed ? Promise.resolve() : new Promise((resolve) => { this.idle.push(resolve); this.poke(); });
-  }
-
-  settled(): void {
-    for (const resolve of this.idle.splice(0)) resolve();
-  }
-
-  /** Ends it for `e`, the first cause kept. */
-  fail(e: unknown): void {
-    if (this.closed) return;
-    this.error = e;
-    this.close();
-  }
-
-  close(): void {
-    this.abort.abort();
-    if (this.timer !== null) clearTimeout(this.timer);
-    if (this.proof !== null) clearTimeout(this.proof);
-    this.timer = null;
-    this.proof = null;
-    this.poke();
-    this.settled();
-  }
-}
 
 type Mode = 'off' | 'connecting' | 'catching-up' | 'live' | 'offline' | 'refused';
 
@@ -292,7 +182,7 @@ export class SyncClient {
       this.setMode('off');
       return;
     }
-    const conn = new Connection(config);
+    const conn = new Connection(config, this.deps);
     this.conn = conn;
     // A retry stays « offline » until it succeeds: the chip does not flicker.
     if (this.mode !== 'offline') this.setMode('connecting');
@@ -327,7 +217,7 @@ export class SyncClient {
    */
   private async session(conn: Connection, started: (sender: Promise<void>) => void): Promise<void> {
     const t0 = this.deps.now();
-    const hello = await this.json(await this.request(conn, '/hello', { headers: FORMAT }));
+    const hello = await json(await conn.request('/hello', { headers: FORMAT }));
     const t1 = this.deps.now();
     const { serverTime, lastSeq, baseId } = (hello ?? {}) as { serverTime?: unknown; lastSeq?: unknown; baseId?: unknown };
     if (
@@ -346,14 +236,14 @@ export class SyncClient {
     this.setClock(serverTime - (t0 + t1) / 2);
     conn.target = lastSeq as number;
     const from = this.deps.store.lastServerSeq();
-    const res = await this.request(conn, '/events', { headers: { 'Last-Event-ID': String(from), Accept: 'text/event-stream' } });
-    await this.ok(res);
+    const res = await conn.request('/events', { headers: { 'Last-Event-ID': String(from), Accept: 'text/event-stream' } });
+    await ok(res);
     if (!res.body) throw new Error('Flux du serveur sans corps.');
     // The shared settings (task 6), read whole once the stream is open, and applied before anything it brings: a setting
     // changed meanwhile comes by both, and its stamp keeps it from being applied twice (SharedSettings.receive).
     const shared = this.deps.settings;
     if (shared) {
-      const rows = await this.json(await this.request(conn, '/settings'));
+      const rows = await json(await conn.request('/settings'));
       let settings: Record<string, SettingRow>;
       try {
         settings = parseSettingRows(rows);
@@ -548,7 +438,7 @@ export class SyncClient {
    * refused alone would be refused again, and is dropped, said in the console.
    */
   private async postSettings(conn: Connection, settings: SettingsSync, sent: Record<string, SettingChange>): Promise<void> {
-    const res = await this.request(conn, '/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
+    const res = await conn.request('/settings', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ changes: sent }) });
     if (res.status === 400 || res.status === 413) {
       const reason = await reasonOf(res), keys = Object.keys(sent);
       if (keys.length === 1) {
@@ -559,7 +449,7 @@ export class SyncClient {
       for (const key of keys) if (!conn.closed) await this.postSettings(conn, settings, { [key]: sent[key] });
       return;
     }
-    const answer = await this.json(res);
+    const answer = await json(res);
     let rows: Record<string, SettingRow>;
     try {
       rows = parseSettingRows((answer as { settings?: unknown } | null)?.settings);
@@ -578,7 +468,7 @@ export class SyncClient {
     const hashes = filesToSend(batch).filter((h) => !this.onServer.has(h));
     for (let i = 0; i < hashes.length; i += MAX_HASHES_PER_REQUEST) {
       const chunk = hashes.slice(i, i + MAX_HASHES_PER_REQUEST);
-      const body = await this.json(await this.request(conn, '/files/missing', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ hashes: chunk }) }));
+      const body = await json(await conn.request('/files/missing', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ hashes: chunk }) }));
       const missing = (body as { missing?: unknown } | null)?.missing;
       if (!Array.isArray(missing)) throw new Refusal('Réponse du serveur illisible à /files/missing : mets à jour Cirrus, ou le serveur.');
       const absent = new Set(missing);
@@ -586,12 +476,12 @@ export class SyncClient {
         if (absent.has(hash)) {
           if (!hasBlob(this.deps.storeDir, hash)) continue;
           const file = await openAsBlob(filePath(this.deps.storeDir, { name: '', hash, size: 0 }));
-          const res = await this.request(conn, `/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob });
+          const res = await conn.request(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob });
           if (res.status === 400 || res.status === 413) {
             console.warn(`Fichier ${hash} refusé par le serveur : ${await reasonOf(res)}`);
             continue;
           }
-          await this.ok(res);
+          await ok(res);
           await res.body?.cancel();
         }
         this.onServer.add(hash);
@@ -614,29 +504,12 @@ export class SyncClient {
       }
       return null;
     }
-    const answer = await this.json(await this.request(conn, '/units', { method: 'POST', headers: JSON_BODY, body }));
+    const answer = await json(await conn.request('/units', { method: 'POST', headers: JSON_BODY, body }));
     const results = (answer as { results?: unknown } | null)?.results;
     if (!Array.isArray(results) || results.length !== batch.length || !results.every(isResult)) {
       throw new Refusal('Réponse du serveur illisible à /units : mets à jour Cirrus, ou le serveur.');
     }
     return results;
-  }
-
-  private request(conn: Connection, path: string, init: { method?: string; headers?: Record<string, string>; body?: BodyInit } = {}): Promise<Response> {
-    return this.deps.fetch(conn.config.url + path, { ...init, headers: { Authorization: `Bearer ${conn.config.token}`, ...init.headers }, signal: conn.abort.signal });
-  }
-
-  /** A refused request: a Refusal for what trying again will not change (4xx), an Error otherwise (the server's own failure). */
-  private async ok(res: Response): Promise<void> {
-    if (res.ok) return;
-    const reason = await reasonOf(res);
-    if (res.status >= 400 && res.status < 500) throw new Refusal(reason);
-    throw new Error(reason);
-  }
-
-  private async json(res: Response): Promise<unknown> {
-    await this.ok(res);
-    return res.json();
   }
 
   /** GET /files/<hash> on the server of the connection under way, or else of the secrets now (none: null). */
