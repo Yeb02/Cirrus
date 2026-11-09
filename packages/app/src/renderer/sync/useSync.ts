@@ -1,8 +1,9 @@
 import type { RenderParams } from '@cirrus/view';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FirstSyncChoice, ServerInfo } from '../../main/sync/protocol.ts';
 import { SyncedChanges } from '../latex/background.ts';
 import { type EditSession, type Opened, openState } from '../session.ts';
+import { referencedPdfs } from './downloadAll.ts';
 import { SyncSession, type SyncView } from './syncSession.ts';
 
 /** Without a server paired (plan 5a, D8): no veil, no chip. */
@@ -19,6 +20,10 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
   const [server, setServer] = useState<ServerInfo | null>(null);
   const sync = useRef<SyncSession | null>(null);
   const [received] = useState(() => new SyncedChanges());
+  /** The session that holds the state: « Tout télécharger » counts its PDFs (plan 5b, D8). */
+  const edits = useRef<EditSession | null>(null);
+  // « Tout télécharger » told at each file's end (D8): into what the block shows, while paired.
+  useEffect(() => window.cirrus.onDownloadAll((p) => setServer((i) => (i?.paired ? { ...i, downloadAll: p } : i))), []);
 
   /**
    * The startup's part, from the moment App begins to load its state. What the main process says of the server after
@@ -47,6 +52,7 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
           toast: (text) => toast(text), onView: setView, onServer: setServer,
         });
         sync.current = s;
+        edits.current = session;
         early();
         const since = told.info ?? undefined;
         setServer(since ?? info);
@@ -59,10 +65,12 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
     };
   };
 
+  /** The PDFs the base refers to now (referencedPdfs): read at each question and each start. */
+  const pdfs = () => (edits.current ? referencedPdfs(edits.current.state) : []);
   /**
    * The block « Serveur » (plan 5a): pairing, its first sync (D7), and unpairing; what the main process holds comes
    * through the session (onServer), after each of them and at each mounting of the block (refresh: review of task 5,
-   * round 2).
+   * round 2). Paired, the server's state and « Tout télécharger » (plan 5b, D8).
    */
   const serverBlock = {
     info: server, status: view.status,
@@ -70,6 +78,13 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
     onFirst: (choice: FirstSyncChoice) => sync.current!.first(choice),
     onUnpair: () => sync.current!.unpair(),
     refresh: () => sync.current!.server(),
+    serverState: { ask: () => window.cirrus.serverStatus(), pollMs: () => params.current.serverStatusPollMs },
+    downloadAll: {
+      plan: () => window.cirrus.downloadAllPlan(pdfs()),
+      start: () => window.cirrus.downloadAllStart(pdfs()),
+      stop: () => window.cirrus.downloadAllStop(),
+      reserveMb: () => params.current.downloadAllReserveMb,
+    },
   };
   /** The chip's click: offline or refused, try again now. */
   const retry = () => sync.current?.retry();

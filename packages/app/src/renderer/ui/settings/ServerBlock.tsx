@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { FirstSyncChoice, FirstSyncOffer, PairResult, ServerInfo, SyncStatus } from '../../../main/sync/protocol.ts';
+import type {
+  DownloadAllPlan, DownloadAllStart, FirstSyncChoice, FirstSyncOffer, PairResult, ServerInfo, ServerStatus, SyncStatus,
+} from '../../../main/sync/protocol.ts';
+import { planText, progressText, startRefusal, statusLines } from '../../sync/downloadAll.ts';
 import { chipOf } from '../../sync/syncSession.ts';
 
 /** The address proposed: a server on this machine, at the port its command line takes by default (packages/server). */
@@ -20,22 +23,33 @@ export function offerAction(o: FirstSyncOffer): { choice: FirstSyncChoice; label
   }
 }
 
+/** What the block is given (useSync's serverBlock). */
+export interface ServerBlockProps {
+  info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onFirst(choice: FirstSyncChoice): Promise<PairResult>;
+  onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
+  /** The server's state (plan 5b, D8): asked at the mounting of a block paired, then every `pollMs()` (serverStatusPollMs). */
+  serverState?: { ask(): Promise<ServerStatus>; pollMs(): number };
+  /**
+   * « Télécharger tous les PDF… » (D8): its plan and its start, of the PDFs the base refers to when asked (referencedPdfs);
+   * « Arrêter »; downloadAllReserveMb.
+   */
+  downloadAll?: { plan(): Promise<DownloadAllPlan>; start(): Promise<DownloadAllStart>; stop(): void; reserveMb(): number };
+}
+
 /**
  * The head of the rubric « Serveur » (plan 5a, D3): not paired, the server's address, the pairing code its `jumeler`
  * shows, this PC's name there, and « Jumeler »; a refusal said under them. The first pairing's question (D7), in its
  * place while the main process holds it (`info.offer`: the panel closed and opened again shows it still): why, then its
  * button and « Annuler ». A vierge PC is asked nothing: « Jumeler » goes on to the download of the server's base, which
  * shows as any first sync under way (after the short review of plan 5a, 2026-11-09). Paired, the server, the
- * synchronisation's state, and « Dissocier ce PC ». A first sync under way, or the restart on a base taken, says what
+ * synchronisation's state, the server's (plan 5b, D8: its latency, the throughput, its space), « Télécharger tous les
+ * PDF… » and « Dissocier ce PC ». A first sync under way, or the restart on a base taken, says what
  * the main process says (`info.busy`, told as it begins: short review after plan 5a, D4). A failed one brings the form
  * back, its message under it. `refresh` reads what the main process holds at each mounting (the panel opened, the
  * rubric unfolded): a first sync under way then shows as such; until it answers, nothing can be clicked (review of task
  * 5, round 2); while mounted, `info` follows each change the main process tells (B2).
  */
-export function ServerBlock(props: {
-  info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>; onFirst(choice: FirstSyncChoice): Promise<PairResult>;
-  onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
-}) {
+export function ServerBlock(props: ServerBlockProps) {
   const [url, setUrl] = useState(props.info?.url || DEFAULT_SERVER_URL);
   const [code, setCode] = useState('');
   const [name, setName] = useState(props.info?.name ?? '');
@@ -55,6 +69,28 @@ export function ServerBlock(props: {
     setUrl(proposal.url || DEFAULT_SERVER_URL);
     setName(proposal.name);
   }, [proposal?.url, proposal?.name]);
+  // The server's state (D8), asked while the block shows a server paired: at once, then every serverStatusPollMs, each
+  // ask once the one before answered; the main process asks the server only while connected.
+  const [serverState, setServerState] = useState<ServerStatus | null>(null);
+  useEffect(() => {
+    const source = props.serverState;
+    if (!paired || !source) return;
+    let mounted = true, timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = () => {
+      void source.ask().catch(() => null).then((s) => {
+        if (!mounted) return;
+        setServerState(s);
+        timer = setTimeout(poll, source.pollMs());
+      });
+    };
+    poll();
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+    };
+  }, [paired]);
+  /** « Télécharger tous les PDF… »: its question (`ok`: « Télécharger » offered), or why it cannot start; null: neither. */
+  const [question, setQuestion] = useState<{ ok: boolean; text: string } | null>(null);
   const blocked = busy !== null || !fresh;
   const run = (label: string, job: () => Promise<void>) => {
     setBusy(label);
@@ -75,14 +111,51 @@ export function ServerBlock(props: {
   const waiting = !paired && props.info.waiting ? <p className="server-error">{props.info.waiting}</p> : null;
   if (paired) {
     const state = chipOf(props.status, false)?.text ?? 'Synchronisation arrêtée';
-    // The address is not drawn in a capture (`volatile`): its port, a free one, changes from one run to the next (task 7).
+    const all = props.downloadAll, progress = props.info.downloadAll, downloading = progress !== undefined && progress.end === undefined;
+    const ask = (job: () => Promise<{ ok: boolean; text: string } | null>) => run('', async () => setQuestion(await job()));
+    /**
+     * « Tout télécharger » (D8): under way, where it is and « Arrêter »; asked, its question, « Télécharger » and
+     * « Annuler »; otherwise « Télécharger tous les PDF… », under why it could not start, or how the last one ended.
+     */
+    const download = !all ? null : downloading ? (
+      <>
+        <p className="server-state">{progressText(progress)}</p>
+        <div className="server-actions server-download"><button onClick={() => all.stop()}>Arrêter</button></div>
+      </>
+    ) : question?.ok ? (
+      <>
+        <p className="server-state">{question.text}</p>
+        <div className="server-actions server-download">
+          <button disabled={blocked} onClick={() => ask(async () => {
+            const r = await all.start();
+            const why = startRefusal(r, all.reserveMb());
+            return why === null ? null : { ok: false, text: why };
+          })}>Télécharger</button>
+          <button disabled={blocked} onClick={() => setQuestion(null)}>Annuler</button>
+        </div>
+      </>
+    ) : (
+      <>
+        {(question ?? progress) && <p className="server-state">{question ? question.text : progressText(progress!)}</p>}
+        <div className="server-actions server-download">
+          <button disabled={blocked} onClick={() => ask(async () => planText(await all.plan(), all.reserveMb()))}>Télécharger tous les PDF…</button>
+        </div>
+      </>
+    );
+    // Not drawn in a capture (`volatile`): the address, its port a free one that changes from one run to the next (task
+    // 7); the server's state, measured live, each value at the end of its line (plan 5b, D8).
     return (
       <div className="param-group server-block">
         <p className="server-state">Jumelé à <span className="server-url volatile">{props.info.url}</span>, sous le nom « {props.info.name} ».</p>
         <p className="server-state">État : {state}</p>
+        {props.serverState && statusLines(serverState).map(([label, value]) => (
+          <p key={label} className="server-state">{label} : <span className="volatile">{value}</span></p>
+        ))}
+        {download}
         <div className="server-actions">
           <button disabled={blocked} onClick={() => run('', props.onUnpair)}>Dissocier ce PC</button>
         </div>
+        {error && <p className="server-error">{error}</p>}
       </div>
     );
   }

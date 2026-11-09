@@ -1,9 +1,8 @@
 import type { LatexStatus } from '@cirrus/core';
 import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, sameSetting, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
-import type { FirstSyncChoice, PairResult, ServerInfo, SyncStatus } from '../../main/sync/protocol.ts';
 import { latexStateText } from '../latex/install.ts';
-import { ServerBlock } from './settings/ServerBlock.tsx';
+import { ServerBlock, type ServerBlockProps } from './settings/ServerBlock.tsx';
 import { type RubricView, settingsTree } from './settingsTree.ts';
 
 type Value = RenderParams[keyof RenderParams];
@@ -127,7 +126,8 @@ const advancedShown = new Set<string>();
  * A search shows every setting it finds, advanced ones included. Changes apply at once; they are not in the history nor
  * undoable. The « LaTeX » rubric (plan 4b, task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX »
  * when it is absent or its installation failed, and opens the preamble's full screen. The « Serveur » rubric (plan 5a)
- * begins with its block: pairing this PC, or its server and « Dissocier ce PC » (`server`).
+ * begins with its block: pairing this PC, or its server, its state, « Télécharger tous les PDF… » (plan 5b, D8) and
+ * « Dissocier ce PC » (`server`).
  */
 export function SettingsPanel(props: {
   /**
@@ -135,9 +135,7 @@ export function SettingsPanel(props: {
    * batch received from the server may have outdated (review of task 6, Important 1). `onResetAll`: « Tout réinitialiser ».
    */
   params: RenderParams; onChange: Change; onResetAll(): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
-  server: { info: ServerInfo | null; status: SyncStatus; onPair(url: string, code: string, name: string): Promise<PairResult>;
-    onFirst(choice: FirstSyncChoice): Promise<PairResult>; onUnpair(): Promise<void>; refresh?(): Promise<unknown>;
-  };
+  server: ServerBlockProps;
 }) {
   const [query, setQuery] = useState('');
   const [, refresh] = useState(0);
