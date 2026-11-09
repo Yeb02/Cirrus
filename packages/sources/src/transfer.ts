@@ -42,6 +42,9 @@ export const INVALID_DELAY = 'Délai invalide.';
  */
 export const validLimits = (limits: Limits) => [limits.timeoutMs, limits.pdfMaxMs].every((ms) => Number.isFinite(ms) && ms > 0);
 
+/** The longest delay `setTimeout` keeps: 2^31 − 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /** What an exchange says when it ends early, in French: its delay passed, a PDF's download too long, the network failing. */
 export interface Failures {
   late(): Refusal;
@@ -106,10 +109,15 @@ export class Transfer {
     if (this.stalled) this.deadline = performance.now() + this.limits.timeoutMs;
   }
 
+  /**
+   * One timer for both deadlines. Node reads a delay over 2^31 − 1 ms (about 24.8 days) as 1 ms, so a far deadline is
+   * reached in steps of that size, check() setting the timer again until it is due.
+   */
   private schedule(): void {
     clearTimeout(this.timer);
     if (this.signal.aborted) return;
-    this.timer = setTimeout(() => this.check(), Math.max(0, Math.min(this.deadline, this.absolute) - performance.now()));
+    const wait = Math.max(0, Math.min(this.deadline, this.absolute) - performance.now());
+    this.timer = setTimeout(() => this.check(), Math.min(wait, MAX_TIMER_MS));
   }
 
   private check(): void {
