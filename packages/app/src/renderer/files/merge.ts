@@ -1,4 +1,4 @@
-import { type FileRef, fileNameKey } from '@cirrus/core';
+import { type FileRef, fileNameKey, isCopyOf } from '@cirrus/core';
 
 /** What a drop does to a node's files: the new list, and the names, as they read in it, added, replaced or left as they were. */
 export interface Merge { files: FileRef[]; added: string[]; replaced: string[]; unchanged: string[] }
@@ -53,6 +53,17 @@ export function mergeFiles(existing: FileRef[], incoming: FileRef[]): Merge {
     }
   }
   return out;
+}
+
+/**
+ * The .tex of which `copy` is the conflict copy (plan 5b, D7), among its node's `files`: the one whose name the copy's
+ * is « nom (conflit du AAAA-MM-JJ HHhMM).tex » of (isCopyOf; « (2) » after it when that name was taken). Null when there
+ * is none — the original renamed or removed since, `copy` no copy at all — and for a file that is not a .tex: only a
+ * .tex is compared.
+ */
+export function conflictOriginal(files: readonly FileRef[], copy: FileRef): FileRef | null {
+  if (!/\.tex$/i.test(copy.name)) return null;
+  return files.find((f) => f !== copy && /\.tex$/i.test(f.name) && isCopyOf(copy.name, nameKey(f.name))) ?? null;
 }
 
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;

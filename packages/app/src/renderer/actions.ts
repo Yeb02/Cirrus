@@ -428,6 +428,50 @@ export function texSaveBuild(s: State, node: Id, ref: FileRef, opts: { keepTheir
 }
 
 /**
+ * A .tex reconciled with its conflict copy, from the comparison's full screen (plan 5b, D7): the text taken is stored
+ * already (`ref`, under the original's name; null: nothing taken, the original is left as it is) and replaces the
+ * original in its place, as texSaveBuild has it; with `removeCopy`, the file of that name leaves the node's files in
+ * the same action — its blob stays in the store, where the history refers to it (spec 5.2): never deleted. One action,
+ * « Réconcilier « x.tex » » (cut to MAX_LABEL_CHARS): one undo step gives both files back. Null when `s` holds all of
+ * it already; refused when the action is computed if the node is gone or in the trash, or the original no longer in
+ * it (texSaveRefusal). A copy gone meanwhile is not an error: what was asked of it is done.
+ *
+ * `keepTheirs` (D6, texSaveBuild's): the original changed elsewhere while the comparison was open; the version the node
+ * holds when the action is computed stays under its conflict name (texConflictName, at `at`, now by default), unless it
+ * is the saved text's own.
+ */
+export function reconcileTexBuild(
+  s: State, node: Id, original: string, ref: FileRef | null, opts: { removeCopy?: string; keepTheirs?: boolean; at?: number } = {},
+): Build {
+  const label = truncateLabel(`Réconcilier « ${original} »`);
+  const at = opts.at ?? Date.now();
+  /** The node's files once reconciled: the same objects when nothing changes. */
+  const reconciled = (files: readonly FileRef[]): FileRef[] => {
+    let out = [...files];
+    if (ref) {
+      const theirs = files.find((f) => sameName(f.name, original));
+      const kept = opts.keepTheirs && theirs && theirs.hash !== ref.hash ? [{ ...theirs, name: texConflictName(files, original, at) }] : [];
+      out = mergeFiles(out, [ref, ...kept]).files;
+    }
+    const copy = opts.removeCopy;
+    return copy === undefined ? out : out.filter((f) => !sameName(f.name, copy));
+  };
+  const unchanged = (files: readonly FileRef[]) => {
+    const next = reconciled(files);
+    return next.length === files.length && next.every((f, i) => f === files[i]);
+  };
+  const n = s.nodes.get(node);
+  if (n && unchanged(n.files)) return null;
+  return (st) => {
+    const why = texSaveRefusal(st, node, original);
+    if (why) throw new CommandError(why);
+    const files = nodeRec(st, node).files;
+    if (unchanged(files)) throw new CommandError(UP_TO_DATE);
+    return combine(st, label, [(x) => editNode(x, node, { files: reconciled(files) })]);
+  };
+}
+
+/**
  * The name the version from elsewhere of the .tex `name` is kept under by a save at `at` (plan 5b, D6): the core's
  * conflictName, « nom (conflit du AAAA-MM-JJ HHhMM).tex » in this PC's time, numbered after it when `files` hold that
  * name already — the copies the synchronisation's merge makes are named so too.
