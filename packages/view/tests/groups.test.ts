@@ -62,7 +62,7 @@ test('cible du dépôt par l’index de la vue : la même que le balayage du pla
   const st = copyOf(s), r = rng(31);
   let compared = 0, found = 0;
   const check = (scene: PlanScene, index: ReturnType<typeof buildIndex>) => {
-    const live = scene.items.flatMap((it, i) => (isLive(scene, i) ? [i] : []));
+    const live = scene.items.flatMap((_it, i) => (isLive(scene, i) ? [i] : []));
     const leaf = live.find((i) => scene.items[i].kind === 'node' && scene.items[i].parent >= 0), group = live.find((i) => scene.items[i].kind === 'group');
     const draggedSets = [[], ...(leaf !== undefined ? [[leaf]] : []), ...(group !== undefined ? [[group]] : []), live.slice(0, 2)];
     const points = dropPoints(scene, r);

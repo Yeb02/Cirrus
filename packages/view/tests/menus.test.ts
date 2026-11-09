@@ -4,8 +4,7 @@ import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
-import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { camAtTextPx, copyOf, fixture, measure, P, run } from './helpers.ts';
+import { copyOf, fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene, these: PlanScene;
 beforeAll(() => {
