@@ -4,13 +4,11 @@ import { beforeAll, expect, test } from 'vitest';
 import { connectTarget, nodeSuggestions, otherPlans } from '../src/connect.ts';
 import { sampleBranch } from '../src/geometry/ribbon.ts';
 import { simpleMarker } from '../src/geometry/simple.ts';
-import { buildHitIndex } from '../src/hit.ts';
-import { buildInstances, CURVE_AT, CURVE_FLOATS, SIMPLE_INTS } from '../src/instances.ts';
+import { CURVE_AT, CURVE_FLOATS, SIMPLE_INTS } from '../src/instances.ts';
 import { menuFor } from '../src/menus.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { emptySelection } from '../src/selection.ts';
-import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { camAtTextPx, fixture, measure, P } from './helpers.ts';
+import { fixture, frameAt, measure, P } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
 beforeAll(() => {
@@ -18,13 +16,6 @@ beforeAll(() => {
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
 
-const frameAt = (scene: PlanScene, k: number, px: number) => {
-  const cam = camAtTextPx(scene, k, px);
-  const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
-  const origin = { x: cam.x, y: cam.y };
-  const inst = buildInstances(scene, visible, cam, origin, P);
-  return { cam, visible, origin, inst, hits: buildHitIndex(scene, visible, inst, P) };
-};
 const at = (id: string) => sc.byId.get(id)!;
 const mainOf = (id: string) => sc.connections.findIndex((c) => c.id === id && c.part === 'main');
 /** The complex curves of visible connection `vi`: each with the member it leads to, and its open cubic's points (relative to the origin). */

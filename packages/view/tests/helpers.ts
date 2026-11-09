@@ -11,10 +11,12 @@ import { LocalStore } from '@cirrus/store';
 import type { Camera } from '../src/camera.ts';
 import { copyClip, pasteSteps } from '../src/clip.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
+import { buildHitIndex } from '../src/hit.ts';
+import { buildInstances } from '../src/instances.ts';
 import { foldT } from '../src/lod.ts';
 import { DEFAULT_PARAMS, type RenderParams } from '../src/params.ts';
 import { buildScene, isLive, type Measure, PART_FAR, PART_GONE, partOf, type PlanScene } from '../src/scene.ts';
-import { NO_PART, type PartLists, type SceneIndex, type VisibleSet } from '../src/visibility.ts';
+import { buildIndex, computeVisible, NO_PART, type PartLists, type SceneIndex, type VisibleSet } from '../src/visibility.ts';
 
 export const P = DEFAULT_PARAMS;
 export const measure: Measure = (t) => Math.max(1, Math.ceil(t.length / 23));
@@ -153,6 +155,15 @@ export function camAtTextPx(scene: PlanScene, k: number, px: number, p: RenderPa
   const b = scene.bounds!;
   return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, zoom: px / (p.baseFontPx * p.textScale * p.factor ** k), widthPx: 2560, heightPx: 1600 };
 }
+
+/** A frame at camAtTextPx: what is visible, its instances from the camera's centre, and their hit index. */
+export const frameAt = (scene: PlanScene, k: number, px: number) => {
+  const cam = camAtTextPx(scene, k, px);
+  const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
+  const origin = { x: cam.x, y: cam.y };
+  const inst = buildInstances(scene, visible, cam, origin, P);
+  return { cam, visible, origin, inst, hits: buildHitIndex(scene, visible, inst, P) };
+};
 
 /**
  * Cameras drawn at random over a scene (an empty one: around the origin), on a 2560×1600 screen: centres in its

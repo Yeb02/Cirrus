@@ -1,34 +1,19 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { type Action, applyOp, connect, createNode, createPlan, emptyState, type Id, placeNode, removeFromPlan, type State } from '@cirrus/core';
-import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
-import { LocalStore } from '@cirrus/store';
+import { connect, createNode, createPlan, emptyState, type Id, placeNode, removeFromPlan, type State } from '@cirrus/core';
+import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { offsetPolygon } from '../src/geometry/hull.ts';
-import { DEFAULT_PARAMS } from '../src/params.ts';
-import { buildScene, type Measure, type PlanScene } from '../src/scene.ts';
-import { copyOf } from './helpers.ts';
+import { buildScene, type PlanScene } from '../src/scene.ts';
+import { copyOf, created, fixture, measure, P, run } from './helpers.ts';
 
-const P = DEFAULT_PARAMS;
-const measure: Measure = (t) => Math.max(1, Math.ceil(t.length / 23));
 let s: State;
 let ids: FixtureIds;
 let sc: PlanScene;
 const it = (scene: PlanScene, id: Id) => scene.items[scene.byId.get(id)!];
 
 beforeAll(() => {
-  const dir = mkdtempSync(join(tmpdir(), 'cirrus-view-'));
-  const store = LocalStore.open(dir, { pc: 'test' });
-  ids = buildFixture(store, dir);
-  s = store.loadState();
-  store.close();
-  rmSync(dir, { recursive: true, force: true });
+  ({ s, ids } = fixture());
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
-
-const run = (st: State, a: Action): Action => { for (const op of a.ops) applyOp(st, op); return a; };
-const created = (a: Action, t: 'node' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 
 test('lobby de la base de test : hiérarchie à trois niveaux', () => {
   expect(it(sc, ids.nodes.groupeTheorie).kind).toBe('group');

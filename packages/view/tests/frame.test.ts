@@ -3,29 +3,19 @@ import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { groupPalette } from '../src/color.ts';
 import { groupColors } from '../src/frame.ts';
-import { buildHitIndex } from '../src/hit.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
 import { sampleBranch } from '../src/geometry/ribbon.ts';
 import { simpleBranches } from '../src/geometry/simple.ts';
-import { buildInstances, CURVE_AT, CURVE_FLOATS, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
+import { CURVE_AT, CURVE_FLOATS, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
 import { placeTitle } from '../src/titles.ts';
-import { buildIndex, computeVisible } from '../src/visibility.ts';
-import { camAtTextPx, fixture, measure, P } from './helpers.ts';
+import { fixture, frameAt, measure, P } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
 beforeAll(() => {
   ({ s, ids } = fixture());
   sc = buildScene(s, ids.plans.lobby, measure, P);
 });
-
-const frameAt = (scene: PlanScene, k: number, px: number) => {
-  const cam = camAtTextPx(scene, k, px);
-  const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
-  const origin = { x: cam.x, y: cam.y };
-  const inst = buildInstances(scene, visible, cam, origin, P);
-  return { cam, visible, origin, inst, hits: buildHitIndex(scene, visible, inst, P) };
-};
 
 test('instances complètes sans NaN sur les trois plans de la base de test, à cinq zooms (Review Focus 4, 5)', () => {
   for (const plan of Object.values(ids.plans)) {
