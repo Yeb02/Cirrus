@@ -6,8 +6,6 @@ import type { LatexSetup } from '../latex/setup.ts';
 
 /** What LaTeX's calls read when the interface makes them: once the base is open, the service and its setup (index.ts). */
 interface LatexDeps {
-  /** The base's folder, whose store holds a compilation's resources. */
-  dir(): string;
   /** The settings LaTeX reads (textViewMaxMb). */
   params(): RenderParams;
   /** LaTeX's compilations (plan 4b). */
@@ -22,9 +20,11 @@ interface LatexDeps {
  */
 export function wireLatex(deps: LatexDeps): void {
   // LaTeX (plan 4b, D2, D8): the interface sends what the source needs; the request's form is checked here whatever the
-  // interface did (strings, lists, a source of textViewMaxMb at most, resources of plain names present in the store).
+  // interface did (strings, lists, a source of textViewMaxMb at most, resources of plain names and SHA-256 hashes). The
+  // node's files absent from this PC's store, a PDF never opened among them, are left out by the service (inStore, final
+  // review of plan 5b, I1): they never refuse a request.
   ipcMain.handle('cirrus:latex:compile', (_e, req: unknown) => {
-    const why = invalidRequest(req, deps.dir(), deps.params().textViewMaxMb * 2 ** 20);
+    const why = invalidRequest(req, deps.params().textViewMaxMb * 2 ** 20);
     const latexSetup = deps.setup();
     if (why !== null || !latexSetup) {
       console.warn(`Compilation LaTeX refusée : ${why ?? 'base non ouverte'}`);
@@ -35,13 +35,13 @@ export function wireLatex(deps: LatexDeps): void {
   ipcMain.on('cirrus:latex:cancel', (_e, slot: unknown) => { if (typeof slot === 'string') deps.setup()?.cancel(slot); });
   // What a synchronisation changed, compiled in the background (plan 5b, D1): no answer, the PDFs land in the cache.
   // Checked as a compilation is, latexBackgroundMax at most (the service keeps no more); those refused are left out, said
-  // in one line (a file received but not downloaded yet refuses each source of its node).
+  // in one line. A file received but not downloaded yet, or a PDF never opened, refuses none: the service leaves it out.
   ipcMain.on('cirrus:latex:background', (_e, reqs: unknown) => {
     const latex = deps.latex();
     if (!Array.isArray(reqs) || !latex) return;
     const p = deps.params(), kept: CompileRequest[] = [], refused: string[] = [];
     for (const req of reqs.slice(0, p.latexBackgroundMax)) {
-      const why = invalidRequest(req, deps.dir(), p.textViewMaxMb * 2 ** 20);
+      const why = invalidRequest(req, p.textViewMaxMb * 2 ** 20);
       if (why === null) kept.push(req as CompileRequest);
       else refused.push(why);
     }

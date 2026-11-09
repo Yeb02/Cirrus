@@ -93,14 +93,16 @@ const openout = (name: string) => `\\newwrite\\w\\immediate\\openout\\w=\\detoke
 
 // --- without pdfLaTeX ---
 
-test('invalidRequest : une requête bien formée passe ; une forme fausse, une source trop longue, une ressource absente ou un nom qui sort sont refusés', () => {
+test('invalidRequest : une requête bien formée passe, une ressource absente du magasin comprise ; une forme fausse, une source trop longue ou un nom qui sort sont refusés', () => {
   const png = importFile(base, join(ASSETS, 'schéma_compression.png'));
   const good = req({
     resources: [png], refs: [{ label: 'a', title: 'A', node: NODE }, { label: 'b', title: 'B', node: null }], broken: ['c'],
     doubled: [{ label: 'd', title: 'D', node: NODE }], cites: [{ key: 'k', text: 'K', node: PUB }], doubledCites: [{ key: 'k2', text: 'K2', node: PUB }],
     unknownCites: ['u'], known: [{ label: 'e', number: '1', page: '1', anchor: 'equation.1' }],
   });
-  expect(invalidRequest(good, base, 1000)).toBeNull();
+  expect(invalidRequest(good, 1000)).toBeNull();
+  // A file this PC has not downloaded (final review of plan 5b, I1): the service leaves it out, the request passes.
+  expect(invalidRequest({ ...good, resources: [png, { ...png, name: 'article.pdf', hash: 'f'.repeat(64) }] }, 1000)).toBeNull();
   const bad: [string, unknown][] = [
     ['rien', null], ['un texte', 'x'], ['sans emplacement', { ...good, slot: 3 }], ['un mode inconnu', { ...good, mode: 'pdf' }],
     ['une source trop longue', { ...good, source: 'é'.repeat(501) }], ['un préambule qui n’est pas un texte', { ...good, preamble: null }],
@@ -110,17 +112,16 @@ test('invalidRequest : une requête bien formée passe ; une forme fausse, une s
     ['une clé inconnue qui n’est pas un texte', { ...good, unknownCites: [null] }],
     ['sans clés en double', { ...good, doubledCites: undefined }], ['une clé en double sans texte', { ...good, doubledCites: [{ key: 'k', node: PUB }] }],
     ['un label connu incomplet', { ...good, known: [{ label: 'e', number: '1', page: '1' }] }],
-    ['une ressource absente du magasin', { ...good, resources: [{ ...png, hash: 'f'.repeat(64) }] }],
     ['une empreinte mal formée', { ...good, resources: [{ ...png, hash: '../../x' }] }],
     ...['a/b.png', 'a\\b.png', 'c:x.png', '.', '..', ''].map((name): [string, unknown] => [`le nom ${name}`, { ...good, resources: [{ ...png, name }] }]),
     // The snippet's width (final review, M1): a number within latexSnippetWidthCm's bounds; none for a page.
     ['sans largeur', { ...good, widthCm: undefined }], ['une largeur trop petite', { ...good, widthCm: 3.9 }], ['une largeur trop grande', { ...good, widthCm: 20.5 }],
     ['une largeur NaN', { ...good, widthCm: Number.NaN }], ['une largeur en texte', { ...good, widthCm: '9' }], ['une page avec une largeur', { ...good, mode: 'page', widthCm: 9 }],
   ];
-  for (const [what, x] of bad) expect(invalidRequest(x, base, 1000), what).toEqual(expect.any(String));
-  expect(invalidRequest({ ...good, mode: 'page', widthCm: null }, base, 1000)).toBeNull();
-  expect(invalidRequest({ ...good, widthCm: 4 }, base, 1000)).toBeNull();
-  expect(invalidRequest({ ...good, widthCm: 20 }, base, 1000)).toBeNull();
+  for (const [what, x] of bad) expect(invalidRequest(x, 1000), what).toEqual(expect.any(String));
+  expect(invalidRequest({ ...good, mode: 'page', widthCm: null }, 1000)).toBeNull();
+  expect(invalidRequest({ ...good, widthCm: 4 }, 1000)).toBeNull();
+  expect(invalidRequest({ ...good, widthCm: 20 }, 1000)).toBeNull();
 });
 
 test('sans pdfLaTeX : unavailable, avec reason « absent », et rien n’est lancé (le statut est celui de LatexSetup, tâche 7)', async () => {
@@ -419,6 +420,31 @@ texTest('fichiers du nœud sous leur nom', async () => {
   const png = importFile(base, join(ASSETS, 'schéma_compression.png'));
   const a = await start().compile(req({ mode: 'page', resources: [png], source: '\\includegraphics[width=2cm]{schéma_compression.png}' }));
   expect((await pagesOf(a))[0].images).toBe(1);
+});
+
+// Final review of plan 5b, I1: a node's file absent from this PC's store — a PDF that stays on the server until its first
+// reading (plan 5a, D6; plan 5b, D2), a file received but not downloaded yet — is left out of the request, before its key.
+texTest('une ressource absente du magasin (un PDF jamais ouvert) est laissée hors de la demande, avant sa clé ; le fichier arrivé, la clé change', async () => {
+  const png = importFile(base, join(ASSETS, 'schéma_compression.png')), pdf = importFile(base, join(ASSETS, 'Li_Vitányi_extrait.pdf'));
+  rmSync(filePath(base, pdf));
+  const s = start(), version = bins!.version;
+  const keyOf = (r: CompileRequest) => new PdfCache(join(base, 'clés'), () => 0).key(r, version);
+  // The node's summary: the request passes the main process's check, compiles, and its key is the one without the PDF.
+  const summary = req({ resources: [png, pdf] });
+  expect(invalidRequest(summary, 1000)).toBeNull();
+  const a = ok(await s.compile(summary));
+  expect(a.pdf.key).toBe(keyOf(req({ resources: [png] })));
+  expect(a.pdf.key).not.toBe(keyOf(summary));
+  // A .tex of the node: one that includes the present file compiles; one that includes the absent one gets TeX's error.
+  const page = (source: string) => req({ slot: `file:${NODE}:x.tex`, mode: 'page', widthCm: null, resources: [png, pdf], source });
+  expect((await pagesOf(await s.compile(page('\\includegraphics[width=2cm]{schéma_compression.png}'))))[0].images).toBe(1);
+  expect(await s.compile(page('\\includegraphics[width=2cm]{Li_Vitányi_extrait.pdf}'))).toMatchObject({
+    status: 'error', error: { message: expect.stringContaining('File `Li_Vitányi_extrait.pdf\' not found') },
+  });
+  // The PDF downloaded since: the same summary's key is the one with it, compiled anew.
+  importFile(base, join(ASSETS, 'Li_Vitányi_extrait.pdf'));
+  const b = ok(await s.compile(summary));
+  expect(b).toMatchObject({ cached: false, pdf: { key: keyOf(summary) } });
 });
 
 texTest('\\documentclass : compilé tel quel', async () => {

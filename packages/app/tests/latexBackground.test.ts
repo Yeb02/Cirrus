@@ -8,11 +8,11 @@ import {
   setPreamble, type State, type TagValue, uuidv7,
 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
-import { LocalStore } from '@cirrus/store';
+import { filePath, importFile, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS, type RenderParams } from '@cirrus/view';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { PdfCache } from '../src/main/latex/cache.ts';
-import { LatexService } from '../src/main/latex/compiler.ts';
+import { invalidRequest, LatexService } from '../src/main/latex/compiler.ts';
 import { findBinaries, type TexBinaries } from '../src/main/latex/tinytex.ts';
 import { backgroundOrigins, changedBySync, type SyncChange, SyncedChanges } from '../src/renderer/latex/background.ts';
 import { LatexRegistry, type Origin, slotOf } from '../src/renderer/latex/registry.ts';
@@ -42,6 +42,7 @@ let dir: string, store: LocalStore, ids: FixtureIds;
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const TEX = process.env.CIRRUS_TINYTEX || join(repo, 'bench', 'latex', 'vendor', 'TinyTeX');
 const hasTex = existsSync(join(TEX, 'bin', 'windows', 'pdflatex.exe'));
+const ASSETS = join(repo, 'packages', 'fixtures', 'assets');
 const texTest = (name: string, fn: () => Promise<void>, timeout = 60_000) =>
   test.skipIf(!hasTex)(hasTex ? name : `${name} (sauté : pas de TinyTeX dans ${TEX})`, fn, timeout);
 let bins: TexBinaries | null = null;
@@ -386,6 +387,21 @@ describe('le principal : la file de fond (LatexService.background)', () => {
     await drain(s);
     ok(await user);
     expect(inCache(bg)).toBe(true);
+  });
+
+  // Final review of plan 5b, I1: a publication node whose PDF this PC never opened (it stays on the server until its first
+  // reading) — its summary's request passes the main process's check, and compiles without the PDF.
+  texTest('une demande de fond dont un fichier du nœud est absent du magasin est acceptée, et compilée sans lui', async () => {
+    const pdf = importFile(base, join(ASSETS, 'Li_Vitányi_extrait.pdf'));
+    rmSync(filePath(base, pdf));
+    const s = start();
+    const bg = req({ slot: 'summary:publication', resources: [pdf] });
+    expect(invalidRequest(bg, 1000)).toBeNull();
+    s.background([bg]);
+    await s.backgroundIdle();
+    expect(inCache({ ...bg, resources: [] })).toBe(true);
+    // The pop-up opened then finds it in the cache, its PDF still absent.
+    expect(ok(await s.compile(bg))).toMatchObject({ cached: true });
   });
 
   // After task 8 (the typed preview under the background's queue): a prepared pdfLaTeX always left ready to the user, and

@@ -358,7 +358,8 @@ export class LatexService {
     if (!bins) return this.settle(job, { status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
     // A request of the user came while pdfLaTeX was looked for: the background waits for it (D1), even cold.
     if (job.background && this.userBusy()) return this.stepAside(job);
-    const key = this.opts.cache.key(job.req, bins.version);
+    const req = inStore(job.req, this.opts.store);
+    const key = this.opts.cache.key(req, bins.version);
     if (job.background) {
       // Compiled already (D1): skipped, its entry neither read nor made the one used last, no view having asked for it.
       if (this.opts.cache.has(key)) return this.settle(job, { status: 'cancelled' });
@@ -366,7 +367,7 @@ export class LatexService {
       const hit = this.opts.cache.get(key);
       if (hit) return this.settle(job, { status: 'ok', ...hit, ms: this.ms(job), cached: true });
     }
-    if (isStandalone(job.req.source)) return this.runStandalone(job, bins, key);
+    if (isStandalone(req.source)) return this.runStandalone(job, req, bins, key);
     if (job.req.preamble !== this.preamble || this.resting) {
       if (job.background && this.resting) {
         // The pool rests after a failure: only a request of the user starts it again; the queue goes (D1), its views
@@ -379,12 +380,13 @@ export class LatexService {
       if (job.background && this.preamble !== null && job.req.preamble !== this.preamble) return this.settle(job, { status: 'cancelled' });
       this.switchPool(job.req.preamble);
     } else if (this.failure) return this.settle(job, this.failed(job, this.failure));
-    return this.runFragment(job, key);
+    return this.runFragment(job, req, key);
   }
 
-  private async runFragment(job: Job, key: string): Promise<void> {
-    const cited = citedLabels(job.req.source);
-    let req = job.req;
+  /** `first`: the job's request, its files absent from the store left out (inStore). */
+  private async runFragment(job: Job, first: CompileRequest, key: string): Promise<void> {
+    const cited = citedLabels(first.source);
+    let req = first;
     for (let pass = 1; ; pass++) {
       const warm = await this.take(job, req.preamble, pass > 1);
       if (!warm) return;
@@ -403,14 +405,17 @@ export class LatexService {
     }
   }
 
-  /** A standalone document (\documentclass), compiled as it is, cold, in folders of its own; again once if it asks. */
-  private async runStandalone(job: Job, bins: TexBinaries, key: string): Promise<void> {
+  /**
+   * A standalone document (\documentclass), compiled as it is, cold, in folders of its own; again once if it asks. `req`:
+   * the job's, its files absent from the store left out (inStore).
+   */
+  private async runStandalone(job: Job, req: CompileRequest, bins: TexBinaries, key: string): Promise<void> {
     const dirs = this.newDirs();
     const src = `job-${dirs.n}-src.tex`, aux = join(dirs.work, `job-${dirs.n}.aux`);
     let exited: Promise<unknown> = Promise.resolve();
     try {
-      this.link(dirs, job.req.resources);
-      writeFileSync(join(dirs.work, src), job.req.source, 'utf8');
+      this.link(dirs, req.resources);
+      writeFileSync(join(dirs.work, src), req.source, 'utf8');
       for (let pass = 1; ; pass++) {
         if (job.done) return;
         const before = read(aux);
@@ -815,9 +820,10 @@ const WIDTH = PARAM_SPECS.find((p) => p.key === 'latexSnippetWidthCm')!;
 /**
  * Why a request from the interface is refused, or null: every field of the form CompileRequest says, a source of
  * `maxSourceBytes` at most (textViewMaxMb), a snippet's width within latexSnippetWidthCm's bounds (none for a page),
- * resources of plain names whose hash is in the store.
+ * resources of plain names and SHA-256 hashes. A resource absent from the store does not refuse it: the service leaves
+ * it out (inStore).
  */
-export function invalidRequest(x: unknown, store: string, maxSourceBytes: number): string | null {
+export function invalidRequest(x: unknown, maxSourceBytes: number): string | null {
   if (!isObject(x)) return 'pas un objet';
   if (!isText(x.slot) || x.slot === '') return 'emplacement';
   if (x.mode !== 'snippet' && x.mode !== 'page') return 'mode';
@@ -837,11 +843,24 @@ export function invalidRequest(x: unknown, store: string, maxSourceBytes: number
     if (!isObject(r) || !isText(r.name) || !isText(r.hash) || typeof r.size !== 'number') return 'ressource mal formée';
     if (!plainName(r.name)) return `nom de ressource refusé : ${r.name.slice(0, 200)}`;
     if (!HASH.test(r.hash)) return `empreinte refusée : ${r.hash.slice(0, 200)}`;
-    try {
-      if (!statSync(filePath(store, { name: r.name, hash: r.hash, size: r.size })).isFile()) return `ressource absente du magasin : ${r.hash}`;
-    } catch {
-      return `ressource absente du magasin : ${r.hash}`;
-    }
   }
   return null;
+}
+
+/**
+ * `req` without the node's files absent from this PC's store (final review of plan 5b, I1): a PDF stays on the server
+ * until its first reading (plan 5a, D6), and one the server imported never came here (plan 5b, D2); a file just received
+ * may not be downloaded yet. Left out before the cache's key, for the user's requests and the background's alike: a
+ * source that does not use them compiles, under the key of a request without them; one that includes one gets TeX's own
+ * error, its file not found. Once the file is here, the next request's key differs. `req` itself when none is absent.
+ */
+export function inStore(req: CompileRequest, store: string): CompileRequest {
+  const resources = req.resources.filter((r) => {
+    try {
+      return statSync(filePath(store, r)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return resources.length === req.resources.length ? req : { ...req, resources };
 }
