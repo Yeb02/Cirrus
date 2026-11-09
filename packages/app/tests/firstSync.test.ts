@@ -614,6 +614,41 @@ test('revue courte du plan 5a, B1 : la réponse de /seed/done perdue, le serveur
   expect(readSettings(a.dir).syncDownloads).toBe(7);
 });
 
+test('relecture des corrections du plan 5a, N1 : un envoi à un serveur neuf dont la réponse de /seed/done s’est perdue, puis la base rejointe sur le serveur qu’elle suivait (R31) et synchronisée là ; jumelé de nouveau au premier, rien n’est renuméroté : l’offre de remplacement', async () => {
+  // S2, the server A follows: its base sent there.
+  const s2 = (lab = await Lab.start());
+  const a = await app(s2, 'pc-a');
+  const { X } = await fill(a);
+  await seeded(s2, a);
+  const followed = await s2.baseId();
+  // S1, new: A sends its base there too, done's answer lost — S1 holds it, A keeps the seed as pending.
+  await a.sync.unpair();
+  const s1 = await Lab.start();
+  labs.push(s1);
+  expect(await a.sync.pair(s1.url, s1.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
+  a.net.loses = (method, path) => method === 'POST' && path === '/seed/done';
+  expect(await a.sync.first('seed')).toMatchObject({ ok: false });
+  a.net.loses = null;
+  expect(a.store.pendingSeed()?.id).toBe(await s1.baseId());
+  // Back to S2 (R31), and synced there a while: A's write numbered by S2, V's received.
+  expect(await a.sync.pair(s2.url, s2.code('Portable'), 'Portable')).toEqual({ ok: true });
+  const v = await s2.pc('pc-v');
+  await s2.settle([v]);
+  const P = [...v.s.plans.values()].find((p) => p.name === 'Thèse')!.id;
+  v.act((s) => createNode(s, { plan: P, title: 'V sur S2', x: 600, y: 300, k: 0 }));
+  await s2.settle([v]);
+  await run(a, (s) => editNode(s, X, { title: 'X sur S2' }));
+  await until(async () => a.store.pendingCount() === 0 && a.store.lastServerSeq() === await s2.lastSeq(), 5000, () => JSON.stringify(a.statuses.slice(-3)));
+  expect(image(a.session.state)).toBe(image(await s2.state()));
+  const numbered = () => a.store.changesSince(0).map((r) => [r.localSeq, r.serverSeq]);
+  const journal = numbered(), lastServerSeq = a.store.lastServerSeq();
+  // S1 again: its base is not the one A follows now — the offer to replace it, and A's journal left as S2 numbered it.
+  await a.sync.unpair();
+  expect(await a.sync.pair(s1.url, s1.code('Portable'), 'Portable')).toMatchObject({ ok: false, offer: { kind: 'replace' } });
+  expect([numbered(), a.store.lastServerSeq(), a.store.baseId(), a.store.pendingSeed()]).toEqual([journal, lastServerSeq, followed, null]);
+  expect(await a.sync.first('cancel')).toMatchObject({ ok: false });
+});
+
 test('Minor 7 et R31 : une base déjà numérotée par un serveur s’envoie à un serveur neuf (l’offre de D7, pas une reprise) : ses numéros effacés puis redonnés, le serveur et le PC d’accord, et la synchro continue', async () => {
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');

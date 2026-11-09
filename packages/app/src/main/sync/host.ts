@@ -441,10 +441,13 @@ export class SyncHost {
    * rejoin, R31: nothing stamped); the server's base identity kept, `baseId` (two empty bases; a seed keeps the one the
    * server gave it with the numbers, numberSeeded; null: kept already) — both before
    * serveur.json: a stop between leaves them for no server, and the next pairing writes them again —, then the server.
+   * A seed still pending is dropped (numbered already when this join settles it): the base now follows this server,
+   * and pairing the seed's server again later must not renumber it (re-review of the fixes, N1).
    */
   private joined(config: ServerConfig, at: number | null, baseId: string | null): void {
     if (at !== null) this.settings.pairedAt(at);
     if (baseId !== null) this.deps.store.setBaseId(baseId);
+    this.deps.store.setPendingSeed(null);
     this.deps.secrets.write(config);
     this.config = config;
   }

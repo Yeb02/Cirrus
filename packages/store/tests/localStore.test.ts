@@ -621,5 +621,9 @@ test('revue courte du plan 5a, B1 : l’envoi en cours gardé dans la méta (ide
   store.setPendingSeed({ id: 'base-semee', last, at: 1234 });
   store.numberSeeded(last, 'base-semee');
   expect([store.pendingSeed(), store.baseId(), store.lastServerSeq()]).toEqual([null, 'base-semee', last]);
+  // Dropped without numbering (a join to another server: re-review of the fixes, N1).
+  store.setPendingSeed({ id: 'base-semee', last, at: 1234 });
+  store.setPendingSeed(null);
+  expect([store.pendingSeed(), store.baseId(), store.lastServerSeq()]).toEqual([null, 'base-semee', last]);
   store.close();
 });

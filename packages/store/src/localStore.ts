@@ -433,7 +433,7 @@ export class LocalStore {
       this.setLastServerSeq(last);
       this.setBaseId(baseId);
       // The seed is settled: nothing left to recognise at the next pairing (pendingSeed).
-      this.q("DELETE FROM meta WHERE key = 'pending_seed'").run();
+      this.setPendingSeed(null);
     });
   }
 
@@ -458,7 +458,12 @@ export class LocalStore {
     return null;
   }
 
-  setPendingSeed(seed: PendingSeed): void {
+  /** Null: none any more (numbered, or the base joined a server otherwise: re-review of the fixes, N1). */
+  setPendingSeed(seed: PendingSeed | null): void {
+    if (seed === null) {
+      this.q("DELETE FROM meta WHERE key = 'pending_seed'").run();
+      return;
+    }
     this.q("INSERT INTO meta (key, value) VALUES ('pending_seed', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(JSON.stringify({ id: seed.id, last: seed.last, at: seed.at }));
   }
