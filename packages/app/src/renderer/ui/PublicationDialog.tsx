@@ -9,7 +9,7 @@ import {
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 type Tone = 'hint' | 'busy' | 'error' | 'found';
-const HINT = 'Un DOI, un identifiant arXiv ou l’adresse d’un article ; ou dépose le PDF ici, ou choisis-le.';
+const HINT = 'Un DOI, un identifiant arXiv ou l’adresse d’un article ; ou dépose un PDF ici.';
 const UNEXPECTED = 'L’import de la publication a échoué : erreur inattendue.';
 const reading = (name: string) => `Lecture de « ${name} »…`;
 /** pdf.js in its own chunk, loaded at the first PDF taken, as the views load it. */
