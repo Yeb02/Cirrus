@@ -27,7 +27,10 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
     const told: { info: ServerInfo | null } = { info: null };
     const early = window.cirrus.onSyncServer((i) => { told.info = i; });
     return {
-      /** The server asked, before the state is read: paired then, it is when the state is read, whose pending writes are then all of them (B2). */
+      /**
+       * The server asked, before the state is read: paired then, it is when the state is read, whose pending writes are
+       * then all of them (B2).
+       */
       ask: () => window.cirrus.syncServer().then((i) => { told.info = null; return i; }),
       /**
        * The synchronisation (plan 5a) once the session holds the state, `info` the main process's answer: with a server

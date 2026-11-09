@@ -120,7 +120,7 @@ export class AppPc {
     };
   }
 
-  /** cirrus:load as index.ts answers it: the payload, the pending writes when paired, this PC's identifier. */
+  /** cirrus:load as ipc/base.ts answers it: the payload, the pending writes when paired, this PC's identifier. */
   private load = async (fromTables: boolean) => clone({ ...loadPayload(this.store, fromTables, this.host.paired()).payload, pc: pcId(this.dir) });
 
   /**

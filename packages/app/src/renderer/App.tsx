@@ -93,7 +93,7 @@ export function App() {
       toast(`${verb} dans ${elsewhere.length > 1 ? 'les plans' : 'le plan'} ${names} : ${r.action.label}`);
     }
   };
-  /** What is open over the graph: the settings panel, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
+  /** What is open over the graph: the settings, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
   const { panel, setPanel, setFull, fullRef, workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn } = useScreens();
   /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
   const sync = useSync(toast, paramsRef);

@@ -7,8 +7,8 @@ import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
 /**
  * A publication's import on the main process's side (plan 4c, D5, D6): its CSL-JSON and its BibTeX asked of its DOI's
  * resolver (content negotiation), then, for an arXiv article, its PDF put into the store. Reached only by the IPC that
- * the user's import calls (main/index.ts), never at startup nor in the background. Every request is guarded (Review
- * Focus 1, 5): HTTPS to a host of PUBLICATION_SOURCES only, redirects followed by hand and each target checked before
+ * the user's import calls (main/ipc/publications.ts), never at startup nor in the background. Every request is guarded
+ * (Review Focus 1, 5): HTTPS to a host of PUBLICATION_SOURCES only, redirects followed by hand and each target checked before
  * it is asked, every body read under its cap, a delay, the answers parsed as data. The network is handed in (`fetch`):
  * Electron's (requestFetch), a replay of recorded answers (replay.ts), a test's fake.
  */
