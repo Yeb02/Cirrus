@@ -6,6 +6,15 @@ import type { Committed } from '../main/sync/protocol.ts';
 
 export type Result = { ok: true; action: Action; plans: Id[] } | { ok: false; message: string };
 
+/**
+ * What a reconciliation applied, as the session tells it (plan 5b, D1): marked so, never told by its label. Its
+ * operations are the rewind's inverses, the writes received, then the pending writes replayed.
+ */
+export type SyncedAction = Action & { readonly synced: true };
+
+/** Whether the synchronisation applied `a`: not this PC, whose open views compile what it changes. */
+export const isSynced = (a: Action | null): a is SyncedAction => a !== null && 'synced' in a && a.synced === true;
+
 /** The plans an action changes the layout of (content changes concern every plan). */
 export function plansOf(a: Action): Id[] {
   const plans = new Set<Id>();
@@ -252,7 +261,8 @@ export class EditSession {
    * Reconciles the writes the server numbered, and those it refused (plan 5a, D4), in the queue: an action started
    * meanwhile is written after it. The state is reconciled in place (the core's reconcile), written by the main process
    * (`write`: its journal number), then the pending writes are those replayed; a write rewritten or dropped leaves the
-   * undo stack (D5); the scene is told one change: the inverses, the writes received and the replayed ones. Rejects with
+   * undo stack (D5); the scene is told one change: the inverses, the writes received and the replayed ones, marked as
+   * the synchronisation's (SyncedAction, plan 5b). Rejects with
    * SyncDivergedError, the state as it was, when a received write does not apply; with `write`'s error when the base
    * did not write it, the state then ahead of the base (broken) until `reload`.
    */
@@ -281,7 +291,8 @@ export class EditSession {
       if (ops.length > 0) {
         this.merging = null;
         this.revision++;
-        this.onChange(this.s, { id: uuidv7(), label: 'Synchronisation', ops }, this.revision);
+        const synced: SyncedAction = { id: uuidv7(), label: 'Synchronisation', ops, synced: true };
+        this.onChange(this.s, synced, this.revision);
       }
       return { notices: r.notices, dropped: r.dropped.map((d) => d.message) };
     });

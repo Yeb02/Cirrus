@@ -64,6 +64,10 @@ interface Job {
   resolve(a: CompileAnswer): void;
   waiter: Waiter | null;
   running: ChildProcess | null;
+  /** Asked by a synchronisation (plan 5b, D1): its answer goes nowhere, its PDF to the cache. */
+  background: boolean;
+  /** A background job stopped for a request of the user: it waits again at the head of its queue. */
+  yielded: boolean;
 }
 
 /** A job waiting for a process prepared with `preamble`; null if it is settled meanwhile. */
@@ -122,6 +126,14 @@ export class LatexService {
   private readonly jobs = new Map<string, Job>();
   /** Every pdfLaTeX not exited yet. */
   private readonly live = new Set<{ child: ChildProcess; exited: Promise<number | null> }>();
+  /** The background's requests waiting (plan 5b, D1), by slot: the snippets (summaries, relations), then the pages (.tex). */
+  private readonly snippets = new Map<string, CompileRequest>();
+  private readonly pages = new Map<string, CompileRequest>();
+  /** The background's job in flight: one at a time. */
+  private backgroundJob: Job | null = null;
+  /** A start of the background's next job is scheduled (a request of the user just settled). */
+  private resuming = false;
+  private readonly idleWaiters: (() => void)[] = [];
 
   constructor(opts: LatexServiceOptions) {
     this.opts = opts;
@@ -145,20 +157,121 @@ export class LatexService {
     const t0 = performance.now();
     if (this.disposed) return Promise.resolve({ status: 'cancelled' });
     this.cancel(req.slot);
-    return new Promise<CompileAnswer>((resolve) => {
-      const job: Job = { req, t0, done: false, resolve, waiter: null, running: null };
-      this.jobs.set(req.slot, job);
-      this.run(job).catch((e: unknown) => {
-        console.error('Compilation LaTeX :', e);
-        this.settle(job, this.error(job, { message: `La compilation a échoué : ${(e as Error).message}`, line: null, where: 'source' }));
-      });
-    });
+    return new Promise<CompileAnswer>((resolve) => { this.launch(req, t0, resolve, false); });
   }
 
   /** The slot's request, waiting or running, is answered `cancelled`, its pdfLaTeX killed. */
   cancel(slot: string): void {
     const job = this.jobs.get(slot);
     if (job) this.settle(job, { status: 'cancelled' });
+  }
+
+  /**
+   * The compilations a synchronisation asks for (plan 5b, D1), each under the slot `bg:<slot>`, their answers going
+   * nowhere: their PDFs land in the cache, where a view opened later finds them. The snippets (summaries, relations)
+   * first, then the pages (.tex), each in order of arrival; a request of a slot already waiting takes its place. At most
+   * latexBackgroundMax are kept, the one running included: the others are compiled when their views open, as before.
+   * They run one at a time, on the prepared pdfLaTeX as the user's do, and only while none of the user's runs or waits
+   * (pump); one of the user's that finds no prepared pdfLaTeX free stops the one running (yieldTo). One already in the
+   * cache is skipped without compiling (PdfCache.has).
+   */
+  background(reqs: CompileRequest[]): void {
+    if (this.disposed) return;
+    const max = this.opts.params().latexBackgroundMax;
+    for (const r of reqs) {
+      const req = { ...r, slot: `bg:${r.slot}` }, queue = this.queueOf(req);
+      if (queue.has(req.slot) || this.snippets.size + this.pages.size + (this.backgroundJob ? 1 : 0) < max) queue.set(req.slot, req);
+    }
+    this.pump();
+  }
+
+  /** Resolves once no background compilation waits or runs (tests, measures). */
+  backgroundIdle(): Promise<void> {
+    if (!this.backgroundJob && this.snippets.size + this.pages.size === 0) return Promise.resolve();
+    return new Promise((resolve) => this.idleWaiters.push(resolve));
+  }
+
+  /** A job for `req`, in flight under its slot. */
+  private launch(req: CompileRequest, t0: number, resolve: (a: CompileAnswer) => void, background: boolean): Job {
+    const job: Job = { req, t0, done: false, resolve, waiter: null, running: null, background, yielded: false };
+    this.jobs.set(req.slot, job);
+    this.run(job).catch((e: unknown) => {
+      console.error('Compilation LaTeX :', e);
+      this.settle(job, this.error(job, { message: `La compilation a échoué : ${(e as Error).message}`, line: null, where: 'source' }));
+    });
+    return job;
+  }
+
+  private queueOf(req: CompileRequest): Map<string, CompileRequest> {
+    return req.mode === 'snippet' ? this.snippets : this.pages;
+  }
+
+  /** Whether a request of the user runs or waits. */
+  private userBusy(): boolean {
+    for (const job of this.jobs.values()) if (!job.background) return true;
+    return false;
+  }
+
+  /**
+   * The background's next request started (D1): when none runs, and none of the user's runs or waits; with none left,
+   * backgroundIdle's waiters are told.
+   */
+  private pump(): void {
+    if (this.disposed || this.backgroundJob) return;
+    const next = (this.snippets.size > 0 ? this.snippets : this.pages).values().next();
+    if (next.done) {
+      for (const resolve of this.idleWaiters.splice(0)) resolve();
+      return;
+    }
+    if (this.userBusy()) return;
+    const req = next.value;
+    this.queueOf(req).delete(req.slot);
+    const job = this.launch(req, performance.now(), (a) => this.backgroundDone(job, a), true);
+    this.backgroundJob = job;
+  }
+
+  /**
+   * The background's job ended. Stopped for the user, it waits again at the head of its queue, unless a newer request of
+   * its slot came meanwhile; without pdfLaTeX, the queue goes (its views compile them when they open). Then the next.
+   */
+  private backgroundDone(job: Job, a: CompileAnswer): void {
+    if (this.backgroundJob === job) this.backgroundJob = null;
+    const queue = this.queueOf(job.req);
+    if (a.status === 'unavailable') {
+      this.snippets.clear();
+      this.pages.clear();
+    } else if (job.yielded && !this.disposed && !queue.has(job.req.slot)) {
+      const rest = [...queue];
+      queue.clear();
+      queue.set(job.req.slot, job.req);
+      for (const [slot, req] of rest) queue.set(slot, req);
+    }
+    this.pump();
+  }
+
+  /**
+   * The background's next job, at the next turn of the event loop: a request of the user that replaces another of its
+   * slot is in flight by then, and the background does not start only to be stopped.
+   */
+  private resumeSoon(): void {
+    if (this.resuming) return;
+    this.resuming = true;
+    setImmediate(() => {
+      this.resuming = false;
+      this.pump();
+    });
+  }
+
+  /**
+   * A request of the user about to wait for a prepared pdfLaTeX (D1): the background's job stops if it waits for one
+   * too, or if none is free; it keeps running when one is free for the user.
+   */
+  private yieldTo(preamble: string): void {
+    const job = this.backgroundJob;
+    if (!job || job.done) return;
+    if (job.waiter === null && preamble === this.preamble && this.idle.some((w) => w.ready)) return;
+    job.yielded = true;
+    this.settle(job, { status: 'cancelled' });
   }
 
   /** Prepares the pool with `preamble` (after the interface loads, or the preamble changes); again after a failure. */
@@ -187,6 +300,9 @@ export class LatexService {
   async dispose(): Promise<void> {
     this.disposed = true;
     for (const job of [...this.jobs.values()]) this.settle(job, { status: 'cancelled' });
+    this.snippets.clear();
+    this.pages.clear();
+    for (const resolve of this.idleWaiters.splice(0)) resolve();
     for (const w of this.idle) w.dead = true;
     this.idle = [];
     const all = [...this.live];
@@ -212,11 +328,19 @@ export class LatexService {
     if (job.done) return;
     if (!bins) return this.settle(job, { status: 'unavailable', reason: 'absent', message: 'LaTeX n’est pas installé.' });
     const key = this.opts.cache.key(job.req, bins.version);
-    const hit = this.opts.cache.get(key);
-    if (hit) return this.settle(job, { status: 'ok', ...hit, ms: this.ms(job), cached: true });
+    if (job.background) {
+      // Compiled already (D1): skipped, its entry neither read nor made the one used last, no view having asked for it.
+      if (this.opts.cache.has(key)) return this.settle(job, { status: 'cancelled' });
+    } else {
+      const hit = this.opts.cache.get(key);
+      if (hit) return this.settle(job, { status: 'ok', ...hit, ms: this.ms(job), cached: true });
+    }
     if (isStandalone(job.req.source)) return this.runStandalone(job, bins, key);
-    if (job.req.preamble !== this.preamble || this.resting) this.switchPool(job.req.preamble);
-    else if (this.failure) return this.settle(job, this.failed(job, this.failure));
+    if (job.req.preamble !== this.preamble || this.resting) {
+      // The background never takes the pool from the user's preamble (D1): a request made under another is outdated.
+      if (job.background && this.preamble !== null && job.req.preamble !== this.preamble) return this.settle(job, { status: 'cancelled' });
+      this.switchPool(job.req.preamble);
+    } else if (this.failure) return this.settle(job, this.failed(job, this.failure));
     return this.runFragment(job, key);
   }
 
@@ -333,7 +457,18 @@ export class LatexService {
 
   // --- the pool ---
 
+  /**
+   * A prepared process for `job`, in order of arrival (`front`: before the others). The background's job never waits
+   * with the user's requests, nor ahead of them (D1): it waits again at the head of its queue; a request of the user may
+   * stop it (yieldTo).
+   */
   private take(job: Job, preamble: string, front: boolean): Promise<Warm | null> {
+    if (job.background && this.userBusy()) {
+      job.yielded = true;
+      this.settle(job, { status: 'cancelled' });
+      return Promise.resolve(null);
+    }
+    if (!job.background) this.yieldTo(preamble);
     return new Promise((give) => {
       const w: Waiter = { job, preamble, give, own: null };
       job.waiter = w;
@@ -589,6 +724,8 @@ export class LatexService {
     }
     if (job.running) void killTree(job.running);
     job.resolve(a);
+    // A request of the user settled: the background goes on once none is left (D1).
+    if (!job.background && this.snippets.size + this.pages.size > 0) this.resumeSoon();
   }
 
   private ms(job: Job): number {

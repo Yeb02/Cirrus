@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('cirrus', {
   historyOf: (id: string) => ipcRenderer.invoke('cirrus:history', id),
   latexCompile: (req: unknown) => ipcRenderer.invoke('cirrus:latex:compile', req),
   latexCancel: (slot: string) => ipcRenderer.send('cirrus:latex:cancel', slot),
+  latexBackground: (reqs: unknown) => ipcRenderer.send('cirrus:latex:background', reqs),
   latexWarm: (preamble: string) => ipcRenderer.send('cirrus:latex:warm', preamble),
   latexStatus: () => ipcRenderer.invoke('cirrus:latex:status:get'),
   latexInstall: () => ipcRenderer.invoke('cirrus:latex:install'),

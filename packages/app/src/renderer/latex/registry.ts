@@ -1,6 +1,6 @@
-import { CITE_KEY_TAG, connId, connRelation, connTitle, connTrashed, type Id, LABEL_TAG, type NodeRec, relationRows, type State } from '@cirrus/core';
+import { CITE_KEY_TAG, connId, connRelation, connTitle, connTrashed, type FileRef, type Id, LABEL_TAG, type NodeRec, relationRows, type State } from '@cirrus/core';
 import { fileKind } from '../files/kind.ts';
-import { scanTex, type TexScan } from './scan.ts';
+import { scanTex, type TexMark, type TexScan } from './scan.ts';
 
 /** A source that compiles (plan 4b, D7): a node's summary, a connection's relation, a node's .tex. */
 export type Origin = { kind: 'summary'; node: Id } | { kind: 'relation'; connection: Id } | { kind: 'file'; node: Id; name: string };
@@ -16,7 +16,7 @@ export function slotOf(o: Origin): string {
 interface LabelDef { label: string; origin: DefOrigin; line: number; title: string; node: Id | null }
 
 /** The tags a short citation reads (spec 5.4). */
-const AUTHOR_TAG = 'auteur', DATE_TAG = 'date_de_publication';
+export const AUTHOR_TAG = 'auteur', DATE_TAG = 'date_de_publication';
 
 /** A title shown for a definition or a citation: an untitled node or connection reads as its pop-up says. */
 const shown = (title: string) => (title === '' ? 'Sans titre' : title);
@@ -40,8 +40,21 @@ export function shortCitation(n: NodeRec): string {
   return year === '' ? who : `${who}, ${year}`;
 }
 
-/** A source as the registry analysed it. */
-interface Source { origin: Origin; text: string; scan: TexScan }
+/** A source as the registry analysed it; `refs`, `cites`: the labels and keys it cites, each once. */
+interface Source { origin: Origin; text: string; scan: TexScan; refs: string[]; cites: string[] }
+
+const namesOf = (marks: TexMark[]) => [...new Set(marks.map((m) => m.name))];
+const NO_LABELS: ReadonlySet<string> = new Set();
+
+/** `origin` among the citers of each of `names`. */
+function cite(index: Map<string, Origin[]>, names: string[], origin: Origin): void {
+  for (const name of names) {
+    const list = index.get(name);
+    if (list) list.push(origin);
+    else index.set(name, [origin]);
+  }
+}
+
 /** A definition and where it sorts: by identifier (node or connection), then title, summary, files in the node's order, then offset. */
 interface Placed { def: LabelDef; id: Id; rank: number; at: number }
 
@@ -56,6 +69,11 @@ const placedOrder = (a: Placed, b: Placed) => compare(a.id, b.id) || a.rank - b.
  * again whole when the state or the texts change, the sources whose origin and text did not change keep their
  * analysis (`previous`): only what changed is read again. What it gives is what it read at its build: the state,
  * changed in place since, is not read again.
+ *
+ * For what a synchronisation changed (plan 5b, D1), it also keeps the sources citing each label and each key (`citers`,
+ * `citersOfKey`), from the names each source cites, kept with its analysis; the labels each node or connection defines;
+ * and the files of each node that has a source (its compilations' resources): the sources a change touches are found
+ * without going through every source.
  */
 export class LatexRegistry {
   private readonly sources = new Map<string, Source>();
@@ -63,6 +81,13 @@ export class LatexRegistry {
   private readonly keys = new Map<string, Id[]>();
   /** The records of the nodes holding a key, as they were at the build (their short citation). */
   private readonly cited = new Map<Id, NodeRec>();
+  /** The sources citing each label, and each key, in the order of the build. */
+  private readonly citing = new Map<string, Origin[]>();
+  private readonly citingKeys = new Map<string, Origin[]>();
+  /** The labels each node or connection defines, by its identifier (its title's tag, its sources). */
+  private readonly owned = new Map<Id, Set<string>>();
+  /** The files of each node that has a source. */
+  private readonly files = new Map<Id, readonly FileRef[]>();
   private all: LabelDef[] | null = null;
   private citations: { key: string; node: Id; text: string }[] | null = null;
   private readonly analyse: (text: string) => TexScan;
@@ -78,14 +103,24 @@ export class LatexRegistry {
       const list = placed.get(p.def.label);
       if (list) list.push(p);
       else placed.set(p.def.label, [p]);
+      const own = r.owned.get(p.id);
+      if (own) own.add(p.def.label);
+      else r.owned.set(p.id, new Set([p.def.label]));
     };
     const source = (fresh: Origin, text: string, title: string, node: Id | null, id: Id, rank: number) => {
       const slot = slotOf(fresh), old = previous?.sources.get(slot);
       // The same slot is the same origin: its object is kept too.
       const kept = old !== undefined && old.text === text;
-      const src: Source = kept ? old : { origin: old?.origin ?? fresh, text, scan: analyse(text) };
+      let src: Source;
+      if (kept) src = old;
+      else {
+        const scan = analyse(text);
+        src = { origin: old?.origin ?? fresh, text, scan, refs: namesOf(scan.refs), cites: namesOf(scan.cites) };
+      }
       r.sources.set(slot, src);
       for (const m of src.scan.labels) define({ def: { label: m.name, origin: src.origin, line: m.line, title, node }, id, rank, at: m.from });
+      cite(r.citing, src.refs, src.origin);
+      cite(r.citingKeys, src.cites, src.origin);
     };
     for (const n of s.nodes.values()) {
       if (n.trashedAt !== undefined) continue;
@@ -102,11 +137,15 @@ export class LatexRegistry {
           r.cited.set(n.id, n);
         }
       }
-      if (n.summary !== '') source({ kind: 'summary', node: n.id }, n.summary, title, n.id, n.id, 1);
+      let sourced = n.summary !== '';
+      if (sourced) source({ kind: 'summary', node: n.id }, n.summary, title, n.id, n.id, 1);
       n.files.forEach((f, k) => {
         const text = fileKind(f.name) === 'tex' ? texts.get(f.hash) : undefined;
-        if (text) source({ kind: 'file', node: n.id, name: f.name }, text, title, n.id, n.id, 2 + k);
+        if (!text) return;
+        source({ kind: 'file', node: n.id, name: f.name }, text, title, n.id, n.id, 2 + k);
+        sourced = true;
       });
+      if (sourced) r.files.set(n.id, n.files);
     }
     for (const row of relationRows(s)) {
       if (connTrashed(s, row)) continue;
@@ -143,5 +182,48 @@ export class LatexRegistry {
   scanOf(origin: Origin, text: string): TexScan {
     const src = this.sources.get(slotOf(origin));
     return src !== undefined && src.text === text ? src.scan : this.analyse(text);
+  }
+
+  /** The text the registry read for the source `origin`; undefined when it is none (empty, unread, in the trash). */
+  textOf(origin: Origin): string | undefined {
+    return this.sources.get(slotOf(origin))?.text;
+  }
+
+  /** Every source, in the order of the build: only a change of the preamble asks for them all (plan 5b, D1). */
+  origins(): Origin[] {
+    return [...this.sources.values()].map((src) => src.origin);
+  }
+
+  /** The sources that cite `label`, each once (plan 5b, D1). */
+  citers(label: string): Origin[] {
+    return this.citing.get(label) ?? [];
+  }
+
+  /** The sources that cite the key `key`, each once (plan 5b, D1). */
+  citersOfKey(key: string): Origin[] {
+    return this.citingKeys.get(key) ?? [];
+  }
+
+  /** The labels the node or connection `id` defines: its title's tag, its summary or relation, its .tex. */
+  labelsOf(id: Id): ReadonlySet<string> {
+    return this.owned.get(id) ?? NO_LABELS;
+  }
+
+  /** The keys the node `id` holds. */
+  keysOf(id: Id): string[] {
+    const n = this.cited.get(id);
+    if (!n) return [];
+    return n.tags.flatMap((t) => (t.key === CITE_KEY_TAG && t.value !== undefined && String(t.value).trim() !== '' ? [String(t.value).trim()] : []));
+  }
+
+  /** The short citation of the node `id`, if it holds a key: as it was at the build. */
+  citationOf(id: Id): string | undefined {
+    const n = this.cited.get(id);
+    return n && shortCitation(n);
+  }
+
+  /** The files of the node `id` when it has a source, which compiles with them; undefined otherwise. */
+  filesOf(id: Id): readonly FileRef[] | undefined {
+    return this.files.get(id);
   }
 }

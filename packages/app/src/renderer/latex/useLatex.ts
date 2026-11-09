@@ -2,6 +2,7 @@ import { type LatexStatus, preambleText, type State } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react';
 import { loading, MB } from '../files/read.ts';
+import { backgroundRequests, type SyncedChanges } from './background.ts';
 import { withPackage } from './install.ts';
 import { LatexRegistry } from './registry.ts';
 import { latexChanged, onPackagesInstalled } from './scheduler.ts';
@@ -53,9 +54,12 @@ export function useLatexStatus(state: State | null, setParams: Dispatch<SetState
 
 /**
  * The registry (plan 4b, D7, D8), built again from `state` (`rev`: its revision) and the texts of its .tex, read here;
- * null until the state is loaded.
+ * null until the state is loaded. At each build, what the synchronisations changed (`synced`) is compiled in the
+ * background, latexBackgroundMax requests at most (plan 5b, D1).
  */
-export function useLatexRegistry(state: State | null, rev: number | undefined, params: RenderParams): LatexRegistry | null {
+export function useLatexRegistry(state: State | null, rev: number | undefined, params: RenderParams, synced: SyncedChanges): LatexRegistry | null {
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
   /** The texts of the .tex, by hash, that the registry reads (plan 4b, D8), and the ceiling (textViewMaxMb) they were read under. */
   const [texts, setTexts] = useState({ byHash: NO_TEXTS, maxMb: 0 });
   const textsRef = useRef(texts);
@@ -83,13 +87,17 @@ export function useLatexRegistry(state: State | null, rev: number | undefined, p
 
   // The registry, built again when the state or the texts change, at most once per typing pause: at once after a
   // quiet moment, else once the pause since the last build is over, with the state as it then is. A build waiting is
-  // counted among what the views load: a capture waits for the compilations it changes (plan 4b, task 6).
+  // counted among what the views load: a capture waits for the compilations it changes (plan 4b, task 6). Then what
+  // the synchronisations changed goes to the background, once the .tex they changed are read (plan 5b, D1).
   useEffect(() => {
     if (!state) return;
     const build = () => {
-      const r = LatexRegistry.build(state, texts.byHash, built.current.registry ?? undefined);
+      const previous = built.current.registry;
+      const r = LatexRegistry.build(state, texts.byHash, previous ?? undefined);
       built.current = { registry: r, at: performance.now() };
       setRegistry(r);
+      const p = paramsRef.current, origins = synced.take(previous, r, state, texts.byHash).slice(0, p.latexBackgroundMax);
+      if (origins.length > 0) window.cirrus.latexBackground(backgroundRequests(origins, state, r, p.latexSnippetWidthCm));
     };
     const wait = built.current.at + params.latexTypingPauseMs - performance.now();
     if (wait <= 0) {

@@ -1,6 +1,7 @@
 import type { RenderParams } from '@cirrus/view';
 import { useRef, useState } from 'react';
 import type { FirstSyncChoice, ServerInfo } from '../../main/sync/protocol.ts';
+import { SyncedChanges } from '../latex/background.ts';
 import { type EditSession, type Opened, openState } from '../session.ts';
 import { SyncSession, type SyncView } from './syncSession.ts';
 
@@ -10,12 +11,14 @@ const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null };
 /**
  * The synchronisation in App (plan 5a): what it shows (the veil, the chip: `view`), the server paired (`server`), and
  * its session, made at startup once the state is read (`starting`). `toast` says what it has to say; `params` holds
- * syncConnectTimeoutMs.
+ * syncConnectTimeoutMs. `received`: what the actions it applied changed, which App's session notes (each action marked
+ * by the session as the synchronisation's, never by its label) and LaTeX compiles in the background (plan 5b, D1).
  */
 export function useSync(toast: (text: string) => void, params: { readonly current: RenderParams }) {
   const [view, setView] = useState<SyncView>(NO_SYNC);
   const [server, setServer] = useState<ServerInfo | null>(null);
   const sync = useRef<SyncSession | null>(null);
+  const [received] = useState(() => new SyncedChanges());
 
   /**
    * The startup's part, from the moment App begins to load its state. What the main process says of the server after
@@ -70,5 +73,5 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
   };
   /** The chip's click: offline or refused, try again now. */
   const retry = () => sync.current?.retry();
-  return { view, serverBlock, retry, starting };
+  return { view, serverBlock, retry, starting, received };
 }

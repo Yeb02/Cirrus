@@ -86,6 +86,11 @@ export interface CirrusBridge {
   latexCompile(req: CompileRequest): Promise<CompileAnswer>;
   /** The slot's request, waiting or running, is cancelled. */
   latexCancel(slot: string): void;
+  /**
+   * What a synchronisation changed, compiled in the background (plan 5b, D1): no answer, the PDFs land in the cache,
+   * where a view opened later finds them (`cached`). Under slots of their own, they never cancel a view's.
+   */
+  latexBackground(reqs: CompileRequest[]): void;
   /** Prepares pdfLaTeX with this preamble (after loading, and when the preamble changes). */
   latexWarm(preamble: string): void;
   /** LaTeX's state on this PC; onLatexStatus is told each change, and `ready` again once packages are installed. Returns the unsubscription. */

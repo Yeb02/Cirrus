@@ -183,6 +183,8 @@ export function App() {
         session.current = new EditSession(s, (a, unit) => window.cirrus.commit(a, unit), (st, action, rev) => {
           setShown({ state: st, rev, action });
           saver.current?.applied();
+          // What the synchronisation applied, for LaTeX's background compilations (plan 5b, D1).
+          sync.received.note(action);
         }, opened.seq);
         // Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would
         // weigh on what they measure).
@@ -206,10 +208,11 @@ export function App() {
   useEffect(() => { if (state) saveTabs(tabs); }, [tabs, state]);
 
   // LaTeX (plan 4b): its state on this PC and the preamble's warm-up (task 7, D2), then the registry the compile
-  // requests read (D7, D8), built again after each change of the state (latex/useLatex.ts).
+  // requests read (D7, D8), built again after each change of the state (latex/useLatex.ts), which sends what the
+  // synchronisations changed to the background (plan 5b, D1).
   const { latex, installLatex } = useLatexStatus(state, setParams);
   const rev = shown?.rev;
-  const registry = useLatexRegistry(state, rev, params);
+  const registry = useLatexRegistry(state, rev, params, sync.received);
 
   // The annotations (plan 4c, D4), built again at each change of the state from the last index: what did not change
   // is not read again, and an index where nothing changed is the same (the readers draw nothing again).

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type CompileRequest, DEFAULT_PREAMBLE } from '@cirrus/core';
@@ -104,6 +104,26 @@ test('PdfCache.trim : au-delà du plafond, le plus ancien part le premier ; une 
   await next.settled();
   expect(readdirSync(cacheDir).sort()).toEqual(files(d));
   expect(next.get(d)).not.toBeNull();
+});
+
+test('PdfCache.has : ni l’ordre du cache ni la date du PDF ne changent (plan 5b, D1)', async () => {
+  let max = 10_000;
+  const files = (...keys: string[]) => keys.flatMap((k) => [`${k}.json`, `${k}.pdf`]);
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((x) => x.repeat(64));
+  const cache = new PdfCache(cacheDir, () => max);
+  for (const [i, k] of [a, b, c].entries()) cache.put(k, compiled(`job-${i}.pdf`, 3000), meta);
+  const old = new Date(2020, 0, 1);
+  utimesSync(join(cacheDir, `${a}.pdf`), old, old);
+  expect([a, b, c, d, 'pas une clé'].map((k) => cache.has(k))).toEqual([true, true, true, false, false]);
+  expect(statSync(join(cacheDir, `${a}.pdf`)).mtimeMs).toBe(old.getTime());
+  // a is still the one used longest ago: the first to go (a get would have kept it).
+  max = 7000;
+  cache.trim();
+  await cache.settled();
+  expect(readdirSync(cacheDir).sort()).toEqual(files(b, c));
+  // Before the folder is listed, its files answer.
+  const next = new PdfCache(cacheDir, () => 2 ** 30);
+  expect([a, b, c].map((k) => next.has(k))).toEqual([false, true, true]);
 });
 
 /** `n` entries written straight into the cache folder, as an earlier session left them, the first the oldest. */

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type CompiledPdf, type CompileRequest, isStandalone, type KnownLabel } from '@cirrus/core';
@@ -100,6 +100,17 @@ export class PdfCache {
       this.remove(key);
       return null;
     }
+  }
+
+  /**
+   * Whether the cache holds `key`, without making it the one used last nor touching its PDF's date: a background
+   * compilation already there is skipped (plan 5b, D1), its entry left where it was, since no view read it. Once the
+   * folder is listed, the index answers; before, its two files.
+   */
+  has(key: string): boolean {
+    if (!KEY.test(key)) return false;
+    if (this.index.has(key)) return true;
+    return !this.listed && existsSync(this.pdfPath(key)) && existsSync(this.metaPath(key));
   }
 
   /**

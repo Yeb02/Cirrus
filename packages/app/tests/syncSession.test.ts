@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
 import type { Committed, PairResult, ServerInfo, SyncIncoming, SyncStatus } from '../src/main/sync/protocol.ts';
-import { EditSession, type Opened, SnapshotSaver } from '../src/renderer/session.ts';
+import { EditSession, isSynced, type Opened, SnapshotSaver } from '../src/renderer/session.ts';
 import { chipOf, type SyncBridge, SyncSession, type SyncView } from '../src/renderer/sync/syncSession.ts';
 import { offerAction, ServerBlock } from '../src/renderer/ui/settings/ServerBlock.tsx';
 
@@ -125,6 +125,8 @@ test('une écriture reçue sans rien en attente s’applique comme une action lo
   await session.reconcile([u], [], write);
   expect(s.nodes.get(X)!.title).toBe('B');
   expect(changes.at(-1)!.ops).toEqual(u.ops);
+  // Plan 5b, D1: what the synchronisation applied is marked so, never told by its label; this PC's own actions are not.
+  expect([isSynced(changes.at(-1)!), isSynced(changes[0])]).toEqual([true, false]);
   expect(session.rev).toBe(rev + 1);
   // The journal's lines: A's write, then B's (the acknowledgement numbered A's in place).
   expect(session.seq).toBe(2);
