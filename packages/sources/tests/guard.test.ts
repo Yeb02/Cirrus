@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { expect, test } from 'vitest';
-import { type ConnectRequest, httpsConnect, isPublic, openFetch } from '../src/guard.ts';
+import { type ConnectRequest, httpsConnect, isPublic, MAX_CONNECT_ATTEMPTS, openFetch } from '../src/guard.ts';
 import { endless, html, HTTPS_ONLY, LOCAL, pdf, PDF_BYTES, PUBLIC, PUBLIC6, redirect, seconds, web } from './support.ts';
 
 const CAPS = { page: 64 * 1024, pdf: 2 ** 20 };
@@ -17,6 +17,8 @@ test('isPublic : chaque plage de D3, à ses deux bouts, est refusée ; ses voisi
     ['ff00::', 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'], ['2001:db8::', '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff'], ['100::', '100::ffff:ffff:ffff:ffff'],
     // Review of task 2: the local-use NAT64 prefix (RFC 8215), the deprecated site-local addresses.
     ['64:ff9b:1::', '64:ff9b:1:ffff:ffff:ffff:ffff:ffff'], ['fec0::', 'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'],
+    // Teredo (2001::/32): an obfuscated IPv4 inside, a known road to the local network.
+    ['2001::', '2001:0:ffff:ffff:ffff:ffff:ffff:ffff'],
   ];
   for (const [first, last] of blocked) {
     expect(isPublic(first), first).toBe(false);
@@ -29,6 +31,8 @@ test('isPublic : chaque plage de D3, à ses deux bouts, est refusée ; ses voisi
     '198.51.101.0', '203.0.112.255', '203.0.114.0', '223.255.255.255',
     'fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', 'fe00::', 'fe00:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db7:ffff:ffff:ffff:ffff:ffff:ffff', '2001:db9::',
     '100:0:0:1::', 'ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '64:ff9b:0:ffff:ffff:ffff:ffff:ffff', '64:ff9b:2::', '64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff',
+    // Teredo's neighbours: just below 2001::, just above 2001:0:ffff:…
+    '2000:ffff:ffff:ffff:ffff:ffff:ffff:ffff', '2001:1::',
   ]) {
     expect(isPublic(a), a).toBe(true);
   }
@@ -160,6 +164,49 @@ test('openFetch : une connexion qui échoue passe à l’adresse vérifiée suiv
   const answered = web({ 'double.example/': () => html('', 503) }, { 'double.example': [PUBLIC, '1.1.1.1'] });
   expect((await openFetch('https://double.example/', answered.deps, ACCEPT, CAPS)).ok).toBe(false);
   expect(answered.connected.map((c) => c.address)).toEqual([PUBLIC]);
+});
+
+test('openFetch : au plus MAX_CONNECT_ATTEMPTS adresses vérifiées essayées par saut, même si le nom en donne des centaines qui échouent vite (relecture de la tâche 2)', async () => {
+  const addresses = Array.from({ length: 10 }, (_, i) => `1.1.1.${i + 1}`);
+  const logged: string[] = [];
+  const w = web({}, { 'hostile.example': addresses }, { log: (m) => logged.push(m) });
+  w.deps.connect = async (req) => {
+    w.connected.push(req);
+    throw Object.assign(new Error(`connect ECONNREFUSED ${req.address}:443`), { code: 'ECONNREFUSED' });
+  };
+  expect(await openFetch('https://hostile.example/', w.deps, ACCEPT, CAPS)).toEqual({ ok: false, message: 'Pas de connexion.' });
+  // The first four, in the order tried (an IPv4 first, then the resolver's order); the others never asked.
+  expect(w.connected.map((c) => c.address)).toEqual(addresses.slice(0, 4));
+  expect(logged.filter((m) => m.includes('ECONNREFUSED'))).toHaveLength(4);
+  // The fourth is still tried; a fifth that would answer is not.
+  const answers = (alive: string) => {
+    const f = web({}, { 'hostile.example': addresses });
+    f.deps.connect = async (req) => {
+      f.connected.push(req);
+      if (req.address !== alive) throw new Error('connect ETIMEDOUT');
+      return html('ok');
+    };
+    return f;
+  };
+  const fourth = answers(addresses[3]);
+  expect((await openFetch('https://hostile.example/', fourth.deps, ACCEPT, CAPS)).ok).toBe(true);
+  expect(fourth.connected).toHaveLength(4);
+  const fifth = answers(addresses[4]);
+  expect(await openFetch('https://hostile.example/', fifth.deps, ACCEPT, CAPS)).toEqual({ ok: false, message: 'Pas de connexion.' });
+  expect(fifth.connected).toHaveLength(4);
+  // The bound is the hop's: a redirect has its own four.
+  const hops = web({}, { 'hostile.example': addresses, 'autre.example': addresses });
+  hops.deps.connect = async (req) => {
+    hops.connected.push(req);
+    if (req.hostname === 'hostile.example' && req.address === addresses[3]) return redirect('https://autre.example/');
+    throw new Error('connect ETIMEDOUT');
+  };
+  expect((await openFetch('https://hostile.example/', hops.deps, ACCEPT, CAPS)).ok).toBe(false);
+  expect(hops.connected.map((c) => [c.hostname, c.address])).toEqual([
+    ...addresses.slice(0, 4).map((a) => ['hostile.example', a]), ...addresses.slice(0, 4).map((a) => ['autre.example', a]),
+  ]);
+  // The bound is a constant of the package, 4: the tests above say it in numbers, this one names it.
+  expect(MAX_CONNECT_ATTEMPTS).toBe(4);
 });
 
 test('openFetch : une réponse dite application/pdf qui ne commence pas par %PDF- est lue comme une page, sous son plafond (relecture de la tâche 2)', async () => {

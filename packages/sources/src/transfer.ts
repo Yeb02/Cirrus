@@ -30,6 +30,18 @@ export interface Limits {
   pdfMaxMs: number;
 }
 
+/** What an exchange says, in French, when its delays are unusable (see validLimits): refused before anything is asked. */
+export const INVALID_DELAY = 'Délai invalide.';
+
+/**
+ * Whether both delays are finite numbers above zero. Anything else is a bug upstream (a setting that came through
+ * absent or garbled) that must not run an exchange: with NaN or no value the deadline is NaN, no comparison with it is
+ * ever true, so nothing stops the exchange and its timer (`setTimeout` reads a NaN delay as 1 ms) is set again every
+ * millisecond; with zero or less the exchange is stopped before it can answer; with infinity it has no bound at all.
+ * So the Transfer refuses them (RangeError), and the two callers that must never throw (openFetch, exchange) check first.
+ */
+export const validLimits = (limits: Limits) => [limits.timeoutMs, limits.pdfMaxMs].every((ms) => Number.isFinite(ms) && ms > 0);
+
 /** What an exchange says when it ends early, in French: its delay passed, a PDF's download too long, the network failing. */
 export interface Failures {
   late(): Refusal;
@@ -58,7 +70,9 @@ export class Transfer {
   private expire: (e: Refusal) => void = () => {};
   private readonly expired: Promise<never>;
 
+  /** @throws RangeError unless both delays are finite numbers above zero (validLimits): a programming error, never the user's. */
   constructor(limits: Limits, failures: Failures) {
+    if (!validLimits(limits)) throw new RangeError('Transfer: timeoutMs and pdfMaxMs must be finite numbers above 0.');
     this.limits = limits;
     this.failures = failures;
     this.expired = new Promise<never>((_resolve, reject) => { this.expire = reject; });

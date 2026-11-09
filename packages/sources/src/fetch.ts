@@ -4,7 +4,9 @@ import { type OpenDeps, openFetch } from './guard.ts';
 import { citationMeta } from './html.ts';
 import { arxivDoi, MAX_IDENTIFIER_CHARS, parseIdentifier, type PublicationId } from './identifier.ts';
 import { PUBLICATION_SOURCES, type PublicationSources } from './sources.ts';
-import { duration, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer } from './transfer.ts';
+import {
+  duration, INVALID_DELAY, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer, validLimits,
+} from './transfer.ts';
 
 /**
  * A publication's import (plan 4c, D5, D6): its CSL-JSON and its BibTeX asked of its DOI's resolver (content
@@ -97,12 +99,15 @@ function permitted(href: string, hosts: readonly string[], from: string | null):
  * (Transfer): the whole exchange's (`timeoutMs`); with `stall` (a PDF, larger than metadata), the longest wait for
  * data instead, and publicationPdfMaxMs for the whole download (review of task 2, I2). Whatever the network does, the
  * request is aborted once the answer is read, or given up. `cancel`: a refusal that stops it at once (its sibling's,
- * fetchPublication), which it then throws.
+ * fetchPublication), which it then throws. Both delays must be finite numbers above zero (validLimits), else it throws
+ * « Délai invalide. » at once, a refusal like the others, before anything is asked.
  */
 async function exchange(
   deps: PublicationDeps, href: string, accept: string, cap: number, server: Server, notFound: string, tooBig: string, stall: boolean,
   cancel?: AbortSignal,
 ): Promise<{ type: string; bytes: Uint8Array }> {
+  // Before the Transfer, whose check is a throw: unusable delays are a refusal like any other, nothing is asked.
+  if (!validLimits(deps)) throw new Refusal(INVALID_DELAY);
   const hosts = (deps.sources ?? PUBLICATION_SOURCES).hosts;
   const t = new Transfer(deps, {
     late: () => new Refusal(`Le ${serverOf(server)} ne répond pas (délai de ${seconds(deps.timeoutMs)} dépassé).`),

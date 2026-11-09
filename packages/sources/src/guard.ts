@@ -3,7 +3,8 @@ import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import {
-  type BodyRule, duration, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer,
+  type BodyRule, duration, INVALID_DELAY, MAX_REDIRECTS, mediaType, messageOf, NOT_FOUND, OFFLINE, readBody, REDIRECTS, Refusal, seconds, Transfer,
+  validLimits,
 } from './transfer.ts';
 
 /**
@@ -79,7 +80,9 @@ const PDF_TYPES = new Set(['application/pdf', 'application/x-pdf']);
  * D3's `::` and `::1` as all of `::/96` (with the deprecated IPv4-compatible addresses: no host of the Internet has
  * one), unique local, link-local, multicast, documentation, discard-only; and, since the review of task 2, the
  * local-use NAT64 prefix (`64:ff9b:1::/48`, RFC 8215, whose translator sits on the local network) and the deprecated
- * site-local addresses (`fec0::/10`). The IPv4 inside an IPv6 is judged as itself (isPublic).
+ * site-local addresses (`fec0::/10`); then Teredo (`2001::/32`), whose addresses carry an obfuscated IPv4 (the client's
+ * address and port, inverted) that no check here reads, a known road to the local network. The IPv4 inside an IPv6 is
+ * judged as itself (isPublic), except a Teredo's, which is refused whole.
  */
 const BLOCKED = new BlockList();
 for (const [a, prefix] of [
@@ -87,7 +90,7 @@ for (const [a, prefix] of [
   ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
 ] as const) BLOCKED.addSubnet(a, prefix, 'ipv4');
 for (const [a, prefix] of [
-  ['::', 96], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8], ['2001:db8::', 32], ['100::', 64], ['64:ff9b:1::', 48],
+  ['::', 96], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8], ['2001::', 32], ['2001:db8::', 32], ['100::', 64], ['64:ff9b:1::', 48],
 ] as const) BLOCKED.addSubnet(a, prefix, 'ipv6');
 
 /** The eight 16-bit groups of an IPv6 address (net.isIP says 6), its dotted IPv4 tail read as two groups. */
@@ -149,6 +152,14 @@ function checked(href: string): URL {
   return url;
 }
 
+/**
+ * The connections tried at most per hop, among the validated addresses of a name (IPv4 first, then the resolver's order).
+ * It bounds the work a hostile DNS answer can cause, on the PC and on the server: a name that gives hundreds of public
+ * addresses, each of which fails fast, would otherwise be tried address by address. A fixed bound, not a setting: it
+ * protects both ends alike, and a genuine site has a handful of addresses at most.
+ */
+export const MAX_CONNECT_ATTEMPTS = 4;
+
 const startsAsPdf = (bytes: Uint8Array) => bytes.length >= PDF_MAGIC.length && PDF_MAGIC.every((b, i) => bytes[i] === b);
 
 /**
@@ -156,17 +167,21 @@ const startsAsPdf = (bytes: Uint8Array) => bytes.length >= PDF_MAGIC.length && P
  * - The address is checked (checked); its name resolved, once, and every address it gives must be public (isPublic,
  *   or `deps.isPublic`), else nothing is asked; an address written in the URL (`https://2130706433/`, which the URL
  *   parser writes 127.0.0.1) is judged without resolution. The connection gets those addresses, an IPv4 first, the
- *   next only when a connection to one fails (review of task 2, M2); the name serves TLS only.
+ *   next only when a connection to one fails (review of task 2, M2), MAX_CONNECT_ATTEMPTS of them at most per hop; the
+ *   name serves TLS only.
  * - A redirect is checked the same way, resolved again and judged again, 5 at most.
  * - A 404 or 410 is « Publication introuvable. », another status than 200 an error with its code.
  * - The body (readBody): its type tells what it is until its first bytes are in, then they do (a page said to be a PDF
  *   is a page: review of task 2, M3). A PDF is read up to `cap.pdf`, refused beyond (its declared length refused before
  *   any read); anything else up to `cap.page`, read no further.
  * - The delays (Transfer): the whole exchange's (`deps.timeoutMs`); once the body is a PDF, the longest wait for data,
- *   and `deps.pdfMaxMs` for its whole download.
+ *   and `deps.pdfMaxMs` for its whole download. Both must be finite numbers above zero (validLimits), else nothing is
+ *   asked: « Délai invalide. ».
  * Whatever the network does, the exchange is aborted once the answer is read or given up. `accept`: the Accept sent.
  */
 export async function openFetch(href: string, deps: OpenDeps, accept: string, cap: OpenCaps): Promise<OpenAnswer> {
+  // Before the Transfer, whose own check throws: unusable delays are a refusal, nothing is resolved or asked.
+  if (!validLimits(deps)) return { ok: false, message: INVALID_DELAY };
   const judge = deps.isPublic ?? isPublic;
   let site = '';
   let asked = href;
@@ -198,7 +213,7 @@ export async function openFetch(href: string, deps: OpenDeps, accept: string, ca
       if (!found.every((a) => isIP(a) !== 0 && judge(a))) throw new Refusal(LOCAL);
       asked = url.href;
       let res: Response | null = null;
-      for (const address of [...found.filter((a) => isIP(a) === 4), ...found.filter((a) => isIP(a) !== 4)]) {
+      for (const address of [...found.filter((a) => isIP(a) === 4), ...found.filter((a) => isIP(a) !== 4)].slice(0, MAX_CONNECT_ATTEMPTS)) {
         try {
           res = await t.network(() => deps.connect({
             address, family: isIP(address) === 6 ? 6 : 4, hostname: host, path: `${url.pathname}${url.search}`,

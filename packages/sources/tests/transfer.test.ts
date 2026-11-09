@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
-import { fetchPublication } from '../src/fetch.ts';
-import { openFetch } from '../src/guard.ts';
-import { duration, readBody, Refusal, Transfer } from '../src/transfer.ts';
+import { fetchPublication, importPublication, type PublicationDeps } from '../src/fetch.ts';
+import { type OpenDeps, openFetch } from '../src/guard.ts';
+import { duration, type Limits, readBody, Refusal, Transfer } from '../src/transfer.ts';
 import { endless, html, pdf, PDF_BYTES, PUBLIC, web } from './support.ts';
 
 /** The reading of a body and its delays, shared by the metadata's exchange and the open web's (review of task 2, I1, I2). */
@@ -102,6 +102,50 @@ test('une longueur annoncée ne réserve pas sa taille : 200 Mo annoncés, 8 oct
   t3.close();
   expect(l.bytes.length).toBe(4 * MIB);
   expect(lied).toEqual([64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, MIB, 2 * MIB, 4 * MIB]);
+});
+
+/** Delays that are no finite number above zero: a deadline made of them is NaN, and nothing would ever stop the exchange. */
+const BAD_DELAYS: [string, unknown][] = [
+  ['NaN', Number.NaN], ['undefined', undefined], ['0', 0], ['-0', -0], ['négatif', -1], ['l’infini', Number.POSITIVE_INFINITY], ['moins l’infini', Number.NEGATIVE_INFINITY],
+  ['null', null], ['du texte', '300'],
+];
+
+test('Transfer : un délai qui n’est pas un nombre fini au-dessus de zéro lève une RangeError, avant tout minuteur', () => {
+  const failures = { late: () => new Refusal('délai'), tooLong: () => new Refusal('trop long'), offline: () => new Refusal('hors ligne') };
+  for (const key of ['timeoutMs', 'pdfMaxMs'] as const) {
+    for (const [what, value] of BAD_DELAYS) {
+      // `close` only so that a Transfer wrongly made does not leave its timer running.
+      expect(() => new Transfer({ timeoutMs: 300, pdfMaxMs: 700, [key]: value } as Limits, failures).close(), `${key} : ${what}`).toThrow(RangeError);
+    }
+  }
+  // Any finite delay above zero is a delay, however small.
+  expect(() => new Transfer({ timeoutMs: 0.5, pdfMaxMs: 3_600_000 }, failures).close()).not.toThrow();
+});
+
+test('openFetch : des délais invalides — NaN, absents, nuls, négatifs — sont refusés d’emblée, « Délai invalide. », sans rien résoudre ni demander, et sans lever', async () => {
+  for (const key of ['timeoutMs', 'pdfMaxMs'] as const) {
+    for (const [what, value] of BAD_DELAYS) {
+      const w = web({ 'public.example/': () => html('ok') }, { 'public.example': [PUBLIC] }, { [key]: value } as Partial<OpenDeps>);
+      expect(await openFetch('https://public.example/', w.deps, 'text/html', { page: 1024, pdf: 2 ** 20 }), `${key} : ${what}`).toEqual({ ok: false, message: 'Délai invalide.' });
+      expect(w.resolved.length + w.connected.length, `${key} : ${what}`).toBe(0);
+    }
+  }
+});
+
+test('l’import des métadonnées : des délais invalides sont refusés d’emblée, « Délai invalide. », sans rien demander, et sans lever', async () => {
+  for (const key of ['timeoutMs', 'pdfMaxMs'] as const) {
+    for (const [what, value] of BAD_DELAYS) {
+      const asked: string[] = [];
+      const deps: PublicationDeps = {
+        fetch: async (url) => { asked.push(url); return new Response('{"title":"T"}', { headers: { 'content-type': 'application/json' } }); },
+        store: (name, bytes) => ({ name, hash: 'h', size: bytes.length }), maxKb: 64, maxPdfBytes: 2 ** 20, timeoutMs: 300, pdfMaxMs: 700, ...{ [key]: value },
+      };
+      expect(await fetchPublication({ arxiv: '1706.03762' }, deps), `${key} : ${what}`).toEqual({ ok: false, message: 'Délai invalide.' });
+      expect(await fetchPublication({ doi: '10.1000/x' }, deps, { pdf: false }), `${key} : ${what}`).toEqual({ ok: false, message: 'Délai invalide.' });
+      expect(await importPublication('arXiv:1706.03762', deps), `${key} : ${what}`).toEqual({ ok: false, message: 'Délai invalide.' });
+      expect(asked, `${key} : ${what}`).toEqual([]);
+    }
+  }
 });
 
 test('duration : une durée en secondes sous la minute, en minutes au-delà', () => {
