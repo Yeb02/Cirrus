@@ -19,6 +19,7 @@ import { LatexNotice } from './ui/latex/LatexNotice.tsx';
 import { saveTex } from './ui/latex/saveScheduler.ts';
 import { GraphBoundary } from './ui/GraphBoundary.tsx';
 import { type GraphHandle, GraphView } from './ui/GraphView.tsx';
+import { measuring } from './ui/graph/launch.ts';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
 import type { Rect } from './ui/panels/geometry.ts';
 import { Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
@@ -37,8 +38,6 @@ import { replayLaunch } from './visualChecks.ts';
 const NODE_GONE = 'Ce nœud n’existe plus.';
 /** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
-/** Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would weigh on what they measure). */
-const measuring = window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
 // What changes from one build of the test base to the next (a node's identifier) is not drawn in a capture (`.volatile`),
 // nor the text cursor, which blinks (plan 4b, task 8), so that the captures repeat to the pixel.
 if (window.cirrus.launch.capture) document.documentElement.classList.add('capture');
@@ -48,7 +47,7 @@ if (window.cirrus.launch.capture) document.documentElement.classList.add('captur
  * unavailable. Bench and captures keep none: a capture shows a view as it opens, whatever an earlier run left.
  */
 function viewStorage(): Storage | null {
-  if (measuring) return null;
+  if (measuring()) return null;
   try {
     return window.localStorage;
   } catch {
@@ -185,7 +184,9 @@ export function App() {
           setShown({ state: st, rev, action });
           saver.current?.applied();
         }, opened.seq);
-        if (!measuring) saver.current = new SnapshotSaver(session.current, (data, seq) => window.cirrus.saveSnapshot(data, seq), () => paramsRef.current, opened.stale);
+        // Bench and captures work on copies of a base: they keep no snapshot (none would be read again, and saving would
+        // weigh on what they measure).
+        if (!measuring()) saver.current = new SnapshotSaver(session.current, (data, seq) => window.cirrus.saveSnapshot(data, seq), () => paramsRef.current, opened.stale);
         // The synchronisation (plan 5a): its session made, then started once the state is shown.
         const startSync = startup.attach(session.current, info);
         mark('stateReady');

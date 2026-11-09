@@ -12,8 +12,7 @@ import type { Graph } from './core.ts';
  */
 export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: { x: number; y: number }): void {
   const {
-    root, engine, sceneRef, paramsRef, stateRef, onResultRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, redraw, notify, edit,
-    moveCamera,
+    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, redraw, notify, edit, moveCamera,
   } = graph;
   const { placement, copyPaste, questions, bib, publication } = graph;
   root.current?.focus({ preventScroll: true });
@@ -134,7 +133,7 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
         return ph?.plan === sc.plan.id && ph.of.kind === 'node' && ph.of.node === it.node;
       });
       const dest = it.phantom === 'node' ? sc.byId.get(it.node) ?? -1 : twin === undefined ? -1 : sc.byId.get(twin) ?? -1;
-      if (dest < 0) { onResultRef.current({ ok: false, message: 'L’original n’est pas dans ce plan.' }); break; }
+      if (dest < 0) { notify('L’original n’est pas dans ce plan.'); break; }
       moveCamera({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
       break;
     }
