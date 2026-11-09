@@ -165,8 +165,10 @@ export class LatexService {
     return new Promise<CompileAnswer>((resolve) => {
       this.launch(req, t0, resolve, false);
       // The background compiling this very source stops, and is not taken up again: the user's request compiles it (D1).
-      const twin = this.backgroundJob;
-      if (twin && twin.req.slot === `bg:${req.slot}`) this.settle(twin, { status: 'cancelled' });
+      // Its view's slot, or the text typed in it (`draft:<slot>`: the full screen's workbench, a field's preview; final
+      // review of plan 5b, M2).
+      const twin = this.backgroundJob, source = req.slot.startsWith('draft:') ? req.slot.slice('draft:'.length) : req.slot;
+      if (twin && twin.req.slot === `bg:${source}`) this.settle(twin, { status: 'cancelled' });
     });
   }
 

@@ -404,6 +404,33 @@ describe('le principal : la file de fond (LatexService.background)', () => {
     expect(ok(await s.compile(bg))).toMatchObject({ cached: true });
   });
 
+  // A request of the user typed in the source the background compiles (its `draft:<slot>`, the full screen's workbench or
+  // a field's preview) stops it too (final review of plan 5b, M2; spec 13).
+  texTest('une demande tapée (draft:) pour la source que le fond compile l’arrête aussi', async () => {
+    const s = start({ latexTimeoutMs: 60_000 });
+    ok(await s.compile(req({ slot: 'chauffe' })));
+    await sleep(1500); // the pool prepared again: two pdfLaTeX free
+    const bg = req({ slot: 'file:n1:x.tex', mode: 'page', widthCm: null, source: `${waitFor('cirrusgo', 'go')}Même source.` });
+    s.background([bg]);
+    await until(() => spawned.some((p) => alive(p) && running(p)));
+    const first = spawned.find((p) => alive(p) && running(p))!;
+    const user = s.compile({ ...bg, slot: `draft:${bg.slot}` });
+    await until(() => !alive(first));
+    await drain(s);
+    ok(await user);
+    expect(inCache(bg)).toBe(true);
+    // Another source's draft leaves the background alone.
+    const other = req({ slot: 'summary:autre', source: `${waitFor('cirrusgoautre', 'goautre')}Autre source.` });
+    s.background([other]);
+    await until(() => spawned.some((p) => alive(p) && running(p)));
+    const second = spawned.find((p) => alive(p) && running(p))!;
+    ok(await s.compile(req({ slot: 'draft:summary:n9', source: 'Ailleurs.' })));
+    expect(alive(second)).toBe(true);
+    touch('goautre.tex');
+    await drain(s);
+    expect(inCache(other)).toBe(true);
+  });
+
   // After task 8 (the typed preview under the background's queue): a prepared pdfLaTeX always left ready to the user, and
   // the background silent for latexBackgroundPauseMs after each of the user's requests.
 
