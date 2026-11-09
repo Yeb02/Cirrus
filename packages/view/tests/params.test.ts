@@ -421,3 +421,12 @@ test('la recherche (Ctrl+K) : la couleur de son cercle, réglage principal de «
   expect(withOverrides({ searchMaxResults: 0, searchFlashMs: -1 })).toMatchObject({ searchMaxResults: 10, searchFlashMs: 0 });
   expect(PARAM_RUBRICS.find((r) => r.title === 'Navigation')!.groups.at(-1)).toBe('Recherche');
 });
+
+test('précédent et suivant : navHistoryMax, réglage avancé du groupe « Recherche », de 10 à 1 000, 100 par défaut (plan 6a, D2, tâche 2)', () => {
+  expect(DEFAULT_PARAMS.navHistoryMax).toBe(100);
+  expect(PARAM_SPECS.find((s) => s.key === 'navHistoryMax')).toEqual({
+    key: 'navHistoryMax', label: 'Endroits gardés par « précédent » et « suivant » (Alt+←, Alt+→)', section: 'avancé', group: 'Recherche', kind: 'number', min: 10, max: 1000, step: 10,
+  });
+  expect(withOverrides({ navHistoryMax: 0 })).toMatchObject({ navHistoryMax: 10 });
+  expect(withOverrides({ navHistoryMax: 1e9 })).toMatchObject({ navHistoryMax: 1000 });
+});

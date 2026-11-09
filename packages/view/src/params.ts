@@ -329,6 +329,8 @@ export interface RenderParams {
   searchFoundColor: Rgb;
   searchMaxResults: number;
   searchFlashMs: number;
+  /** Previous and next (plan 6a, D2): the places kept by the jumps, for the session. */
+  navHistoryMax: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -519,6 +521,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   searchFoundColor: hexToRgb('#5ee38f'),
   searchMaxResults: 50,
   searchFlashMs: 1200,
+  navHistoryMax: 100,
 };
 
 /**
@@ -743,6 +746,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   color('searchFoundColor', 'Résultats de la recherche', 'Sélection et dépôt'),
   num('searchMaxResults', 'Résultats montrés au plus par la recherche (Ctrl+K)', A, 'Recherche', 10, 500, 10),
   num('searchFlashMs', 'Durée du cercle autour d’un objet après un saut (ms)', A, 'Recherche', 0, 10_000, 100),
+  num('navHistoryMax', 'Endroits gardés par « précédent » et « suivant » (Alt+←, Alt+→)', A, 'Recherche', 10, 1000, 10),
 ];
 
 /**

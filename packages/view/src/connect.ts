@@ -1,4 +1,4 @@
-import { type Id, placementKey, type State } from '@cirrus/core';
+import { connKind, connRow, connTrashed, type Id, KNOWLEDGE, nodeAt, nodeRow, phantomsOf, placedIn, placementKey, planId, type State } from '@cirrus/core';
 import type { Hit } from './hit.ts';
 import type { PlanScene } from './scene.ts';
 
@@ -36,6 +36,26 @@ export function otherPlans(s: State, plan: Id, nodes: Id[], connection?: Id): Id
     .filter((p) => p.id !== plan && p.type !== 'document' && nodes.every((n) => s.placements.has(placementKey(p.id, n))))
     .filter((p) => connection === undefined || shownIn.has(p.id))
     .map((p) => p.id);
+}
+
+/**
+ * The plans an object is shown in (plan 6a, D3): a node, by its placements; a knowledge connection, by its branches and
+ * its phantoms — what a jump to it can frame (the revealer). Empty for an object gone or in the trash, and for a
+ * connection of structure. The lobby is a plan like the others; the order is the state's.
+ */
+export function plansShowing(s: State, kind: 'node' | 'connection', id: Id): Id[] {
+  if (kind === 'node') {
+    const row = nodeRow(s, id);
+    return row < 0 || nodeAt(s, row)?.trashedAt !== undefined ? [] : Array.from(placedIn(s, row), (p) => planId(s, p));
+  }
+  const row = connRow(s, id);
+  if (row < 0 || connKind(s, row) !== KNOWLEDGE || connTrashed(s, row)) return [];
+  const plans = s.branches.plansOf(id);
+  for (const ph of phantomsOf(s, id)) {
+    const p = s.phantoms.get(ph)?.plan;
+    if (p !== undefined && !plans.includes(p)) plans.push(p);
+  }
+  return plans;
 }
 
 /** The two French ligatures, which NFD keeps whole: « œ » and « æ » are typed « oe » and « ae » on a French keyboard. */

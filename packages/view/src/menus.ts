@@ -1,11 +1,12 @@
 import { type Id, placementKey, type State } from '@cirrus/core';
+import { plansShowing } from './connect.ts';
 import type { Hit } from './hit.ts';
 import { partOf, type PlanScene } from './scene.ts';
 import type { Selection } from './selection.ts';
 
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
-  | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'importBib' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection';
+  | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'importBib' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection' | 'seeElsewhere';
 
 export interface MenuItem { action: MenuAction; label: string }
 
@@ -30,6 +31,7 @@ const LABELS: Record<MenuAction, string> = {
   layout: 'Disposer la connexion',
   resetLayout: 'Rétablir la disposition automatique',
   deleteConnection: 'Supprimer la connexion…',
+  seeElsewhere: 'Voir dans un autre plan',
 };
 
 /**
@@ -38,7 +40,8 @@ const LABELS: Record<MenuAction, string> = {
  * the arm back; a stub, to import its node; the background, to create a node, paste, import a publication by its
  * identifier (plan 4c, D5) or a whole .bib (D9), after the menu of the open group `under` the cursor if any. On a
  * connection: split the branch clicked if it leads to a node placed here, join the arm back on its far side; a line
- * standing for several connections (a closed group) has no menu.
+ * standing for several connections (a closed group) has no menu. A node's or a connection's menu ends with « Voir dans
+ * un autre plan » when it is shown in a plan other than this one, the lobby counting (plan 6a, D3).
  */
 export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, canPaste: boolean, under?: Id): MenuItem[] {
   const make = (actions: MenuAction[]) => actions.map((action) => ({ action, label: LABELS[action] }));
@@ -62,6 +65,7 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
     const lobby = [...s.plans.values()].find((p) => p.type === 'lobby');
     const members = s.connections.get(sc.id)?.members ?? [];
     if (lobby && scene.plan.id !== lobby.id && !members.some((m) => s.branches.has({ plan: lobby.id, connection: sc.id, node: m.node }))) actions.push('addToLobby');
+    if (plansShowing(s, 'connection', sc.id).some((p) => p !== scene.plan.id)) actions.push('seeElsewhere');
     return make(actions);
   }
   const at = scene.byId.get(hit.id);
@@ -74,5 +78,6 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
   actions.push('scaleDown', 'scaleUp', 'rename', 'hide', 'delete');
   const lobby = [...s.plans.values()].find((p) => p.type === 'lobby');
   if (lobby && scene.plan.type !== 'lobby' && !s.placements.has(placementKey(lobby.id, it.id))) actions.push('addToLobby');
+  if (plansShowing(s, 'node', it.id).some((p) => p !== scene.plan.id)) actions.push('seeElsewhere');
   return make(actions);
 }
