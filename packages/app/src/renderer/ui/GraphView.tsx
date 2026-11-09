@@ -1,13 +1,11 @@
 import { type Action, type FileRef, type Id, phantomsOf, type State, type Vec2 } from '@cirrus/core';
 import {
-  bibBlock, blockHalves, type Bounds, buildScene, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
+  bibBlock, blockHalves, type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
   type PlanScene, type RenderParams, sceneParamsKey, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, stepWheel, type WheelSteps, type ConnectTarget, connectTarget, otherPlans,
-  type Mode, type Clip, copyClip, deleteSummary, applyHandle, type BundleGeometry, bundleFor, handleAt, type HandleSpot, type Layout,
-  type LayoutHandle, layoutHandles, dropScenes, repercussion, isPinch, scaleMoves, withMoves, newlyPressed, renderPaused, updateScene, partOf, PART_FAR,
-  PART_MAIN, partEnds, type Measure, mergeChanges, type SceneChanges, type SceneIndex, updateIndex, type FontData, measureLines, layoutSplit, previewSplit,
-  type PreviewSplit, type VisibleSet,
+  dropEffects, dropTarget, type MenuAction, type MenuItem, menuFor, type ConnectTarget, connectTarget, otherPlans,
+  type Mode, type Clip, copyClip, deleteSummary, dropScenes, repercussion, isPinch, newlyPressed, renderPaused, partOf, PART_FAR,
+  partEnds, type SceneIndex, type FontData, previewSplit, type PreviewSplit,
 } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
@@ -34,18 +32,16 @@ import type { LatexRegistry } from '../latex/registry.ts';
 import { bibImportBuild, bibNotice, bibStoreFailure, bibText, planBib, type PlannedBib, storeBibs } from '../publications/bib.ts';
 import { type ImportDeps, publicationBuild } from '../publications/build.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
+import { type Engine, type Graph, NOTHING_SHOWN } from './graph/core.ts';
+import { useHover } from './graph/hover.ts';
+import { ignored, measuring, replayPointer } from './graph/launch.ts';
+import { useLayoutHandles } from './graph/layoutHandles.ts';
+import { useScaleWheel } from './graph/scaleWheel.ts';
+import { useScenes } from './graph/scenes.ts';
 
 /** What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures). */
 export interface GraphHandle { dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void> }
 
-/**
- * Bench and capture modes (plan 3c, task 1): their windows may not hold the OS focus, and nothing they measure or show
- * may depend on it, nor on where the user's mouse lies. They lift the pause of the drawing and the gesture abandoned on
- * a lost focus, and ignore the physical pointer and keyboard; the normal mode keeps all three.
- */
-const measuring = () => window.cirrus.launch.bench !== undefined || window.cirrus.launch.capture === true;
-/** A real input event in bench or capture mode: ignored (their replayed events are not trusted, the user's are). */
-const ignored = (ev: { isTrusted: boolean }) => ev.isTrusted && measuring();
 const NAV_KEYS = new Set(['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** The camera a plan opens with: the launch option "x,y,zoom" for visual checks, else the plan framed. */
@@ -55,10 +51,6 @@ function initialCamera(scene: PlanScene, widthPx: number, heightPx: number, p: R
   return fitBounds(scene.bounds, widthPx, heightPx, p);
 }
 
-type Tip = { x: number; y: number; text: string } | null;
-/** The visible set of a renderer that has drawn nothing yet: a preview's split made for it is built whole. */
-const NOTHING_SHOWN: VisibleSet = { items: [], groups: [], connections: [], signature: '' };
-type Chain = { item: number; title: string }[];
 /** What a gesture without a held button will do once placed (spec 9.1). */
 type Placing =
   | { kind: 'newNode' }
@@ -142,7 +134,7 @@ export function GraphView(props: {
 }) {
   const root = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
-  const engine = useRef<{ gl: Gl; renderer: PlanRenderer; font: FontData } | null>(null);
+  const engine = useRef<Engine | null>(null);
   const cameras = useRef(new Map<Id, Camera>());
   const sceneRef = useRef<PlanScene | null>(null);
   const paramsRef = useRef(props.params);
@@ -196,15 +188,6 @@ export function GraphView(props: {
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /** What Ctrl+C copied (spec 7): it survives a change of plan, to be pasted elsewhere. */
   const clip = useRef<Clip | null>(null);
-  /** The layout handles of the selected connection (spec 8.5), drawn over the canvas; one may be dragged. */
-  const handlesSvg = useRef<SVGSVGElement>(null);
-  const handleDrag = useRef<{
-    handle: LayoutHandle; conn: number; id: Id; base: Layout | undefined; g: BundleGeometry; layout: Layout | undefined; scene: PlanScene;
-    /** Where it was pressed; the drag begins beyond clickSlopPx, short of it the press is a plain click (I10 of the review). */
-    from: { x: number; y: number }; armed: boolean;
-    /** Its split for the visible set drawn (plan 3c task 9). */
-    split?: PreviewSplit;
-  } | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
   /** The plans a repercussion still has to place by hand, one after the other (spec 10), then the plan to come back to. */
@@ -213,31 +196,13 @@ export function GraphView(props: {
    * A gesture, a question, a repercussion or a .bib's import under way: Ctrl+Z and Ctrl+Y wait for it (I6 of the plan
    * 3b review), and so do a node dropped from a list and another .bib.
    */
-  const busy = () => gestures.current.busy || dragging.current !== null || handleDrag.current !== null || stubDrag.current !== null
+  const busy = () => gestures.current.busy || dragging.current !== null || handles.held() || stubDrag.current !== null
     || repQueue.current !== null || questionRef.current !== null || bib.current !== null;
   /** A .bib put down, waiting for its .bib (M4): no gesture that puts something down begins, the menus do not open. */
   const bibWaiting = () => bib.current?.put != null;
   /** Why `what` waits: the .bib's import put down (Escape does not give it up), or a gesture in progress. */
   const busyReason = (what: string) => (bibWaiting() ? BIB_WAITING : `Un geste est en cours : terminez-le ou abandonnez-le (Échap) avant ${what}.`);
 
-  /**
-   * Gives the renderer the scene to show (plan 3c, task 6): when it follows the renderer's own by the changes gathered
-   * since (sceneChanges), those changes, so that its index is updated rather than built; else the scene with the index
-   * its tab kept, if any — the index of the scene the renderer leaves going back to its tab's entry.
-   */
-  const showScene = (r: PlanRenderer, scene: PlanScene) => {
-    const gathered = sceneChanges.current;
-    sceneChanges.current = null;
-    if (gathered && r.held && gathered.prev === r.held.scene) r.updateScene(gathered.scene, gathered.changes);
-    const held = r.held;
-    if (held?.scene === scene) return;
-    const byPlan = scenes.current.byPlan;
-    const own = held ? byPlan.get(held.scene.plan.id) : undefined;
-    if (held && own?.scene === held.scene) own.index = held.index;
-    const entry = byPlan.get(scene.plan.id), kept = entry?.scene === scene ? entry.index : null;
-    r.setScene(scene, false, kept ?? undefined);
-    if (entry && entry.scene === scene) entry.index = null;
-  };
   /**
    * Back to the scene of the state, after a preview given up or refused (Escape, a lost focus, a right click, a
    * refusal: Review Focus 5): the renderer's preview ended, its texels and instances written back from the state's
@@ -298,24 +263,6 @@ export function GraphView(props: {
   const [ready, setReady] = useState(false);
   /** Why the engine could not start (no WebGL 2, a font file absent or unreadable…): shown in place of the graph. */
   const [failure, setFailure] = useState<string | null>(null);
-  const [scene, setScene] = useState<PlanScene | null>(null);
-  /**
-   * The scenes of the last tabs shown (cachedPlans, the current one last), all at revision `rev` of the state: each
-   * action updates them by its operations (plan 3c, task 5), so that going back to one of these tabs is immediate.
-   * `key`: the parameters they were made with (sceneParamsKey), and their measure of titles. Each keeps its visibility
-   * index too (plan 3c, task 6), kept up to date with it — except the scene the renderer holds, whose index is the
-   * renderer's (null here) until another tab is shown.
-   */
-  const scenes = useRef<{ rev: number; key: string; measure: Measure | null; byPlan: Map<Id, { scene: PlanScene; index: SceneIndex | null }> }>({
-    rev: 0, key: '', measure: null, byPlan: new Map(),
-  });
-  /**
-   * The renderer's scene once updated by the actions since it was given (`prev`, `scene`) and their changes, merged: the
-   * effect that shows the scene gives them to the renderer, which updates its index instead of building it again.
-   */
-  const sceneChanges = useRef<{ prev: PlanScene; scene: PlanScene; changes: SceneChanges } | null>(null);
-  const [tip, setTip] = useState<Tip>(null);
-  const [chain, setChain] = useState<Chain>([]);
   paramsRef.current = props.params;
 
   const moveCamera = (next: Camera) => {
@@ -332,35 +279,32 @@ export function GraphView(props: {
     const e = engine.current;
     if (e) moveCamera(navigate(e.renderer.camera, input, paramsRef.current));
   };
+  const local = (ev: { clientX: number; clientY: number }) => {
+    const r = root.current!.getBoundingClientRect();
+    return { sx: ev.clientX - r.left, sy: ev.clientY - r.top };
+  };
+  const hitAt = (sx: number, sy: number): Hit => {
+    const e = engine.current, hits = e?.renderer.hitIndex;
+    if (!e || !hits) return { kind: 'background' };
+    const w = screenToWorld(e.renderer.camera, sx, sy);
+    return hits.hit(w.x, w.y, e.renderer.camera.zoom);
+  };
+  const feed = (input: Input) => {
+    const e = engine.current;
+    if (!e) return;
+    for (const intent of gestures.current.feed(input, e.renderer.camera)) handle(intent);
+  };
 
-  /** What is under the screen point (sx, sy): hover light, tooltip, hierarchy reminder. */
-  const hover = (sx: number, sy: number) => {
-    const e = engine.current, sc = sceneRef.current, hits = e?.renderer.hitIndex;
-    if (!e || !sc || !hits) return;
-    const cam = e.renderer.camera;
-    const w = screenToWorld(cam, sx, sy);
-    const h = hits.hit(w.x, w.y, cam.zoom);
-    e.renderer.setHover(h.kind === 'connection' || h.kind === 'stub' ? h.conn : null);
-    redraw();
-    let text: string | null = null;
-    // The intruders found among what is drawn, with the same visible set as the hit index (spec 10, plan 3c task 6).
-    const intruder = h.kind === 'item' ? e.renderer.intruders.get(h.item) : undefined;
-    if (h.kind === 'stub') text = `absent : ${h.title}`;
-    else if (intruder !== undefined) text = `intrus dans le groupe « ${sc.items[intruder].title} »`;
-    else if (h.kind === 'item' && sc.items[h.item].kind === 'phantom') {
-      const it = sc.items[h.item];
-      text = `${it.phantom === 'node' ? 'fantôme' : it.phantom === 'center' ? 'centre' : 'absent'} : ${it.title}`;
-    }
-    setTip((old) => (text === null ? null : old && old.text === text && old.x === sx && old.y === sy ? old : { x: sx, y: sy, text }));
-    const next = hits.openGroupsAt(w.x, w.y, cam.zoom).reverse().map((item) => ({ item, title: sc.items[item].title }));
-    setChain((old) => (old.length === next.length && old.every((g, i) => g.item === next[i].item) ? old : next));
+  /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
+  const graph: Graph = {
+    root, engine, sceneRef, paramsRef, selectionRef, gestures, redraw, edit, hitAt, restoreScene, feed,
+    get scenes() { return scenes; }, get handles() { return handles; },
   };
-  const clearHover = () => {
-    engine.current?.renderer.setHover(null);
-    redraw();
-    setTip(null);
-    setChain([]);
-  };
+  const scenes = useScenes(graph, props, ready);
+  const scene = scenes.scene;
+  const { tip, chain, hover, clearHover } = useHover(graph);
+  const handles = useLayoutHandles(graph);
+  const { settleWheel, wheelScale } = useScaleWheel(graph);
 
   /** A gesture without a held button begins (spec 9.1): `text` follows the cursor, if any. */
   const startPlacing = (what: Placing, text: string | null, at: { x: number; y: number }) => {
@@ -557,7 +501,7 @@ export function GraphView(props: {
     const p = paramsRef.current, planned = planBib(stateRef.current, file.name, text.text, p.publicationMaxAuthors);
     bibMark('planned');
     if (planned.items.length === 0) { onLongNoticeRef.current(bibNotice(planned, 0, p.bibNoticeLines)); return; }
-    const measure = scenes.current.measure && scenes.current.key === sceneParamsKey(p) ? scenes.current.measure : measureLines(e.font, p);
+    const measure = scenes.measureOf(p);
     const lines = planned.items.map((x) => measure(x.plan.title));
     const b: BibImport = {
       planned, plan, lines, halves: blockHalves(bibBlock(lines.length, 0, p, lines), 0, p, lines),
@@ -627,78 +571,6 @@ export function GraphView(props: {
     startBib(file, at, plan);
   };
   /**
-   * The handles of the one connection selected, if it is drawn alone (spec 8.5): its marker, its trunk's rotation, the
-   * Bézier handles of its branches — from the layout being dragged, if any.
-   */
-  const layoutSpots = (): { spots: HandleSpot[]; g: BundleGeometry; conn: number } | null => {
-    const e = engine.current, sc = sceneRef.current, sel = selectionRef.current, vis = e?.renderer.visible;
-    if (!e || !sc || !vis || sel.items.size > 0 || sel.connections.size !== 1) return null;
-    const id = [...sel.connections][0];
-    const vc = vis.connections.find((x) => x.conns.length === 1 && x.fade === 'none' && sc.ids[x.conns[0]] === id && sc.part[x.conns[0]] === PART_MAIN);
-    if (!vc) return null;
-    const g = bundleFor(sc, vc, paramsRef.current, { x: 0, y: 0 }, handleDrag.current?.layout);
-    return { spots: layoutHandles(g, e.renderer.camera.zoom, paramsRef.current), g, conn: vc.conns[0] };
-  };
-  const drawHandles = () => {
-    const svg = handlesSvg.current, e = engine.current;
-    if (!svg || !e) return;
-    const L = layoutSpots();
-    if (!L) { if (svg.firstChild) svg.replaceChildren(); return; }
-    const p = paramsRef.current, cam = e.renderer.camera;
-    const rgb = (c: [number, number, number]) => `rgb(${c.map((v) => Math.round(v * 255)).join(',')})`;
-    const ink = rgb(p.selectionColor), edge = rgb(p.skyColor);
-    const at = L.spots.map((s) => worldToScreen(cam, s.at.x, s.at.y));
-    let html = '';
-    L.spots.forEach((s, i) => {
-      if (!s.from) return;
-      const f = worldToScreen(cam, s.from.x, s.from.y);
-      html += `<line x1="${f.x}" y1="${f.y}" x2="${at[i].x}" y2="${at[i].y}" stroke="${ink}"/>`;
-    });
-    for (const a of at) html += `<circle cx="${a.x}" cy="${a.y}" r="${p.handleRadiusPx}" fill="${ink}" stroke="${edge}"/>`;
-    svg.innerHTML = html;
-  };
-  /** A press on a handle starts dragging it, out of the gesture machine's way. */
-  const grabHandle = (sx: number, sy: number): boolean => {
-    const e = engine.current, sc = sceneRef.current, L = layoutSpots();
-    if (!e || !sc || !L) return false;
-    const cam = e.renderer.camera, w = screenToWorld(cam, sx, sy);
-    const handle = handleAt(L.spots, w.x, w.y, cam.zoom, paramsRef.current);
-    if (!handle) return false;
-    const l = sc.layout[L.conn];
-    const base = l && { handles: l.handles, ...(l.marker ? { marker: l.marker } : {}), ...(l.angle !== undefined ? { angle: l.angle } : {}) };
-    handleDrag.current = { handle, conn: L.conn, id: sc.ids[L.conn], base, g: L.g, layout: base, scene: sc, from: { x: sx, y: sy }, armed: false };
-    return true;
-  };
-  /** The connection redrawn with the handle under the cursor: a preview, nothing written. */
-  const dragHandle = (sx: number, sy: number) => {
-    const d = handleDrag.current, e = engine.current;
-    if (!d || !e) return;
-    if (!d.armed && Math.hypot(sx - d.from.x, sy - d.from.y) <= paramsRef.current.clickSlopPx) return;
-    d.armed = true;
-    d.layout = applyHandle(d.base, d.g, d.handle, screenToWorld(e.renderer.camera, sx, sy));
-    // The layout stands in for the part's own (an override): the scene is not copied (plan 3c task 9).
-    const visible = e.renderer.visible ?? NOTHING_SHOWN;
-    if (d.split?.visible !== visible) d.split = layoutSplit(visible, d.conn);
-    e.renderer.preview(d.scene, d.split, new Map([[d.conn, d.layout]]));
-    redraw();
-  };
-  /** Released: the layout is written for this plan (one step); Escape or a refusal brings the old one back. */
-  const dropHandle = (keep: boolean) => {
-    const d = handleDrag.current;
-    handleDrag.current = null;
-    if (!d) return;
-    // Released without moving: a click on what lies under the handle (the marker opens its connection's pop-up).
-    if (!d.armed) {
-      if (keep) {
-        feed({ t: 'down', button: 0, sx: d.from.x, sy: d.from.y, ctrl: false, alt: false, shift: false, hit: hitAt(d.from.x, d.from.y) });
-        feed({ t: 'up', button: 0, sx: d.from.x, sy: d.from.y });
-      }
-      return;
-    }
-    if (!keep || !d.layout || d.layout === d.base) { restoreScene(); return; }
-    edit(layoutBuild(d.scene.plan.id, d.id, d.layout), restoreScene);
-  };
-  /**
    * A drop that changes groups (spec 10): « partout ou ici seulement » when other plans would change, with its cost
    * announced; « partout » writes the drop and the plans needing no hand, then opens the others one after the other.
    */
@@ -719,8 +591,8 @@ export function GraphView(props: {
     const p = paramsRef.current, s = stateRef.current;
     // The other plans' scenes, for the whole drop: the cached ones when they are at the state's revision, else built
     // once, measured as the cached ones, with their measure's titles already laid out (I1 of the final review).
-    const cache = scenes.current, key = sceneParamsKey(p), current = cache.key === key && cache.rev === sessionRef.current?.rev;
-    const measure = cache.measure && cache.key === key ? cache.measure : measureLines(engine.current!.font, p);
+    const cache = scenes.cache.current, key = sceneParamsKey(p), current = cache.key === key && cache.rev === sessionRef.current?.rev;
+    const measure = scenes.measureOf(p);
     const sceneOf = dropScenes(s, measure, p, (q) => (current ? cache.byPlan.get(q)?.scene : undefined));
     const reps = moves.map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
     const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
@@ -833,35 +705,6 @@ export function GraphView(props: {
       // separated by "|" are replayed a few frames apart (a menu opened, then chosen: "click .context-menu button").
       const launchPhases = (window.cirrus.launch.pointer ?? '').split('|').map((x) => x.trim()).filter(Boolean);
       let settle = 0;
-      const replay = (script: string) => {
-        for (const step of script.split(';').map((x) => x.trim()).filter(Boolean)) {
-          if (step.startsWith('click ')) { document.querySelector<HTMLElement>(step.slice(6))?.click(); continue; }
-          if (step.startsWith('press ')) {
-            // Keys to the graph itself (Ctrl+C, Suppr…), where window-wide keys (--keys) do not go.
-            const parts = step.slice(6).split('+');
-            root.current?.dispatchEvent(new KeyboardEvent('keydown', { key: parts.pop()!, ctrlKey: parts.includes('ctrl'), bubbles: true }));
-            continue;
-          }
-          const [t, xs, ys, ...mods] = step.split(/\s+/);
-          const sx = Number(xs), sy = Number(ys), button = mods.includes('right') ? 2 : 0;
-          // The same paths as the real pointer: a layout handle first, else the gesture machine.
-          if (t === 'down') {
-            if (button === 0 && !mods.includes('ctrl') && !gestures.current.busy && grabHandle(sx, sy)) continue;
-            feed({ t: 'down', button, sx, sy, ctrl: mods.includes('ctrl'), alt: mods.includes('alt'), shift: mods.includes('shift'), hit: hitAt(sx, sy) });
-          } else if (t === 'move') {
-            if (handleDrag.current) dragHandle(sx, sy);
-            else feed({ t: 'move', sx, sy });
-          } else if (t === 'up') {
-            if (handleDrag.current) dropHandle(true);
-            else feed({ t: 'up', button, sx, sy });
-          }
-          else if (t === 'key') feed({ t: 'key', key: xs });
-          else if (t === 'wheel') {
-            const r = root.current!.getBoundingClientRect();
-            root.current!.dispatchEvent(new WheelEvent('wheel', { clientX: sx + r.left, clientY: sy + r.top, deltaY: Number(mods[0] ?? -120), ctrlKey: mods.includes('ctrl'), cancelable: true }));
-          }
-        }
-      };
       // Frames are drawn on demand: the loop waits for the screen only while something is to be drawn, and not at all
       // while the window is hidden or, by default, without the focus (battery). The first frame is drawn regardless,
       // and every frame in bench and capture modes (measuring()). One exception must not stop the drawing for good (C1
@@ -913,16 +756,16 @@ export function GraphView(props: {
             dirty.current = false;
             const rebuilt = e.renderer.renderFrame();
             drawn = { preview };
-            drawHandles();
+            handles.drawHandles();
             // What is under a resting pointer changes with the drawn set (I1 of the review): look again — not while a
             // handle is dragged (each of its frames is patched in place; the hover comes back once it is released).
-            if (rebuilt && lastPointer.current && !gestures.current.busy && !handleDrag.current) hover(lastPointer.current.x, lastPointer.current.y);
+            if (rebuilt && lastPointer.current && !gestures.current.busy && !handles.held()) hover(lastPointer.current.x, lastPointer.current.y);
             if (firstPending.current) {
               mark('firstFrame');
               // Visual checks: a simulated hover is drawn before the capture is taken.
               if (launchHover && launchHover.length === 2) { hover(launchHover[0], launchHover[1]); launchHover = undefined; }
               else if (settle > 0) { settle--; dirty.current = true; }
-              else if (launchPhases.length > 0) { replay(launchPhases.shift()!); settle = 5; dirty.current = true; }
+              else if (launchPhases.length > 0) { replayPointer(graph, launchPhases.shift()!); settle = 5; dirty.current = true; }
               else {
                 firstPending.current = false;
                 props.onFirstFrame();
@@ -962,43 +805,6 @@ export function GraphView(props: {
     };
   }, []);
 
-  // The scene depends on the state (its revision), the plan and the few parameters it reads (box sizes): a colour or a
-  // threshold changed in the settings panel does not rebuild it. The measure needs the font loaded.
-  const sceneKey = sceneParamsKey(props.params);
-  useEffect(() => {
-    if (!ready) return;
-    const p = paramsRef.current, cache = scenes.current, s = props.state;
-    if (cache.key !== sceneKey) { cache.byPlan.clear(); cache.key = sceneKey; cache.measure = measureLines(engine.current!.font, p); sceneChanges.current = null; }
-    const measure = cache.measure!;
-    if (props.rev !== cache.rev) {
-      // One action since the scenes were made: its operations update every one (Review Focus 2). React may have
-      // gathered several actions into this render, of which only the last is known: the scenes are made anew then.
-      const ops = props.rev === cache.rev + 1 ? props.action?.ops : undefined;
-      // The renderer's scene, or the one it will be given with the changes gathered so far.
-      const held = sceneChanges.current?.scene ?? sceneRef.current;
-      for (const [plan, entry] of [...cache.byPlan]) {
-        if (!ops || !s.plans.has(plan)) { cache.byPlan.delete(plan); continue; }
-        const { scene: next, changes } = updateScene(entry.scene, s, ops, measure, p);
-        if (next === entry.scene) continue;
-        if (entry.scene === held) {
-          // Its index is the renderer's: the changes go to it with the scene ([scene] effect), merged if renders gather.
-          const g = sceneChanges.current;
-          sceneChanges.current = g && g.scene === entry.scene ? { prev: g.prev, scene: next, changes: mergeChanges(g.changes, changes) } : { prev: entry.scene, scene: next, changes };
-        } else if (entry.index) entry.index = updateIndex(entry.index, next, changes, p);
-        entry.scene = next;
-      }
-      if (!ops) sceneChanges.current = null;
-      cache.rev = props.rev;
-    }
-    const entry = cache.byPlan.get(props.plan) ?? { scene: buildScene(s, props.plan, measure, p), index: null };
-    // The tab shown last goes last; beyond cachedPlans, the one shown longest ago is forgotten.
-    cache.byPlan.delete(props.plan);
-    cache.byPlan.set(props.plan, entry);
-    for (const plan of cache.byPlan.keys()) { if (cache.byPlan.size <= p.cachedPlans) break; cache.byPlan.delete(plan); }
-    setScene(entry.scene);
-    mark('sceneReady');
-  }, [ready, props.state, props.rev, props.plan, sceneKey]);
-
   useEffect(() => {
     const e = engine.current;
     if (!e || !ready) return;
@@ -1020,7 +826,7 @@ export function GraphView(props: {
         notify(`Répercussion interrompue : ${left} plan${left > 1 ? 's' : ''} non placé${left > 1 ? 's' : ''} à la main.`);
       }
       settleWheel();
-      dropHandle(false);
+      handles.dropHandle(false);
       setQuestion(null);
       feed({ t: 'cancel' });
       setSelection(emptySelection());
@@ -1033,7 +839,7 @@ export function GraphView(props: {
       }
     }
     sceneRef.current = scene;
-    showScene(e.renderer, scene);
+    scenes.showScene(e.renderer, scene);
     clearHover();
     const { width, height } = e.gl;
     const known = cameras.current.get(scene.plan.id);
@@ -1059,16 +865,6 @@ export function GraphView(props: {
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  const local = (ev: { clientX: number; clientY: number }) => {
-    const r = root.current!.getBoundingClientRect();
-    return { sx: ev.clientX - r.left, sy: ev.clientY - r.top };
-  };
-  const hitAt = (sx: number, sy: number): Hit => {
-    const e = engine.current, hits = e?.renderer.hitIndex;
-    if (!e || !hits) return { kind: 'background' };
-    const w = screenToWorld(e.renderer.camera, sx, sy);
-    return hits.hit(w.x, w.y, e.renderer.camera.zoom);
-  };
   /**
    * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
    * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
@@ -1335,47 +1131,6 @@ export function GraphView(props: {
     }
     redraw();
   };
-  /**
-   * Ctrl+wheel (spec 8.1): the step of the selection or of the element under the cursor. The notches of one gesture
-   * are previewed at once and written as one action when the wheel pauses (stepWheel).
-   */
-  const wheelGesture = useRef<{ steps: WheelSteps; base: PlanScene; preview: PlanScene; items: number[]; timer: number } | null>(null);
-  const commitScale = (g: { steps: WheelSteps; base: PlanScene; items: number[] }) => {
-    if (g.steps.delta === 0) { restoreScene(); return; }
-    edit(scaleBuild(g.base, g.items, g.steps.delta, paramsRef.current), restoreScene);
-  };
-  /** Writes now the Ctrl+wheel gesture waiting for its pause (before an undo, a change of plan). */
-  const settleWheel = () => {
-    const g = wheelGesture.current;
-    if (!g) return;
-    window.clearTimeout(g.timer);
-    wheelGesture.current = null;
-    commitScale(g);
-  };
-  const wheelScale = (sx: number, sy: number, deltaY: number) => {
-    const e = engine.current, sc = sceneRef.current;
-    if (!e || !sc) return;
-    const h = hitAt(sx, sy);
-    const prev = wheelGesture.current;
-    if (h.kind !== 'item') return;
-    const id = sc.items[h.item].id, sel = selectionRef.current;
-    const ids = sel.items.has(id) ? [...sel.items] : [id];
-    const steps = stepWheel(prev?.steps ?? null, [...ids].sort().join(','), deltaY, performance.now(), paramsRef.current);
-    if (prev) window.clearTimeout(prev.timer);
-    if (steps.flush && prev) commitScale(prev);
-    // A new gesture starts from what the screen shows: after the one just written, its preview (I6 of the review).
-    const base = !prev ? sc : steps.flush ? prev.preview : prev.base;
-    const items = ids.flatMap((x) => { const i = base.byId.get(x); return i === undefined ? [] : [i]; });
-    // Preview: the placements as the action would leave them, without rebuilding the scene (I15 of the review), the
-    // gesture's previous preview's storage taken again (plan 3c task 9).
-    const reuse = prev && !steps.flush ? prev.preview : undefined;
-    const preview = steps.delta === 0 ? base : withMoves(base, scaleMoves(base, items, steps.delta, paramsRef.current), paramsRef.current, reuse);
-    e.renderer.preview(preview, previewSplit(base, e.renderer.visible ?? NOTHING_SHOWN, items));
-    const gesture = { steps, base, preview, items, timer: 0 };
-    gesture.timer = window.setTimeout(() => { wheelGesture.current = null; commitScale(gesture); }, paramsRef.current.scaleGesturePauseMs);
-    wheelGesture.current = gesture;
-    redraw();
-  };
 
   /**
    * A menu choice (spec 9.1): on the element clicked, or on the whole selection when it belongs to it. The focus comes
@@ -1527,11 +1282,6 @@ export function GraphView(props: {
     }
     redraw();
   };
-  const feed = (input: Input) => {
-    const e = engine.current;
-    if (!e) return;
-    for (const intent of gestures.current.feed(input, e.renderer.camera)) handle(intent);
-  };
   /**
    * What the import dialog asks of the graph (plan 4c, D5 to D8): the IPC, and the node put down where the menu was
    * opened (publicationBuild), at the zoom of then, through the session — one action. Its plan no longer shown, nothing.
@@ -1575,7 +1325,7 @@ export function GraphView(props: {
     // A plan of a repercussion waits instead: Alt+Tab must not skip it (I8 of the review). Not in bench and capture modes.
     const onBlur = () => {
       if (measuring()) return;
-      dropHandle(false);
+      handles.dropHandle(false);
       if (placing.current?.kind !== 'repercussion') feed({ t: 'cancel' });
     };
     window.addEventListener('blur', onBlur);
@@ -1640,7 +1390,7 @@ export function GraphView(props: {
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         root.current!.setPointerCapture(ev.pointerId);
-        if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && grabHandle(sx, sy)) return;
+        if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && handles.grabHandle(sx, sy)) return;
         feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
       }}
       onMouseDown={(ev) => {
@@ -1655,10 +1405,10 @@ export function GraphView(props: {
         const pressed = newlyPressed(buttons.current, ev.buttons);
         buttons.current = ev.buttons;
         for (const b of pressed) {
-          if (handleDrag.current && b !== 0) { dropHandle(false); continue; }
+          if (handles.held() && b !== 0) { handles.dropHandle(false); continue; }
           feed({ t: 'down', button: b, sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
         }
-        if (handleDrag.current) { dragHandle(sx, sy); return; }
+        if (handles.held()) { handles.dragHandle(sx, sy); return; }
         if (!gestures.current.busy) hover(sx, sy);
         feed({ t: 'move', sx, sy });
       }}
@@ -1667,7 +1417,7 @@ export function GraphView(props: {
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
-        if (handleDrag.current) { dropHandle(true); return; }
+        if (handles.held()) { handles.dropHandle(true); return; }
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
       onPointerLeave={(ev) => { if (ignored(ev)) return; lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
@@ -1676,8 +1426,8 @@ export function GraphView(props: {
         if (ev.key === 'Escape') {
           // Taken by the gesture it cancels, or by the menu or connection pop-up it closes, it is not the floating panels'
           // (they close on an Escape nothing took).
-          if (handleDrag.current || gestures.current.busy || menu || popup) ev.preventDefault();
-          if (handleDrag.current) dropHandle(false); else feed({ t: 'key', key: 'Escape' });
+          if (handles.held() || gestures.current.busy || menu || popup) ev.preventDefault();
+          if (handles.held()) handles.dropHandle(false); else feed({ t: 'key', key: 'Escape' });
           return;
         }
         const sc = sceneRef.current;
@@ -1700,7 +1450,7 @@ export function GraphView(props: {
     >
       <div className="canvas-host" ref={host} />
       {failure && <div className="placeholder">Le graphe ne peut pas être dessiné : {failure}</div>}
-      <svg className="handles" ref={handlesSvg} />
+      <svg className="handles" ref={handles.handlesSvg} />
       {rectStyle && <div className="select-rect" style={rectStyle} />}
       <HierarchyCorner
         chain={chain}
