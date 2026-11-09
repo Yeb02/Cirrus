@@ -8,9 +8,9 @@ import { fileNameKey, rebaseUnit } from '../src/merge.ts';
 import type { FileRef, Id, NodeRec, TagValue } from '../src/model.ts';
 import { applyOp, applyOps, canonical, emptyState, placementOf, type State } from '../src/state.ts';
 import type { RemoteUnit, Unit } from '../src/sync.ts';
+import { created, stamp } from './helpers.ts';
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
-const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 const file = (name: string, c: string, size = 1): FileRef => ({ name, hash: c.repeat(64), size });
 
 /**
@@ -48,11 +48,6 @@ function rebase(s: State, x: Sides) {
 
 const tags = (s: State, id: Id): TagValue[] => s.nodes.get(id)!.tags;
 const files = (s: State, id: Id): string[] => s.nodes.get(id)!.files.map((f) => `${f.name}=${f.hash[0]}`);
-/** « (conflit du AAAA-MM-JJ HHhMM) » in the local time of the PC replaying (R4). */
-const stamp = (at: number) => {
-  const d = new Date(at), p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}h${p(d.getMinutes())}`;
-};
 
 interface Case { name: string; check: (w: World) => void }
 

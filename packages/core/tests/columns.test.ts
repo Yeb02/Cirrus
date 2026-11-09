@@ -7,21 +7,10 @@ import {
   applyOp, canonical, checkRecord, connId, connRelation, connRow, dataOf, emptyState, formerConnRow, formerNodeRow, groupMembers, memberOf, nodeRow,
   OpConflictError, phantomsIn, phantomsOf, placedIn, placementOf, planRow, reindex, relationRows, type State,
 } from '../src/state.ts';
+import { rng, view } from './helpers.ts';
 import * as oracleRules from './oracle/invariants.ts';
 import * as oracle from './oracle/state.ts';
 import { toSnapshot as oracleSnapshot } from './oracle/snapshot.ts';
-
-/** mulberry32: a small seeded generator, so that a failure replays. */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const PLANS = ['p0', 'p1', 'p2'];
 const NODES = Array.from({ length: 12 }, (_, i) => `n${i}`);
@@ -149,15 +138,6 @@ function both(s: State, o: oracle.State, op: Op): void {
   expect(err === null).toBe(oracleErr === null);
   if (err) expect(err).toBeInstanceOf(OpConflictError);
 }
-
-// Sorted: the two models do not iterate in the same order, the content must be the same.
-const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
-const bkey = (b: { plan: Id; connection: Id; node: Id }) => `${b.plan}|${b.connection}|${b.node}`;
-const view = (s: State | oracle.State) => ({
-  nodes: sorted(s.nodes), connections: sorted(s.connections), plans: sorted(s.plans), tagKeys: sorted(s.tagKeys), placements: sorted(s.placements),
-  branches: [...s.branches].map((b) => (typeof b === 'string' ? b : bkey(b))).sort(), connLayouts: sorted(s.connLayouts), phantoms: sorted(s.phantoms),
-  sizes: [s.nodes.size, s.connections.size, s.plans.size, s.tagKeys.size, s.placements.size, s.branches.size, s.connLayouts.size, s.phantoms.size],
-});
 
 /** Every lookup of the façades and direct accessors, on every identifier of the universe, against the oracle. */
 function lookups(s: State, o: oracle.State): void {

@@ -8,6 +8,7 @@ import type { ConnectionKind, ConnectionRec, Id, NodeRec, PlanType, Role, TagKey
 import type { Op } from '../src/ops.ts';
 import { ancestors, checkState, groupOf, touchedBy, type Violation } from '../src/invariants.ts';
 import { applyOp, applyOps, emptyState, type State } from '../src/state.ts';
+import { rng } from './helpers.ts';
 
 const node = (id: Id): NodeRec => ({ id, title: id, summary: '', tags: [], files: [] });
 
@@ -96,18 +97,6 @@ test('la vérification limitée aux objets touchés trouve les mêmes violations
   expect(keys(checkState(s, new Set(['inc-A-H', 'inc-H-G', 'st', 'k', 'H'])))).toEqual(keys(checkState(s)));
   expect(keys(checkState(s))).toEqual(['branchNotMember|k', 'cycle|G', 'cycle|H', 'structureOutsideDocument|st', 'twoGroups|A']);
 });
-
-/** mulberry32: a small seeded generator, so that a failure replays. */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const NODES = Array.from({ length: 12 }, (_, i) => `n${i}`);
 

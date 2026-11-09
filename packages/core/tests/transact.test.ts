@@ -5,14 +5,13 @@ import {
   transact,
 } from '../src/commands.ts';
 import { UndoConflictError, UndoStack } from '../src/history.ts';
-import type { Id, PlanType } from '../src/model.ts';
+import type { PlanType } from '../src/model.ts';
 import type { Op } from '../src/ops.ts';
 import { toSnapshot } from '../src/snapshot.ts';
 import { applyOp, applyOps, canonical, dataOf, emptyState, OpConflictError, placementOf, type State } from '../src/state.ts';
+import { created, sorted } from './helpers.ts';
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
-const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
-const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
 
 /**
  * The content of a state, its indices in identifier terms, and each identifier's row and the references held to it,

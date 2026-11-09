@@ -1,12 +1,10 @@
 import { expect, test } from 'vitest';
 import { connect, createNode, createPlan, include, splitArm, type Action } from '../src/commands.ts';
-import type { Id } from '../src/model.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
 import { applyOp, canonical, emptyState, type State } from '../src/state.ts';
+import { created } from './helpers.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
-const created = (a: Action, t: 'node' | 'plan' | 'connection'): Id =>
-  (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 const parts = (s: State) => ({
   nodes: [...s.nodes], connections: [...s.connections], plans: [...s.plans], tagKeys: [...s.tagKeys],
   placements: [...s.placements], branches: [...s.branches].map((b) => canonical(b)).sort(), connLayouts: [...s.connLayouts], phantoms: [...s.phantoms],

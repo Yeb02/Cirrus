@@ -9,12 +9,9 @@ import type { Id } from '../src/model.ts';
 import { invertAction } from '../src/history.ts';
 import { flowOf, MAX_LABEL_CHARS, subjectOf, truncateLabel } from '../src/ops.ts';
 import { applyOp, canonical, emptyState, layoutKey, OpConflictError, placementKey, preambleText, type State } from '../src/state.ts';
+import { created } from './helpers.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
-const created = (a: Action, t: 'node' | 'connection' | 'plan'): Id => {
-  const op = a.ops.find((o) => o.t === t && o.before === null);
-  return (op as { after: { id: Id } }).after.id;
-};
 
 function world() {
   const s = emptyState();

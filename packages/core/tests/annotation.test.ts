@@ -5,11 +5,11 @@ import {
 } from '../src/commands.ts';
 import { UndoStack } from '../src/history.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
-import type { Anchor, Id, NodeRec } from '../src/model.ts';
+import type { Anchor, NodeRec } from '../src/model.ts';
 import { applyOp, canonical, checkRecord, emptyState, nodeRow, placedIn, type State } from '../src/state.ts';
+import { created } from './helpers.ts';
 
 const run = (s: State, a: Action): Action => { for (const op of a.ops) applyOp(s, op); return a; };
-const created = (a: Action, t: 'node' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 
 const HASH = '0123456789abcdef'.repeat(4);
 const anchor = (extra: Partial<Anchor> = {}): Anchor => ({

@@ -10,11 +10,11 @@ import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
 import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State } from '../src/state.ts';
 import { parseRemoteUnit, parseUnit, reconcile, type RemoteUnit, SyncDivergedError, type Unit } from '../src/sync.ts';
+import { created, stamp } from './helpers.ts';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
 const run = (s: State, a: Action): Action => { applyOps(s, a.ops); return a; };
-const created = (a: { ops: Op[] }, t: 'node' | 'connection' | 'plan'): Id => (a.ops.find((o) => o.t === t && o.before === null) as { after: { id: Id } }).after.id;
 /** Through JSON, as on the network. */
 const wire = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
@@ -176,11 +176,6 @@ test('reconcile : une opération reçue qui ne s’applique pas lève SyncDiverg
   expect(image(s)).toBe(before);
 });
 
-/** « AAAA-MM-JJ HHhMM » in this PC's local time, as a conflict copy's name gives it (R4). */
-const stamp = (at: number) => {
-  const d = new Date(at), p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}h${p(d.getMinutes())}`;
-};
 const MIN = 60_000;
 
 /**

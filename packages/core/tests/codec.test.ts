@@ -11,7 +11,8 @@ import { DEFAULT_PREAMBLE } from '../src/latex.ts';
 import type { ConnectionRec, Id, NodeRec, PhantomRec } from '../src/model.ts';
 import type { Op } from '../src/ops.ts';
 import { toSnapshot } from '../src/snapshot.ts';
-import { applyOp, applyOps, canonical, dataOf, emptyState, memberOf, placedIn, preambleText, type State } from '../src/state.ts';
+import { applyOp, applyOps, dataOf, emptyState, memberOf, placedIn, preambleText, type State } from '../src/state.ts';
+import { bkey, rng, view } from './helpers.ts';
 import { fromSnapshot as oracleFromSnapshot } from './oracle/snapshot.ts';
 import * as oracle from './oracle/state.ts';
 
@@ -19,26 +20,6 @@ import * as oracle from './oracle/state.ts';
 setFlagsFromString('--allow-natives-syntax');
 const sameHeapObject = new Function('a', 'b', 'return %IsSameHeapObject(a, b)') as (a: unknown, b: unknown) => boolean;
 
-/** mulberry32: a small seeded generator, so that a failure replays. */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// Sorted: the two models do not iterate in the same order, the content must be the same.
-const sorted = <T>(xs: Iterable<T>) => [...xs].map((x) => canonical(x)).sort();
-const bkey = (b: { plan: Id; connection: Id; node: Id }) => `${b.plan}|${b.connection}|${b.node}`;
-const view = (s: State | oracle.State) => ({
-  nodes: sorted(s.nodes), connections: sorted(s.connections), plans: sorted(s.plans), tagKeys: sorted(s.tagKeys), placements: sorted(s.placements),
-  branches: [...s.branches].map((b) => (typeof b === 'string' ? b : bkey(b))).sort(), connLayouts: sorted(s.connLayouts), phantoms: sorted(s.phantoms),
-  sizes: [s.nodes.size, s.connections.size, s.plans.size, s.tagKeys.size, s.placements.size, s.branches.size, s.connLayouts.size, s.phantoms.size],
-});
 /** The object model loaded from a state's records. */
 function oracleOf(s: State): oracle.State {
   const x = toSnapshot(s);
