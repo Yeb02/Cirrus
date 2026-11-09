@@ -922,3 +922,115 @@ Le passage de correctifs couvre aussi les Minors 2 (par R31), 3, 4 et les tests 
   - Coût si faux : nul.
 - Ruling (Minor 4) : **507 pour un fichier reçu que le disque de ce PC n'a pas gardé**, que le lecteur dit à part. Un téléchargement en fond ainsi manqué est retenté à la connexion suivante, comme une panne du réseau : le disque peut avoir de la place d'ici là.
   - Coût si faux : un essai de plus par connexion tant que le disque refuse.
+
+## Annexe : registre d'exécution (décisions du contrôleur et points différés)
+
+Le plan a été exécuté tâche par tâche : un agent par tâche, une revue par tâche, puis une revue de l'ensemble et un tour de correction final. Cette annexe garde ce que le carnet de bord de l'exécution contenait, puisqu'il est effacé à la fin.
+
+### Décisions prises au nom de l'utilisateur (R1 à R33)
+
+Chacune avec son coût si elle est fausse.
+
+- **R1 :** `commit` reçoit le PC d'origine (`{ at, unit, pc }`), et le serveur écrit l'auteur de chaque ligne. Coût : un champ d'option en trop.
+- **R2 :** `SERVER_SNAPSHOT_UNITS` (500) est une borne du serveur, dans `bounds.ts`. Coût : nul.
+- **R3 :** la fenêtre de regroupement des écritures reçues est le réglage `syncReceiveBatchMs` (50 ms). Coût : un réglage de plus.
+- **R4 :** une copie de conflit d'un `.tex` porte l'heure locale de l'écriture perdante, « nom (conflit du AAAA-MM-JJ HHhMM).ext », avec « (2) » en cas de doublon. Coût : un nom de fichier.
+- **R5 :** la liste des écritures en attente de l'interface est toujours complète ; `pendingUnits(limit)` ne borne que les envois. Coût : nul.
+- **R6 :** le serveur écrit ses propres lignes déjà numérotées, et refuse un nom de fichier qui n'est pas un nom simple. Coût : une option de `commit`.
+- **R7 :** un PC vide face à un serveur dont le journal a déjà des lignes prend la base du serveur : une base n'a jamais deux lobbies. Coût : un « prendre la base » au jumelage d'un PC vide.
+- **R8 :** le client de synchro ne démarre qu'une fois le premier jumelage tranché. Coût : un journal migré envoyé écriture par écriture.
+- **R9 :** les téléchargements interrompus sont gardés dans `downloads.json` et repris au démarrage. Coût : après un plantage pendant l'écriture de ce fichier, quelques fichiers manquent jusqu'à leur ouverture.
+- **R10 :** une adresse `http:` n'est acceptée que vers la boucle locale : ni le code ni le jeton ne circulent en clair. Coût : nul en 5a.
+- **R11 (provisoire, remplacée par la tâche 5) :** jumelage seulement entre une base vide et un serveur vide ; arrêt et démarrage sérialisés ; dissocier efface `downloads.json` ; refus si `safeStorage` ne chiffre pas. Coût : un refus temporaire.
+- **R12 :** calculer la taille ou la lisibilité d'une ancre d'annotation ne télécharge jamais un PDF ; un PDF absent est « pas encore téléchargé ». Coût : une annotation vers un PDF que le serveur aurait perdu paraît normale jusqu'à l'ouverture.
+- **R13 :** après un rechargement de la page, le principal n'envoie rien à l'interface tant qu'elle n'est pas prête (drapeau `ready`), sans délai d'attente. Coût : un autre chemin de message perdu bloquerait l'arrêt jusqu'à la fermeture.
+- **R14 :** l'ouverture d'un PDF absent par l'application du système le télécharge d'abord. Coût : un tour de correction de plus.
+- **R15 :** un PC peut révoquer son propre jeton (`POST /unpair`) ; le premier jumelage l'appelle à l'annulation et à l'échec, « Dissocier ce PC » aussi. Coût : une route.
+- **R16 :** envoi d'une base : le dernier PC qui commence l'emporte ; un envoi partiel reste invisible ; l'instantané est écrit en flux dans un fichier, jamais gardé en mémoire. Coût : de deux envois simultanés, le premier doit recommencer.
+- **R17 :** « prendre la base » prépare `<base>-nouvelle`, avec une marque écrite en dernier, échangée au démarrage suivant ; l'ancienne base devient `base-avant-jumelage-AAAA-MM-JJ` ; la base adoptée garde l'identifiant de ce PC. Coût : un renommage au démarrage.
+- **R18 :** envoi, adoption, mémoire du serveur et `downloads.json` sont mesurés sur la base de référence, jamais sur la vraie. Coût : nul.
+- **R19 :** le serveur accepte les défauts qu'une base envoyée portait déjà (comptés et journalisés) ; seule la structure est vérifiée. Coût : la base du serveur garde un défaut que le PC avait.
+- **R20 :** un libellé d'action trop long est coupé par le PC (« … ») ; le serveur refuse toujours un libellé trop long. Coût : un libellé coupé dans l'historique.
+- **R21 :** les essais de l'échange de base au démarrage restent des constantes, puisqu'aucun réglage n'est lisible avant la base ; leur budget couvre plusieurs secondes. Coût : nul.
+- **R22 :** les accélérations mesurées de l'envoi et de l'adoption (−37 %, −20 %) ne sont pas appliquées. Coût : environ 20 s, une fois, sur une base de 50 000 nœuds (environ 2 s à la taille de la vraie base).
+- **R23 :** tous les réglages sont partagés et le serveur fait foi (absent veut dire défaut). Envoyer sa base envoie ses réglages ; prendre celle du serveur prend les siens. Ensuite le plus récent gagne, puis l'identifiant du PC. Coût : un PC qui adopte perd ses propres réglages, ce que la spec 19 demande.
+- **R24 :** le serveur vérifie la forme d'un réglage (clé, taille, heure, nombre) ; chaque PC le borne à la réception. Coût : nul.
+- **R25 :** la migration unique des réglages, ajoutée par l'agent, est retirée. Coût : une base de test jumelée avant la tâche 6 reprend les réglages du serveur.
+- **R26 :** un réglage daté de plus d'un jour d'avance est refusé par le serveur ; la minuterie d'enregistrement ne renvoie jamais une valeur remplacée par une valeur reçue. Coût : un tour court de plus.
+- **R27 :** pour le scénario « prendre la base », `CIRRUS_NO_RELAUNCH` remplace le redémarrage par une sortie, et le scénario relance l'app lui-même en arrière-plan. Coût : le vrai redémarrage n'est couvert que par vitest.
+- **R28 :** les captures d'un état jumelé jumellent vraiment avec un serveur local ; aucun jeton n'est écrit en clair. Coût : des captures plus lentes.
+- **R29 :** la recompilation des résumés en arrière-plan après une synchro passe au plan 5b. Coût : d'ici là, un nœud changé sur un autre PC compile à son ouverture, comme aujourd'hui.
+- **R30 :** la capture du bloc non jumelé tape un nom de PC fixe (« Portable »). Coût : une capture refaite.
+- **R31 :** la base du serveur a une identité. Un PC qui la connaît se jumelle de nouveau sans offre et envoie ce qui attend ; un PC face à une autre base s'arrête avec un message. Coût : une base copiée avec ses métadonnées reprend le serveur de l'originale (affaire du plan 9).
+- **R32 :** une base ne garde jamais une écriture que le serveur refuserait : clés de tags bornées à la création, chaque écriture vérifiée avant d'être écrite ; l'historique ancien reste envoyable. Coût : supprimer plus de 200 000 éléments d'un coup est refusé, à faire en plusieurs fois.
+- **R33 :** une clé de tag que l'enregistrement porte déjà n'est pas jugée de nouveau. Coût : une vieille clé trop longue survit sur cet enregistrement.
+
+### Points mineurs différés
+
+Les points réglés en cours de route sont marqués « réglé ».
+
+**Fusion, journal et historique**
+- `pendingUnits(limit)` ne doit borner que les envois — réglé par R5.
+- Une base migrée de la v3 peut donner deux écritures en attente de même identifiant (enregistrements non contigus d'un même `.tex`). Sur le chemin « PC vide, serveur vide » d'une base migrée puis vidée, corbeille comprise, la synchro de cette base resterait bloquée. Presque inaccessible ; à corriger en numérotant un journal migré comme un envoi de base.
+- `commit` écrivait toujours `local` — réglé par R6.
+- Le journal grossit de deux fois les opérations en attente à chaque réconciliation, même sans recoupement (optimisation plus tard).
+- L'index des écritures reçues de `merge.ts` est mis en cache par identité de tableau.
+- Un nom de fichier non simple — réglé par R6 (le serveur le refuse).
+- La simulation de réconciliation n'affirme que la convergence et le nombre de notifications, n'a pas de fichiers, et imprime une ligne à chaque passage.
+- La table `within` de `history.ts` n'est jamais élaguée (croissance par session).
+- Un nœud ressuscité retrouve ses placements et branches, pas ses appartenances (limite documentée, spec 6.6).
+- Une copie de conflit remplacée par nom et contenu peut remplacer la vraie copie d'un autre PC (rien de perdu, la notification nomme une copie renommée).
+- Deux copies de conflit de même nom dans la même minute donnent un nom imbriqué ; `replaced` retire une clé entière même quand l'autre côté a un autre contenu sous ce nom (artificiel).
+- Les écritures d'annulation et de rétablissement ont de nouveaux identifiants : `forget` ne retrouve pas leur pas de pile, qui refuse ensuite avec « a été modifié depuis ».
+- Une écriture rebasée pendant une réconciliation ne passe pas le contrôle de R32 (un nœud à vieille clé longue, supprimé ailleurs et modifié ici, est refusé après coup — plus étroit qu'avant).
+
+**Serveur**
+- Un code de jumelage utilisé avec l'identifiant d'un PC déjà jumelé renomme sa ligne et tue son jeton (base copiée ; plan 9).
+- Le nom envoyé par `/pair` n'est contrôlé qu'en longueur ; `pcs` l'imprime tel quel (caractères de contrôle dans le terminal).
+- Code mort (`Tokens.pcOf`, `TOKEN`), expression des empreintes répétée (une demi-douzaine de fois avec le client), `Canon.undo` par `applyOps` vérifié (inaccessible).
+- Tests manquants : échec du commit puis état restauré, échec non conflictuel de `applyOps`, reprise vraiment concurrente.
+- Un `PUT /files` découpé au-delà de `MAX_FILE_BYTES` coupe la connexion au lieu d'un 413.
+- Après un redémarrage, l'instantané peut retarder de près de 999 écritures.
+
+**Client de synchro**
+- Les écritures reçues ne sont pas bornées en mémoire, ni les lots (un message et une transaction pour tout un retard) ; à borner avant le plan 9.
+- Le décalage d'horloge est fixé pour la vie d'une connexion et n'est pas gardé (plan 9).
+- `onServer` jamais vidé — réglé à la tâche 4.
+- Vérification de `Content-Length` morte ; un `Content-Length` absent échoue sans avertissement.
+- Tests manquants : retard ≤ reçu ⇒ divergence, 409 côté client, saut après un 400 ou 413, découpe d'un lot trop gros.
+- « Serveur injoignable (…) : fetch failed. » contient de l'anglais ; apostrophe droite dans l'avertissement d'horloge.
+- Répétitions : `FORMAT`, le nettoyage d'`accepted`, le message de trou de flux.
+- Un téléchargement à la demande en cours peut masquer une demande en fond pour la même empreinte.
+- `downloads.json` réécrit en entier par lot reçu apportant des fichiers — mesuré à la tâche 5 (R18).
+- Un fichier temporaire `downloads.json.<pid>.tmp` peut rester après un plantage.
+- La remise à zéro de l'attente se fie au contrat de réconciliation.
+- Un fichier absent du serveur aussi répond 503 « serveur injoignable », sans mémoire du refus ; abandonner la lecture n'arrête pas le téléchargement.
+- Envoi et adoption transfèrent les fichiers un par un (à paralléliser avant le serveur distant du plan 9).
+- Le flux d'événements à moitié ouvert n'est pas détecté, et les requêtes n'ont pas de délai ; sans effet sur la boucle locale, à régler avant le plan 9.
+
+**Interface et bloc « Serveur »**
+- `checked()` ne vérifie pas les éléments de `dropped` et `notices`.
+- Le scénario « rien n'est envoyé après la dissociation » n'écrivait rien — réglé à la tâche 7.
+- `EditSession.receive` est mort dans l'app ; `messageOf` a plusieurs copies ; `host.ts` (552 lignes) mêle quatre rôles et `client.ts` fait 679 lignes : à découper en un passage.
+- Sans serveur, une invocation de plus au démarrage et deux lectures de fichiers absents (négligeable).
+- Si le principal est jumelé mais que le client ne démarre pas, « Réessayer » est inerte jusqu'au redémarrage.
+- Une navigation vers une page d'erreur ne détache pas (seulement quand l'app ne charge pas sa propre page).
+- Imports à ranger dans deux fichiers de test.
+- L'échec de la relecture du bloc à son montage est avalé sans trace (`ServerBlock.tsx:46`).
+- Après un rechargement pendant un envoi de base, le bloc n'est rafraîchi qu'au montage suivant.
+
+**Premier jumelage**
+- Le nom d'archive proposé peut différer du nom final ; l'offre de remplacement ne dit pas combien de nœuds partent à l'archive.
+- Un PC en avance sur un serveur restauré d'une sauvegarde reçoit l'offre « remplacer », dont le texte parle de deux bases ; un serveur restauré garde son identité, donc un PC ne voit pas la restauration (plan 9).
+- Sur une base où une ancienne version a mis une clé de tag de plus de 128 caractères, annuler son retrait, copier un tel nœud ou choisir cette clé dans les suggestions est refusé avec le message technique de l'analyseur, et une annulation refusée bloque la pile.
+
+**Réglages partagés**
+- Avec `settingsSaveDelayMs` proche de 0, la minuterie peut encore renvoyer brièvement une valeur ancienne (bref, se corrige seul).
+- L'écriture de `settings-pending.json` quand une heure trop avancée est ramenée n'est pas protégée ; un échec coupe une connexion.
+- Deux changements plafonnés d'un même réglage dans la même milliseconde : le second est défait (cas d'une heure trop avancée seulement).
+- Après la perte de `serveur.db`, le premier PC repris revient aux réglages par défaut ; correctif simple : dater les réglages à la reprise seulement quand le serveur n'en garde aucun.
+
+**Scripts et tests**
+- `captures.mjs --only=serveur-non-jumele` refait toute la chaîne jumelée, et un échec plus loin sort quand même avec 0.
+- Le test de taille de 64 Mio est lourd en mémoire.
+- `latexKill.test.ts` échoue parfois sous charge (passe seul) — instabilité connue d'avant le plan 5a.
