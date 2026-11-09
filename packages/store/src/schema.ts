@@ -48,7 +48,7 @@ const MIGRATIONS: string[] = [
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
-export class SchemaError extends Error {}
+class SchemaError extends Error {}
 
 export function migrate(db: DatabaseSync): void {
   const current = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;

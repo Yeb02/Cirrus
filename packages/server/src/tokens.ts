@@ -64,8 +64,8 @@ export class PairingError extends Error {
   }
 }
 
-export interface PairedPc { id: string; name: string; machine: string; pairedAt: number }
-export interface PendingCode { name: string; expiresAt: number }
+interface PairedPc { id: string; name: string; machine: string; pairedAt: number }
+interface PendingCode { name: string; expiresAt: number }
 
 /** A PC's name: what `jumeler` gives, and what the PC says of itself; text of 1 to MAX_PC_NAME_CHARS characters, no control character. */
 function checkName(name: unknown): string | null {

@@ -19,7 +19,7 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 // anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
 // paired PCs, the shared settings), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7).
 
-export interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number }
+interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number }
 export interface RunningServer { url: string; close(): Promise<void> }
 
 /** The addresses it listens on: this machine's, until HTTPS (plan 9). */

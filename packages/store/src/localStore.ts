@@ -15,7 +15,7 @@ export { SCHEMA_VERSION } from './schema.ts';
  * A journal line's kind (plan 5a, D5): local, an action of this PC (pending until the server numbers it); remote, one
  * received from the server; rewind, the inverse of a pending write a reconciliation undid, never sent.
  */
-export type ChangeKind = 'local' | 'remote' | 'rewind';
+type ChangeKind = 'local' | 'remote' | 'rewind';
 
 export interface ChangeRow {
   localSeq: number;
@@ -35,10 +35,10 @@ export interface ChangeRow {
 }
 
 /** A seed sent whose `done` may have gone unanswered (short review after plan 5a, B1): see LocalStore.pendingSeed. */
-export interface PendingSeed { id: string; last: number; at: number }
+interface PendingSeed { id: string; last: number; at: number }
 
 /** The base's snapshot of the state (plan 3c, decision 4): its bytes, the last journal line it covers, its format. */
-export interface StoredSnapshot { data: ArrayBuffer; seq: number; version: number }
+interface StoredSnapshot { data: ArrayBuffer; seq: number; version: number }
 
 interface ChangeDbRow {
   local_seq: number; server_seq: number | null; action_id: string; label: string; flow: string; at: number; pc: string; subject: string; op: string; unit: string;

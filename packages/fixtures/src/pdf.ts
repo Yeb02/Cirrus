@@ -8,7 +8,7 @@
 export interface PdfLine { x: number; y: number; size: number; text: string; bold?: boolean }
 type Rect = [number, number, number, number];
 /** A link's area, in the page's points: to the top of a page of the document (by index), or to an address. */
-export type PdfLink = { rect: Rect; page: number } | { rect: Rect; uri: string };
+type PdfLink = { rect: Rect; page: number } | { rect: Rect; uri: string };
 /** A page: its size in points, its lines of text, its links, and raw content drawn after the text (`content`). */
 export interface PdfPageSpec { width: number; height: number; lines: PdfLine[]; links?: PdfLink[]; content?: string }
 
@@ -20,7 +20,7 @@ const CP1252: Record<number, number> = {
 };
 
 /** A literal string in WinAnsiEncoding: « ( », « ) » and « \ » escaped, every byte past ASCII written in octal. */
-export function pdfString(text: string): string {
+function pdfString(text: string): string {
   let out = '(';
   for (const ch of text) {
     const c = ch.codePointAt(0)!;

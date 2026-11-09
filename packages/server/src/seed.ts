@@ -61,7 +61,7 @@ function seedRow(x: unknown, expected: number, history: boolean): ChangeRow {
 }
 
 /** A whole base, as `done` hands it to the canon: its state, last journal line, lines by pages, and identity. */
-export interface Seeded { state: State; last: number; lines(after: number, limit: number): ChangeRow[]; baseId: string }
+interface Seeded { state: State; last: number; lines(after: number, limit: number): ChangeRow[]; baseId: string }
 
 export class Seeds {
   private readonly root: string;
