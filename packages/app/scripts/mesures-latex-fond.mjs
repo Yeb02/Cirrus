@@ -13,8 +13,8 @@
 // - fond: from the virtual PC's write of 100 summaries to the 100th PDF in the cache, nothing else running (round 0);
 // - frappe: the preview of « Frappe »'s summary typed in its compact editor (« ␣a », then 1.2 s of rest), from the end
 //   of the typing pause (latexTypingPauseMs) to the canvas of its new PDF put in the page — before any background work,
-//   while the background compiles 100 summaries changed by a sync (rounds 1 and 2, the keystrokes whose pause ended
-//   before the background's last PDF), and after it;
+//   while the background has 100 summaries changed by a sync to compile (rounds 1 and 2, TYPED_PER_ROUND keystrokes at
+//   most, those whose pause ended before the background's last PDF), and after it;
 // - ouverture: the pop-up of a node of the grid whose summary the background compiled, from the release of the click
 //   to its canvas: the first of the session (pdf.js not loaded yet), then ten others, pdf.js loaded.
 // Prints a JSON report, for the registry.
@@ -36,6 +36,13 @@ const PAUSE_MS = 300;
 const REST_MS = 1200;
 /** Keystrokes before and after the background's rounds, each a session's baseline. */
 const BASELINE = 10;
+/**
+ * Keystrokes typed at most in a round with the background: task 8's rounds typed until the background had put its 100
+ * PDFs, 15 keystrokes on average (90 in six rounds). Since latexBackgroundPauseMs (after task 8), the background starts
+ * nothing while one types at this rhythm (a request every 1.7 to 1.9 s, under its 2 s): the typing stops after these, and
+ * the round waits for the background's last PDF.
+ */
+const TYPED_PER_ROUND = 15;
 /**
  * The view: the world's (3100, 300) at the graph's centre, zoom 1 — (792, 499) in the page, under the tabs (38 px). The
  * grid: 10 columns of 120 px from x = 2500, 10 rows of 65 px from y = 0; « Frappe » at (3750, 300), right of it.
@@ -176,9 +183,9 @@ async function openTimed(page, cache, i) {
 
 /**
  * A round: the virtual PC changes the grid's 100 summaries in one write (revision `r`); its time `t0`. Without typing, the
- * 100 PDFs awaited in the cache. With typing, keystrokes in « Frappe »'s editor until the background has put its 100:
- * the cache then also holds one PDF per keystroke, each counted out once its canvas is drawn — the background's last
- * PDF is when the PDFs seen, less the keystrokes' drawn by then, reach 100.
+ * 100 PDFs awaited in the cache. With typing, keystrokes in « Frappe »'s editor until the background has put its 100, or
+ * TYPED_PER_ROUND of them, then the rest awaited: the cache then also holds one PDF per keystroke, each counted out once
+ * its canvas is drawn — the background's last PDF is when the PDFs seen, less the keystrokes' drawn by then, reach 100.
  */
 async function round(ctx, r, typing) {
   const { page, pc, grid, cache, clock } = ctx;
@@ -187,11 +194,10 @@ async function round(ctx, r, typing) {
   const t0 = now();
   pc.act((s) => ({ id: uuidv7(), label: `Modifier 100 résumés (mesure, révision ${r})`, ops: grid.flatMap((id, i) => editNode(s, id, { summary: summary(i, r) }).ops) }));
   const keys = [];
-  if (!typing) {
-    for (const end = Date.now() + 180_000; cache.count() < 100 && Date.now() < end;) await sleep(20);
-  } else {
-    for (const end = Date.now() + 180_000; cache.count() - keys.length < 100 && Date.now() < end;) keys.push(await keystroke(page, LETTERS[(ctx.typed++) % 26]));
+  if (typing) {
+    for (const end = Date.now() + 180_000; cache.count() - keys.length < 100 && keys.length < TYPED_PER_ROUND && Date.now() < end;) keys.push(await keystroke(page, LETTERS[(ctx.typed++) % 26]));
   }
+  for (const end = Date.now() + 180_000; cache.count() - keys.length < 100 && Date.now() < end;) await sleep(20);
   // The background's PDFs: the times of the PDFs seen, each keystroke's taken out (its canvas, on this process's clock).
   await sleep(200);
   const all = cache.times(), drawn = keys.map((k) => k.canvas - clock.ms).sort((a, b) => a - b);
@@ -199,9 +205,12 @@ async function round(ctx, r, typing) {
   if (bg.length < 100) throw new Error(`révision ${r} : ${bg.length} PDF de fond sur 100 dans le cache (${all.length} en tout)`);
   const gaps = bg.slice(1, 100).map((t, j) => t - bg[j]);
   const during = keys.filter((k) => k.pause - clock.ms < bg[99]);
+  // The background's PDFs put while one typed: up to the last keystroke's canvas.
+  const typedUntil = keys.length > 0 ? drawn[drawn.length - 1] : null;
   return {
     revision: r, firstMs: Math.round(bg[0] - t0), lastMs: Math.round(bg[99] - t0), gaps: stats(gaps), gapsMs: gaps.map(Math.round),
     keystrokes: keys.length, during: during.map((k) => r1(k.ms)), all: keys.map((k) => r1(k.ms)),
+    ...(typedUntil === null ? {} : { typedMs: Math.round(typedUntil - t0), backgroundWhileTyping: bg.filter((t) => t <= typedUntil).length }),
   };
 }
 
@@ -295,7 +304,10 @@ const report = {
   settings: SETTINGS ?? 'défauts',
   passes,
   fond: { lastMs: stats(passes.map((p) => p.fond.lastMs)), firstMs: stats(passes.map((p) => p.fond.firstMs)), gaps: stats(passes.flatMap((p) => p.fond.gapsMs)) },
-  fondPendantLaFrappe: { lastMs: stats(passes.flatMap((p) => p.frappe.map((x) => x.lastMs))), gaps: stats(passes.flatMap((p) => p.frappe.flatMap((x) => x.gapsMs))) },
+  fondPendantLaFrappe: {
+    lastMs: stats(passes.flatMap((p) => p.frappe.map((x) => x.lastMs))), gaps: stats(passes.flatMap((p) => p.frappe.flatMap((x) => x.gapsMs))),
+    typedMs: stats(passes.flatMap((p) => p.frappe.map((x) => x.typedMs))), pdfsWhileTyping: passes.flatMap((p) => p.frappe.map((x) => x.backgroundWhileTyping)),
+  },
   frappe: {
     criterion: 'p95 < 300 ms',
     sansFond: stats(passes.flatMap((p) => [...p.avant, ...p.apres])),
