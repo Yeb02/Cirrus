@@ -7,7 +7,7 @@ import { DEFAULT_PARAMS, type RenderParams, withOverrides } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';
 import { pcId } from '../src/main/base.ts';
 import { parseSettingRows, PENDING_SETTINGS_FILE, readSettings, SharedSettings } from '../src/main/settings.ts';
-import { swapStaged } from '../src/main/sync/firstSync.ts';
+import { swapStaged } from '../src/main/sync/swap.ts';
 import { applyReceived, dueChanges, keepUnsaved, localChanges, withSetting } from '../src/renderer/settingChanges.ts';
 import { AppPc, writeSettings } from './support/appPc.ts';
 import { created, Lab, T0, until } from './support/virtualPc.ts';

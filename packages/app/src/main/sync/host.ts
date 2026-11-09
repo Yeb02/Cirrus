@@ -4,15 +4,16 @@ import { type Action, type Id, isObject, type Op, type Reconciliation, type Remo
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import { SharedSettings } from '../settings.ts';
+import { adoptBase } from './adopt.ts';
 import { SyncClient } from './client.ts';
 import { pair, type SecretStore, type ServerConfig, serverUrl } from './config.ts';
 import { FORMAT } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
-import {
-  adoptBase, firstSyncOffer, isBaseId, offerMessage, pristine, revokeSelf, seedBase, sentence, stagedDir, stagedWaiting, waitingMessage,
-} from './firstSync.ts';
+import { firstSyncOffer, isBaseId, offerMessage, pristine, revokeSelf, sentence, stagedDir } from './firstSync.ts';
 import type { Committed, FirstSyncOffer, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from './protocol.ts';
+import { seedBase } from './seed.ts';
 import { writeRefusal } from './sender.ts';
+import { stagedWaiting, waitingMessage } from './swap.ts';
 
 // The synchronisation in the app's main process (plan 5a, task 4), without Electron (wire.ts binds it to IPC, the
 // window, safeStorage and powerMonitor): the sync client's life — started once the interface holds its pending writes,

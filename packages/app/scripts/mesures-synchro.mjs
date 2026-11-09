@@ -87,7 +87,7 @@ async function pairing(url, dataDir, name, pc) {
 /** PC A sends its base (the copy in `pcDir`) to the server at `url`. */
 async function envoyer(url, dataDir, pcDir) {
   const { LocalStore } = await import('@cirrus/store');
-  const { seedBase } = await import('../src/main/sync/firstSync.ts');
+  const { seedBase } = await import('../src/main/sync/seed.ts');
   const config = await pairing(url, dataDir, 'Mesure A', 'pc-mesure-a');
   const t0 = performance.now();
   const store = LocalStore.open(pcDir, { pc: 'pc-mesure-a' });
@@ -103,7 +103,8 @@ async function envoyer(url, dataDir, pcDir) {
 
 /** PC B, empty, takes the server's base, staged beside `pcDir`. */
 async function prendre(url, dataDir, pcDir) {
-  const { adoptBase, stagedDir } = await import('../src/main/sync/firstSync.ts');
+  const { adoptBase } = await import('../src/main/sync/adopt.ts');
+  const { stagedDir } = await import('../src/main/sync/firstSync.ts');
   const { fileSecrets } = await import('../src/main/sync/config.ts');
   const { FORMAT } = await import('../src/main/sync/connection.ts');
   const { LocalStore } = await import('@cirrus/store');

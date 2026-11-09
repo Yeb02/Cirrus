@@ -21,8 +21,9 @@ import { type FetchFn, importPublication, requestFetch } from './publications/fe
 import { replayDirOf, replayFetch } from './publications/replay.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
-import { quitsInsteadOfRelaunch, stagedDir, startBase } from './sync/firstSync.ts';
+import { stagedDir } from './sync/firstSync.ts';
 import { SyncHost, watchWindow } from './sync/host.ts';
+import { quitsInsteadOfRelaunch, startBase } from './sync/swap.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
 
 /**
