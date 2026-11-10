@@ -2,6 +2,7 @@ import type { Action, Anchor, FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { RenderParams, SceneItem } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Build } from '../../actions.ts';
+import { type ConsultationDraft, consultations } from '../../consultations.ts';
 import type { AnnotationIndex } from '../../files/annotations.ts';
 import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
@@ -121,6 +122,18 @@ export function closedIds(before: Panel[], after: Panel[]): number[] {
 }
 
 /**
+ * The consultations a rule makes (plan 6a, D6): a node's pop-up or a file's preview that `after` has and `before` did not —
+ * a click, a link, an annotation opened from a pop-up. One brought in front keeps its panel, so it is not new; a file is
+ * told by its name.
+ */
+export function openedPanels(before: Panel[], after: Panel[]): ConsultationDraft[] {
+  const had = new Set(before.map((p) => p.id));
+  return after.filter((p) => !had.has(p.id)).map((p): ConsultationDraft => (
+    p.target.kind === 'file' ? { kind: 'file_preview', subject: p.target.node, detail: p.target.name } : { kind: 'node_popup', subject: p.target.node }
+  ));
+}
+
+/**
  * The node whose pop-up a click in the graph opens (spec 8.5, 9.1): a node or a group clicked without Ctrl, or the far
  * node a phantom of a split arm stands for, as the original would. An absent phantom (it brings its node in), a centre
  * phantom (its connection's pop-up), a Ctrl+click, and whatever is no item (background, connection, stub) open none:
@@ -223,7 +236,8 @@ export function Panels(props: {
    * during a commit, and a press's own focus change comes after its listeners: I1 of the review).
    */
   const apply = (rule: (ps: Panel[]) => Panel[]) => {
-    const closing = closedIds(panelsRef.current, rule(panelsRef.current));
+    const after = rule(panelsRef.current), closing = closedIds(panelsRef.current, after);
+    for (const draft of openedPanels(panelsRef.current, after)) consultations.record(draft);
     const focused = document.activeElement as HTMLElement | null;
     const host = focused?.closest?.<HTMLElement>('.panel[data-panel]');
     if (focused && host && closing.includes(Number(host.dataset.panel))) focused.blur();

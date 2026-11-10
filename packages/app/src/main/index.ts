@@ -6,9 +6,11 @@ import { type RenderParams, withOverrides } from '@cirrus/view';
 import { app, BrowserWindow, dialog, Menu, net, protocol, safeStorage } from 'electron';
 import { dataDir, openBase, pcId } from './base.ts';
 import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
+import { Consultations } from './consultations.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
 import { wireBase } from './ipc/base.ts';
 import { markNow, wireBench } from './ipc/bench.ts';
+import { wireConsultations } from './ipc/consultations.ts';
 import { wireFiles } from './ipc/files.ts';
 import { tellLatexStatus, wireLatex } from './ipc/latex.ts';
 import { wirePublications } from './ipc/publications.ts';
@@ -33,6 +35,7 @@ import { createWindow } from './window.ts';
  * served by the same protocol, and installs TinyTeX when the user asks, then the packages it misses (latex/, plan 4b).
  * It fetches a publication's metadata, and an arXiv article's PDF, when the user imports one (publications/, plan 4c).
  * With a server paired, it syncs the base with it (sync/, plan 5a): the interface reconciles, this process writes.
+ * It writes the interface's consultations, in batches, to consultations.db beside the base (plan 6a, D6).
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
  * for the sync client to stop.
  * This file starts and ends the process; the interface's calls are answered by domain under ipc/ (the sync's in
@@ -48,6 +51,8 @@ let dir = '';
 let pc = '';
 /** The synchronisation (plan 5a), once the base is open: with no server paired, it does nothing. */
 let sync: SyncHost | null = null;
+/** The consultations' file (plan 6a, D6), once the base is open: created at the first batch. */
+let consultations: Consultations | null = null;
 const capture = process.env.CIRRUS_CAPTURE;
 const bench = process.env.CIRRUS_BENCH;
 const benchBuild = process.env.CIRRUS_BENCH_BUILD;
@@ -146,6 +151,7 @@ wireFiles({ dir: () => dir, sync: () => sync, settings, copies, capture: capture
 wireBench({ scale: bench, exit: exitAfterLatex });
 wireLatex({ params: currentParams, latex: () => latex, setup: () => latexSetup });
 wirePublications({ dir: () => dir, store: () => store, params: currentParams, sync: () => sync, capture: capture !== undefined });
+wireConsultations({ consultations: () => consultations });
 
 /**
  * A base that cannot be opened (damaged, disk full, folder not writable): said, and the app quits rather than staying
@@ -271,6 +277,7 @@ void app.whenReady().then(() => {
   // The synchronisation (plan 5a): its client starts once the interface holds its state (cirrus:sync:start), if a server
   // is paired; the token kept by safeStorage (DPAPI), never in clear.
   pc = pcId(dir);
+  consultations = Consultations.open(dir, pc);
   sync = new SyncHost({
     fetch: (url, init) => net.fetch(String(url), init), store, dir, pc, secrets: fileSecrets(dir, tokenCipher), secretsAt: (d) => fileSecrets(d, tokenCipher),
     canEncrypt: () => safeStorage.isEncryptionAvailable(), params: currentParams, now: Date.now, machineName: hostname(),
@@ -303,6 +310,7 @@ app.on('window-all-closed', () => {
   void Promise.all([latex?.dispose() ?? Promise.resolve(), syncStopped]).finally(() => {
     latexDisposed = true;
     store?.close();
+    consultations?.close();
     lock?.release();
     app.quit();
   });

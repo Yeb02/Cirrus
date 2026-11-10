@@ -1,6 +1,7 @@
 import { existsSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { LocalStore } from '@cirrus/store';
+import { CONSULTATIONS_FILE } from '../consultations.ts';
 import { SERVER_FILE } from './config.ts';
 import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
@@ -76,6 +77,24 @@ function freeName(path: string): string {
 const RELAUNCH = 'Ferme ce qui la tient ouverte (l’antivirus, l’explorateur), puis relance Cirrus.';
 
 /**
+ * This PC's consultations (plan 6a, D6) are its own, not the base's: the old base's file, closed with the app (its -wal
+ * and -shm gone with the last connection), moves to the base that takes its place, unless that one has one already. At
+ * best: a file that resists stays in the old base's folder, said.
+ */
+function keepConsultations(from: string, to: string, retry: SwapRetry): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = join(from, CONSULTATIONS_FILE + suffix), target = join(to, CONSULTATIONS_FILE + suffix);
+    if (!existsSync(file) || existsSync(target)) continue;
+    try {
+      rename(file, target, retry);
+    } catch (e) {
+      console.warn(`Consultations de ce PC non reprises (${messageOf(e)}) : elles restent dans « ${from} ».`);
+      return;
+    }
+  }
+}
+
+/**
  * At the start, before the base opens and nothing holds its folder (R17): a base taken from the server and staged by
  * the last run replaces it — the old one renamed `<base>-avant-jumelage-AAAA-MM-JJ` (« (2) », … when that name is
  * taken), without a list of downloads to do nor a server; one that is not complete (no mark: an interrupted adopt) is
@@ -116,6 +135,7 @@ export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWA
     }
     throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}) : elle attend dans « ${staged} ».`);
   }
+  if (archive) keepConsultations(archive, dir, retry);
   if (archive && blank) {
     // Nothing of the user's in it: deleted, retried as a rename is. At best: one that resists stays aside, as any.
     try {

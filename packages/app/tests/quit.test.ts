@@ -18,7 +18,7 @@ function step(events: string[], name: string, fail = false) {
 test('quitInOrder : le .tex enregistré, puis les champs LaTeX tapés, puis l’instantané, puis la fenêtre libérée (revue finale, I1)', async () => {
   const events: string[] = [];
   const tex = step(events, 'tex'), fields = step(events, 'champs'), snapshot = step(events, 'instantané');
-  const done = quitInOrder({ workbench: tex.run, fields: fields.run, snapshot: snapshot.run, ready: () => events.push('prêt'), error: () => {} });
+  const done = quitInOrder({ workbench: tex.run, fields: fields.run, snapshot: snapshot.run, consultations: () => {}, ready: () => events.push('prêt'), error: () => {} });
   await tick();
   expect(events).toEqual(['début tex']);
   tex.release();
@@ -37,7 +37,7 @@ test('quitInOrder : un échec n’arrête pas la suite, et la fenêtre est toujo
   const events: string[] = [], errors: string[] = [];
   const tex = step(events, 'tex', true), fields = step(events, 'champs', true), snapshot = step(events, 'instantané', true);
   const done = quitInOrder({
-    workbench: tex.run, fields: fields.run, snapshot: snapshot.run, ready: () => events.push('prêt'),
+    workbench: tex.run, fields: fields.run, snapshot: snapshot.run, consultations: () => {}, ready: () => events.push('prêt'),
     error: (what, e) => errors.push(`${what} ${(e as Error).message}`),
   });
   for (const s of [tex, fields, snapshot]) {
@@ -82,4 +82,27 @@ test('TypedFields : un champ en modification est tenu jusqu’à ce qu’il en s
   // Released twice, or after its release: nothing.
   releaseA();
   expect(fields.size).toBe(1);
+});
+
+test('quitInOrder : les consultations sont envoyées avant tout le reste, de façon que même une fermeture forcée pendant l’instantané les ait ; une étape qui lèverait n’arrête rien (plan 6a, D6, tâche 5)', async () => {
+  const events: string[] = [], errors: string[] = [];
+  const tex = step(events, 'tex'), fields = step(events, 'champs'), snapshot = step(events, 'instantané');
+  const done = quitInOrder({
+    workbench: tex.run, fields: fields.run, snapshot: snapshot.run, consultations: () => { events.push('consultations'); },
+    ready: () => events.push('prêt'), error: (what) => errors.push(what),
+  });
+  for (const s of [tex, fields, snapshot]) {
+    await tick();
+    s.release();
+  }
+  await done;
+  expect(events).toEqual(['consultations', 'début tex', 'fin tex', 'début champs', 'fin champs', 'début instantané', 'fin instantané', 'prêt']);
+  expect(errors).toEqual([]);
+  // A step that throws (it should not: the queue swallows its failures) still lets the others run, and the window go.
+  const later: string[] = [];
+  await quitInOrder({
+    workbench: async () => { later.push('tex'); }, fields: async () => { later.push('champs'); }, snapshot: async () => { later.push('instantané'); },
+    consultations: () => { throw new Error('principal cassé'); }, ready: () => later.push('prêt'), error: (what) => later.push(`dit : ${what}`),
+  });
+  expect(later.filter((x) => !x.startsWith('dit'))).toEqual(['tex', 'champs', 'instantané', 'prêt']);
 });

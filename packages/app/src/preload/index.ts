@@ -30,6 +30,9 @@ contextBridge.exposeInMainWorld('cirrus', {
   benchMemory: () => ipcRenderer.invoke('cirrus:bench:memory'),
   benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),
   commit: (action: unknown, unit: string) => ipcRenderer.invoke('cirrus:commit', action, unit),
+  // The consultations (plan 6a, D6): sent, never awaited, on the channel the closing's « ready » is sent on, so that they
+  // arrive before it.
+  recordConsultations: (events: unknown) => ipcRenderer.send('cirrus:consultations', events),
   // The Windows app commands « Précédent » et « Suivant » (plan 6a, D2: the mouse's side buttons, the browser keys).
   onAppCommand: (fn: (command: string) => void) => on('cirrus:app-command', (c) => { if (c === 'browser-backward' || c === 'browser-forward') fn(c); }),
   onQuit: (fn: () => void) => {

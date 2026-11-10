@@ -2,6 +2,7 @@
 import type { CompileAnswer, CompileRequest, FileRef, Id, LatexStatus } from '@cirrus/core';
 import type { PublicationResult } from '@cirrus/sources';
 import type { BibFile } from '../main/bib.ts';
+import type { Consultation } from './consultations.ts';
 import type { HistorySummary, ImportResult, OpenResult } from '../main/files.ts';
 import type {
   Committed, DownloadAllPlan, DownloadAllProgress, DownloadAllStart, FirstSyncChoice, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, ServerStatus, SyncIncoming,
@@ -35,6 +36,12 @@ export interface CirrusBridge {
    * number of its last line and its time (this PC's clock corrected by the server's, D4), rejects with the reason.
    */
   commit(action: unknown, unit: string): Promise<Committed>;
+  /**
+   * A batch of the interface's consultations (plan 6a, D6), to be written to this PC's consultations.db in one transaction.
+   * Sent and forgotten, in order with quitReady (the same channel): a closing's last batch is written before the window
+   * goes. The main process checks it strictly, and drops a batch it cannot write, with a warning in its console.
+   */
+  recordConsultations(events: Consultation[]): void;
   /** Windows' app commands « Précédent » et « Suivant » (plan 6a, D2), as the main process hears them. Returns the unsubscription. */
   onAppCommand(fn: (command: 'browser-backward' | 'browser-forward') => void): () => void;
   /** The window is closing: `fn` saves what it must, then calls quitReady. Returns the unsubscription. */

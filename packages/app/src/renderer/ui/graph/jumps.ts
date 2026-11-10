@@ -1,5 +1,6 @@
 import type { Id, State } from '@cirrus/core';
 import type { Camera } from '@cirrus/view';
+import type { JumpMade } from '../../consultations.ts';
 import { NavHistory, type HistoryMove, type Place } from '../../navigation.ts';
 import type { RevealTarget } from './reveal.ts';
 
@@ -22,6 +23,8 @@ export interface JumpHost {
   /** Shows a plan in its tab (App's openPlan). */
   openPlan(plan: Id): void;
   moveCamera(camera: Camera): void;
+  /** A jump made, told once it has gone (plan 6a, D6: it is a consultation). Never for one refused. */
+  jumped?(jump: JumpMade): void;
 }
 
 /**
@@ -44,13 +47,16 @@ export class Jumps {
     const here = this.host.place();
     if (!this.revealer.reveal(t)) return false;
     this.leave(here);
+    this.host.jumped?.({ kind: 'reveal', plan: t.plan, subject: t.id });
     return true;
   }
 
   /** A jump within the plan that is only a move of the camera (« s’y téléporter »): the place left is pushed. */
   moveTo(camera: Camera): void {
-    this.leave(this.host.place());
+    const here = this.host.place();
+    this.leave(here);
     this.host.moveCamera(camera);
+    if (here) this.host.jumped?.({ kind: 'teleport', plan: here.plan });
   }
 
   back(): boolean { return this.move('back'); }
@@ -75,6 +81,7 @@ export class Jumps {
       h.remember(to.plan, to.camera);
       h.openPlan(to.plan);
     }
+    h.jumped?.({ kind: dir, plan: to.plan });
     return true;
   }
 }

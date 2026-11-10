@@ -35,6 +35,12 @@ export class TypedFields {
 export const typedFields = new TypedFields();
 
 interface QuitSteps {
+  /**
+   * The consultations waiting handed to the main process (plan 6a, D6): first, so that a closing the main process forces
+   * during the snapshot has them. Fire and forget, ordered before `ready` on the same channel; a failure is dropped by the
+   * queue itself, in silence.
+   */
+  consultations(): void;
   /** The .tex typed in its full screen saved (D6). */
   workbench(): Promise<void>;
   /** What is typed in the LaTeX fields being edited committed (typedFields). */
@@ -50,6 +56,7 @@ interface QuitSteps {
 /** Closing (App's onQuit), in this order, each step waited for; a failure is said, and never keeps the window open. */
 export async function quitInOrder(s: QuitSteps): Promise<void> {
   const steps: [string, () => Promise<void>][] = [
+    ['Envoi des consultations à la fermeture :', async () => s.consultations()],
     ['Enregistrement du .tex à la fermeture :', s.workbench],
     ['Enregistrement d’un champ LaTeX à la fermeture :', s.fields],
     ['Instantané à la fermeture :', s.snapshot],

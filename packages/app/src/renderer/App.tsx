@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
+import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { SearchBuild, type SearchHit, SearchIndex, type SearchWhere } from './search/index.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
@@ -207,6 +208,34 @@ export function App() {
   // A click whose press closed a context menu is swallowed, wherever it lands (clickGuard.ts).
   useEffect(() => guardClicks(window), []);
 
+  // The consultations (plan 6a, D6): the queue follows the settings once the state, hence the settings, are there — never
+  // the defaults of the first render —, a plan shown is one, and so is the window gaining or losing the focus (the time
+  // spent is read from them). An event is not an action: nothing here enters the journal or the undo.
+  const consulting = state !== null;
+  useEffect(() => {
+    if (consulting) configureConsultations(consultationSettings(paramsRef.current, measuring()), () => activeRef.current ?? undefined);
+  }, [consulting, params.consultationsRecord, params.consultationsFlushMs]);
+  useEffect(() => {
+    const draft = planShownDraft(active);
+    if (draft) consultations.record(draft);
+  }, [active]);
+  useEffect(() => {
+    // Focus lost and window hidden are two signals of one state (FocusTracker): one blur.
+    const tracker = new FocusTracker(document.hasFocus() && document.visibilityState === 'visible');
+    const onChange = () => {
+      const draft = tracker.set(document.hasFocus() && document.visibilityState === 'visible');
+      if (draft) consultations.record(draft);
+    };
+    window.addEventListener('focus', onChange);
+    window.addEventListener('blur', onChange);
+    document.addEventListener('visibilitychange', onChange);
+    return () => {
+      window.removeEventListener('focus', onChange);
+      window.removeEventListener('blur', onChange);
+      document.removeEventListener('visibilitychange', onChange);
+    };
+  }, []);
+
   // The snapshot is due once nothing has happened for a while: any input starts that wait again.
   useEffect(() => {
     const touch = () => saver.current?.touch();
@@ -236,6 +265,10 @@ export function App() {
   useEffect(() => window.cirrus.onQuit(() => {
     keepOpenViews();
     void quitInOrder({
+      consultations: () => {
+        consultations.record({ kind: 'app_close' });
+        consultations.finish();
+      },
       workbench: () => workbench.current?.flush() ?? Promise.resolve(),
       fields: () => typedFields.commitAll(),
       snapshot: () => saver.current?.flush() ?? Promise.resolve(),
@@ -267,6 +300,9 @@ export function App() {
           current = wanted.id;
         }
         const p = firstSettings(settings);
+        // The recording opens with the app, by the settings just read (the switch may be off): its first event.
+        configureConsultations(consultationSettings(p, measuring()), () => activeRef.current ?? undefined);
+        consultations.record({ kind: 'app_open' });
         session.current = new EditSession(s, (a, unit) => window.cirrus.commit(a, unit), (st, action, rev) => {
           setShown({ state: st, rev, action });
           // Every action, for the search index (plan 6a, D1); a state read anew is built whole again.

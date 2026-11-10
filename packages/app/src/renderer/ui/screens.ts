@@ -1,5 +1,6 @@
 import type { FileRef, Id, NodeRec, State } from '@cirrus/core';
 import { useEffect, useRef, useState } from 'react';
+import { type ConsultationDraft, consultations } from '../consultations.ts';
 import { sameName } from '../files/merge.ts';
 import type { WorkbenchHandle } from './latex/TexWorkbench.tsx';
 import { type PanelTarget, resolveTarget } from './panels/Panels.tsx';
@@ -26,6 +27,14 @@ export function resolveFull(s: State, t: FullTarget): FullShown | null {
   const node = resolveTarget(s, { kind: 'node', node: t.node })?.node;
   const file = node?.files.find((f) => sameName(f.name, t.original)), copy = node?.files.find((f) => sameName(f.name, t.copy));
   return node && file && copy ? { node, file, copy } : null;
+}
+
+/**
+ * The consultation a full screen makes when it opens (plan 6a, D6): a file's, by its node and its name; none for its
+ * closing, for the comparison of a .tex with its copy (an edit's tool, not a reading), or for a node.
+ */
+export function fullDraft(t: FullTarget | null): ConsultationDraft | null {
+  return t?.kind === 'file' ? { kind: 'file_fullscreen', subject: t.node, detail: t.name } : null;
 }
 
 /**
@@ -56,6 +65,11 @@ export function useScreens() {
   const fullSteps = useRef(new Set<Id>());
   // A full screen opened or closed: its steps are no longer its own.
   useEffect(() => { fullSteps.current = new Set(); }, [full]);
+  // A file opened in full screen is a consultation (plan 6a, D6): each opening sets a new target.
+  useEffect(() => {
+    const draft = fullDraft(full);
+    if (draft) consultations.record(draft);
+  }, [full]);
 
   /**
    * The file in full screen, as `state` has it: a new version of it stays; gone — removed, renamed, its addition

@@ -1,5 +1,6 @@
 import type { Id, State } from '@cirrus/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { consultations, searchDraft } from '../consultations.ts';
 import { DEFAULT_FILTERS, type SearchFilters, type SearchHit, type SearchIndex, type SearchWhere } from '../search/index.ts';
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
@@ -26,7 +27,9 @@ export const hitTitle = (hit: SearchHit): string => hit.title.trim() || (hit.kin
  * (`onClose`). What it finds in this plan is told to the graph (`onFound`), which rings it. Its keys and presses are its
  * own, as the publication dialog's: the graph and the panels never see them. `index` is null while the index is being
  * built (after the first frame, by slices): the box says so, and lists once it is there. `asked` counts the Ctrl+K: one
- * more, while it is open, gives its field the focus again, what is typed selected.
+ * more, while it is open, gives its field the focus again, what is typed selected. A search is one consultation (plan 6a,
+ * D6), made when the box ends: with the result chosen (Entrée, a click), or with none if it is closed with something typed,
+ * however it is closed (Échap, a click away, a full screen) — never at each keystroke.
  */
 export function SearchBox(props: {
   asked: number; index: SearchIndex | null; state: State; where: SearchWhere; max: number;
@@ -35,6 +38,19 @@ export function SearchBox(props: {
   const [text, setText] = useState('');
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
   const [chosen, setChosen] = useState(0);
+  const typed = useRef(text), picked = useRef(false);
+  typed.current = text;
+  // The box ends: a text typed and not followed by a pick is a search with no result chosen.
+  useEffect(() => () => {
+    const draft = picked.current ? null : searchDraft(typed.current);
+    if (draft) consultations.record(draft);
+  }, []);
+  const pick = (hit: SearchHit) => {
+    const draft = picked.current ? null : searchDraft(typed.current, hit);
+    picked.current = true;
+    if (draft) consultations.record(draft);
+    props.onPick(hit);
+  };
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const { index, where, max } = props;
@@ -61,7 +77,7 @@ export function SearchBox(props: {
           if (hits.length > 0) setChosen((at + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length);
           return;
         }
-        if (e.key === 'Enter' && hits.length > 0) { e.preventDefault(); props.onPick(hits[at]); }
+        if (e.key === 'Enter' && hits.length > 0) { e.preventDefault(); pick(hits[at]); }
       }}
     >
       <input
@@ -85,7 +101,7 @@ export function SearchBox(props: {
           {hits.map((h, i) => (
             <li
               key={h.id} role="option" aria-selected={i === at} className={`${h.kind}${i === at ? ' on' : ''}`} data-id={h.id}
-              onMouseMove={() => { if (i !== at) setChosen(i); }} onClick={() => props.onPick(h)}
+              onMouseMove={() => { if (i !== at) setChosen(i); }} onClick={() => pick(h)}
             >
               <span className="title">{hitTitle(h)}</span>
               <span className="where">{placeLabel(h, where, props.state)}</span>

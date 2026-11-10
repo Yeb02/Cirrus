@@ -8,6 +8,7 @@ import {
 } from '@cirrus/view';
 import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
+import { connectionDrafts, consultations, jumpDraft } from '../consultations.ts';
 import { createGl, type Gl } from '../gl/context.ts';
 import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
@@ -303,12 +304,14 @@ export function GraphView(props: {
     max: () => paramsRef.current.navHistoryMax, busy: () => latest.current.busy(), stopFlash,
     remember: (plan, camera) => { cameras.current.set(plan, camera); },
     openPlan: (plan) => onOpenPlanRef.current(plan), moveCamera: (c) => latest.current.moveCamera(c),
+    jumped: (j) => consultations.record(jumpDraft(j)),
   }, revealer.current);
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
   /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
   const openPopup = (connections: Id[], sx: number, sy: number) => {
+    for (const draft of connectionDrafts(connections)) consultations.record(draft);
     const r = root.current!.getBoundingClientRect();
     setPopup({ connections, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
   };
