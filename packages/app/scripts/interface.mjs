@@ -2393,6 +2393,25 @@ const SCENARIOS = [
       if (JSON.stringify(filtered) !== JSON.stringify(['Note brouillon à jeter'])) throw new Error(`le filtre « BROUILLON » montre ${JSON.stringify(filtered)}`);
       await page.press('Escape', 'Escape', 27);
       if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error('Échap ne ferme pas le panneau');
+
+      // Final review of plan 6a: Échap closes the panel with the search box open but not focused (it takes Escape only when
+      // focused), then with a pinned pop-up on screen (it never takes that Escape: only × closes it).
+      await reopen();
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(`document.activeElement?.matches('.search-box .search-field') === true`))) throw new Error('Ctrl+K n’ouvre pas la recherche, le panneau ouvert');
+      await click('.trash input.search');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error('Échap ne ferme pas le panneau avec la recherche ouverte sans le focus');
+      if (!(await page.evaluate(`!!document.querySelector('.search-box')`))) throw new Error('Échap a fermé la recherche, qui n’avait pas le focus');
+      await reopen();
+      await searchJump(page, 'sans perte', 'Compression sans perte');
+      await openPopup(page, centre, 'Compression sans perte');
+      await page.evaluate(`document.querySelector('.panels .panel .pin:not(.on)')?.click()`);
+      if (!(await page.until(`!!document.querySelector('.panels .panel.pinned')`))) throw new Error('le pop-up ne s’épingle pas');
+      await click('.trash input.search');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error('Échap ne ferme pas le panneau avec un pop-up épinglé à l’écran');
+      if (!(await page.evaluate(`!!document.querySelector('.panels .panel.pinned')`))) throw new Error('Échap a fermé le pop-up épinglé');
     },
   },
   TWO_PCS,
