@@ -69,6 +69,17 @@ export const MAX_HASHES_PER_REQUEST = 10_000;
 export const MAX_JOURNAL_PAGE = 10_000;
 export const MAX_SEED_BYTES = 2 * 2 ** 30;
 /**
+ * The largest file a PC sends (PUT /files/<hash>), which the server refuses past it (413) — and a PDF the server imports
+ * for a PC (plan 5b): a PC sends none larger (plan 9, review of task 2, M6), and says why.
+ */
+export const MAX_FILE_BYTES = 2 ** 30;
+/**
+ * The slowest pace a body is allowed (plan 9, task 1, I2): the server gives a JSON body its delay plus a second for each
+ * of these bytes; a PC waits as long for the answer to what it sends (task 2, C1 and I1), so that a slow line is never
+ * taken for a dead one.
+ */
+export const MIN_BODY_BYTES_PER_S = 8192;
+/**
  * The most shared settings in one POST /settings (task 6, R24), which the PC respects too (its client cuts its changes
  * to it): more than twice the settings there are.
  */

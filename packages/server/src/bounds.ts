@@ -44,8 +44,11 @@ export const MAX_PAIR_CODE_CHARS = 64;
  */
 export const SERVER_DB_BUSY_MS = 5000;
 
-/** The largest file a PC sends (PUT /files/<hash>); a PDF the server imports for a PC too (POST /publications, plan 5b). */
-export const MAX_FILE_BYTES = 2 ** 30;
+/**
+ * The largest file a PC sends (PUT /files/<hash>); a PDF the server imports for a PC too (POST /publications, plan 5b).
+ * The core's (plan 9, review of task 2, M6): a PC sends none larger.
+ */
+export { MAX_FILE_BYTES } from '@cirrus/core';
 
 /**
  * A publication imported by the server for a paired PC (plan 5b, task 3, D2: POST /publications), its network reached
@@ -123,10 +126,11 @@ export const DRAIN_LINGER_MS = 1000;
  * MAX_SMALL_BODY_MS, plus a second for every MIN_BODY_BYTES_PER_S of its length (as announced, or its route's cap) —
  * 30 s for a pairing's few bytes, 30,125 s at most for the form; a page of journal of 64 Mio (MAX_BODY_BYTES) over a line of 64 kbit/s or more still passes. Otherwise 408,
  * and the connection is cut (review of task 1, I2): a body trickled a byte at a time escapes SERVER_IDLE_MS. Files and
- * a seed (PUT /files, POST /seed) are streamed, bounded by their size and SERVER_IDLE_MS only.
+ * a seed (PUT /files, POST /seed) are streamed, bounded by their size and SERVER_IDLE_MS only. The pace is the core's (plan
+ * 9, review of task 2, C1): a PC waits as long for the answer to what it sends.
  */
 export const MAX_SMALL_BODY_MS = 30_000;
-export const MIN_BODY_BYTES_PER_S = 8192;
+export { MIN_BODY_BYTES_PER_S } from '@cirrus/core';
 
 /** The longest name the server answers to (`--nom`, a domain name: 253 characters, labels of 63 at most). */
 export const MAX_HOST_NAME_CHARS = 253;
