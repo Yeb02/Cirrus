@@ -377,6 +377,8 @@ function simulate(seed: number, registry: boolean) {
   const pcs: Pc[] = ['pc-a', 'pc-b', 'pc-c'].map((name) => ({ name, s: copy(s0), pending: [], next: 0, seq: 0, inflight: null, waitFor: 0, refused: [] }));
 
   const stats = { commands: 0, writes: 0, refusedCommands: 0, reconciliations: 0, acked: 0, rebased: 0, rewritten: 0, dropped: 0, stale: 0, notices: 0 };
+  /** The labels of the writes a reconciliation rewrote or dropped. */
+  const collided: string[] = [];
   const WORDS = ['MDL', 'Kolmogorov', 'Solomonoff', 'Bayes', 'Occam', 'Shannon'];
   const TAGS: TagValue[] = [{ key: 'lu' }, { key: 'important' }, { key: 'auteur', value: 'Li' }, { key: 'auteur', value: 'Vitányi' }];
   const ROLES: Role[] = ['source', 'target', 'associate'];
@@ -399,8 +401,17 @@ function simulate(seed: number, registry: boolean) {
     }
     if (r < 6) return renameTagKey(s, pick(KEYS), pick(KEYS));
     if (r < 7.5) {
+      // A definition changed: its multiplicity, scope or required; the type of a key that is not the enumeration (never
+      // into one); the enumeration's values — one added, removed or ranked anew.
       const d = pick(defs), change = rand();
-      return defineTagKey(s, change < 0.4 ? { ...d, multi: !d.multi } : change < 0.7 ? { ...d, scope: d.scope === 'both' ? 'node' : 'both' } : { ...d, required: !d.required });
+      if (change < 0.25) return defineTagKey(s, { ...d, multi: !d.multi });
+      if (change < 0.4) return defineTagKey(s, { ...d, scope: d.scope === 'both' ? 'node' : 'both' });
+      if (change < 0.5) return defineTagKey(s, { ...d, required: !d.required });
+      if (d.type !== 'enum') return defineTagKey(s, { ...d, type: pick(['text', 'number', 'date', 'word'] as const) });
+      const values = d.enumValues ?? [], e = rand(), x = pick(values);
+      if (e < 0.4) return defineTagKey(s, { ...d, enumValues: [...values, { name: pick(VALUES), rank: Math.max(...values.map((v) => v.rank)) + 1 }] });
+      if (e < 0.7) return defineTagKey(s, { ...d, enumValues: values.filter((v) => v !== x) });
+      return defineTagKey(s, { ...d, enumValues: values.map((v) => (v === x ? { name: v.name, rank: v.rank + 10 } : v)) });
     }
     // Created among the names not declared, removed among the keys that are not the enumeration: its values keep being renamed.
     if (r < 8.5) {
@@ -475,10 +486,13 @@ function simulate(seed: number, registry: boolean) {
     stats.acked += r.acked.length;
     stats.dropped += r.dropped.length;
     stats.notices += r.notices.length;
+    for (const d of r.dropped) collided.push(d.unit.label);
     if (r.rewind.length > 0) {
       stats.rebased += r.rebased.length;
       const before = new Map(pc.pending.map((u) => [u.unit, u]));
-      stats.rewritten += r.rebased.filter((u) => before.get(u.unit) !== u).length;
+      const rewritten = r.rebased.filter((u) => before.get(u.unit) !== u);
+      stats.rewritten += rewritten.length;
+      for (const u of rewritten) collided.push(u.label);
     }
     pc.pending = r.rebased;
     pc.refused = [];
@@ -524,7 +538,7 @@ function simulate(seed: number, registry: boolean) {
     expect(checkState(pc.s), pc.name).toEqual([]);
   }
   expect(checkState(server.s)).toEqual([]);
-  return { stats, server };
+  return { stats, server, collided };
 }
 
 test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livraisons retardées et mêlées : au repos, quatre états égaux et valides', () => {
@@ -539,7 +553,7 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
 }, 60_000);
 
 test('simulation du registre des tags (plan 6a, Review Focus 2) : des renommages de clés croisés avec les tags et les définitions changés sur les autres PC : au repos, quatre états égaux et valides', () => {
-  const { stats, server } = simulate(20261110, true);
+  const { stats, server, collided } = simulate(20261110, true);
   expect(stats.writes).toBeGreaterThan(1000);
   expect(stats.rewritten).toBeGreaterThan(0);
   expect(stats.dropped).toBeGreaterThan(0);
@@ -548,4 +562,6 @@ test('simulation du registre des tags (plan 6a, Review Focus 2) : des renommages
   for (const start of ['Renommer le tag', 'Renommer la valeur', 'Créer le tag', 'Modifier le tag', 'Retirer le tag']) {
     expect(labels.filter((l) => l.startsWith(start)).length, start).toBeGreaterThan(1);
   }
+  // And the renames did cross other writes: some were replayed into other operations, or dropped.
+  for (const start of ['Renommer le tag', 'Renommer la valeur']) expect(collided.filter((l) => l.startsWith(start)).length, start).toBeGreaterThan(0);
 }, 60_000);
