@@ -1,13 +1,14 @@
 import {
-  type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, deleteConnection, deleteEverywhere, editConnection, editNode,
-  exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
-  removeMember, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, truncateLabel, type Vec2,
+  type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
+  editConnection, editNode, exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
+  removeMember, renameEnumValue, renameTagKey, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, truncateLabel, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
   scaleMoves, type SceneIndex,
 } from '@cirrus/view';
 import { checkFileName, type Merge, mergeFiles, sameName } from './files/merge.ts';
+import { type EnumRename, sameDefinition, withRenames } from './tagRegistry.ts';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -364,6 +365,63 @@ export function tagsBuild(node: Id, change: (tags: TagValue[], defs: ReadonlyMap
     const tags = nodeRec(st, node).tags, next = change(tags, st.tagKeys);
     if (next === tags) throw new CommandError('Ces tags sont déjà à jour.');
     return editNode(st, node, { tags: next });
+  };
+}
+
+/** The connection, or the core's refusal when it is gone. */
+const connectionRec = (s: State, connection: Id): ConnectionRec => {
+  const c = s.connections.get(connection);
+  if (!c) throw new CommandError('Connexion introuvable.');
+  return c;
+};
+
+/**
+ * A connection's tags changed by `change` (withTag, withoutTag), as tagsBuild does a node's (plan 6a, D4): computed on the
+ * state the action is made on, and one that changes nothing is refused rather than written empty.
+ */
+export function connectionTagsBuild(connection: Id, change: (tags: TagValue[], defs: ReadonlyMap<string, TagKeyDef>) => TagValue[]): Build {
+  return (st) => {
+    const tags = connectionRec(st, connection).tags, next = change(tags, st.tagKeys);
+    if (next === tags) throw new CommandError('Ces tags sont déjà à jour.');
+    return editConnection(st, connection, { tags: next });
+  };
+}
+
+// The tag registry's panel (plan 6a, D4): each of the core's commands as an edit of the session, one action that Ctrl+Z
+// undoes. A refusal (CommandError) is the session's, told in a toast; so is the gate's, when a rename is too big to send.
+
+/** A key created, or its definition changed. */
+export function defineTagKeyBuild(def: TagKeyDef): Build {
+  return (st) => defineTagKey(st, def);
+}
+
+/** A key renamed everywhere: its definition, the nodes and the connections that carry it, the trash included. */
+export function renameTagKeyBuild(from: string, to: string): Build {
+  return (st) => renameTagKey(st, from, to);
+}
+
+/** A key taken out of the registry; the objects keep its tags. */
+export function deleteTagKeyBuild(key: string): Build {
+  return (st) => deleteTagKey(st, key);
+}
+
+/** A value of an enumeration renamed, on the objects that carry it too. */
+export function renameEnumValueBuild(key: string, from: string, to: string): Build {
+  return (st) => renameEnumValue(st, key, from, to);
+}
+
+/**
+ * The form of an enumeration saved: its values renamed (`renames`, in an order planRenames made) and the definition as
+ * the form has it, in one action — one Ctrl+Z gives all of it back. The definition is written only if the renames leave it
+ * different from `def`; with no renames it is defineTagKey alone, which refuses a definition that changes nothing.
+ */
+export function saveTagKeyBuild(def: TagKeyDef, renames: readonly EnumRename[]): Build {
+  if (renames.length === 0) return defineTagKeyBuild(def);
+  return (st) => {
+    const old = st.tagKeys.get(def.key);
+    const steps = renames.map((r) => (x: State) => renameEnumValue(x, def.key, r.from, r.to));
+    if (!old || !sameDefinition(withRenames(old, renames), def)) steps.push((x) => defineTagKey(x, def));
+    return combine(st, `Modifier le tag « ${def.key} »`, steps);
   };
 }
 

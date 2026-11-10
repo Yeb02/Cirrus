@@ -1,12 +1,9 @@
-import { MAX_ID_CHARS, normalizeTag, TagError, type TagKeyDef, type TagValue } from '@cirrus/core';
-
-/** A number as typed, the French way too: « 1,5 », « -2.25 », « 1 000 ». */
-const NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
+import { MAX_ID_CHARS, normalizeTag, readTagNumber, TagError, type TagKeyDef, type TagValue } from '@cirrus/core';
 
 /**
  * A tag typed in a node's pop-up (spec 5.4): « mot » is a word, « clé:valeur » a key and its value, split at the first
  * colon, both trimmed. A key of the registry is held to its type: a word takes no value, any other type needs one; a
- * number is read the French way too; an enumeration value, by its name or its rank, goes through normalizeTag. A key the
+ * number is read as the core reads one (readTagNumber: the French way too, and one that is not finite is refused); an enumeration value, by its name or its rank, goes through normalizeTag. A key the
  * registry does not know is kept as typed (the registry grows over time), within MAX_ID_CHARS characters, as the
  * server's gate bounds a key a write adds (R32: refused when typed, never undone afterwards). Refusals throw TagError,
  * in French.
@@ -28,10 +25,9 @@ export function parseTag(input: string, defs: ReadonlyMap<string, TagKeyDef>): T
   if (value === undefined) return { key };
   if (value === '') throw new TagError(`Il manque la valeur après « ${key}: ».`);
   if (def?.type === 'number') {
-    // Spaces between digits are dropped, the no-break ones too (\s holds them).
-    const compact = value.replace(/\s/g, '');
-    if (!NUMBER.test(compact)) throw new TagError(`Le tag « ${key} » demande un nombre : « ${value} » n’en est pas un.`);
-    return { key, value: Number(compact.replace(',', '.')) };
+    const n = readTagNumber(value);
+    if (n === null) throw new TagError(`Le tag « ${key} » demande un nombre : « ${value} » n’en est pas un.`);
+    return { key, value: n };
   }
   if (def?.type === 'enum') {
     // A rank is written in digits; a name that is also digits is taken as a name.
