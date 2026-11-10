@@ -21,7 +21,7 @@
     "bench": "electron-vite build && node scripts/bench.mjs",
     "icones": "node scripts/icones.mjs",
     "paquet": "electron-vite build && electron-builder --win nsis --publish never",
-    "paquet:dev": "electron-vite build --mode dev && electron-builder --win nsis --publish never --config electron-builder.dev.yml"
+    "paquet:dev": "electron-vite build && electron-builder --win nsis --publish never --config electron-builder.dev.yml"
   },
   "dependencies": {
     "@cirrus/core": "*",

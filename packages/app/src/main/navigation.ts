@@ -1,4 +1,13 @@
 /**
+ * The address of electron-vite's dev server (ELECTRON_RENDERER_URL, `npm run dev`), from which the window loads the
+ * interface and keeps two development shortcuts; never in the packaged app (`packaged`), which shows its own page only
+ * (plan 9, task 3, M5).
+ */
+export function devServerUrl(env: Record<string, string | undefined>, packaged: boolean): string | undefined {
+  return packaged ? undefined : env.ELECTRON_RENDERER_URL || undefined;
+}
+
+/**
  * Whether the window may go to `url` (Review Focus 2): only to the app's own page, `appUrl` (the dev server's address,
  * or the built page's file: URL), its fragment aside. Anything else — a file dropped outside a drop zone (Chromium's
  * default is to show it), another file: or https: page, about:blank, a blob of the store — is refused, so the window

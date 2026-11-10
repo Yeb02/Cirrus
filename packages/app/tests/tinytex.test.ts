@@ -46,6 +46,13 @@ test('LATEX_SOURCES : l’installateur de TinyTeX et le dépôt des paquets, en 
   }
 });
 
+test('tinyTexRoot de l’app empaquetée : CIRRUS_TINYTEX ignoré, toujours LOCALAPPDATA\\Cirrus\\TinyTeX (plan 9, tâche 3, M5)', () => {
+  const env = { CIRRUS_TINYTEX: 'D:\\ailleurs', LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' };
+  expect(tinyTexRoot(env, { packaged: true })).toBe(join('C:\\Users\\a\\AppData\\Local', 'Cirrus', 'TinyTeX'));
+  expect(tinyTexRoot(env, { packaged: false })).toBe('D:\\ailleurs');
+  expect(tinyTexRoot(env)).toBe('D:\\ailleurs');
+});
+
 test('tinyTexRoot : CIRRUS_TINYTEX, sinon LOCALAPPDATA\\Cirrus\\TinyTeX, sinon une erreur', () => {
   expect(tinyTexRoot({ CIRRUS_TINYTEX: 'D:\\tex\\TinyTeX', LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' })).toBe('D:\\tex\\TinyTeX');
   expect(tinyTexRoot({ LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' })).toBe(join('C:\\Users\\a\\AppData\\Local', 'Cirrus', 'TinyTeX'));

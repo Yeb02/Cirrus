@@ -32,10 +32,11 @@ export type Progress = InstallProgress;
 /**
  * CIRRUS_TINYTEX if set (a TinyTeX of one's own, the tests' and the captures'), else %LOCALAPPDATA%\Cirrus\TinyTeX: the
  * same for the official app and « Cirrus Dev » (plan 9, D3), whose installations only add to it. It never follows the
- * app's name nor its data folder (identity.ts).
+ * app's name nor its data folder (identity.ts). The packaged app (`packaged`) never hears CIRRUS_TINYTEX: a variable of
+ * the environment does not choose the programs it runs (plan 9, task 3, M5).
  */
-export function tinyTexRoot(env: Record<string, string | undefined>): string {
-  if (env.CIRRUS_TINYTEX) return env.CIRRUS_TINYTEX;
+export function tinyTexRoot(env: Record<string, string | undefined>, opts: { packaged: boolean } = { packaged: false }): string {
+  if (env.CIRRUS_TINYTEX && !opts.packaged) return env.CIRRUS_TINYTEX;
   if (!env.LOCALAPPDATA) throw new Error('Dossier de LaTeX introuvable : LOCALAPPDATA n’est pas défini.');
   return join(env.LOCALAPPDATA, 'Cirrus', 'TinyTeX');
 }

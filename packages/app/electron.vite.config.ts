@@ -43,15 +43,11 @@ function pdfjsData(): Plugin {
   };
 }
 
-/**
- * The variant built (plan 9, D3; main/identity.ts): « Cirrus Dev » with `--mode dev` (`npm run paquet:dev`), the official
- * app otherwise — `npm run dev` included, which stays the user's app on the user's base.
- */
-const variantOf = (mode: string) => (mode === 'dev' ? 'dev' : 'official');
-
-export default defineConfig(({ mode }) => ({
-  main: { define: { CIRRUS_VARIANT: JSON.stringify(variantOf(mode)) }, build: { externalizeDeps: bundled } },
+// One build for both variants (plan 9, D3): « Cirrus Dev » is a packaging (electron-builder.dev.yml), which the app reads
+// in its package's name at each start (main/identity.ts), never something built in (fix round 1 of task 3, I3).
+export default defineConfig({
+  main: { build: { externalizeDeps: bundled } },
   // Sandboxed preloads must be CommonJS.
   preload: { build: { externalizeDeps: bundled, rollupOptions: { output: { format: 'cjs', entryFileNames: '[name].cjs' } } } },
   renderer: { plugins: [react(), pdfjsData()] },
-}));
+});

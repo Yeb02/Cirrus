@@ -8,7 +8,7 @@ import { dataDir, openBase, pcId } from './base.ts';
 import { markNow, wireBenchMode } from './benchMode.ts';
 import { Consultations } from './consultations.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
-import { appIdentity, applyIdentity, copiesDir } from './identity.ts';
+import { appIdentity, applyIdentity, copiesDir, packageVariant, type Variant } from './identity.ts';
 import { wireBase } from './ipc/base.ts';
 import { wireConsultations } from './ipc/consultations.ts';
 import { wireFiles } from './ipc/files.ts';
@@ -54,11 +54,22 @@ import { createWindow } from './window.ts';
 /**
  * The app's identity (plan 9, D3), before anything reads userData (the single-instance lock, Chromium's profile, the
  * base): its name, its data folder — %APPDATA%\@cirrus\app for the official app, where the user's base is, its own for
- * « Cirrus Dev » —, its AppUserModelId. A profile given by --user-data-dir (the checks, the captures) is kept; bench and
- * captures then take their own (below).
+ * « Cirrus Dev » —, its AppUserModelId. The variant is the package's: its name in the archive (« @cirrus/app-dev », from
+ * electron-builder.dev.yml, makes « Cirrus Dev »), or packages/app's for `npm run dev` and the checks (the official app).
+ * The build is the same for both. A package that cannot be read stops the start rather than guess. A profile given by
+ * --user-data-dir (the checks, the captures) is kept; bench and captures then take their own (below).
  */
-const identity = appIdentity({ appData: app.getPath('appData') });
+let variant: Variant;
+try {
+  variant = packageVariant(app.getAppPath());
+} catch (e) {
+  dialog.showErrorBox('Cirrus', `Le paquet de l’app ne se lit pas : Cirrus ne sait pas quelle variante il est, et s’arrête.\n\n${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+}
+const identity = appIdentity({ appData: app.getPath('appData'), variant });
 applyIdentity(app, identity, { platform: process.platform, userDataGiven: app.commandLine.hasSwitch('user-data-dir') });
+/** TinyTeX's folder: CIRRUS_TINYTEX (the tests', the captures') is heard only outside the packaged app (M5). */
+const texRoot = () => tinyTexRoot(process.env, { packaged: app.isPackaged });
 let store: LocalStore | null = null;
 let dir = '';
 /** This PC's identifier (pc.json), once the base is open: it signs the writes. */
@@ -140,7 +151,7 @@ async function texBinaries(): Promise<TexBinaries | null> {
   if (texFound) return texFound;
   let root: string;
   try {
-    root = tinyTexRoot(process.env);
+    root = texRoot();
   } catch {
     return null;
   }
@@ -293,7 +304,7 @@ void app.whenReady().then(() => {
   const toolRun: Deps['run'] = (file, args) => runFile(file, args, currentParams().latexTlmgrTimeoutMs);
   latexSetup = new LatexSetup({
     service: latex, binaries: texBinaries, params: currentParams,
-    provision: async (onProgress) => provision(tinyTexRoot(process.env), {
+    provision: async (onProgress) => provision(texRoot(), {
       download: fetchDownload((url, init) => net.fetch(url, init), () => currentParams().latexDownloadStallMs), run: toolRun,
     }, onProgress),
     packages: (bins) => new Packages(bins, toolRun),

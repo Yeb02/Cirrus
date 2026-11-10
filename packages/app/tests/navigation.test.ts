@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
-import { externalUrlAllowed, navigationAllowed } from '../src/main/navigation.ts';
+import { devServerUrl, externalUrlAllowed, navigationAllowed } from '../src/main/navigation.ts';
 
 // The window's two addresses: the dev server's (ELECTRON_RENDERER_URL), and the built app's page, a file: URL.
 const DEV = 'http://localhost:5173/';
@@ -41,4 +41,11 @@ test('externalUrlAllowed : un lien d’un PDF vers http:, https: ou mailto: seul
   ]) {
     expect(externalUrlAllowed(url), url).toBe(false);
   }
+});
+
+test('devServerUrl : l’adresse du serveur de développement d’electron-vite, jamais dans l’app empaquetée (plan 9, tâche 3, M5)', () => {
+  expect(devServerUrl({ ELECTRON_RENDERER_URL: DEV }, false)).toBe(DEV);
+  expect(devServerUrl({ ELECTRON_RENDERER_URL: DEV }, true)).toBeUndefined();
+  expect(devServerUrl({ ELECTRON_RENDERER_URL: '' }, false)).toBeUndefined();
+  expect(devServerUrl({}, false)).toBeUndefined();
 });

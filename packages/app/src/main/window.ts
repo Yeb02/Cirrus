@@ -1,10 +1,10 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { BrowserWindow, ipcMain, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import { captureWhenReady } from './capture.ts';
 import { devShortcut } from './devKeys.ts';
 import type { LatexSetup } from './latex/setup.ts';
-import { navigationAllowed } from './navigation.ts';
+import { devServerUrl, navigationAllowed } from './navigation.ts';
 import { type SyncHost, watchWindow } from './sync/host.ts';
 
 /** What the window takes of the process (index.ts). */
@@ -54,9 +54,11 @@ export function createWindow(deps: WindowDeps): void {
     },
   });
   win.once('ready-to-show', () => (background ? win.showInactive() : win.show()));
+  // The dev server's address (`npm run dev`); never heard by the packaged app (plan 9, task 3, M5).
+  const devServer = devServerUrl(process.env, app.isPackaged);
   // The window has no menu (main/index.ts: Menu.setApplicationMenu(null)): Alt shows no bar. In development, the two
   // shortcuts of the default menu that the work needs are given back (devShortcut); in the built app, none.
-  if (process.env.ELECTRON_RENDERER_URL) {
+  if (devServer) {
     win.webContents.on('before-input-event', (e, input) => {
       const action = devShortcut(input);
       if (action === null) return;
@@ -89,7 +91,7 @@ export function createWindow(deps: WindowDeps): void {
   // The window shows the app's page and nothing else (Review Focus 2): a file let go outside a drop zone, a link, a
   // script's location do not take it elsewhere, and no other window opens.
   const page = join(import.meta.dirname, '..', 'renderer', 'index.html');
-  const appUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(page).href;
+  const appUrl = devServer ?? pathToFileURL(page).href;
   win.webContents.on('will-navigate', (e) => {
     if (navigationAllowed(e.url, appUrl)) return;
     e.preventDefault();
@@ -98,7 +100,7 @@ export function createWindow(deps: WindowDeps): void {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   // A page gone (closed, reloaded, crashed): the reconciliations it held are abandoned, the sync client tries later.
   if (sync) watchWindow(win, sync);
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  if (devServer) void win.loadURL(devServer);
   else void win.loadFile(page);
   // The user's LaTeX packages (latexPackages, D1), installed if missing once the window is loaded (task 7), in the
   // background. Measuring runs leave the bench's TinyTeX as it is.
