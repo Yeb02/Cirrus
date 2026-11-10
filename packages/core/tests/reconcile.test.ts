@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import {
-  type Action, addedViolation, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editConnection, editNode, exclude, include, moveNodes,
-  placeNode, removeFromPlan, setRole,
+  type Action, addedViolation, combine, CommandError, connect, createNode, createPlan, defineTagKey, deleteEverywhere, deleteTagKey, editConnection, editNode, exclude,
+  include, moveNodes, placeNode, removeFromPlan, renameEnumValue, renameTagKey, setRole,
 } from '../src/commands.ts';
 import { uuidv7 } from '../src/ids.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
@@ -337,8 +337,14 @@ interface Pc {
   refused: { unit: Id; message: string }[];
 }
 
-test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livraisons retardées et mêlées : au repos, quatre états égaux et valides', () => {
-  const rand = mulberry32(20261108), ids = mulberry32(5);
+/**
+ * The run: 2 000 commands drawn from `seed` on three PCs, delivered at random, until rest; then the four states are
+ * checked equal and valid. `registry` (plan 6a, task 3): a quarter of the commands are the tag registry's — renames of a
+ * key, definitions changed, created or removed, enumeration values renamed — and tags of the keys they rename; without
+ * it, the run draws exactly what it drew before them.
+ */
+function simulate(seed: number, registry: boolean) {
+  const rand = mulberry32(seed), ids = mulberry32(5);
   let now = T0;
   // Identifiers and times drawn from the seeds: the same run every time.
   vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -356,6 +362,13 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
   const s0 = emptyState();
   const P1 = created(run(s0, createPlan(s0, 'Un', 'plan')), 'plan'), P2 = created(run(s0, createPlan(s0, 'Deux', 'plan')), 'plan');
   applyOp(s0, { t: 'tagKey', before: null, after: { key: 'statut', type: 'text', scope: 'both', multi: false, required: false } });
+  if (registry) {
+    applyOp(s0, { t: 'tagKey', before: null, after: { key: 'thème', type: 'text', scope: 'both', multi: true, required: false } });
+    applyOp(s0, {
+      t: 'tagKey', before: null,
+      after: { key: 'niveau', type: 'enum', scope: 'both', multi: false, required: false, enumValues: [{ name: 'bas', rank: 1 }, { name: 'moyen', rank: 2 }, { name: 'haut', rank: 3 }] },
+    });
+  }
   const first: Id[] = [];
   for (let i = 0; i < 8; i++) first.push(created(run(s0, createNode(s0, { plan: P1, title: `n${i}`, x: i * 50, y: 0, k: 0 })), 'node'));
   for (const n of first.slice(0, 3)) run(s0, placeNode(s0, P2, n, 0, 0, 0));
@@ -368,8 +381,39 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
   const TAGS: TagValue[] = [{ key: 'lu' }, { key: 'important' }, { key: 'auteur', value: 'Li' }, { key: 'auteur', value: 'Vitányi' }];
   const ROLES: Role[] = ['source', 'target', 'associate'];
 
+  const KEYS = ['statut', 'état', 'thème', 'sujet', 'niveau', 'grade'], VALUES = ['bas', 'moyen', 'haut', 'faible', 'x'];
+
+  /**
+   * A registry command, or a tag of one of the keys it renames, on the same few nodes and connections: renames cross
+   * the edits of the objects that carry the key on other PCs.
+   */
+  function registryCommand(s: State): Action {
+    const hot = (xs: Id[]) => (rand() < 0.7 ? [...xs].sort().slice(0, 6) : xs);
+    const defs = [...s.tagKeys.values()], r = rand() * 10;
+    if (r < 4) {
+      const onNode = rand() < 0.7, id = pick(hot([...(onNode ? s.nodes : s.connections).keys()]));
+      const old = (onNode ? s.nodes.get(id) : s.connections.get(id))!.tags, tag: TagValue = { key: pick(KEYS), value: pick(VALUES) };
+      const has = old.some((x) => canonical(x) === canonical(tag));
+      const tags = has ? old.filter((x) => canonical(x) !== canonical(tag)) : rand() < 0.5 ? [...old.filter((x) => x.key !== tag.key), tag] : [...old, tag];
+      return onNode ? editNode(s, id, { tags }) : editConnection(s, id, { tags });
+    }
+    if (r < 6) return renameTagKey(s, pick(KEYS), pick(KEYS));
+    if (r < 7.5) {
+      const d = pick(defs), change = rand();
+      return defineTagKey(s, change < 0.4 ? { ...d, multi: !d.multi } : change < 0.7 ? { ...d, scope: d.scope === 'both' ? 'node' : 'both' } : { ...d, required: !d.required });
+    }
+    // Created among the names not declared, removed among the keys that are not the enumeration: its values keep being renamed.
+    if (r < 8.5) {
+      if (rand() < 0.5) return deleteTagKey(s, pick(defs.filter((x) => x.type !== 'enum')).key);
+      return defineTagKey(s, { key: pick(KEYS.filter((k) => !s.tagKeys.has(k))), type: 'text', scope: 'both', multi: rand() < 0.5, required: false });
+    }
+    const d = pick(defs.filter((x) => x.type === 'enum'));
+    return renameEnumValue(s, d.key, pick(d.enumValues ?? []).name, pick(VALUES));
+  }
+
   /** One command drawn at random, often on the same few nodes (the oldest ones), so that the PCs' writes collide. */
   function command(s: State): Action {
+    if (registry && rand() < 0.25) return registryCommand(s);
     const plan = rand() < 0.6 ? P1 : P2;
     const live = [...s.nodes.values()].filter((n) => n.trashedAt === undefined).map((n) => n.id);
     const placed = [...s.placements.values()].filter((p) => p.plan === plan).map((p) => p.node);
@@ -480,6 +524,11 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
     expect(checkState(pc.s), pc.name).toEqual([]);
   }
   expect(checkState(server.s)).toEqual([]);
+  return { stats, server };
+}
+
+test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livraisons retardées et mêlées : au repos, quatre états égaux et valides', () => {
+  const { stats } = simulate(20261108, false);
   // The run did collide: writes were replayed, rewritten and dropped, not only acknowledged.
   expect(stats.writes).toBeGreaterThan(1000);
   expect(stats.rewritten).toBeGreaterThan(0);
@@ -487,4 +536,16 @@ test('simulation : trois PC et un séquenceur, 2 000 commandes au hasard, livrai
   expect(stats.stale).toBeGreaterThan(0);
   // The same .tex saved on two PCs at once: conflict copies were made.
   expect(stats.notices).toBeGreaterThan(0);
+}, 60_000);
+
+test('simulation du registre des tags (plan 6a, Review Focus 2) : des renommages de clés croisés avec les tags et les définitions changés sur les autres PC : au repos, quatre états égaux et valides', () => {
+  const { stats, server } = simulate(20261110, true);
+  expect(stats.writes).toBeGreaterThan(1000);
+  expect(stats.rewritten).toBeGreaterThan(0);
+  expect(stats.dropped).toBeGreaterThan(0);
+  // Every registry command reached the server, more than once.
+  const labels = server.journal.map((u) => u.label);
+  for (const start of ['Renommer le tag', 'Renommer la valeur', 'Créer le tag', 'Modifier le tag', 'Retirer le tag']) {
+    expect(labels.filter((l) => l.startsWith(start)).length, start).toBeGreaterThan(1);
+  }
 }, 60_000);
