@@ -1,6 +1,6 @@
 import {
-  type Action, connId, connKind, connRelation, connRow, connRowCount, connTags, connTitle, connTrashed, type Id, KNOWLEDGE, nodeAt, type NodeRec, nodeRow,
-  phantomsOf, placedIn, placementsIn, planId, planRow, type State, type TagValue,
+  type Action, connId, connKind, connRelation, connRow, connRowCount, connTags, connTitle, connTrashed, type Id, KNOWLEDGE, type NodeRec, nodeRow,
+  phantomsOf, placedIn, placedInCount, placementsIn, planId, planRow, type State, type TagValue,
 } from '@cirrus/core';
 import { fold } from '@cirrus/view';
 import { fileKind } from '../files/kind.ts';
@@ -31,8 +31,16 @@ export interface SearchWhere { plan: Id; lobby: Id; tabs: readonly Id[] }
 /** The words of a query beyond this many are not read: a bit each in a 32-bit word. */
 const MAX_QUERY_WORDS = 32;
 const COLLATOR = new Intl.Collator('fr');
-/** Items read between two looks at the clock, in a build made by slices. */
-const CLOCK_EVERY = 64;
+/**
+ * A build by slices (SearchBuild, SearchRefresh) looks at its clock each time it has read this much (fix round 1 of
+ * the review, Important 2): characters of text, an object counting OBJECT_WORK more. A long text — a .tex reaches
+ * textViewMaxMb — is read by pieces of this size, over as many slices as it takes; a slice ends past its deadline by
+ * one piece at most (about a third of a millisecond).
+ */
+export const CLOCK_WORK = 16_384;
+const OBJECT_WORK = 256;
+/** A « word » longer than this (a hash, a base64 blob in a .tex) is not indexed: nobody types it, and its reading may be cut. */
+const MAX_WORD_CHARS = 100;
 
 // Words (D1): runs of letters and digits, anything else separates them. A decomposed accent (a mark after its letter)
 // belongs to its word; fold then drops it. Scanned by hand: a Unicode class in a regular expression costs a whole build
@@ -60,25 +68,48 @@ function wordUnitAt(t: string, i: number): number {
   return k === 1 ? 1 : 0;
 }
 
-/** Each word of `t` as written, in order, repeats kept. */
-function forEachWord(t: string, f: (raw: string) => void): void {
+/**
+ * Where a reading of words stands within a text: `inLong` once it stopped inside a word already longer than
+ * MAX_WORD_CHARS, whose rest is skipped.
+ */
+interface ScanState { inLong: boolean }
+
+/**
+ * The words of `t` as written, from `from`, to `f`, until the first word boundary at or past `limit`; where it stopped
+ * (t.length once done). A word is never cut — but one longer than MAX_WORD_CHARS, which is dropped, and may be left
+ * in its middle (`st.inLong`), its rest skipped by the next call.
+ */
+function scanWords(t: string, from: number, limit: number, st: ScanState, f: (raw: string) => void): number {
   const n = t.length;
-  let i = 0;
+  let i = from;
+  if (st.inLong) {
+    for (let len = 0; i < n && (len = wordUnitAt(t, i)) > 0;) { i += len; if (i >= limit && i < n) return i; }
+    st.inLong = false;
+  }
   while (i < n) {
+    if (i >= limit) return i;
     let len = wordUnitAt(t, i);
     if (len === 0) { i++; continue; }
     const start = i;
-    do i += len; while (i < n && (len = wordUnitAt(t, i)) > 0);
-    f(t.slice(start, i));
+    do i += len; while (i < n && (len = wordUnitAt(t, i)) > 0 && !(i - start > MAX_WORD_CHARS && i >= limit));
+    if (i < n && len > 0 && i - start > MAX_WORD_CHARS) { st.inLong = true; return i; }
+    if (i - start <= MAX_WORD_CHARS) f(t.slice(start, i));
   }
+  return n;
 }
 
 /** A text's words as the index compares them (fold: no case, no accents, ligatures as two letters), in order. */
 export function searchWords(text: string): string[] {
   const out: string[] = [];
-  forEachWord(text, (raw) => { const w = fold(raw); if (w !== '') out.push(w); });
+  scanWords(text, 0, Infinity, { inLong: false }, (raw) => { const w = fold(raw); if (w !== '') out.push(w); });
   return out;
 }
+
+/**
+ * A title as the results are ordered by it among equals (fix round 1, M1): its words, folded, one space between them —
+ * the French order of a dictionary, which neither « ’ » nor « « » » change; the collator breaks its ties.
+ */
+const titleKey = (title: string): string => searchWords(title).join(' ');
 
 /**
  * Every distinct word the index has met, once each, by number: the query reads each word once, not each object's.
@@ -113,20 +144,21 @@ interface Entry {
   readonly id: Id;
   readonly kind: 'node' | 'connection';
   readonly title: string;
-  /** Its folded title: the order of the results among equals, as a plain comparison (the collator only breaks its ties). */
+  /** Its title's key (titleKey): the order of the results among equals, as a plain comparison. */
   readonly key: string;
   /** The numbers of its words, field after field (FIELDS), each field's without repeats; field f ends at `ends[f]`. */
   readonly words: Int32Array;
   readonly ends: readonly [number, number, number, number];
 }
 
-/** Collects an entry's word numbers, field by field, each field without repeats (a stamp per word number). */
+/** Collects an object's word numbers, field by field, each field without repeats (a stamp per word number). */
 class WordBuffer {
   private buf = new Int32Array(1024);
   private n = 0;
   private seen = new Int32Array(1024);
   private stamp = 0;
   private readonly dict: Dictionary;
+  readonly scan: ScanState = { inLong: false };
   private readonly add = (raw: string) => {
     const id = this.dict.idOfRaw(raw);
     if (id < 0) return;
@@ -138,21 +170,78 @@ class WordBuffer {
   };
   constructor(dict: Dictionary) { this.dict = dict; }
 
-  /** A new entry. */
-  begin(): void { this.n = 0; this.field(); }
+  /** A new object. */
+  begin(): void { this.n = 0; this.scan.inLong = false; this.field(); }
   /** A new field (a word of the previous one counts again); where the field before it ended. */
   field(): number {
     if (++this.stamp === 0x7fffffff) { this.seen.fill(0); this.stamp = 1; }
     return this.n;
   }
-  text(t: string): void { if (t !== '') forEachWord(t, this.add); }
-  tags(tags: readonly TagValue[]): void {
-    for (const t of tags) {
-      this.text(t.key);
-      if (t.value !== undefined) this.text(String(t.value));
-    }
-  }
+  /** The words of `t` from `from`, until a word boundary past `limit`; where it stopped. */
+  text(t: string, from: number, limit: number): number { return scanWords(t, from, limit, this.scan, this.add); }
   take(): Int32Array { return this.buf.slice(0, this.n); }
+}
+
+/** A text of an object, in its field (an index of FIELDS). */
+type Part = readonly [field: number, text: string];
+
+const tagParts = (field: number, tags: readonly TagValue[], out: Part[]) => {
+  for (const t of tags) {
+    out.push([field, t.key]);
+    if (t.value !== undefined) out.push([field, String(t.value)]);
+  }
+};
+/** The hashes of a node's .tex, read as its content; null for none. */
+function texOf(n: NodeRec | undefined): string[] | null {
+  let tex: string[] | null = null;
+  for (const f of n?.files ?? []) if (fileKind(f.name) === 'tex') (tex ??= []).push(f.hash);
+  return tex;
+}
+/** A node's texts, field by field: its title, its tags, its summary, its .tex (as `texts` has them, '' for one not read). */
+function nodeParts(n: NodeRec, tex: readonly string[] | null, texts: ReadonlyMap<string, string>): Part[] {
+  const out: Part[] = [[0, n.title]];
+  tagParts(1, n.tags, out);
+  out.push([2, n.summary]);
+  for (const h of tex ?? []) out.push([3, texts.get(h) ?? '']);
+  return out;
+}
+
+/** One object's words read by pieces (a long .tex over several slices), into a buffer of its own while it lasts. */
+class EntryReader {
+  private part = 0;
+  private at = 0;
+  private field = 0;
+  private readonly ends = [0, 0, 0, 0];
+  private readonly b: WordBuffer;
+  private readonly parts: readonly Part[];
+
+  constructor(b: WordBuffer, parts: readonly Part[]) {
+    this.b = b;
+    this.parts = parts;
+    b.begin();
+  }
+
+  get done(): boolean { return this.part >= this.parts.length; }
+
+  /** Reads about `budget` characters (a word is never cut but an overlong one); the characters read. */
+  read(budget: number): number {
+    let read = 0;
+    while (this.part < this.parts.length && read < budget) {
+      const [field, text] = this.parts[this.part];
+      while (this.field < field) this.ends[this.field++] = this.b.field();
+      const stop = this.b.text(text, this.at, this.at + (budget - read));
+      read += stop - this.at;
+      if (stop >= text.length) { this.part++; this.at = 0; this.b.scan.inLong = false; } else this.at = stop;
+    }
+    return read;
+  }
+
+  /** Once done, the entry: null without a word. */
+  entry(id: Id, kind: 'node' | 'connection', title: string): Entry | null {
+    while (this.field < 4) this.ends[this.field++] = this.b.field();
+    const [t, g, m, c] = this.ends;
+    return c === 0 ? null : { id, kind, title, key: titleKey(title), words: this.b.take(), ends: [t, g, m, c] };
+  }
 }
 
 /**
@@ -165,22 +254,41 @@ const BLOOM_BITS = 512, BLOOM_INTS = BLOOM_BITS / 32;
 const BLOOM_WORDS_MAX = 256;
 const bloomBit = (id: number) => (Math.imul(id, 0x9e3779b1) >>> 23) & (BLOOM_BITS - 1);
 
+/** A knowledge connection outside the trash, by its row, whose words are read: never a structure (spec 5.3) nor an inclusion. */
+const indexedConnection = (s: State, row: number) => row >= 0 && connKind(s, row) === KNOWLEDGE && !connTrashed(s, row);
+function connectionParts(s: State, row: number): Part[] {
+  const out: Part[] = [[0, connTitle(s, row)]];
+  tagParts(1, connTags(s, row), out);
+  out.push([2, connRelation(s, row)]);
+  return out;
+}
+
 /**
  * The index's storage, handed from each index to the next (SearchIndex.build): only the latest index is to be asked.
- * The entries are in a list (the query reads it whole), each at its slot, its bloom at the same slot.
+ * The entries are in a list (the query reads it whole), each at its slot, its bloom at the same slot. `version` counts
+ * the writes: a query's narrowing (LastQuery) holds while the slots it kept are those of the list.
  */
 class Store {
   readonly dict = new Dictionary();
+  /** The buffer of the reads made at once (an action's subjects); a build by slices has its own. */
   readonly words = new WordBuffer(this.dict);
   readonly list: Entry[] = [];
   readonly slots = new Map<Id, number>();
   blooms = new Int32Array(1024 * BLOOM_INTS);
-  /** The nodes that have a .tex, with the hashes they read: a change of the texts reads only them again. */
+  version = 0;
+  /** The nodes that have a .tex, with the hashes they read. */
   readonly tex = new Map<Id, readonly string[]>();
+  /** The texts of the .tex, newest known: what a node is read with. */
+  texts: ReadonlyMap<string, string>;
+  /** The nodes whose .tex texts changed since they were read (SearchIndex.build): read again by slices (SearchRefresh). */
+  readonly stale = new Set<Id>();
   /** The query's marks, one bit per query word, by word number: zero between queries. */
   flags = new Int32Array(0);
 
+  constructor(texts: ReadonlyMap<string, string>) { this.texts = texts; }
+
   set(id: Id, e: Entry | null): void {
+    this.version++;
     const at = this.slots.get(id);
     if (e) {
       let slot = at;
@@ -205,95 +313,167 @@ class Store {
     }
   }
 
-  /** A node read again from the state (`n`: its record, none if it is gone). */
-  setNode(id: Id, n: NodeRec | undefined, texts: ReadonlyMap<string, string>): void {
-    let tex: string[] | null = null;
-    for (const f of n?.files ?? []) if (fileKind(f.name) === 'tex') (tex ??= []).push(f.hash);
+  /** A node read: its entry (null in the trash, without a word, or gone) and its .tex. */
+  setNode(id: Id, entry: Entry | null, tex: readonly string[] | null): void {
     if (tex) this.tex.set(id, tex); else this.tex.delete(id);
-    this.set(id, n && n.trashedAt === undefined ? this.nodeEntry(n, tex, texts) : null);
+    this.stale.delete(id);
+    this.set(id, entry);
   }
 
-  /** A connection read again from the state, by its row (−1: gone). */
-  setConnection(s: State, id: Id, row: number): void {
-    this.set(id, this.connectionEntry(s, row));
+  /** A node read again at once from the state (an action's subject). */
+  readNode(s: State, id: Id): void {
+    const n = s.nodes.get(id), tex = texOf(n);
+    if (!n || n.trashedAt !== undefined) { this.setNode(id, null, tex); return; }
+    const r = new EntryReader(this.words, nodeParts(n, tex, this.texts));
+    r.read(Infinity);
+    this.setNode(id, r.entry(id, 'node', n.title), tex);
   }
 
-  /** A live node's entry, null without a word. */
-  private nodeEntry(n: NodeRec, tex: readonly string[] | null, texts: ReadonlyMap<string, string>): Entry | null {
-    const b = this.words;
-    b.begin();
-    b.text(n.title);
-    const t = b.field();
-    b.tags(n.tags);
-    const g = b.field();
-    b.text(n.summary);
-    const m = b.field();
-    for (const h of tex ?? []) b.text(texts.get(h) ?? '');
-    const c = b.field();
-    return c === 0 ? null : { id: n.id, kind: 'node', title: n.title, key: fold(n.title), words: b.take(), ends: [t, g, m, c] };
+  /** A connection read again at once from the state, by its row (−1: gone). */
+  readConnection(s: State, id: Id, row: number): void {
+    if (!indexedConnection(s, row)) { this.set(id, null); return; }
+    const r = new EntryReader(this.words, connectionParts(s, row));
+    r.read(Infinity);
+    this.set(id, r.entry(id, 'connection', connTitle(s, row)));
   }
 
-  /**
-   * A connection's entry: a knowledge connection outside the trash only — never a document's structure (spec 5.3), nor a
-   * group's inclusion, which has no text and is drawn as its envelope; null without a word. Read from its columns: the
-   * bench's base has half a million connections, most without text.
-   */
-  private connectionEntry(s: State, row: number): Entry | null {
-    if (row < 0 || connKind(s, row) !== KNOWLEDGE || connTrashed(s, row)) return null;
-    const title = connTitle(s, row), relation = connRelation(s, row), tags = connTags(s, row);
-    if (title === '' && relation === '' && tags.length === 0) return null;
-    const b = this.words;
-    b.begin();
-    b.text(title);
-    const t = b.field();
-    b.tags(tags);
-    const g = b.field();
-    b.text(relation);
-    const m = b.field();
-    return m === 0 ? null : { id: connId(s, row), kind: 'connection', title, key: fold(title), words: b.take(), ends: [t, g, m, m] };
+  /** New texts: the nodes whose .tex are not those read are marked to be read again (SearchRefresh). */
+  takeTexts(texts: ReadonlyMap<string, string>): void {
+    if (texts === this.texts) return;
+    for (const [id, hashes] of this.tex) if (hashes.some((h) => texts.get(h) !== this.texts.get(h))) this.stale.add(id);
+    this.texts = texts;
+  }
+}
+
+/** A reading in progress over slices: its object, the record it was started on, the texts it reads. */
+interface Reading { id: Id; kind: 'node' | 'connection'; title: string; rec?: NodeRec; tex: string[] | null; texts: ReadonlyMap<string, string>; reader: EntryReader }
+
+/**
+ * The clock of a build by slices, and its work counted: it looks at the clock every `every` of work (CLOCK_WORK; a
+ * test slices finer), and a long text is read by pieces of that size.
+ */
+class Slices {
+  work = 0;
+  readonly every: number;
+  private next: number;
+  private readonly clock: () => number;
+  constructor(clock: () => number, every: number) {
+    this.clock = clock;
+    this.every = every;
+    this.next = every;
+  }
+  /** Whether the deadline is passed, looked at once `every` more work is done. */
+  late(deadline: number): boolean {
+    if (this.work < this.next) return false;
+    this.next = this.work + this.every;
+    return this.clock() >= deadline;
   }
 }
 
 /**
  * A whole build made a slice at a time (Global Constraints, « La performance »: the window is never frozen by it — at
- * 50 000 nodes with long summaries it takes about two seconds). Each `step` reads until its deadline; each object is read
- * as the state is when its turn comes. The actions applied meanwhile are given to the index it ends with
- * (SearchIndex.build, by their subjects): what one of them changed after its object was read is read again.
+ * 50 000 nodes with long summaries it takes about two seconds). Each `step` reads until its deadline, by its clock
+ * (performance.now unless given), looked at every CLOCK_WORK characters read: a long .tex is read over several slices.
+ * Each object is read as the state is when its turn comes; the actions applied meanwhile are given to the index it ends
+ * with (SearchIndex.build, by their subjects): what one of them changed after its object was read is read again.
  */
 export class SearchBuild {
   private readonly s: State;
-  private readonly texts: ReadonlyMap<string, string>;
-  private readonly store = new Store();
+  private readonly st: Store;
   private readonly nodes: Id[];
   private node = 0;
   private row = 0;
+  private reading: Reading | null = null;
+  private readonly slices: Slices;
 
-  constructor(s: State, texts: ReadonlyMap<string, string>) {
+  constructor(s: State, texts: ReadonlyMap<string, string>, clock: () => number = () => performance.now(), every = CLOCK_WORK) {
     this.s = s;
-    this.texts = texts;
+    this.st = new Store(texts);
     this.nodes = [...s.nodes.keys()];
+    this.slices = new Slices(clock, every);
   }
 
-  /**
-   * Reads until `deadline` (performance.now()), looking at the clock every `every` objects (so many at least); the index
-   * once every object is read.
-   */
-  step(deadline: number, every = CLOCK_EVERY): SearchIndex | null {
-    const s = this.s, st = this.store;
-    let k = 0;
-    const late = () => ++k % every === 0 && performance.now() >= deadline;
-    while (this.node < this.nodes.length) {
-      const id = this.nodes[this.node++];
-      st.setNode(id, s.nodes.get(id), this.texts);
-      if (late()) return null;
+  /** The work done so far: characters read, OBJECT_WORK per object, one per connection row passed. */
+  get work(): number { return this.slices.work; }
+
+  /** Reads until `deadline`; the index once every object is read. */
+  step(deadline: number): SearchIndex | null {
+    const s = this.s, st = this.st, sl = this.slices;
+    for (;;) {
+      const r = this.reading;
+      if (r) {
+        sl.work += r.reader.read(sl.every);
+        if (r.reader.done) {
+          this.reading = null;
+          const e = r.reader.entry(r.id, r.kind, r.title);
+          if (r.kind === 'node') st.setNode(r.id, e, r.tex); else st.set(r.id, e);
+        }
+      } else if (this.node < this.nodes.length) {
+        const id = this.nodes[this.node++], n = s.nodes.get(id), tex = texOf(n);
+        sl.work += OBJECT_WORK;
+        if (!n || n.trashedAt !== undefined) st.setNode(id, null, tex);
+        else this.reading = { id, kind: 'node', title: n.title, tex, texts: st.texts, reader: new EntryReader(st.words, nodeParts(n, tex, st.texts)) };
+      } else if (this.row < connRowCount(s)) {
+        const row = this.row++;
+        sl.work++;
+        if (indexedConnection(s, row)) {
+          sl.work += OBJECT_WORK;
+          this.reading = { id: connId(s, row), kind: 'connection', title: connTitle(s, row), tex: null, texts: st.texts, reader: new EntryReader(st.words, connectionParts(s, row)) };
+        }
+      } else return SearchIndex.of(s, st);
+      if (sl.late(deadline)) return null;
     }
-    for (const end = connRowCount(s); this.row < end;) {
-      const r = this.row++;
-      if (connKind(s, r) !== KNOWLEDGE) continue;
-      st.setConnection(s, connId(s, r), r);
-      if (late()) return null;
+  }
+}
+
+/**
+ * The nodes whose .tex were read since the index read them (Store.stale), read again by slices as SearchBuild reads
+ * (fix round 1, Important 2: never in a render). Each is written into the index's storage once read, unless an action
+ * read it again meanwhile, or newer texts came (then it is read anew). The index it was made from is the latest until
+ * then: App makes a new one (SearchIndex.build, without an action) after each slice that wrote.
+ */
+export class SearchRefresh {
+  private readonly s: State;
+  private readonly st: Store;
+  private readonly words: WordBuffer;
+  private reading: Reading | null = null;
+  private readonly slices: Slices;
+
+  constructor(index: SearchIndex, clock: () => number = () => performance.now(), every = CLOCK_WORK) {
+    this.s = index.state;
+    this.st = index.store;
+    this.words = new WordBuffer(this.st.dict);
+    this.slices = new Slices(clock, every);
+  }
+
+  get work(): number { return this.slices.work; }
+
+  /** Reads until `deadline`; whether it wrote an entry, and whether no node is left to read. */
+  step(deadline: number): { wrote: boolean; done: boolean } {
+    const s = this.s, st = this.st, sl = this.slices;
+    let wrote = false;
+    for (;;) {
+      const r = this.reading;
+      if (r) {
+        sl.work += r.reader.read(sl.every);
+        if (r.reader.done) {
+          this.reading = null;
+          // Read again meanwhile by an action (no longer stale, or another record): its result stands. Newer texts: anew.
+          if (st.stale.has(r.id) && s.nodes.get(r.id) === r.rec && st.texts === r.texts) {
+            st.setNode(r.id, r.reader.entry(r.id, 'node', r.title), r.tex);
+            wrote = true;
+          }
+        }
+      } else {
+        const id = st.stale.values().next().value;
+        if (id === undefined) return { wrote, done: true };
+        const n = s.nodes.get(id), tex = texOf(n);
+        sl.work += OBJECT_WORK;
+        if (!n || n.trashedAt !== undefined) { st.setNode(id, null, tex); wrote = true; }
+        else this.reading = { id, kind: 'node', title: n.title, rec: n, tex, texts: st.texts, reader: new EntryReader(this.words, nodeParts(n, tex, st.texts)) };
+      }
+      if (sl.late(deadline)) return { wrote, done: false };
     }
-    return SearchIndex.of(s, this.texts, st);
   }
 }
 
@@ -307,55 +487,48 @@ function compare(group: number, rank: number, e: Entry, c: Candidate): number {
 }
 
 /**
- * A query's words and fields, with what answered it: its objects' slots (any plan; the slots hold while the index is
- * the latest), and each word's dictionary numbers.
+ * A query's words and fields, with what answered it: its objects' slots (any plan), valid while the storage is at
+ * `version`, and each word's dictionary numbers.
  */
-interface LastQuery { words: string[]; fields: string; slots: number[]; ids: Map<string, Int32Array> }
+interface LastQuery { words: string[]; fields: string; version: number; slots: number[]; ids: Map<string, Int32Array> }
 
 /**
  * The index (D1). Built whole once (SearchBuild; `build` without `previous`), it is then built again at each change of
  * the state from the last one (`previous`): with the actions applied since (`action`, their operations as one), only
  * the nodes and connections they touch are read again — whatever their operations say in between (a synchronisation's
- * rewinds: each subject is read as it now is); without one (undefined), only the nodes whose .tex were read since
- * (`texts`, the registry's: plan 4b). A null action (a reload), or another state, builds it whole. The plans an object is
- * in are not kept: the query reads them for what it finds, as the state now has them. The storage goes from each index
- * to the next: the previous one is not to be asked any more.
+ * rewinds: each subject is read as it now is). New `texts` (the registry's, plan 4b) only mark the nodes whose .tex
+ * changed (`pending`): SearchRefresh reads them by slices (`refresh`). A null action (a reload), or another state,
+ * builds it whole. The plans an object is in are not kept: the query reads them for what it finds, as the state now has
+ * them. The storage goes from each index to the next: the previous one is not to be asked any more.
  */
 export class SearchIndex {
   readonly state: State;
-  private readonly texts: ReadonlyMap<string, string>;
-  private readonly store: Store;
+  /** @internal The storage, for SearchRefresh. */
+  readonly store: Store;
   private last: LastQuery | null = null;
 
-  private constructor(s: State, texts: ReadonlyMap<string, string>, store: Store) {
+  private constructor(s: State, store: Store) {
     this.state = s;
-    this.texts = texts;
     this.store = store;
   }
 
   /** @internal SearchBuild's end: its storage, as an index. */
-  static of(s: State, texts: ReadonlyMap<string, string>, store: Store): SearchIndex {
-    return new SearchIndex(s, texts, store);
+  static of(s: State, store: Store): SearchIndex {
+    return new SearchIndex(s, store);
   }
 
   static build(s: State, texts: ReadonlyMap<string, string>, previous?: SearchIndex, action?: Action | null): SearchIndex {
     if (!previous || previous.state !== s || action === null) return new SearchBuild(s, texts).step(Infinity)!;
     const st = previous.store, done = new Set<Id>();
+    st.takeTexts(texts);
     for (const op of action?.ops ?? []) {
       if (op.t !== 'node' && op.t !== 'connection') continue;
       const id = (op.after ?? op.before)!.id;
       if (done.has(id)) continue;
       done.add(id);
-      if (op.t === 'node') st.setNode(id, s.nodes.get(id), texts);
-      else st.setConnection(s, id, connRow(s, id));
+      if (op.t === 'node') st.readNode(s, id); else st.readConnection(s, id, connRow(s, id));
     }
-    // The .tex read since: the nodes whose texts are no longer those read.
-    if (texts !== previous.texts) {
-      for (const [id, hashes] of [...st.tex]) {
-        if (!done.has(id) && hashes.some((h) => texts.get(h) !== previous.texts.get(h))) st.setNode(id, s.nodes.get(id), texts);
-      }
-    }
-    return new SearchIndex(s, texts, st);
+    return new SearchIndex(s, st);
   }
 
   /** The objects indexed. */
@@ -363,9 +536,19 @@ export class SearchIndex {
     return this.store.list.length;
   }
 
+  /** The nodes waiting to be read again with their new .tex texts (refresh). */
+  get pending(): number {
+    return this.store.stale.size;
+  }
+
+  /** Their reading, by slices (SearchRefresh's clock and step of work). */
+  refresh(clock?: () => number, every?: number): SearchRefresh {
+    return new SearchRefresh(this, clock, every);
+  }
+
   /**
    * What `q` finds (D1): every one of its words the start of a word of the object, in the fields `f` chooses, without
-   * case or accents; ordered by D1 (the group of plans, the field, the French order of the titles), `max` at most. Each
+   * case or accents; ordered by D1 (the group of plans, the field, the order of the titles), `max` at most. Each
    * object's words are read once (a bit per query word, marked in the dictionary); the plans are read for the objects
    * found, the order kept for the `max` best only. A query that narrows the last one (each of its words the start of
    * one of the new ones: a keystroke more) reads only what the last one found.
@@ -374,7 +557,8 @@ export class SearchIndex {
     const words = [...new Set(searchWords(q))].slice(0, MAX_QUERY_WORDS);
     const chosen = FIELDS.map((x) => f[x]), fields = chosen.join();
     if (words.length === 0 || max <= 0 || !chosen.some(Boolean)) return [];
-    const st = this.store, all = st.dict.words, D = all.length, last = this.last;
+    const st = this.store, all = st.dict.words, D = all.length;
+    const last = this.last !== null && this.last.version === st.version ? this.last : null;
     const narrows = last !== null && last.fields === fields && last.words.every((w) => words.some((x) => x.startsWith(w)));
     if (st.flags.length < D) st.flags = new Int32Array(Math.max(D, st.flags.length * 2));
     const flags = st.flags, ids = new Map<string, Int32Array>();
@@ -414,13 +598,13 @@ export class SearchIndex {
           if (rank >= 0) { slots.push(i); ranks.push(rank); }
         }
       }
-      this.last = { words, fields, slots, ids };
-      const matches = slots.map((i) => st.list[i]);
+      this.last = { words, fields, version: st.version, slots, ids };
       const s = this.state, here = placementsIn(s, planRow(s, where.plan)), lobby = placementsIn(s, planRow(s, where.lobby));
       const best: Candidate[] = [];
-      for (let m = 0; m < matches.length; m++) {
-        const e = matches[m], rank = ranks[m];
-        const group = this.groupOf(e, where, here, lobby);
+      for (let m = 0; m < slots.length; m++) {
+        const e = st.list[slots[m]], rank = ranks[m];
+        // Full of this plan's and the lobby's: another plan or none could not come in (fix round 1, M2).
+        const group = this.groupOf(e, where, here, lobby, best.length === max ? best[max - 1].group : 4);
         if (group < 0 || (f.planOnly && group !== 0)) continue;
         if (best.length === max && compare(group, rank, e, best[max - 1]) >= 0) continue;
         let lo = 0, hi = best.length;
@@ -460,15 +644,19 @@ export class SearchIndex {
   }
 
   /**
-   * Its group of plans (0 this plan, 1 the lobby, 2 another, 3 none), as the state now has it; −1 if it is gone. A
-   * node by the placements of this plan and the lobby, by node row (`here`, `lobby`); a connection by its plans.
+   * Its group of plans (0 this plan, 1 the lobby, 2 another, 3 none), as the state now has it; −1 if it is gone. A node
+   * by the placements of this plan and the lobby, by node row (`here`, `lobby`), then by its count of plans — not read
+   * when the results kept are full of groups before 2 (`worst`, the last one's): it is 2 then, and does not come in. A
+   * connection by its plans.
    */
-  private groupOf(e: Entry, where: SearchWhere, here: ReadonlyMap<number, unknown>, lobby: ReadonlyMap<number, unknown>): number {
+  private groupOf(e: Entry, where: SearchWhere, here: ReadonlyMap<number, unknown>, lobby: ReadonlyMap<number, unknown>, worst: number): number {
     const s = this.state;
     if (e.kind === 'node') {
       const row = nodeRow(s, e.id);
-      if (row < 0 || nodeAt(s, row)?.trashedAt !== undefined) return -1;
-      return here.has(row) ? 0 : lobby.has(row) ? 1 : placedIn(s, row).length > 0 ? 2 : 3;
+      if (row < 0) return -1;
+      if (here.has(row)) return 0;
+      if (lobby.has(row)) return 1;
+      return worst < 2 || placedInCount(s, row) > 0 ? 2 : 3;
     }
     const row = connRow(s, e.id);
     if (row < 0 || connTrashed(s, row)) return -1;

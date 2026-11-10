@@ -1,14 +1,14 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Action, applyOps, deleteConnection, editConnection, type Id, invertAction, removeFromPlan, type State, uuidv7 } from '@cirrus/core';
+import { type Action, applyOps, createNode, deleteConnection, editConnection, type Id, invertAction, removeFromPlan, type State, uuidv7 } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, type Camera, DEFAULT_PARAMS as P, fitBounds, fitItem, type PlanScene } from '@cirrus/view';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import { renameBuild, tagsBuild } from '../src/renderer/actions.ts';
 import { foundItems } from '../src/renderer/render/found.ts';
-import { DEFAULT_FILTERS, SearchBuild, SearchIndex, type SearchFilters, type SearchHit } from '../src/renderer/search/index.ts';
+import { CLOCK_WORK, DEFAULT_FILTERS, SearchBuild, SearchIndex, type SearchFilters, type SearchHit, type SearchRefresh } from '../src/renderer/search/index.ts';
 import { type RevealHost, Revealer, type RevealTarget } from '../src/renderer/ui/graph/reveal.ts';
 
 // The search (plan 6a, D1) and the jump to what it finds (D2), on the test base: read once into a store, each test
@@ -157,7 +157,7 @@ test('une connexion de structure et un objet jeté ne sont pas dans l’index', 
 
 // The incremental index (Global Constraints, « La performance »): each action reads again only what it touches; the
 // result is always the one of an index built anew.
-const QUERIES = ['kolmo', 'comp', 'algorithmique', 'zephyr', 'monde', 'definition', 'induction', 'analogue', 'distant', 'complex kolm', 'note', 'local'];
+const QUERIES = ['kolmo', 'comp', 'algorithmique', 'zephyr', 'monde', 'definition', 'induction', 'analogue', 'distant', 'complex kolm', 'note', 'local', 'zygomorphe', 'zenith', 'lorem', 'relu'];
 const FILTERS: SearchFilters[] = [DEFAULT_FILTERS, ALL, only({ tags: true }), { ...ALL, planOnly: true }];
 const PLACES = () => [where(ids.plans.lobby), where(ids.plans.these, [ids.plans.these]), where(ids.plans.lecture)];
 function expectSame(incremental: SearchIndex, texts: ReadonlyMap<string, string> = NO_TEXTS) {
@@ -222,8 +222,13 @@ test('l’incrémental : des .tex lus après coup, et une action nulle (une rele
   const tex = s.nodes.get(ids.nodes.kolmogorov)!.files.find((f) => f.name.endsWith('.tex'))!;
   let index = SearchIndex.build(s, NO_TEXTS);
   const texts = new Map([[tex.hash, 'Un texte zéphyr']]);
-  // The texts read since: only they are taken again (no action).
+  // The texts read since: their nodes marked (never read in the render: fix round 1, Important 2), then read by slices.
   index = SearchIndex.build(s, texts, index);
+  expect(index.pending).toBe(1);
+  expect(index.query('zephyr', ALL, where(ids.plans.lobby), 50)).toEqual([]);
+  expect(index.refresh().step(Infinity)).toEqual({ wrote: true, done: true });
+  index = SearchIndex.build(s, texts, index);
+  expect(index.pending).toBe(0);
   expect(index.query('zephyr', ALL, where(ids.plans.lobby), 50).map((h) => [h.id, h.field])).toEqual([[ids.nodes.kolmogorov, 'content']]);
   expectSame(index, texts);
   // Changed in place without an action told (a reload, renders gathered): built anew.
@@ -233,16 +238,16 @@ test('l’incrémental : des .tex lus après coup, et une action nulle (une rele
 });
 
 test('la construction par tranches : des actions entre deux tranches, données ensuite, et le même index qu’entier', () => {
-  const job = new SearchBuild(s, NO_TEXTS);
-  // A deadline already past: five objects a slice.
-  expect(job.step(0, 5)).toBeNull();
+  // A deadline already past, and the clock looked at every 300 of work: about an object a slice.
+  const job = new SearchBuild(s, NO_TEXTS, () => 0, 300);
+  expect(job.step(0)).toBeNull();
   const actions: Action[] = [];
   actions.push(run(renameBuild(ids.nodes.kolmogorov, 'Complexité algorithmique')));
   actions.push(run(renameBuild(ids.nodes.occam, 'Rasoir local')));
   actions.push(apply(removeFromPlan(s, ids.plans.lobby, ids.nodes.monde)));
   actions.push(apply(deleteConnection(s, ids.connections.twoToTwo)));
   let index: SearchIndex | null = null, slices = 1;
-  for (; slices < 1000 && !index; slices++) index = job.step(0, 5);
+  for (; slices < 1000 && !index; slices++) index = job.step(0);
   expect(index).not.toBeNull();
   expect(slices).toBeGreaterThan(5);
   index = SearchIndex.build(s, NO_TEXTS, index!, { id: uuidv7(), label: '', ops: actions.flatMap((a) => a.ops) });
@@ -258,6 +263,71 @@ test('une frappe de plus ne relit que ce que la précédente a trouvé, et le r�
   }
 });
 
+test('à égalité, l’ordre des titres est celui de leurs mots (revue, M1) : ni « ’ » ni « « » » n’y comptent', () => {
+  const titles = ['Lac essai', 'La forêt essai', 'L’arbre essai', '« Zèbre » essai', 'Mouton essai', 'Abeille essai'];
+  titles.forEach((title, i) => apply(createNode(s, { plan: ids.plans.lobby, title, x: 3000 + 300 * i, y: 3000, k: 0 })));
+  const hits = SearchIndex.build(s, NO_TEXTS).query('essai', only({ title: true }), where(ids.plans.lobby), 50).map((h) => h.title);
+  expect(hits).toEqual(['Abeille essai', 'L’arbre essai', 'La forêt essai', 'Lac essai', 'Mouton essai', '« Zèbre » essai']);
+  // The French collator agrees on the apostrophe; it puts « « Zèbre » » first, which a dictionary does not (Ruling).
+  const collator = new Intl.Collator('fr');
+  expect(['Lac essai', 'La forêt essai', 'L’arbre essai'].sort(collator.compare)).toEqual(['L’arbre essai', 'La forêt essai', 'Lac essai']);
+  expect(['Abeille essai', '« Zèbre » essai'].sort(collator.compare)[0]).toBe('« Zèbre » essai');
+});
+
+// Builds by slices, budgeted by work (fix round 1, Important 2): very long .tex, as long as textViewMaxMb lets them be.
+/** About `chars` characters of text, « zygomorphe » first; with `long`, a « word » of a million letters too (a blob). */
+const longTex = (chars: number, long = false) => `zygomorphe ${long ? `${'x'.repeat(1_000_000)} ` : ''}${'lorem ipsum dolor sit amet '.repeat(Math.ceil(chars / 27))}`;
+const texHash = (node: Id) => s.nodes.get(node)!.files.find((f) => f.name.endsWith('.tex'))!.hash;
+/** Each slice's work, until the job ends: a slice is given BUDGET of work, the clock counting the work done. */
+const BUDGET = 50_000;
+/** What a slice may do past its budget: the last piece of text read (a word is not cut, unless overlong), or an object. */
+const OVERSHOOT = CLOCK_WORK + 100 + 256;
+
+test('par tranches : de très longs .tex se lisent en plusieurs tranches, aucune ne passant son budget de plus d’un morceau', () => {
+  const texts = new Map([[texHash(ids.nodes.kolmogorov), longTex(2_000_000)], [texHash(ids.nodes.mdl), longTex(2_000_000, true)]]);
+  const job: SearchBuild = new SearchBuild(s, texts, () => job.work);
+  const per: number[] = [];
+  let index: SearchIndex | null = null;
+  while (!index) {
+    const before = job.work;
+    index = job.step(before + BUDGET);
+    per.push(job.work - before);
+  }
+  expect(per.length).toBeGreaterThan((5_000_000 / (BUDGET + OVERSHOOT)) | 0);
+  expect(Math.max(...per)).toBeLessThanOrEqual(BUDGET + OVERSHOOT);
+  // The same index as one built at once; the million-letter « word » is not a word.
+  expect(index.query('zygomorphe', only({ content: true }), where(ids.plans.lobby), 50).map((h) => h.id).sort()).toEqual([ids.nodes.kolmogorov, ids.nodes.mdl].sort());
+  expect(index.query('xxxx', ALL, where(ids.plans.lobby), 50)).toEqual([]);
+  expectSame(index, texts);
+});
+
+test('les .tex lus après coup se relisent par tranches, hors du rendu ; un nœud relu entre-temps par une action garde ce qu’elle a lu', () => {
+  const texts = new Map([[texHash(ids.nodes.kolmogorov), longTex(2_000_000)], [texHash(ids.nodes.mdl), longTex(1_000_000)]]);
+  let index = SearchIndex.build(s, NO_TEXTS);
+  index = SearchIndex.build(s, texts, index);
+  expect(index.pending).toBe(2);
+  const first = [...index.store.stale][0];
+  const job: SearchRefresh = index.refresh(() => job.work);
+  const per: number[] = [];
+  const slice = () => {
+    const before = job.work, r = job.step(before + BUDGET);
+    per.push(job.work - before);
+    // Each slice that wrote: a new index over the same storage (App's render).
+    if (r.wrote) index = SearchIndex.build(s, texts, index);
+    return r.done;
+  };
+  expect(slice()).toBe(false);
+  // The node being read is renamed meanwhile, and read again at once by that action's render.
+  index = SearchIndex.build(s, texts, index, run(renameBuild(first, 'Relu au zénith')));
+  while (!slice());
+  index = SearchIndex.build(s, texts, index);
+  expect(index.pending).toBe(0);
+  expect(Math.max(...per)).toBeLessThanOrEqual(BUDGET + OVERSHOOT);
+  expect(per.length).toBeGreaterThan((2_000_000 / (BUDGET + OVERSHOOT)) | 0);
+  expect(index.query('zenith', ALL, where(ids.plans.lobby), 50).map((h) => h.id)).toEqual([first]);
+  expectSame(index, texts);
+});
+
 // The jump (D2): the plan opened if needed, the object framed, then ringed a moment.
 function host(shown: () => PlanScene | null) {
   const opened: Id[] = [], moved: Camera[] = [], flashed: Id[][] = [];
@@ -267,7 +337,9 @@ function host(shown: () => PlanScene | null) {
     state: () => s, scene: shown, plan: () => asked, camera: () => cam, params: () => P,
     openPlan: (plan) => { opened.push(plan); asked = plan; }, moveCamera: (c) => moved.push(c), flash: (x) => flashed.push(x),
   };
-  return { h, opened, moved, flashed, cam };
+  /** Another tab chosen by the user. */
+  const ask = (plan: Id) => { asked = plan; };
+  return { h, opened, moved, flashed, cam, ask };
 }
 const measure = (t: string) => Math.max(1, Math.ceil(t.length / 23));
 
@@ -332,4 +404,27 @@ test('reveal : un objet jeté, ou absent de ce plan, rend faux sans rien ouvrir'
   expect(opened).toEqual([]);
   expect(moved).toEqual([]);
   expect(flashed).toEqual([]);
+});
+
+test('reveal : un autre plan choisi avant que la scène soit prête abandonne le saut (revue, M5) ; un plan absent rend faux', () => {
+  const lobby = buildScene(s, ids.plans.lobby, measure, P), these = buildScene(s, ids.plans.these, measure, P), article = buildScene(s, ids.plans.article, measure, P);
+  let shown = lobby;
+  const { h, opened, moved, flashed, ask } = host(() => shown);
+  const r = new Revealer(h);
+  expect(r.reveal({ plan: ids.plans.these, id: ids.nodes.mdl, kind: 'node' })).toBe(true);
+  expect(opened).toEqual([ids.plans.these]);
+  // The user picks the article's tab before Thèse's scene is shown: its scene gives the jump up.
+  ask(ids.plans.article);
+  shown = article;
+  r.sceneShown();
+  // Thèse shown later, by the user: its camera is left alone.
+  ask(ids.plans.these);
+  shown = these;
+  r.sceneShown();
+  expect(moved).toEqual([]);
+  expect(flashed).toEqual([]);
+  // A plan that does not exist (deleted since the result was listed).
+  expect(r.reveal({ plan: 'plan-absent', id: ids.nodes.mdl, kind: 'node' })).toBe(false);
+  expect(r.reveal({ plan: 'plan-absent', id: ids.connections.mdlSolomonoff, kind: 'connection' })).toBe(false);
+  expect(opened).toEqual([ids.plans.these]);
 });
