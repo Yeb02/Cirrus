@@ -1,10 +1,11 @@
 import { type Id, placementKey, type Role, type State } from '@cirrus/core';
 import { nodeSuggestions, type RenderParams } from '@cirrus/view';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { type Build, connectionTextBuild, roleBuild } from '../actions.ts';
+import { type Build, connectionTagsBuild, connectionTextBuild, roleBuild } from '../actions.ts';
 import type { LatexRegistry, Origin } from '../latex/registry.ts';
 import { LatexField } from './latex/LatexField.tsx';
 import type { Rect } from './panels/geometry.ts';
+import { Tags } from './Tags.tsx';
 
 const ROLES: { value: Role; label: string }[] = [
   { value: 'source', label: 'source' }, { value: 'target', label: 'cible' }, { value: 'associate', label: 'associé' },
@@ -14,7 +15,8 @@ const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 /**
  * The connection's pop-up (spec 8.5, 11.2), at the click: title, relation compiled and edited in place with its
  * preview under it (LatexField, plan 4b, task 6; a link in it opens its node's pop-up beside this one, `onNodeLink`),
- * the members with their roles, those not shown in this plan greyed. A line standing for several connections lists
+ * its tags, as a node's (Tags; the registry's keys of scope connection or both are suggested, plan 6a, D4), the members
+ * with their roles, those not shown in this plan greyed. A line standing for several connections lists
  * them first. Adding or removing a member goes through the graph, which asks « partout ou ici seulement ». `onEdit`
  * resolves with whether the edit was written.
  */
@@ -69,6 +71,8 @@ export function ConnectionPopup(props: {
           key={c.id} origin={relation!} value={c.relation} placeholder="Relation (LaTeX)" rows={3} state={s} registry={props.registry} params={props.params}
           onCommit={(t) => props.onEdit(connectionTextBuild(c.id, { relation: t }))} onNodeLink={nodeLink}
         />
+        <h4>Tags</h4>
+        <Tags s={s} scope="connection" tags={c.tags} suggested={props.params.tagSuggestions} onChange={(change) => props.onEdit(connectionTagsBuild(c.id, change))} />
         <h4>Membres</h4>
         <ul>
           {c.members.map((m) => {

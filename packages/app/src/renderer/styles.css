@@ -267,20 +267,24 @@ button, input, select { font: inherit; color: var(--ink); }
 }
 .panel textarea { display: block; width: 100%; resize: vertical; font: 12.5px/1.4 Consolas, monospace; }
 .panel .dim { color: var(--muted); opacity: 0.7; }
-.node-popup .tags { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0 0 6px; padding: 0; }
-.node-popup .tag {
+.node-popup .tags, .popup .tags { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0 0 6px; padding: 0; }
+.node-popup .tag, .popup .tag {
   display: inline-flex; align-items: center; padding: 1px 2px 1px 8px; border-radius: 11px; font-size: 12.5px;
   background: rgba(143, 184, 255, 0.13); border: 1px solid rgba(143, 184, 255, 0.25);
 }
-.node-popup .tag .remove { border: none; background: none; padding: 0 5px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
-.node-popup .tag .remove:hover { color: var(--ink); }
-.node-popup .tag.default { padding: 0; background: none; border-style: dashed; opacity: 0.6; }
-.node-popup .tag.default button { border: none; background: none; padding: 1px 8px; color: var(--muted); cursor: pointer; font-size: inherit; }
-.node-popup .tag-field { width: 100%; }
-.node-popup .error { margin: 4px 0 0; color: var(--warn); font-size: 12.5px; }
-.node-popup .suggestions { margin-top: 2px; padding: 2px; border: 1px solid rgba(143, 184, 255, 0.2); border-radius: 6px; }
+.node-popup .tag .remove, .popup .tag .remove { border: none; background: none; padding: 0 5px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.node-popup .tag .remove:hover, .popup .tag .remove:hover { color: var(--ink); }
+.node-popup .tag.default, .popup .tag.default { padding: 0; background: none; border-style: dashed; opacity: 0.6; }
+.node-popup .tag.default button, .popup .tag.default button { border: none; background: none; padding: 1px 8px; color: var(--muted); cursor: pointer; font-size: inherit; }
+.node-popup .tag-field, .popup .tag-field { width: 100%; }
+.node-popup .error, .popup .error { margin: 4px 0 0; color: var(--warn); font-size: 12.5px; }
+.node-popup .suggestions, .popup .suggestions { margin-top: 2px; padding: 2px; border: 1px solid rgba(143, 184, 255, 0.2); border-radius: 6px; }
 .node-popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 3px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px; }
 .node-popup .pick:hover, .node-popup .pick.on { background: rgba(143, 184, 255, 0.14); }
+/* The same tags in a connection's pop-up (plan 6a, D4): its list rules (.popup li, .pick) give way to the chips' and the suggestions'. */
+.popup .tag { gap: 0; }
+.popup .suggestions .pick { padding: 3px 6px; font-size: 12.5px; }
+.popup .pick.on { background: rgba(143, 184, 255, 0.14); }
 .node-popup .meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: 12.5px; }
 .node-popup .meta dt { color: var(--muted); }
 .node-popup .meta dd { margin: 0; }
