@@ -413,12 +413,14 @@ test('la recherche (Ctrl+K) : la couleur de son cercle, réglage principal de «
   const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
     ['searchMaxResults', 50, 'Résultats montrés au plus par la recherche (Ctrl+K)', 10, 500, 10],
     ['searchFlashMs', 1200, 'Durée du cercle autour d’un objet après un saut (ms)', 0, 10_000, 100],
+    // Fix round 1, M3: the slices of the index's whole build.
+    ['searchBuildSliceMs', 8, 'Temps pris par tranche pour construire l’index de la recherche (ms)', 2, 50, 1],
   ];
   for (const [key, value, label, min, max, step] of specs) {
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Recherche', kind: 'number', min, max, step });
   }
-  expect(withOverrides({ searchMaxResults: 0, searchFlashMs: -1 })).toMatchObject({ searchMaxResults: 10, searchFlashMs: 0 });
+  expect(withOverrides({ searchMaxResults: 0, searchFlashMs: -1, searchBuildSliceMs: 0 })).toMatchObject({ searchMaxResults: 10, searchFlashMs: 0, searchBuildSliceMs: 2 });
   expect(PARAM_RUBRICS.find((r) => r.title === 'Navigation')!.groups.at(-1)).toBe('Recherche');
 });
 
