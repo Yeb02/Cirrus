@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -105,6 +105,12 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
   });
 }
 
+/**
+ * A request's body read as a stream (PUT /files, POST /seed), its reader stopping short — past its bound, refused —
+ * without cutting the connection: the answer (413) still reaches the client, what follows read and dropped (plan 9, D8).
+ */
+const bodyOf = (req: IncomingMessage): AsyncIterable<Uint8Array> => req.iterator({ destroyOnReturn: false });
+
 /** A JSON body (Content-Type application/json: a page of another site cannot send one without a preflight, which is refused). */
 async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
   if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] ?? '')) throw new HttpError(415, 'Corps JSON attendu (Content-Type: application/json).');
@@ -134,6 +140,19 @@ function formatRefusal(req: IncomingMessage): string | null {
   return differ.length === 0 ? null : `Ce serveur garde ses données dans un autre format (${differ.join(' ; ')}) : mets à jour Cirrus, ou travaille sur un serveur local.`;
 }
 
+/** The store's temporaries (`.import-` and 16 hexadecimal digits: receiveBlob's, an import's). */
+const TEMPORARY = /^\.import-[0-9a-f]{16}$/;
+
+/**
+ * What a server stopped short — killed, the machine off — left of an upload under way: its store's temporaries,
+ * removed at the next start, the base locked (no other server writes there). A stop in order leaves none (Review
+ * Focus 1): its uploads are cut, and each removes its own.
+ */
+function dropTemporaries(baseDir: string): void {
+  const files = join(baseDir, 'files');
+  for (const name of existsSync(files) ? readdirSync(files) : []) if (TEMPORARY.test(name)) rmSync(join(files, name), { force: true });
+}
+
 /**
  * Starts the server on `host` (127.0.0.1 by default, or ::1: refused otherwise) and `port` (0: a free one), its data in
  * `dataDir`, one server per data (the base's lock), answering to this machine's names and to `names`. `now`: its clock
@@ -154,6 +173,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   if (!lock) throw new Error(`Un autre serveur tourne déjà sur ces données (${opts.dataDir}).`);
   let tokens: Tokens | null = null, canon: Canon | null = null, hub: Hub | null = null, sizes: StoreSize | null = null;
   try {
+    dropTemporaries(baseDir);
     tokens = Tokens.open(opts.dataDir);
     // The streams relay what the base accepts, and read its journal to catch up.
     canon = Canon.open(baseDir, (u) => hub?.publish(u));
@@ -235,7 +255,7 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
         const seq = count(header, 0, 'Cirrus-Seq');
         if (Number(req.headers['content-length']) > MAX_SEED_BYTES) throw tooBig(MAX_SEED_BYTES);
         fresh();
-        reply(res, 200, { baseId: await seeds.begin(who.tokenHash, req, seq) });
+        reply(res, 200, { baseId: await seeds.begin(who.tokenHash, bodyOf(req), seq) });
       },
     },
     '/seed/journal': {
@@ -406,7 +426,7 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
         // otherwise read it between its rename into place and `add` (task 8a).
         sizes.placing(hash);
         try {
-          sizes.add(hash, (await receiveBlob(baseDir, hash, req, MAX_FILE_BYTES)).size);
+          sizes.add(hash, (await receiveBlob(baseDir, hash, bodyOf(req), MAX_FILE_BYTES)).size);
         } catch (e) {
           sizes.abandon(hash);
           if (e instanceof BlobError) throw e.tooBig ? tooBig(MAX_FILE_BYTES) : new HttpError(400, e.message);
@@ -460,6 +480,9 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
       try {
         await handle(req, res);
       } catch (e) {
+        // A body refused before its end, or not read: what follows is read and dropped, so that a client which sends its
+        // whole body before it reads gets the answer, not a cut connection.
+        req.resume();
         const known = e instanceof HttpError ? e
           : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError || e instanceof PresenceError
             ? new HttpError(e.status, e.message)
