@@ -3,7 +3,10 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS, SSE_PING_MS } from '../src/bounds.ts';
+import {
+  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_SMALL_BODY_MS, MIN_BODY_BYTES_PER_S, SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
+  SSE_PING_MS,
+} from '../src/bounds.ts';
 import { type RunningServer, startServer } from '../src/server.ts';
 import { Client, FORMAT, newCode, pair, T0 } from './support.ts';
 
@@ -129,6 +132,8 @@ test('flux (D1) : l’en-tête X-Accel-Buffering: no, qu’un mandataire ne le r
 
 test('délais (D1) : en-têtes 60 s, requête entière sans délai, connexion gardée 65 s, inactivité 2 min ; un ping bien avant', async () => {
   expect([SERVER_HEADERS_TIMEOUT_MS, SERVER_REQUEST_TIMEOUT_MS, SERVER_KEEP_ALIVE_MS, SERVER_IDLE_MS]).toEqual([60_000, 0, 65_000, 120_000]);
+  // What follows an answer is read 1 Mio or 5 s at most; a JSON body arrives within 30 s, plus a second per 8 Kio (review, I1, I2).
+  expect([DRAIN_MAX_BYTES, DRAIN_MAX_MS, DRAIN_LINGER_MS, MAX_SMALL_BODY_MS, MIN_BODY_BYTES_PER_S]).toEqual([2 ** 20, 5000, 1000, 30_000, 8192]);
   // An event stream says something well within the idle delay: it is never cut for silence.
   expect(SSE_PING_MS * 4).toBeLessThanOrEqual(SERVER_IDLE_MS);
   const before = servers.length;

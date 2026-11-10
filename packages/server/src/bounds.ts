@@ -94,6 +94,33 @@ export const SERVER_REQUEST_TIMEOUT_MS = 0;
 export const SERVER_IDLE_MS = 120_000;
 export const SERVER_KEEP_ALIVE_MS = 65_000;
 
+/**
+ * What follows an answer in a request's body — a refusal sent before the body was read, or while it was (413), an
+ * answer that did not need it —, read and dropped (review of task 1, I1): DRAIN_MAX_BYTES within DRAIN_MAX_MS at most,
+ * whoever the client is, a token or not; past either, the server cuts the connection itself. Within them, a client that
+ * sends its whole body before it reads gets the answer, and keeps its connection; beyond, it may see the connection cut
+ * instead (a PC's own caps keep it from sending such a body).
+ */
+export const DRAIN_MAX_BYTES = 2 ** 20;
+export const DRAIN_MAX_MS = 5000;
+
+/**
+ * A drain past its bounds stops reading and ends the connection after the answer (its FIN), then destroys it
+ * DRAIN_LINGER_MS later: a client that reads while it sends (Node's fetch, Caddy's Go) gets the answer before the reset
+ * — Windows drops what a socket has not yet read when a reset comes.
+ */
+export const DRAIN_LINGER_MS = 1000;
+
+/**
+ * A JSON body (/pair, every route of a paired PC, /installer of task 5) arrives whole within MAX_SMALL_BODY_MS, plus a
+ * second for every MIN_BODY_BYTES_PER_S of its length (as announced, or its route's cap) — 30 s for a pairing's few
+ * bytes; a page of journal of 64 Mio (MAX_BODY_BYTES) over a line of 64 kbit/s or more still passes. Otherwise 408,
+ * and the connection is cut (review of task 1, I2): a body trickled a byte at a time escapes SERVER_IDLE_MS. Files and
+ * a seed (PUT /files, POST /seed) are streamed, bounded by their size and SERVER_IDLE_MS only.
+ */
+export const MAX_SMALL_BODY_MS = 30_000;
+export const MIN_BODY_BYTES_PER_S = 8192;
+
 /** The longest name the server answers to (`--nom`, a domain name: 253 characters, labels of 63 at most). */
 export const MAX_HOST_NAME_CHARS = 253;
 

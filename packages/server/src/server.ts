@@ -7,8 +7,9 @@ import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Un
 import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES,
-  MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST, SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
+  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES,
+  MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_SMALL_BODY_MS, MAX_UNITS_PER_REQUEST, MIN_BODY_BYTES_PER_S,
+  SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
@@ -81,35 +82,82 @@ const tooBig = (max: number) => new HttpError(413, `Requête trop grosse : ${max
 
 /**
  * A request's body, `max` bytes at most: refused (413) by its announced length before anything is read, or as soon as
- * it passes `max` — what follows is then read and dropped, so that the answer still reaches the client.
+ * it passes `max`; what follows is drain's, after the answer. Whole within its deadline (MAX_SMALL_BODY_MS, and a second
+ * per MIN_BODY_BYTES_PER_S of its announced length, or of `max`), or 408, and the connection closed after the answer
+ * (review of task 1, I2): a body trickled a byte at a time would escape SERVER_IDLE_MS.
  */
 function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
-  if (Number(req.headers['content-length']) > max) return Promise.reject(tooBig(max));
+  const announced = Number(req.headers['content-length']);
+  if (announced > max) return Promise.reject(tooBig(max));
+  const deadline = MAX_SMALL_BODY_MS + Math.ceil((Math.min(announced || max, max) / MIN_BODY_BYTES_PER_S) * 1000);
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    let size = 0, over = false;
-    req.on('data', (chunk: Buffer) => {
-      if (over) return;
+    let size = 0;
+    const onData = (chunk: Buffer) => {
       size += chunk.length;
       if (size > max) {
-        over = true;
         chunks.length = 0;
-        reject(tooBig(max));
+        stop(tooBig(max));
         return;
       }
       chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-    req.on('close', () => { if (!req.complete) reject(new Error('requête interrompue')); });
+    };
+    const onEnd = () => {
+      clearTimeout(late);
+      resolve(Buffer.concat(chunks));
+    };
+    const onClose = () => {
+      if (!req.complete) stop(new Error('requête interrompue'));
+    };
+    /** Reading stops: the body is left where it is, for drain. */
+    const stop = (e: Error) => {
+      clearTimeout(late);
+      req.off('data', onData).off('end', onEnd).off('error', stop).off('close', onClose);
+      req.pause();
+      reject(e);
+    };
+    const late = setTimeout(() => stop(new HttpError(408, `Corps trop lent : il doit arriver entier en ${Math.round(deadline / 1000)} s.`, { Connection: 'close' })), deadline);
+    req.on('data', onData).on('end', onEnd).on('error', stop).on('close', onClose);
   });
 }
 
 /**
  * A request's body read as a stream (PUT /files, POST /seed), its reader stopping short — past its bound, refused —
- * without cutting the connection: the answer (413) still reaches the client, what follows read and dropped (plan 9, D8).
+ * without cutting the connection: the answer (413) still reaches the client, what follows is drain's (plan 9, D8).
  */
 const bodyOf = (req: IncomingMessage): AsyncIterable<Uint8Array> => req.iterator({ destroyOnReturn: false });
+
+/**
+ * The rest of a request's body once it is answered — a refusal, before its body was read or while it was; an answer
+ * that did not need it —, read and dropped, so that a client which sends its whole body before it reads gets the
+ * answer (plan 9, D8). DRAIN_MAX_BYTES within DRAIN_MAX_MS at most, whoever the client is, a token or not: past either,
+ * the server cuts the connection itself (review of task 1, I1) — it reads no more, ends the connection after the answer,
+ * and destroys it DRAIN_LINGER_MS later, so that a client reading while it sends gets the answer before the reset. A
+ * body read whole: nothing to do.
+ */
+function drain(req: IncomingMessage): void {
+  if (req.complete || req.destroyed) return;
+  const socket = req.socket;
+  let dropped = 0, cutting = false;
+  const onData = (chunk: Buffer) => {
+    dropped += chunk.length;
+    if (dropped > DRAIN_MAX_BYTES) cut();
+  };
+  const cut = () => {
+    if (cutting) return;
+    cutting = true;
+    clearTimeout(timer);
+    req.off('data', onData);
+    req.pause();
+    socket.end();
+    setTimeout(() => socket.destroy(), DRAIN_LINGER_MS).unref();
+  };
+  const timer = setTimeout(cut, DRAIN_MAX_MS);
+  const done = () => clearTimeout(timer);
+  req.on('data', onData);
+  req.once('end', done).once('close', done);
+  req.resume();
+}
 
 /** A JSON body (Content-Type application/json: a page of another site cannot send one without a preflight, which is refused). */
 async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
@@ -150,7 +198,23 @@ const TEMPORARY = /^\.import-[0-9a-f]{16}$/;
  */
 function dropTemporaries(baseDir: string): void {
   const files = join(baseDir, 'files');
-  for (const name of existsSync(files) ? readdirSync(files) : []) if (TEMPORARY.test(name)) rmSync(join(files, name), { force: true });
+  // One that will not go (another program holds it) never keeps the server from starting: the next start tries again.
+  const failed = (what: string, e: unknown) => console.warn(`Temporaire non ôté, ${what} : ${e instanceof Error ? e.message : String(e)} ; le prochain démarrage réessaiera.`);
+  let names: string[];
+  try {
+    names = existsSync(files) ? readdirSync(files) : [];
+  } catch (e) {
+    failed(files, e);
+    return;
+  }
+  for (const name of names) {
+    if (!TEMPORARY.test(name)) continue;
+    try {
+      rmSync(join(files, name), { force: true });
+    } catch (e) {
+      failed(join(files, name), e);
+    }
+  }
 }
 
 /**
@@ -232,8 +296,7 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
     },
     // R15: a PC revokes its own token — a pairing it cancels, a first sync that fails, « Dissocier ce PC » —, never another's.
     '/unpair': {
-      POST: (req, res, _url, who) => {
-        req.resume();
+      POST: (_req, res, _url, who) => {
         tokens.revokeToken(who.tokenHash);
         seeds.drop(who.tokenHash);
         res.writeHead(204).end();
@@ -379,12 +442,17 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
       POST: async (req, res) => {
         const request = parsePublicationRequest(await readJson(req, MAX_PUBLICATION_BODY_BYTES));
         // The PC waits, silent, while the server imports: the idle delay (SERVER_IDLE_MS) is lifted, the import's own
-        // delays bound it (plan 9, D1). Its answer sent, the connection kept falls under SERVER_KEEP_ALIVE_MS, then the
-        // next request under SERVER_IDLE_MS again (Node's own reset).
+        // delays bound it (plan 9, D1), and put back before the answer — a request pipelined behind this one on the
+        // connection falls under it again (review of task 1, M1: Node does not reset it then).
         res.setTimeout(0);
         const gone = new AbortController();
         res.on('close', () => { if (!res.writableEnded) gone.abort(new Error('Demande d’import abandonnée.')); });
-        const result = await imports.run(request, gone.signal);
+        let result: Awaited<ReturnType<typeof imports.run>>;
+        try {
+          result = await imports.run(request, gone.signal);
+        } finally {
+          res.setTimeout(SERVER_IDLE_MS);
+        }
         if (gone.signal.aborted) return;
         if (!result.ok && unreachable(result.message)) throw new HttpError(502, result.message);
         reply(res, 200, result);
@@ -432,6 +500,11 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
           if (e instanceof BlobError) throw e.tooBig ? tooBig(MAX_FILE_BYTES) : new HttpError(400, e.message);
           throw e;
         }
+      } else {
+        // Already there (two PCs sending it at once): its bytes read to the end and dropped, MAX_FILE_BYTES at most — a
+        // sending of its own, not a rest for drain, which would cut it past DRAIN_MAX_BYTES.
+        let size = 0;
+        for await (const chunk of bodyOf(req)) if ((size += chunk.length) > MAX_FILE_BYTES) throw tooBig(MAX_FILE_BYTES);
       }
       res.writeHead(204).end();
     },
@@ -476,13 +549,14 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
   const inflight = new Set<Promise<void>>();
   // Its delays, explicit (D1, bounds.ts): headers within a minute, a whole request without limit, a silent connection cut.
   const server = createServer({ headersTimeout: SERVER_HEADERS_TIMEOUT_MS, requestTimeout: SERVER_REQUEST_TIMEOUT_MS, keepAliveTimeout: SERVER_KEEP_ALIVE_MS }, (req, res) => {
+    // Once answered — a refusal, before or while its body was read; an answer that did not need the body —, what is
+    // left of the body is drain's, bounded, token or not (review of task 1, I1). Before Node's own listener: Node would
+    // otherwise read it all and drop it, unbounded.
+    res.prependOnceListener('finish', () => drain(req));
     const p: Promise<void> = (async () => {
       try {
         await handle(req, res);
       } catch (e) {
-        // A body refused before its end, or not read: what follows is read and dropped, so that a client which sends its
-        // whole body before it reads gets the answer, not a cut connection.
-        req.resume();
         const known = e instanceof HttpError ? e
           : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError || e instanceof PresenceError
             ? new HttpError(e.status, e.message)
