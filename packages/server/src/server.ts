@@ -7,8 +7,8 @@ import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Un
 import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES,
-  MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST,
+  MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES,
+  MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_UNITS_PER_REQUEST, SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
@@ -27,16 +27,32 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 // (plan 5b, D8), is storeSize.ts's.
 
 /**
+ * `names`: the names it answers to besides this machine's (plan 9, D1): the domain Caddy serves, which passes the
+ * client's Host header on as it is; checked by hostName, refused otherwise.
  * `sources`: the network of a publication's import (plan 5b, task 3), the server's own by default (serverNetwork: Node's
  * fetch, the system's resolver, httpsConnect); a test's replay, so that no test reaches the Internet.
  */
-interface ServerOptions { dataDir: string; port: number; host?: string; now?: () => number; sources?: PublicationNetwork }
+interface ServerOptions { dataDir: string; port: number; host?: string; names?: string[]; now?: () => number; sources?: PublicationNetwork }
 export interface RunningServer { url: string; close(): Promise<void> }
 
-/** The addresses it listens on: this machine's, until HTTPS (plan 9). */
+/** The addresses it listens on: this machine's only. From the Internet, Caddy carries HTTPS and passes it on (plan 9, D1). */
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
-/** The names a request may give the server (its Host header): this machine's; another is a page that rebound its domain to it. */
-const LOCAL_NAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
+/**
+ * The names a request may give the server (its Host header): this machine's, and those of `names`; another is a page
+ * that rebound its domain to it (DNS rebinding). Nothing a proxy says of the client is read (no X-Forwarded-*).
+ */
+const LOCAL_NAMES = ['127.0.0.1', 'localhost', '[::1]'];
+/** A label of a domain name: letters, digits and inner hyphens, 63 characters at most. */
+const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+const HOST_NAME = new RegExp(`^${LABEL}(?:\\.${LABEL})*$`, 'i');
+
+/**
+ * A name the server may answer to (`--nom`, plan 9, D1), lower-cased: a domain name alone, ASCII (an international
+ * name in its xn-- form), without scheme, path, port nor final dot, MAX_HOST_NAME_CHARS at most; null otherwise.
+ */
+export function hostName(text: string): string | null {
+  return text.length <= MAX_HOST_NAME_CHARS && HOST_NAME.test(text) ? text.toLowerCase() : null;
+}
 const HASH = /^[0-9a-f]{64}$/;
 const BEARER = /^Bearer ([A-Za-z0-9_-]{43})$/;
 
@@ -120,11 +136,18 @@ function formatRefusal(req: IncomingMessage): string | null {
 
 /**
  * Starts the server on `host` (127.0.0.1 by default, or ::1: refused otherwise) and `port` (0: a free one), its data in
- * `dataDir`, one server per data (the base's lock). `now`: its clock (pairing codes, /hello).
+ * `dataDir`, one server per data (the base's lock), answering to this machine's names and to `names`. `now`: its clock
+ * (pairing codes, /hello).
  */
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const host = opts.host ?? '127.0.0.1';
-  if (!LOOPBACK.has(host)) throw new Error("Le serveur n'écoute que sur cette machine tant qu'il n'a pas de HTTPS (plan 9).");
+  if (!LOOPBACK.has(host)) throw new Error("Le serveur n'écoute que sur cette machine : Caddy, devant lui, porte le HTTPS (plan 9, D1).");
+  const names = new Set(LOCAL_NAMES);
+  for (const n of opts.names ?? []) {
+    const name = hostName(n);
+    if (name === null) throw new Error(`Nom refusé : « ${n} ». Un nom de domaine seul est attendu, sans https://, chemin ni port (cirrus.exemple.fr).`);
+    names.add(name);
+  }
   const now = opts.now ?? Date.now;
   const baseDir = join(opts.dataDir, 'base');
   const lock = lockBase(baseDir);
@@ -140,7 +163,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     const s = (sizes = new StoreSize(baseDir));
     const imports = new PublicationImports(baseDir, opts.sources ?? serverNetwork(), (hash, size) => s.add(hash, size));
     return await listen({
-      port: opts.port, host, now, dataDir: opts.dataDir, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), imports, sizes: s, lock,
+      port: opts.port, host, names, now, dataDir: opts.dataDir, baseDir, tokens: t, canon: c, hub, seeds: new Seeds(join(opts.dataDir, 'seed')), imports, sizes: s, lock,
     });
   } catch (e) {
     await sizes?.close();
@@ -154,15 +177,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
 /** What a started server holds, opened by startServer: closed by its `close`. */
 interface Parts {
-  port: number; host: string; now: () => number; dataDir: string; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds; imports: PublicationImports;
-  sizes: StoreSize; lock: { release(): void };
+  port: number; host: string; names: ReadonlySet<string>; now: () => number; dataDir: string; baseDir: string; tokens: Tokens; canon: Canon; hub: Hub; seeds: Seeds;
+  imports: PublicationImports; sizes: StoreSize; lock: { release(): void };
 }
 
 /** A seed's steps, to a server that holds a base already (task 5, D7, R16). */
 const NOT_FRESH = 'Le serveur tient déjà une base : il ne reçoit celle d’un PC que vide.';
 
 /** Listens, and serves the routes. */
-async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon, hub, seeds, imports, sizes, lock }: Parts): Promise<RunningServer> {
+async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens, canon, hub, seeds, imports, sizes, lock }: Parts): Promise<RunningServer> {
   /** The PC of the request's token, and the token's hash; 401 otherwise, checked before anything of the body is read. */
   const authenticate = (req: IncomingMessage): { pc: string; tokenHash: string } => {
     const token = BEARER.exec(req.headers.authorization ?? '')?.[1];
@@ -335,6 +358,10 @@ async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon
     '/publications': {
       POST: async (req, res) => {
         const request = parsePublicationRequest(await readJson(req, MAX_PUBLICATION_BODY_BYTES));
+        // The PC waits, silent, while the server imports: the idle delay (SERVER_IDLE_MS) is lifted, the import's own
+        // delays bound it (plan 9, D1). Its answer sent, the connection kept falls under SERVER_KEEP_ALIVE_MS, then the
+        // next request under SERVER_IDLE_MS again (Node's own reset).
+        res.setTimeout(0);
         const gone = new AbortController();
         res.on('close', () => { if (!res.writableEnded) gone.abort(new Error('Demande d’import abandonnée.')); });
         const result = await imports.run(request, gone.signal);
@@ -397,9 +424,10 @@ async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon
   };
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // Another name than this machine's: a page that rebound its domain to 127.0.0.1 (DNS rebinding).
-    if (!LOCAL_NAMES.has((req.headers.host ?? '').toLowerCase().replace(/:\d+$/, ''))) {
-      throw new HttpError(403, 'Hôte refusé : ce serveur ne répond qu’à cette machine (127.0.0.1, localhost ou ::1).');
+    // Another name than this machine's or its own (--nom): a page that rebound its domain to 127.0.0.1 (DNS rebinding).
+    // The refusal names none of them.
+    if (!names.has((req.headers.host ?? '').toLowerCase().replace(/:\d+$/, ''))) {
+      throw new HttpError(403, 'Hôte refusé : ce serveur ne répond qu’à cette machine et aux noms qu’on lui a donnés.');
     }
     const url = new URL(req.url ?? '/', 'http://serveur'), method = req.method ?? 'GET';
     const allow = (methods: string[]) => {
@@ -426,7 +454,8 @@ async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon
 
   /** The requests under way, awaited by close: none is cut while it writes. */
   const inflight = new Set<Promise<void>>();
-  const server = createServer((req, res) => {
+  // Its delays, explicit (D1, bounds.ts): headers within a minute, a whole request without limit, a silent connection cut.
+  const server = createServer({ headersTimeout: SERVER_HEADERS_TIMEOUT_MS, requestTimeout: SERVER_REQUEST_TIMEOUT_MS, keepAliveTimeout: SERVER_KEEP_ALIVE_MS }, (req, res) => {
     const p: Promise<void> = (async () => {
       try {
         await handle(req, res);
@@ -447,6 +476,7 @@ async function listen({ port: wanted, host, now, dataDir, baseDir, tokens, canon
     })().finally(() => inflight.delete(p));
     inflight.add(p);
   });
+  server.timeout = SERVER_IDLE_MS;
   await new Promise<void>((resolve, reject) => {
     server.once('error', (e: NodeJS.ErrnoException) => reject(e.code === 'EADDRINUSE' ? new Error(`Le port ${wanted} est déjà pris sur ${host}.`) : e));
     server.listen(wanted, host, () => resolve());

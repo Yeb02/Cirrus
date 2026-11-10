@@ -77,6 +77,26 @@ export const MAX_PC_NAME_CHARS = 100;
 /** The pause between two comments (« : ping ») on an open event stream: it keeps the connection alive, and checks its token. */
 export const SSE_PING_MS = 15_000;
 
+/**
+ * The HTTP server's delays (plan 9, D1), set explicitly — the server is reached from the Internet, through Caddy:
+ * - a request's headers, whole within SERVER_HEADERS_TIMEOUT_MS (Node checks every 30 s: cut between 60 and 90 s);
+ * - a whole request, no delay (SERVER_REQUEST_TIMEOUT_MS, 0): a file (MAX_FILE_BYTES) or a base (MAX_SEED_BYTES) sent
+ *   over a slow line takes what it takes, bounded by its size, not by the clock;
+ * - a connection that neither sends nor receives anything for SERVER_IDLE_MS is cut: an upload stalled halfway. An event
+ *   stream speaks every SSE_PING_MS, far within it; an import of a publication lifts it while it runs, its own delays
+ *   bounding it (MAX_PUBLICATION_TIMEOUT_MS, MAX_PUBLICATION_PDF_MS);
+ * - a connection kept open between two requests, SERVER_KEEP_ALIVE_MS (Keep-Alive: timeout=65). A proxy that keeps
+ *   its connections to the server must drop them sooner (Caddy's `keepalive`, task 6), or it may send a request on
+ *   one the server is closing.
+ */
+export const SERVER_HEADERS_TIMEOUT_MS = 60_000;
+export const SERVER_REQUEST_TIMEOUT_MS = 0;
+export const SERVER_IDLE_MS = 120_000;
+export const SERVER_KEEP_ALIVE_MS = 65_000;
+
+/** The longest name the server answers to (`--nom`, a domain name: 253 characters, labels of 63 at most). */
+export const MAX_HOST_NAME_CHARS = 253;
+
 /** How long a pairing code lives (D3). */
 export const PAIRING_TTL_MS = 10 * 60_000;
 

@@ -574,7 +574,7 @@ test('StoreSize : un fichier placé pendant le premier compte, entre son renomma
 
 test('adresse : démarrer ailleurs que sur cette machine est refusé', async () => {
   for (const host of ['0.0.0.0', '192.168.1.10', '::', 'localhost.exemple.org']) {
-    await expect(startServer({ dataDir: dir, port: 0, host }), host).rejects.toThrow("Le serveur n'écoute que sur cette machine tant qu'il n'a pas de HTTPS (plan 9).");
+    await expect(startServer({ dataDir: dir, port: 0, host }), host).rejects.toThrow("Le serveur n'écoute que sur cette machine : Caddy, devant lui, porte le HTTPS (plan 9, D1).");
   }
   // Nothing created.
   expect(readdirSync(dir)).toEqual([]);

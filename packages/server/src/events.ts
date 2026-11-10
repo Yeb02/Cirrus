@@ -61,7 +61,8 @@ export class Hub {
 
   /** A stream on `res`, following on from `after` (checked by the caller: a number of the journal, at the end of a write). */
   open(res: ServerResponse, after: number, tokenHash: string): void {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    // X-Accel-Buffering: a proxy in front (plan 9, D1) passes each frame on as it comes, without holding it back.
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Accel-Buffering': 'no' });
     res.flushHeaders();
     const st: Stream = { res, cursor: after, live: false, closed: false, tokenHash };
     this.streams.add(st);
