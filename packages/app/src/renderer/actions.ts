@@ -425,11 +425,6 @@ export function deleteTagKeyBuild(key: string): Build {
   return (st) => deleteTagKey(st, key);
 }
 
-/** A value of an enumeration renamed, on the objects that carry it too. */
-export function renameEnumValueBuild(key: string, from: string, to: string): Build {
-  return (st) => renameEnumValue(st, key, from, to);
-}
-
 /**
  * The form of an enumeration saved: its values renamed (`renames`, in an order planRenames made) and the definition as
  * the form has it, in one action — one Ctrl+Z gives all of it back. `freed`: values removed whose name a rename takes

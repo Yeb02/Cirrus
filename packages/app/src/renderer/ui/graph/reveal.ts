@@ -36,8 +36,8 @@ export interface RevealHost {
 }
 
 /**
- * The jump (plan 6a, D2), the one way GraphView shows an object for another part of the app (the search; « voir dans
- * un autre plan » and the history next): the target's plan opened in its tab if it is not the one shown, then, once
+ * The jump (plan 6a, D2), the one way GraphView shows an object for another part of the app (the search, « voir dans
+ * un autre plan », « aller au nœud »; Jumps wraps it for the history): the target's plan opened in its tab if it is not the one shown, then, once
  * its scene is shown, the object framed and ringed a moment. Only the camera moves: no gesture begins, the selection
  * stays (a placing waits in `pendingPlace`, which this never touches). The pending target is taken by its plan's
  * scene only (`sceneShown`, from GraphView's scene effect), once; another jump replaces it.

@@ -541,11 +541,6 @@ export class SearchIndex {
     return new SearchIndex(s, st);
   }
 
-  /** The objects indexed. */
-  get size(): number {
-    return this.store.list.length;
-  }
-
   /** The nodes waiting to be read again with their new .tex texts (refresh). */
   get pending(): number {
     return this.store.stale.size;

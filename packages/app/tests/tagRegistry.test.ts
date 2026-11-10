@@ -4,7 +4,7 @@ import {
 } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import {
-  connectionTagsBuild, defineTagKeyBuild, deleteTagKeyBuild, formSaveBuild, renameEnumValueBuild, renameTagKeyBuild, saveTagKeyBuild, tagsBuild,
+  type Build, connectionTagsBuild, defineTagKeyBuild, deleteTagKeyBuild, formSaveBuild, renameTagKeyBuild, saveTagKeyBuild, tagsBuild,
 } from '../src/renderer/actions.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { EditSession } from '../src/renderer/session.ts';
@@ -66,6 +66,12 @@ test('defineTagKeyBuild : une clé créée puis modifiée, chaque fois une actio
 
 const LABEL: TagKeyDef = { key: 'label', type: 'text', scope: 'node', multi: false, required: false };
 
+/** A value of an enumeration renamed as the panel's form saves it: the draft's value renamed, then saveTagKeyBuild (planRenames, definitionOf). */
+const renamingValue = (def: TagKeyDef, from: string, to: string): Build => {
+  const draft = draftOf(def), d = renameValue(draft, draft.values.find((v) => v.name === from)!.id, to);
+  return saveTagKeyBuild(definitionOf(d), planRenames(def, d));
+};
+
 test('les refus du cœur arrivent en message français, sans écriture : un nom vide, une clé inconnue, une valeur que le changement invaliderait', async () => {
   const { s, mk, session } = world([NIVEAU]);
   mk('A', [{ key: 'niveau', value: 'bas' }]);
@@ -76,7 +82,7 @@ test('les refus du cœur arrivent en message français, sans écriture : un nom 
   expect(await refused(session, deleteTagKeyBuild('inconnu')!)).toBe('Le tag « inconnu » n’est pas dans le registre.');
   expect(await refused(session, defineTagKeyBuild({ ...NIVEAU, enumValues: [{ name: 'moyen', rank: 2 }, { name: 'haut', rank: 3 }] })!))
     .toBe('1 nœud porte une valeur que ce changement rendrait invalide : « A ».');
-  expect(await refused(session, renameEnumValueBuild('niveau', 'absent', 'x')!)).toBe('Le tag « niveau » n’a pas de valeur « absent ».');
+  expect(await refused(session, saveTagKeyBuild(NIVEAU, [{ from: 'absent', to: 'x' }])!)).toBe('Le tag « niveau » n’a pas de valeur « absent ».');
   expect(session.rev).toBe(before);
   expect(s.tagKeys.get('niveau')).toEqual(NIVEAU);
 });
@@ -139,11 +145,11 @@ test('renameTagKeyBuild : la définition, les nœuds et les connexions, la corbe
   expect(await refused(session, renameTagKeyBuild('statut', 'statut')!)).toBe('Le tag s’appelle déjà « statut ».');
 });
 
-test('deleteTagKeyBuild : la définition part, les tags restent ; renameEnumValueBuild : la valeur change partout, le rang reste', async () => {
+test('deleteTagKeyBuild : la définition part, les tags restent ; une valeur renommée par le formulaire : elle change partout, le rang reste', async () => {
   const { s, mk, session } = world([NIVEAU, TEXTE]);
   const a = mk('A', [{ key: 'niveau', value: 'haut' }, { key: 'statut', value: 'lu' }]);
-  const renamed = await session.run(renameEnumValueBuild('niveau', 'haut', 'élevé')!);
-  expect(renamed.ok && renamed.action.label).toBe('Renommer la valeur « haut » du tag « niveau » en « élevé »');
+  const renamed = await session.run(renamingValue(NIVEAU, 'haut', 'élevé')!);
+  expect(renamed.ok && renamed.action.label).toBe('Modifier le tag « niveau »');
   expect(tagsOf(s, a)[0]).toEqual({ key: 'niveau', value: 'élevé' });
   expect(s.tagKeys.get('niveau')?.enumValues).toContainEqual({ name: 'élevé', rank: 3 });
   expect((await session.run(deleteTagKeyBuild('statut')!)).ok).toBe(true);
@@ -162,7 +168,7 @@ test('le scénario de la tâche : une énumération créée, deux nœuds tagués
   expect((await session.run(tagsBuild(a, (t, d) => withTag(t, parseTag('niveau:2', d), d))!)).ok).toBe(true);
   expect((await session.run(tagsBuild(b, (t, d) => withTag(t, parseTag('niveau:haut', d), d))!)).ok).toBe(true);
   expect(tagsOf(s, a)).toEqual([{ key: 'niveau', value: 'moyen' }]);
-  expect((await session.run(renameEnumValueBuild('niveau', 'moyen', 'médian')!)).ok).toBe(true);
+  expect((await session.run(renamingValue(NIVEAU, 'moyen', 'médian')!)).ok).toBe(true);
   expect(tagsOf(s, a)).toEqual([{ key: 'niveau', value: 'médian' }]);
   expect(s.tagKeys.get('niveau')?.defaultValue).toBe('médian');
   expect((await session.run(renameTagKeyBuild('niveau', 'importance')!)).ok).toBe(true);
