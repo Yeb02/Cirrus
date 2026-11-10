@@ -1,0 +1,15 @@
+# « Cirrus Dev » (plan 9, D3): `npm run paquet:dev` builds the app as that variant (`electron-vite build --mode dev`, which
+# gives it its data folder, %APPDATA%\@cirrus\app-dev) and then this, over electron-builder.yml: its name, its appId —
+# so its own installation, beside the official app's —, its icon marked « DEV ». It writes dist/Cirrus Dev Setup <version>.exe.
+extends: ./electron-builder.yml
+appId: io.github.yeb02.cirrus.dev
+productName: Cirrus Dev
+win:
+  target: nsis
+  icon: build/icon-dev.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon-dev.ico
+  uninstallerIcon: build/icon-dev.ico

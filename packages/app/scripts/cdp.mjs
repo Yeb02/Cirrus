@@ -13,8 +13,11 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** For the measures: the value under which a share `q` of the sorted values falls. */
 export const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); return s.length === 0 ? Number.NaN : s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
 
-/** The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…). */
-export async function launch(data, profile, more = {}) {
+/**
+ * The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…).
+ * `exe`: a packaged app's executable (dist/win-unpacked, paquet-essai.mjs) instead of Electron on this folder's build.
+ */
+export async function launch(data, profile, more = {}, { exe } = {}) {
   // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/window.ts); the page is told it has it.
   const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -22,7 +25,8 @@ export async function launch(data, profile, more = {}) {
   // the same profile left removed first, so that its port is never read.
   const portFile = join(profile, 'DevToolsActivePort');
   rmSync(portFile, { force: true });
-  const child = spawn(electron, [appDir, `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { env, stdio: 'ignore' });
+  const args = [`--user-data-dir=${profile}`, '--remote-debugging-port=0'];
+  const child = spawn(exe ?? electron, exe ? args : [appDir, ...args], { env, stdio: 'ignore' });
   let target;
   for (let i = 0; i < 120 && !target; i++) {
     await sleep(250);

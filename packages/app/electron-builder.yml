@@ -1,0 +1,34 @@
+# The Windows installer of Cirrus (plan 9, D3): `npm run paquet` builds the app (electron-vite, into out/) and then
+# this, which writes dist/Cirrus Setup <version>.exe. « Cirrus Dev » is electron-builder.dev.yml, over this one.
+# out/ holds everything the app runs: electron-vite bundles the workspace packages and the interface's libraries; the
+# main process imports only Node's modules and Electron. No node_modules goes into the archive.
+appId: io.github.yeb02.cirrus
+productName: Cirrus
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - "!node_modules{,/**}"
+asar: true
+# No native module: node:sqlite is Node's own.
+npmRebuild: false
+nodeGypRebuild: false
+# Electron's switches a packaged app has no use for (Electron's security checklist): the executable never runs as Node
+# (ELECTRON_RUN_AS_NODE), reads no NODE_OPTIONS, takes no --inspect, and loads its code from its archive only.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+win:
+  target: nsis
+  icon: build/icon.ico
+# Per user, without administrator rights (%LOCALAPPDATA%\Programs), the folder left to choose.
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico

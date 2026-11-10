@@ -18,7 +18,10 @@
     "mesures": "electron-vite build && node scripts/mesures-annotations.mjs",
     "essai": "electron-vite build && node scripts/essai.mjs",
     "font": "node scripts/build-font.mjs",
-    "bench": "electron-vite build && node scripts/bench.mjs"
+    "bench": "electron-vite build && node scripts/bench.mjs",
+    "icones": "node scripts/icones.mjs",
+    "paquet": "electron-vite build && electron-builder --win nsis --publish never",
+    "paquet:dev": "electron-vite build --mode dev && electron-builder --win nsis --publish never --config electron-builder.dev.yml"
   },
   "dependencies": {
     "@cirrus/core": "*",
@@ -46,6 +49,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.2.1",
     "electron": "45.2.1",
+    "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "msdf-bmfont-xml": "^2.8.0",
     "vite": "8.3.5"
