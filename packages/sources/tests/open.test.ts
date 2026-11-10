@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { FileRef } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { type FetchFn, importPublication, type PublicationDeps } from '../src/fetch.ts';
+import { MAX_ADDRESS_CHARS } from '../src/identifier.ts';
 import type { OpenDeps } from '../src/guard.ts';
 import { endless, html, HTTPS_ONLY, LOCAL, NO_PDF, pdf, PDF_BYTES, PUBLIC, redirect, web } from './support.ts';
 
@@ -149,7 +150,7 @@ test('importPublication : une adresse http, une adresse sans réseau ouvert, une
   expect(await importPublication('ftp://public.example/x.pdf', s.deps)).toEqual({ ok: false, message: HTTPS_ONLY });
   expect(await importPublication('https://moi:secret@public.example/x', s.deps)).toEqual({ ok: false, message: 'Adresse refusée : elle contient un nom d’utilisateur ou un mot de passe.' });
   // Not an address: as before, unrecognized, nothing asked (« doi: » or « arXiv: » are no schemes of an address).
-  for (const text of ['bonjour', 'doi:', 'arXiv:bonjour', 'javascript:alert(1)', 'https://', `https://public.example/${'x'.repeat(1000)}`]) {
+  for (const text of ['bonjour', 'doi:', 'arXiv:bonjour', 'javascript:alert(1)', 'https://', `https://public.example/${'x'.repeat(MAX_ADDRESS_CHARS)}`]) {
     expect(await importPublication(text, s.deps), text).toEqual({ ok: false, message: UNRECOGNIZED });
   }
   expect(s.resolved.length + s.connected.length + s.asked.length).toBe(0);
