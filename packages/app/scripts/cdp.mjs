@@ -16,8 +16,9 @@ export const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); re
 /**
  * The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…).
  * `exe`: a packaged app's executable (dist/win-unpacked, paquet-essai.mjs) instead of Electron on this folder's build.
+ * `log`: a file descriptor that receives the main process's output (maj-essai.mjs: electron-updater's journal).
  */
-export async function launch(data, profile, more = {}, { exe } = {}) {
+export async function launch(data, profile, more = {}, { exe, log } = {}) {
   // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/window.ts); the page is told it has it.
   const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -26,7 +27,7 @@ export async function launch(data, profile, more = {}, { exe } = {}) {
   const portFile = join(profile, 'DevToolsActivePort');
   rmSync(portFile, { force: true });
   const args = [`--user-data-dir=${profile}`, '--remote-debugging-port=0'];
-  const child = spawn(exe ?? electron, exe ? args : [appDir, ...args], { env, stdio: 'ignore' });
+  const child = spawn(exe ?? electron, exe ? args : [appDir, ...args], { env, stdio: log === undefined ? 'ignore' : ['ignore', log, log] });
   let target;
   for (let i = 0; i < 120 && !target; i++) {
     await sleep(250);
@@ -216,5 +217,7 @@ export async function launch(data, profile, more = {}, { exe } = {}) {
       return false;
     },
     close: async () => { ws.close(); child.kill(); await exited; },
+    /** The app's process id: its children are looked for by it (maj-essai.mjs). */
+    pid: child.pid,
   };
 }
