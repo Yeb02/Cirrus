@@ -80,7 +80,7 @@ async function journal(c: Client): Promise<ChangeRow[]> {
 test('seed : l’instantané, le journal par pages, puis done ; le serveur tient l’état et l’historique du PC, numérotés, et le dit (hello)', async () => {
   const { url } = await start();
   const a = await paired(url, 'pc-a');
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0, baseId: expect.any(String) });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: 0, empty: true, nodes: 0, baseId: expect.any(String), version: null });
   // The snapshot covers the first four lines; the tail (5 to 7) is replayed by the server on it.
   const { store, s, X } = pcBase('pc-a', 4);
   const rows = store.changesSince(0), snap = store.readSnapshot()!;
@@ -92,7 +92,7 @@ test('seed : l’instantané, le journal par pages, puis done ; le serveur tient
   const done = await send(a, '/seed/done', { last: rows.length });
   expect(done.status).toBe(200);
   expect(await done.json()).toEqual({ lastSeq: rows.length, baseId: expect.any(String) });
-  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: rows.length, empty: false, nodes: 2, baseId: expect.any(String) });
+  expect(await a.hello()).toEqual({ serverTime: T0, lastSeq: rows.length, empty: false, nodes: 2, baseId: expect.any(String), version: null });
   const served = decodeState(await (await a.get('/snapshot')).arrayBuffer());
   expect(image(served)).toBe(image(s));
   // The history of every line, as the PC wrote it, numbered (server_seq = its local_seq).

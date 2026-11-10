@@ -135,6 +135,12 @@ export { MIN_BODY_BYTES_PER_S } from '@cirrus/core';
 /** The longest name the server answers to (`--nom`, a domain name: 253 characters, labels of 63 at most). */
 export const MAX_HOST_NAME_CHARS = 253;
 
+/**
+ * The largest of the small files of versions/ the server reads and serves whole (plan 9, D4): version.json, its
+ * signature, latest.yml — a few hundred bytes each. One larger is not served, nor read by /hello.
+ */
+export const MAX_VERSION_FILE_BYTES = 64 * 1024;
+
 /** How long a pairing code lives (D3). */
 export const PAIRING_TTL_MS = 10 * 60_000;
 

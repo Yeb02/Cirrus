@@ -13,7 +13,9 @@ import {
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
-import { contentDisposition, installerPage, ManifestError, NOTHING_PUBLISHED, type OpenInstaller, openInstaller, PAGE_HEADERS, WRONG_CODE } from './installer.ts';
+import {
+  contentDisposition, installerPage, ManifestError, NOTHING_PUBLISHED, officialVersion, type OpenInstaller, openInstaller, PAGE_HEADERS, readVersionFile, WRONG_CODE,
+} from './installer.ts';
 import { parsePresence, PresenceError } from './presence.ts';
 import { parsePublicationRequest, PublicationError, PublicationImports, type PublicationNetwork, serverNetwork } from './publications.ts';
 import { SeedError, Seeds } from './seed.ts';
@@ -23,7 +25,8 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
 // paired PC on every route but /pair and the download page (/installer, plan 9, D5: installer.ts, a form, and the
-// installer for a pairing code), no CORS header (no browser is answered but there), every body bounded and checked
+// installer for a pairing code) — the signed updates (/versions/*, plan 9, D4) included —, no CORS header (no browser
+// is answered but there), every body bounded and checked
 // before anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
 // paired PCs, the shared settings, the files each PC has open in full screen), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
 // serves only a paired PC's import of a publication (plan 5b, D2: publications.ts). Its space, which GET /status gives
@@ -206,6 +209,14 @@ function formatRefusal(req: IncomingMessage): string | null {
   return differ.length === 0 ? null : `Ce serveur garde ses données dans un autre format (${differ.join(' ; ')}) : mets à jour Cirrus, ou travaille sur un serveur local.`;
 }
 
+/**
+ * The small files of versions/ a PC asks for (plan 9, D4), and their types: the manifest of the official version, its
+ * signature (base64), and latest.yml, which electron-updater reads first.
+ */
+const VERSION_FILES: Record<string, string> = {
+  'version.json': 'application/json; charset=utf-8', 'version.json.sig': 'text/plain; charset=utf-8', 'latest.yml': 'text/yaml; charset=utf-8',
+};
+
 /** The store's temporaries (`.import-` and 16 hexadecimal digits: receiveBlob's, an import's). */
 const TEMPORARY = /^\.import-[0-9a-f]{16}$/;
 
@@ -304,12 +315,14 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
 
   const routes: Record<string, Record<string, (req: IncomingMessage, res: ServerResponse, url: URL, who: { pc: string; tokenHash: string }) => Promise<void> | void>> = {
     '/hello': {
-      GET: (req, res) => {
+      GET: async (req, res) => {
         const refusal = formatRefusal(req);
         if (refusal) throw new HttpError(409, refusal);
         // The nodes it holds: the first pairing's offer to take its base names them (task 5, D7). Its base's identity:
-        // a PC that follows it picks up where it stopped, one that follows another stops (R31).
-        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty(), nodes: canon.state.nodes.size, baseId: canon.baseId });
+        // a PC that follows it picks up where it stopped, one that follows another stops (R31). The official version it
+        // serves (plan 9, D4), or null: a PC older than it looks for its update — which it trusts only once signed.
+        const version = await officialVersion(dataDir);
+        reply(res, 200, { serverTime: now(), lastSeq: canon.seq, empty: canon.empty(), nodes: canon.state.nodes.size, baseId: canon.baseId, version });
       },
     },
     // R15: a PC revokes its own token — a pairing it cancels, a first sync that fails, « Dissocier ce PC » —, never another's.
@@ -544,25 +557,63 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
   const installer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const code = (await readForm(req, MAX_INSTALLER_BODY_BYTES)).get('code');
     if (code === null || !tokens.checkCode(code, now())) return sendPage(res, WRONG_CODE);
-    let found: OpenInstaller | null;
+    const found = await official('Page de téléchargement');
+    if (!found) return sendPage(res, NOTHING_PUBLISHED);
+    await sendInstaller(res, found, { 'Content-Disposition': contentDisposition(found.file) });
+  };
+
+  /** The official installer opened (openInstaller), or null; a manifest that names nothing it can serve, written to the log for `who`. */
+  const official = async (who: string): Promise<OpenInstaller | null> => {
     try {
-      found = await openInstaller(dataDir);
+      return await openInstaller(dataDir);
     } catch (e) {
       if (!(e instanceof ManifestError)) throw e;
-      console.warn(`Page de téléchargement : ${e.message}`);
-      found = null;
+      console.warn(`${who} : ${e.message}`);
+      return null;
     }
-    if (!found) return sendPage(res, NOTHING_PUBLISHED);
+  };
+
+  /** The installer opened, streamed from its handle — its checked size and no more, were the file to grow under it —, then closed. */
+  const sendInstaller = async (res: ServerResponse, found: OpenInstaller, headers: Record<string, string> = {}): Promise<void> => {
     try {
       res.writeHead(200, {
-        'Content-Type': 'application/octet-stream', 'Content-Length': String(found.size), 'Content-Disposition': contentDisposition(found.file), 'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
+        'Content-Type': 'application/octet-stream', 'Content-Length': String(found.size), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers,
       });
-      // Its checked size and no more, were the file to grow under it.
       await pipeline(found.handle.createReadStream({ start: 0, end: found.size - 1, autoClose: false }), res);
     } finally {
       await found.handle.close();
     }
+  };
+
+  /**
+   * GET /versions/<name> (plan 9, D4), with a paired PC's token: what the app's updater and electron-updater ask for —
+   * version.json, its signature, latest.yml, read whole (MAX_VERSION_FILE_BYTES at most); the installer version.json
+   * names, streamed, and no other file. `name` decoded from the path (electron-updater asks for « Cirrus Setup
+   * 0.1.7.exe » as %20s); each opened as it is checked (installer.ts: a regular file of versions/, its only name). Any
+   * other name, or a file not served: 404, the reason in the log.
+   */
+  const versionFile = async (res: ServerResponse, name: string): Promise<void> => {
+    const absent = new HttpError(404, 'Fichier absent des versions publiées.');
+    const type = Object.hasOwn(VERSION_FILES, name) ? VERSION_FILES[name] : null;
+    if (type === null) {
+      const found = await official('Versions');
+      if (found?.file !== name) {
+        await found?.handle.close();
+        throw absent;
+      }
+      return sendInstaller(res, found);
+    }
+    let bytes: Buffer | null;
+    try {
+      bytes = await readVersionFile(dataDir, name);
+    } catch (e) {
+      if (!(e instanceof ManifestError)) throw e;
+      console.warn(`Versions : ${e.message}`);
+      bytes = null;
+    }
+    if (!bytes) throw absent;
+    res.writeHead(200, { 'Content-Type': type, 'Content-Length': String(bytes.length), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    res.end(bytes);
   };
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -585,6 +636,18 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
       const token = tokens.pair(await readJson(req, MAX_PAIR_BODY_BYTES), now());
       reply(res, 200, { token });
       return;
+    }
+    // The signed updates (plan 9, D4): GET only, the token before anything of the folder is looked at.
+    if (url.pathname.startsWith('/versions/')) {
+      allow(['GET']);
+      authenticate(req);
+      let name: string;
+      try {
+        name = decodeURIComponent(url.pathname.slice('/versions/'.length));
+      } catch {
+        throw new HttpError(400, 'Nom de fichier mal encodé.');
+      }
+      return versionFile(res, name);
     }
     if (url.pathname.startsWith('/files/') && url.pathname !== '/files/missing') {
       allow(Object.keys(fileRoutes));
