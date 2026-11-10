@@ -1911,9 +1911,11 @@ const SCENARIOS = [
         await page.click(rubric.x, rubric.y);
         if (!(await page.until(`document.querySelectorAll('.server-block input').length === 3`))) throw new Error('le bloc « Serveur » ne montre pas ses trois champs');
         const values = await page.evaluate(`[...document.querySelectorAll('.server-block input')].map((i) => i.value)`);
-        if (values[0] !== 'http://127.0.0.1:7310' || values[1] !== '' || values[2] === '') throw new Error(`champs proposés : ${JSON.stringify(values)}`);
+        // Plan 9, task 2: no address proposed, an example of a rented server's instead.
+        const example = await page.evaluate(`document.querySelector('.server-block input').placeholder`);
+        if (values[0] !== '' || example !== 'https://cirrus.mondomaine.fr' || values[1] !== '' || values[2] === '') throw new Error(`champs proposés : ${JSON.stringify(values)}, ${example}`);
         if (await chipText(page)) throw new Error('une pastille sans serveur jumelé');
-        // The server's address, typed over the one proposed; the code `jumeler` shows.
+        // The server's address, typed in the empty field; the code `jumeler` shows.
         const url = await serverField(page, 0);
         await page.click(url.x, url.y);
         await page.press('a', 'KeyA', 65, 2);

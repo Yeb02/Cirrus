@@ -485,8 +485,12 @@ test('le bloc « Serveur » : non jumelé, l’adresse, le code, le nom de ce PC
   const none = renderToStaticMarkup(createElement(ServerBlock, {
     info: { paired: false, url: '', name: 'PORTABLE' }, status: { state: 'off' }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
   }));
-  for (const text of ['Adresse du serveur', 'Code de jumelage', 'Nom de ce PC', 'Jumeler', 'value="http://127.0.0.1:7310"', 'value="PORTABLE"']) expect(none).toContain(text);
+  for (const text of ['Adresse du serveur', 'Code de jumelage', 'Nom de ce PC', 'Jumeler', 'value="PORTABLE"']) expect(none).toContain(text);
   expect(none).not.toContain('Dissocier');
+  // Plan 9, task 2: no address proposed — the server is rented, its domain the user's —, an example of one instead.
+  const address = none.match(/<input[^>]*>/)![0];
+  for (const text of ['value=""', 'placeholder="https://cirrus.mondomaine.fr"']) expect(address).toContain(text);
+  expect(none).not.toContain('7310');
   const paired = renderToStaticMarkup(createElement(ServerBlock, {
     info: { paired: true, url: 'http://127.0.0.1:7310', name: 'Portable' }, status: { state: 'live', pending: 0 }, onPair: async (): Promise<PairResult> => ({ ok: true }), onFirst: async (): Promise<PairResult> => ({ ok: true }), onUnpair: async () => {},
   }));

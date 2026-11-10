@@ -5,8 +5,11 @@ import type {
 import { planText, pollServerState, progressText, startRefusal, statusLines } from '../../sync/downloadAll.ts';
 import { chipOf } from '../../sync/syncSession.ts';
 
-/** The address proposed: a server on this machine, at the port its command line takes by default (packages/server). */
-const DEFAULT_SERVER_URL = 'http://127.0.0.1:7310';
+/**
+ * No address proposed (plan 9): the server is rented, its domain the user's; the field shows an example of one. A
+ * server of this machine (http://127.0.0.1:port) is typed as any.
+ */
+const SERVER_URL_EXAMPLE = 'https://cirrus.mondomaine.fr';
 
 /** « n nœuds », « 1 nœud »: a count and its noun, in the singular below 2 (French). */
 const count = (n: number, noun: string) => `${n} ${noun}${n > 1 ? 's' : ''}`;
@@ -50,7 +53,7 @@ export interface ServerBlockProps {
  * 5, round 2); while mounted, `info` follows each change the main process tells (B2).
  */
 export function ServerBlock(props: ServerBlockProps) {
-  const [url, setUrl] = useState(props.info?.url || DEFAULT_SERVER_URL);
+  const [url, setUrl] = useState(props.info?.url ?? '');
   const [code, setCode] = useState('');
   const [name, setName] = useState(props.info?.name ?? '');
   const [busy, setBusy] = useState<string | null>(null);
@@ -61,12 +64,12 @@ export function ServerBlock(props: ServerBlockProps) {
     if (props.refresh) void props.refresh().catch(() => {}).finally(() => setFresh(true));
   }, []);
   const paired = props.info?.paired === true;
-  // The proposals arrive with the information (the address by default, the machine's name), or after an unpairing; the
-  // same values read again leave what is typed.
+  // The proposals arrive with the information (the address of a pairing under way, none otherwise; the machine's name),
+  // or after an unpairing; the same values read again leave what is typed.
   const proposal = props.info && !props.info.paired ? props.info : null;
   useEffect(() => {
     if (!proposal) return;
-    setUrl(proposal.url || DEFAULT_SERVER_URL);
+    setUrl(proposal.url);
     setName(proposal.name);
   }, [proposal?.url, proposal?.name]);
   // The server's state (D8), asked while the block shows a server paired: at once, then every serverStatusPollMs, each
@@ -178,7 +181,7 @@ export function ServerBlock(props: ServerBlockProps) {
       {waiting}
       <label className="param">
         <span className="label">Adresse du serveur</span>
-        <input type="text" className="list" value={url} spellCheck={false} onChange={(e) => setUrl(e.target.value)} />
+        <input type="text" className="list" value={url} spellCheck={false} placeholder={SERVER_URL_EXAMPLE} onChange={(e) => setUrl(e.target.value)} />
       </label>
       <label className="param">
         <span className="label">Code de jumelage</span>
