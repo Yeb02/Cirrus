@@ -253,3 +253,16 @@ Plan : `docs/superpowers/plans/2026-11-10-cirrus-production.md` (écrit le 2026-
 - `bash -n` sur les trois scripts : sans erreur. Le workflow lu par `js-yaml` : deux jobs, leurs permissions, `paths-ignore`, les conditions de `publish`.
 - La simulation : 80 vérifications sur 80, en dix-huit cas. Les nouveaux : deux jonctions plantées dans les données dès le départ (à la place de `versions/` et d'un `.maj-*`), dont les cibles ne sont jamais écrites, vidées ni ôtées (I1) ; des bases qui ne se copient pas (le code d'avant relancé, rien d'essayé) ; un nouveau serveur qui migre ses bases puis se tait (les bases et leur `-wal` rendus tels qu'avant, le `-wal` du nouveau ôté, le code d'avant relancé, le tag noté) ; la même version l'heure suivante (plus essayée, rien de téléchargé ni d'arrêté) ; une plus récente (essayée, l'échec oublié). Dix-sept mutants, chacun une garde ôtée, tous attrapés au premier passage complet (de 1 à 7 vérifications chacun) ; parmi eux, les versions remises dans les données, les temporaires dans les données, les bases non remises, le `-wal` gardé, le tag non noté ou réessayé, l'absence de copie. Les jonctions ont ensuite été plantées dès le départ (un mutant qui remet les versions dans les données les rencontre alors) ; le second passage, arrêté par le système faute de mémoire après onze mutants sur dix-sept, les a tous attrapés, dont les versions dans les données par la cible de la jonction écrite (la démonstration de la relecture). Les six derniers (le tag réessayé, l'absence de copie, les quatre du vérificateur) ne touchent pas à ce changement, et n'ont pas été relancés.
 - Les fonctions d'`installer-serveur.sh` : 46 sur 46, dont la migration (l'ancien `versions/` de root ôté et refait par `cirrus`, le service arrêté avant toute suppression ; une jonction plantée ôtée comme un lien, sa cible intacte ; un fichier à sa place ; un dossier de `cirrus` gardé, sans suppression par root).
+
+### Tâche 6, relecture de la correction 1
+
+Les huit constats sont traités ; aucun défaut nouveau, important ou critique. Trois retouches mineures, faites par le contrôleur :
+- **réinstallation ratée :** `installer-serveur.sh` relance le serveur et le minuteur s'il échoue après les avoir arrêtés (`relancer_au_besoin`, sur `EXIT`) ;
+- **SSH :** `DenyUsers cirrus` ; un serveur compromis qui poserait une clé pour `cirrus` ne s'en sert ni pour entrer ni pour un tunnel ;
+- **arrêt raté :** si le service ne s'arrête pas, la mise à jour ne copie pas les bases, remet le code d'avant, et réessaie l'heure suivante.
+
+Laissés pour l'usage :
+- **le lien posé par `cirrus` :** systemd suit un lien posé par `cirrus` au point de montage de `versions` ; cela permet au plus de bloquer le service, sans écriture de root ailleurs ;
+- **les écritures pendant une mise à jour :** `cirrus-serveur jumeler`/`revoquer`, lancés pendant une mise à jour, peuvent écrire la base entre sa copie et un retour arrière.
+
+La simulation passe 80 sur 80, l'installation 46 sur 46.

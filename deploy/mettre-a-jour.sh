@@ -232,7 +232,12 @@ mettre_le_code_a() {
     remettre_le_code "$avant" || erreur "le code d’avant non plus ; le service tourne encore sur celui qu’il a chargé, la prochaine heure réessaie."
     return 1
   fi
-  service stop "$SERVICE" || true
+  # Copied only once stopped (re-review of task 6): a service that does not stop keeps its bases, and the code before.
+  if ! service stop "$SERVICE"; then
+    erreur "le service ne s’est pas arrêté : le code d’avant est remis, $tag sera réessayée la prochaine heure."
+    remettre_le_code "$avant" || erreur "le code d’avant non plus ; le service tourne encore sur celui qu’il a chargé."
+    return 1
+  fi
   if ! sauver_les_bases; then
     erreur "les bases n’ont pas pu être copiées : le code d’avant est remis et relancé, $tag n’est pas essayée."
     relancer_l_ancien "$avant"

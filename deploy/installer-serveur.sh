@@ -227,6 +227,8 @@ durcir_ssh() {
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
+# The server's user never logs in, nor forwards a port, even with a key planted by a compromised server.
+DenyUsers cirrus
 FIN
   chmod 644 "$fichier"
   if ! sshd -t; then
@@ -249,6 +251,16 @@ verifier_le_dns() {
     if hostname -I | tr ' ' '\n' | grep -qxF -- "$ip"; then return 0; fi
   done
   dire "Attention : $domaine ne pointe pas (encore) vers cette machine ($(hostname -I | xargs)). Fais l’enregistrement DNS (A, et AAAA pour l’IPv6) : Caddy obtiendra son certificat dès qu’il pointera ici."
+}
+
+# A run that fails once the timer is stopped (re-review of task 6): the server and the timer started again, so that a
+# failed run again leaves neither down until a reboot.
+relancer_au_besoin() {
+  local code=$?
+  (( code == 0 )) && return 0
+  if systemctl cat cirrus-serveur.service >/dev/null 2>&1; then systemctl start cirrus-serveur.service || true; fi
+  if systemctl cat cirrus-maj.timer >/dev/null 2>&1; then systemctl start cirrus-maj.timer || true; fi
+  return "$code"
 }
 
 # Not « main »: the update's script, sourced below, defines a function of that name.
@@ -278,6 +290,7 @@ installer() {
   # /var/lib/cirrus-maj or the service meanwhile (review of task 6, M2). On a run again, the timer stops until the end;
   # a run of the update under way is waited for.
   if systemctl cat cirrus-maj.timer >/dev/null 2>&1; then systemctl stop cirrus-maj.timer; fi
+  trap relancer_au_besoin EXIT
   exec 9>"$VERROU"
   if ! flock --nonblock 9; then
     dire "Une mise à jour du serveur est en cours : j’attends qu’elle finisse."
