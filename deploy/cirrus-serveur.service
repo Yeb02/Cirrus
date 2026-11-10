@@ -23,11 +23,16 @@ RestartSec=5s
 TimeoutStopSec=60s
 UMask=0077
 
-# The hardening: the server reads its code and writes its data, nothing else. Its temporary files are under its data
+# The hardening: the server reads its code and its versions, and writes its data, nothing else. Its temporary files are under its data
 # (files/.import-…); /tmp is its own all the same.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/cirrus
+# The versions served are root's, in /var/lib/cirrus-maj/versions (deploy/mettre-a-jour.sh writes them): the server sees
+# them read-only where it looks for them, <data>/versions, the same files (so the same inodes, one name each). cirrus can
+# neither change them nor turn root's writes elsewhere (review of task 6, I1). Without the folder, the service does not
+# start, rather than serve a folder cirrus could write.
+BindReadOnlyPaths=/var/lib/cirrus-maj/versions:/var/lib/cirrus/versions
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -2,17 +2,24 @@
 # Cirrus's server, updated from the versions published on GitHub (plan 9, D6). Run as root by cirrus-maj.timer, every
 # hour; by hand: `systemctl start cirrus-maj.service`, its journal `journalctl -u cirrus-maj`.
 #   1. It reads the latest release from GitHub's API, without a token: the repository is public.
-#   2. When its tag is newer than what is deployed — the code in /opt/cirrus, or the files in /var/lib/cirrus/versions —,
-#      its four files are downloaded into a temporary folder beside the data (the same file system as versions/).
+#   2. When its tag is newer than what is deployed — the code in /opt/cirrus, or the versions served —, its four files
+#      are downloaded into a temporary folder of /var/lib/cirrus-maj, root's, beside the versions served.
 #   3. version.json.sig is checked with the public key of the code deployed (key.ts), never with the new version's, and
 #      the manifest must be the tag's version: deploy/verifier-version.mjs, which runs the app's own checks.
 #   4. The installer must have the manifest's size and sha512.
-#   5. The code goes to the tag, `npm ci --omit=dev`, its imports are tried as cirrus, then the service restarts and must
-#      answer. Otherwise the code before is put back.
-#   6. The installer, latest.yml, version.json.sig, then version.json last, each go into versions/ by a rename. The older
-#      installers are removed.
-# Any failure leaves the version before in place, says why in the journal, and exits non-zero. It runs as root, never as
-# the server's user: it writes the code that user runs. While key.ts holds the placeholder, it installs nothing.
+#   5. The code goes to the tag, its dependencies are installed, its imports are tried as cirrus. Then the service stops,
+#      cirrus copies its SQLite bases, and the new server starts and must answer. Otherwise its bases and the code before
+#      are put back, and that tag is not tried again.
+#   6. The installer, latest.yml, version.json.sig, then version.json last, each go into the versions served by a
+#      rename. The older installers are removed.
+# A failure before the new server starts leaves the version before in place; after, the bases and the code before are
+# put back. Either way it says why in the journal and exits non-zero.
+#
+# Root never works in /var/lib/cirrus, which cirrus owns: a link planted there by a compromised server could send root's
+# writes and deletions anywhere (review of task 6, I1). The versions served are root's, in /var/lib/cirrus-maj/versions,
+# and the service sees them read-only where the server looks for them, <data>/versions (BindReadOnlyPaths); what touches
+# the data (the copies of the bases, the server's imports) runs as cirrus. While key.ts holds the placeholder, nothing
+# is installed.
 #
 # Its functions can be sourced (installer-serveur.sh does, and so does the local simulation of task 6): main runs only
 # when the script is run. main is called on the script's last line, with exit: bash has read the whole script before
@@ -20,14 +27,23 @@
 
 DEPOT=/opt/cirrus
 DONNEES=/var/lib/cirrus
+# Root's tree, on the same file system as the data: the versions served and the temporary folders of the runs.
+MAJ=/var/lib/cirrus-maj
+VERSIONS=$MAJ/versions
+# The tag whose new server did not answer: not tried again until a newer one is published.
+ECHEC=$MAJ/echec
 GITHUB_DEPOT=Yeb02/Cirrus
 UTILISATEUR=cirrus
 SERVICE=cirrus-serveur.service
 PORT=7310
+# How long a server just started has to answer.
+ATTENTE_S=60
 SYSTEMD=/etc/systemd/system
 BIN=/usr/local/bin
 VERIFIER=$DEPOT/deploy/verifier-version.mjs
 VERROU=/run/cirrus-maj.lock
+# The SQLite files of the data, which a version's migrations change: serveur.db (the tokens), the base's cirrus.db.
+BASES=(serveur.db serveur.db-wal serveur.db-shm base/cirrus.db base/cirrus.db-wal base/cirrus.db-shm)
 # The temporary folder of a run, removed at its end.
 TEMPORAIRE=''
 
@@ -39,10 +55,10 @@ erreur() { printf 'Échec : %s\n' "$*" >&2; }
 
 est_root() { [[ $(id -u) -eq 0 ]]; }
 
-# One run at a time: the timer's, or one by hand.
+# One run at a time: the timer's, one by hand, or installer-serveur.sh.
 verrouiller() {
   exec 9>"$VERROU" || return 1
-  flock --nonblock 9 || { erreur "une autre mise à jour est en cours."; return 1; }
+  flock --nonblock 9 || { erreur "une autre mise à jour, ou installer-serveur.sh, est en cours."; return 1; }
 }
 
 # GitHub's answer for the latest release, into the file $1. Returns 0 for a release, 1 when none is published yet, 2 when
@@ -68,28 +84,53 @@ telecharger() {
 
 git_depot() { git -C "$DEPOT" "$@"; }
 
-# The checkout's dependencies, production only, without their install scripts: the server needs none (no native module,
-# node:sqlite is Node's own), and no script of a dependency ever runs as root.
-npm_ci() { (cd "$DEPOT" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error); }
+# The server's dependencies only (--workspace packages/server: the links to core, sources and store, which the verifier
+# needs too; nothing of the app's or the benches'), production only, without install scripts: the server has no
+# dependency outside Node and the workspace, and no script of a dependency ever runs as root (review of task 6, M8).
+npm_ci() { (cd "$DEPOT" && npm ci --workspace packages/server --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error); }
 
-# The server's modules imported as cirrus, as the service will: every import resolves after npm ci --omit=dev, and the
-# user can read them all. Nothing starts: main.ts alone runs the command line.
+# A command as cirrus, from /: what touches the data runs as their owner, never as root.
+en_cirrus() { (cd / && runuser -u "$UTILISATEUR" -- "$@"); }
+
+# The server's modules imported as cirrus, as the service will: every import resolves, and the user can read them all.
+# Nothing starts: main.ts alone runs the command line.
 serveur_importable() {
-  (cd / && runuser -u "$UTILISATEUR" -- node --input-type=module \
-    -e "await import('$DEPOT/packages/server/src/cli.ts'); await import('$DEPOT/packages/server/src/server.ts');")
+  en_cirrus node --input-type=module \
+    -e "await import('$DEPOT/packages/server/src/cli.ts'); await import('$DEPOT/packages/server/src/server.ts');"
 }
 
 service() { systemctl "$@"; }
 
-# Whether the server answers on this machine within a minute: any HTTP answer will do (/hello without a token: 401).
+# Whether the server answers on this machine within ATTENTE_S: any HTTP answer will do (/hello without a token: 401).
 serveur_repond() {
   local i code
-  for ((i = 0; i < 30; i++)); do
+  for ((i = 0; i < ATTENTE_S / 2; i++)); do
     sleep 2
     code=$(curl --silent --output /dev/null --max-time 5 --write-out '%{http_code}' "http://127.0.0.1:$PORT/hello") || true
     [[ $code =~ ^[1-5][0-9][0-9]$ ]] && return 0
   done
   return 1
+}
+
+# The SQLite files of the data copied by cirrus into <data>/.avant-maj (inside the data's 700), the service stopped (so
+# closed in order): what a new version that does not answer gives back, its migrations undone (review of task 6, M1).
+# `complet` says the copy ended.
+sauver_les_bases() {
+  en_cirrus bash -c 'set -eu
+    d=$1; shift; s=$d/.avant-maj
+    rm -rf -- "$s"
+    mkdir -- "$s" "$s/base"
+    for f in "$@"; do if [ -f "$d/$f" ]; then cp -p -- "$d/$f" "$s/$f"; fi; done
+    : >"$s/complet"' sauver "$DONNEES" "${BASES[@]}"
+}
+
+# The SQLite files put back as they were copied, by cirrus, the service stopped: each removed, then copied back if it was
+# there (a -wal left by the new version would replay its writes over the base put back).
+remettre_les_bases() {
+  en_cirrus bash -c 'set -eu
+    d=$1; shift; s=$d/.avant-maj
+    [ -f "$s/complet" ] || { echo "Échec : aucune copie complète des bases dans $s." >&2; exit 1; }
+    for f in "$@"; do rm -f -- "$d/$f"; if [ -f "$s/$f" ]; then cp -p -- "$s/$f" "$d/$f"; fi; done' remettre "$DONNEES" "${BASES[@]}"
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -119,9 +160,9 @@ version_du_code() {
   printf '%s' "$best"
 }
 
-# The version of the files in versions/: that of version.json, its signature holding with the key of the code deployed;
-# empty without one, or with one that does not hold (then the files are put back).
-version_des_fichiers() { node "$VERIFIER" posee "$DEPOT" "$DONNEES/versions" 2>/dev/null || true; }
+# The version of the files served: that of version.json, its signature holding with the key of the code deployed; empty
+# without one, or with one that does not hold (then the files are put back).
+version_des_fichiers() { node "$VERIFIER" posee "$DEPOT" "$VERSIONS" 2>/dev/null || true; }
 
 # The release listed in $1/fichiers (verifier-version.mjs publication), downloaded into $1/version, then checked against
 # the tag $2. Prints the installer's name in the signed manifest, and nothing else.
@@ -160,8 +201,20 @@ remettre_le_code() {
   npm_ci
 }
 
-# The code moved to the tag $1, its dependencies installed, its imports tried, the service restarted and heard. When a
-# step fails, the code before is put back (and restarted, if the new one had been) and it returns 1.
+# The code before ($1) back, with its units, and its server started and heard; the service is stopped.
+relancer_l_ancien() {
+  remettre_le_code "$1" || erreur "le code d’avant n’a pas pu être remis entièrement."
+  poser_les_fichiers_systeme || true
+  service start "$SERVICE" || true
+  serveur_repond || erreur "le serveur d’avant ne répond pas non plus : regarde journalctl -u cirrus-serveur."
+}
+
+# The code moved to the tag $1, its dependencies installed, its imports tried; then the service stopped, its bases
+# copied, the new server started and heard. Returns 1 when a step fails, the version before in place:
+#   - before the stop (fetch, checkout, npm ci, imports), the code before is put back; the service, untouched, still runs
+#     on what it loaded (the server imports nothing after its start, and reads no file of its folder);
+#   - after the start, the new server not answering (so no PC wrote to it), its bases and the code before are put back
+#     and started, and the tag is written in ECHEC: it is not tried again.
 mettre_le_code_a() {
   local tag=$1 avant
   avant=$(git_depot rev-parse --verify HEAD) || return 1
@@ -176,27 +229,34 @@ mettre_le_code_a() {
   fi
   if ! npm_ci || ! serveur_importable; then
     erreur "les dépendances de $tag ne s’installent pas, ou le serveur ne se charge pas : le code d’avant est remis."
-    # The service still runs on what it loaded: it is not restarted.
     remettre_le_code "$avant" || erreur "le code d’avant non plus ; le service tourne encore sur celui qu’il a chargé, la prochaine heure réessaie."
     return 1
   fi
-  poser_les_fichiers_systeme || { erreur "les unités de $tag n’ont pas pu être posées."; }
-  service restart "$SERVICE" || true
-  if ! serveur_repond; then
-    erreur "le serveur de $tag ne répond pas : le code d’avant est remis et relancé."
-    remettre_le_code "$avant" || erreur "le code d’avant n’a pas pu être remis entièrement."
-    poser_les_fichiers_systeme || true
-    service restart "$SERVICE" || true
-    serveur_repond || erreur "le serveur d’avant ne répond pas non plus : regarde journalctl -u cirrus-serveur."
+  service stop "$SERVICE" || true
+  if ! sauver_les_bases; then
+    erreur "les bases n’ont pas pu être copiées : le code d’avant est remis et relancé, $tag n’est pas essayée."
+    relancer_l_ancien "$avant"
     return 1
   fi
+  poser_les_fichiers_systeme || erreur "les unités de $tag n’ont pas pu être posées."
+  service start "$SERVICE" || true
+  if ! serveur_repond; then
+    erreur "le serveur de $tag ne répond pas en $ATTENTE_S s : ses bases et le code d’avant sont remis et relancés, et $tag ne sera plus essayée."
+    printf '%s\n' "$tag" >"$ECHEC" || true
+    service stop "$SERVICE" || true
+    remettre_les_bases || erreur "les bases d’avant n’ont pas pu être remises : leur copie est dans $DONNEES/.avant-maj."
+    relancer_l_ancien "$avant"
+    return 1
+  fi
+  rm -f -- "$ECHEC"
 }
 
-# The checked files of $1 moved into versions/, the installer under the manifest's name $2: each by a rename on the
-# same file system, version.json last — the server never names an installer that is not there yet. Then the other files
-# of versions/ (the older installers) are removed: the server serves only the one version.json names.
+# The checked files of $1 moved into the versions served, the installer under the manifest's name $2: each by a rename on
+# the same file system, version.json last — the server never names an installer that is not there yet. Then the other
+# files there (the older installers) are removed: the server serves only the one version.json names. All of it in root's
+# tree: no link of cirrus's can send these writes and deletions elsewhere.
 poser_les_versions() {
-  local source=$1 nom=$2 cible="$DONNEES/versions" f
+  local source=$1 nom=$2 cible=$VERSIONS f
   install -d -m 755 "$cible" || return 1
   chmod 644 "$source/installateur" "$source/latest.yml" "$source/version.json.sig" "$source/version.json" || return 1
   mv -f -- "$source/installateur" "$cible/$nom" || return 1
@@ -215,7 +275,7 @@ poser_les_versions() {
 fin() {
   local statut=$1
   if [[ -n $TEMPORAIRE ]]; then rm -rf -- "$TEMPORAIRE"; fi
-  if [[ $statut -ne 0 ]]; then erreur "la mise à jour s’arrête ; la version d’avant reste en place."; fi
+  if [[ $statut -ne 0 ]]; then erreur "la mise à jour s’arrête ; la version en place est celle d’avant."; fi
 }
 
 main() {
@@ -230,9 +290,10 @@ main() {
     erreur "la clé publique de $DEPOT (packages/app/src/main/update/key.ts) est encore provisoire : aucune version n’est installée. Fais la clé (node deploy/cle-de-signature.mjs, sur ton PC), commite key.ts, puis relance installer-serveur.sh une fois la version suivante publiée."
     return 1
   fi
-  # What a run stopped short (a reboot, a kill) left behind.
-  rm -rf -- "$DONNEES"/.maj-*
-  TEMPORAIRE=$(mktemp -d "$DONNEES/.maj-XXXXXXXX")
+  install -d -m 755 "$MAJ" "$VERSIONS"
+  # What a run stopped short (a reboot, a kill) left behind: only root writes in $MAJ.
+  rm -rf -- "$MAJ"/.maj-*
+  TEMPORAIRE=$(mktemp -d "$MAJ/.maj-XXXXXXXX")
   trap 'fin $?' EXIT
 
   local trouve=0
@@ -260,6 +321,10 @@ main() {
       return 0
     fi
   done
+  if [[ $code != "$version" && -f $ECHEC && $(<"$ECHEC") == "$tag" ]]; then
+    erreur "le serveur de $tag n’a pas répondu ici : elle n’est plus essayée, la suivante le sera. Pour la réessayer : rm $ECHEC, puis systemctl start cirrus-maj.service."
+    return 1
+  fi
   dire "Version publiée : $version (code en place : ${code:-aucune version}, fichiers en place : ${fichiers:-aucun})."
 
   nom=$(telecharger_et_verifier "$TEMPORAIRE" "$tag")
@@ -269,7 +334,7 @@ main() {
     dire "Le code de $tag est en place, le service relancé."
   fi
   if [[ $fichiers != "$version" ]]; then
-    poser_les_versions "$TEMPORAIRE/version" "$nom" || { erreur "les fichiers de $tag n’ont pas pu être posés dans $DONNEES/versions."; return 1; }
+    poser_les_versions "$TEMPORAIRE/version" "$nom" || { erreur "les fichiers de $tag n’ont pas pu être posés dans $VERSIONS."; return 1; }
     dire "L’installateur de $tag est servi : $nom."
   fi
   dire "Cirrus $version est en place."

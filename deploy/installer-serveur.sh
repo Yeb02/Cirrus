@@ -3,12 +3,15 @@
 #   bash installer-serveur.sh <domaine> ["<clé publique SSH>"]
 # Without its arguments, it asks for them. It installs:
 #   - Node (the version the repository needs) from NodeSource, Caddy from its own repository, git;
-#   - the system user cirrus, and the repository cloned into /opt/cirrus at its latest release (else main), with its
-#     production dependencies (npm ci --omit=dev), the server's imports tried as cirrus;
-#   - the data in /var/lib/cirrus (cirrus's, 700), the domain in /etc/cirrus/serveur.env;
+#   - the system user cirrus, and the repository cloned into /opt/cirrus at its latest release (else main), with the
+#     server's dependencies (npm ci --workspace packages/server --omit=dev), its imports tried as cirrus;
+#   - the data in /var/lib/cirrus (cirrus's, 700); the versions served in /var/lib/cirrus-maj (root's), which the service
+#     sees read-only at /var/lib/cirrus/versions; the domain in /etc/cirrus/serveur.env;
 #   - the systemd units (the server, its hourly update), enabled and started, and the command cirrus-serveur;
 #   - the Caddyfile with the domain; ufw (22, 80, 443, TCP); unattended-upgrades;
-#   - SSH by key only, once a key is authorised: nobody is locked out.
+#   - SSH by key only, once a key is authorised (its format checked; the final message has a second session tried
+#     before this one closes).
+# It holds the update's lock while it works in /opt/cirrus and /var/lib/cirrus-maj.
 # Then it fetches the latest release's installer (deploy/mettre-a-jour.sh) and says what comes next, in French.
 # It is idempotent: run again, it breaks nothing, and puts the code on the latest release, the units, the Caddyfile and
 # cirrus-serveur back from it.
@@ -22,6 +25,8 @@ DONNEES=/var/lib/cirrus
 CONFIG=/etc/cirrus
 UTILISATEUR=cirrus
 NODE_MAJEURE=26
+# The update's lock (mettre-a-jour.sh, sourced below, says the same).
+VERROU=/run/cirrus-maj.lock
 
 etape() { printf '\n== %s\n' "$*"; }
 dire() { printf '%s\n' "$*"; }
@@ -94,9 +99,26 @@ creer_l_utilisateur() {
     useradd --system --user-group --home-dir "$DONNEES" --no-create-home --shell /usr/sbin/nologin "$UTILISATEUR"
     dire "Utilisateur système $UTILISATEUR créé."
   fi
-  # The data: cirrus's alone. versions/ is root's: the update writes there, the server only reads.
+}
+
+# The data, cirrus's alone; the versions served, root's, in /var/lib/cirrus-maj, which the service sees read-only at
+# <data>/versions (cirrus-serveur.service, BindReadOnlyPaths). Root never works inside the data while cirrus may run
+# (review of task 6, I1): the service is stopped first, and then nothing runs as cirrus.
+preparer_les_dossiers() {
+  if systemctl cat cirrus-serveur.service >/dev/null 2>&1; then systemctl stop cirrus-serveur.service; fi
   install -d -m 700 -o "$UTILISATEUR" -g "$UTILISATEUR" "$DONNEES"
-  install -d -m 755 -o root -g root "$DONNEES/versions"
+  install -d -m 755 -o root -g root "$MAJ" "$VERSIONS"
+  # The layout before the review of task 6: versions/ was root's, inside the data. It goes, a link as a link; the update
+  # downloads and checks its files again, into root's tree.
+  local ancien="$DONNEES/versions"
+  if [[ -L $ancien || (-e $ancien && ! -d $ancien) ]]; then
+    rm -f -- "$ancien"
+  elif [[ -d $ancien && $(stat -c %u "$ancien") -eq 0 ]]; then
+    rm -rf --one-file-system -- "$ancien"
+    dire "Ancien dossier $ancien retiré : les versions servies sont désormais dans $VERSIONS."
+  fi
+  # The bind mount's point, made by cirrus: root makes nothing inside the data.
+  en_cirrus mkdir -p -- "$ancien"
 }
 
 # The repository in /opt/cirrus, root's (the server's user reads it, never writes it), at main for now.
@@ -111,25 +133,25 @@ cloner_le_depot() {
 
 # The code on the latest release when there is one, else main; its dependencies; its imports tried as cirrus.
 placer_le_code() {
-  local temporaire trouve=0 tag=''
+  local temporaire trouve=0 lue=0 tag=''
   temporaire=$(mktemp -d)
   lire_derniere_publication "$temporaire/publication.json" || trouve=$?
+  if [[ $trouve -eq 0 ]]; then
+    node "$VERIFIER" publication "$temporaire/publication.json" "$GITHUB_DEPOT" >"$temporaire/fichiers" || lue=$?
+    [[ $lue -ne 0 ]] || tag=$(awk -F '\t' '$1 == "tag" { print $2 }' "$temporaire/fichiers")
+  fi
+  rm -rf -- "$temporaire"
   case $trouve in
-    0)
-      node "$VERIFIER" publication "$temporaire/publication.json" "$GITHUB_DEPOT" >"$temporaire/fichiers" ||
-        mourir "la dernière version publiée sur GitHub est incomplète : regarde l’onglet Actions du dépôt, puis relance le script."
-      tag=$(awk -F '\t' '$1 == "tag" { print $2 }' "$temporaire/fichiers")
-      ;;
+    0) [[ $lue -eq 0 ]] || mourir "la dernière version publiée sur GitHub est incomplète : regarde l’onglet Actions du dépôt, puis relance le script." ;;
     1) dire "Aucune version n’est encore publiée sur GitHub : le code est celui de main." ;;
     *) mourir "GitHub ne répond pas : relance le script plus tard." ;;
   esac
-  rm -rf -- "$temporaire"
   if [[ -n $tag ]]; then
     git -C "$DEPOT" -c advice.detachedHead=false checkout --quiet --force --detach "refs/tags/$tag"
     dire "Code de la version $tag."
   fi
-  npm_ci || mourir "npm ci --omit=dev a échoué dans $DEPOT."
-  serveur_importable || mourir "le serveur ne se charge pas (une dépendance manque-t-elle après --omit=dev ?)."
+  npm_ci || mourir "npm ci (le serveur seul, --omit=dev) a échoué dans $DEPOT."
+  serveur_importable || mourir "le serveur ne se charge pas (une dépendance manque-t-elle à npm ci --workspace packages/server ?)."
   dire "Dépendances installées ; le serveur se charge en $UTILISATEUR."
 }
 
@@ -144,12 +166,14 @@ FIN
   mv -f "$CONFIG/serveur.env.nouveau" "$CONFIG/serveur.env"
   poser_les_fichiers_systeme || mourir "les unités systemd n’ont pas pu être posées."
   systemctl daemon-reload
+  # The timer enabled now, started at the end: its first run waits for this one's lock to be released.
   systemctl enable --quiet cirrus-serveur.service cirrus-maj.timer
   # Restarted, not only started: a run again takes the code just placed.
   systemctl restart cirrus-serveur.service
-  systemctl start cirrus-maj.timer
   serveur_repond || mourir "le serveur ne répond pas sur 127.0.0.1:$PORT : regarde journalctl -u cirrus-serveur -e."
-  dire "Service cirrus-serveur actif ; la mise à jour passe chaque heure (cirrus-maj.timer)."
+  # The code placed by hand: a tag the update gave up on may be this one.
+  rm -f -- "$ECHEC"
+  dire "Service cirrus-serveur actif."
 }
 
 configurer_caddy() {
@@ -248,13 +272,22 @@ installer() {
   autoriser_la_cle "${SUDO_USER:-root}" "$cle"
   etape "Paquets : Node, Caddy, git, ufw, unattended-upgrades"
   installer_les_paquets
-  etape "Utilisateur $UTILISATEUR et dossier des données"
+  etape "Utilisateur $UTILISATEUR"
   creer_l_utilisateur
+  # The update's lock, held from here to the update run below: neither the timer nor a run by hand works in /opt/cirrus,
+  # /var/lib/cirrus-maj or the service meanwhile (review of task 6, M2).
+  exec 9>"$VERROU"
+  if ! flock --nonblock 9; then
+    dire "Une mise à jour du serveur est en cours : j’attends qu’elle finisse."
+    flock 9
+  fi
   etape "Dépôt dans $DEPOT"
   cloner_le_depot
-  # The update's functions (the release read, npm ci, the units, the server heard), from the checkout.
+  # The update's functions (the release read, npm ci, the folders, the units, the server heard), from the checkout.
   # shellcheck source=deploy/mettre-a-jour.sh
   . "$DEPOT/deploy/mettre-a-jour.sh"
+  etape "Dossiers des données et des versions"
+  preparer_les_dossiers
   placer_le_code
   etape "Service"
   configurer_le_service "$domaine"
@@ -267,16 +300,25 @@ installer() {
   etape "SSH"
   durcir_ssh
   etape "Installateur de la dernière version"
+  # The lock released: the update takes it itself, then the timer.
+  exec 9>&-
   if bash "$DEPOT/deploy/mettre-a-jour.sh"; then
     dire "La page de téléchargement sert la dernière version publiée."
   else
     dire "Attention : l’installateur n’est pas encore en place (le message ci-dessus dit pourquoi). La mise à jour réessaie chaque heure ; une fois la cause réglée : systemctl start cirrus-maj.service."
   fi
+  systemctl start cirrus-maj.timer
+  dire "La mise à jour passe chaque heure (cirrus-maj.timer)."
   verifier_le_dns "$domaine"
 
   cat <<FIN
 
 Cirrus est installé sur https://$domaine.
+
+AVANT DE FERMER CETTE SESSION : SSH n'accepte plus que les clés. Ouvre un second terminal sur ton PC et
+vérifie que tu entres : ssh ${SUDO_USER:-root}@<l'adresse de la VM>. S'il échoue, depuis cette session encore ouverte :
+  rm /etc/ssh/sshd_config.d/00-cirrus.conf && systemctl reload ssh
+puis règle ta clé, et relance le script.
 
 La suite :
   1. Vérifie le service :            systemctl status cirrus-serveur
