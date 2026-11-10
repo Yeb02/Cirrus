@@ -184,6 +184,12 @@ const NO_IDS: ReadonlySet<Id> = new Set();
  * the index's own set, which the next write may change — copy it before writing.
  */
 export const taggedWith = (s: State, key: string): ReadonlySet<Id> => dataOf(s).index.tagged.get(key) ?? NO_IDS;
+/**
+ * The keys some node or connection uses, trash included, declared or not, each once, from the index (the tag registry,
+ * plan 6a, D4): the index's own iterator, which the next write may change — read it at once. A key no one carries any
+ * more is not in it.
+ */
+export const taggedKeys = (s: State): IterableIterator<string> => dataOf(s).index.tagged.keys();
 /** Core only: whether `rec` is its connection's current record, in the sense of canonical (read from the columns). */
 export const isCurrentConnection = (s: State, rec: ConnectionRec): boolean => connectionIs(dataOf(s).tables, rec.id, rec);
 /** The LaTeX preamble in effect (spec 5.6): the base's, or DEFAULT_PREAMBLE when it never set one (D5: never stored). */

@@ -11,7 +11,7 @@ import type { Id, TagKeyDef, TagValue } from '../src/model.ts';
 import { invertOp, MAX_ID_CHARS } from '../src/ops.ts';
 import { PROTECTED_TAG_KEYS, readTagNumber } from '../src/registry.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
-import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State, taggedWith } from '../src/state.ts';
+import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State, taggedKeys, taggedWith } from '../src/state.ts';
 import { parseUnit, reconcile, type RemoteUnit, type Unit } from '../src/sync.ts';
 import { created, view } from './helpers.ts';
 
@@ -71,6 +71,20 @@ test('taggedWith : les nœuds et les connexions qui portent une clé, corbeille 
   expect(core.taggedWith).toBe(taggedWith);
   expect(core.PROTECTED_TAG_KEYS).toBe(PROTECTED_TAG_KEYS);
   for (const k of ['defineTagKey', 'renameTagKey', 'deleteTagKey', 'renameEnumValue'] as const) expect(typeof core[k]).toBe('function');
+});
+
+test('taggedKeys : les clés que portent des objets, déclarées ou non, corbeille comprise, une fois chacune ; une clé que plus rien ne porte s’en va', () => {
+  const { s, mk, link } = world([TEXT]);
+  const a = mk('A', [{ key: 'lu' }, { key: 'thème', value: 'MDL' }]), b = mk('B', [{ key: 'lu' }]);
+  const ab = link(a, b, [{ key: 'lu' }, { key: 'connexe' }]);
+  expect([...taggedKeys(s)].sort()).toEqual(['connexe', 'lu', 'thème']);
+  // Declared and carried by no one: not carried. Carried by a node in the trash: carried.
+  run(s, deleteEverywhere(s, a));
+  expect([...taggedKeys(s)].sort()).toEqual(['connexe', 'lu', 'thème']);
+  run(s, editConnection(s, ab, { tags: [] }));
+  run(s, editNode(s, b, { tags: [] }));
+  expect([...taggedKeys(s)].sort()).toEqual(['lu', 'thème']);
+  expect(core.taggedKeys).toBe(taggedKeys);
 });
 
 test('PROTECTED_TAG_KEYS : les clés dont Cirrus se sert, chacune avec le type, la portée et la multiplicité qu’il lui donne', () => {
