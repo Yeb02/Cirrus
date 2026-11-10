@@ -7,6 +7,7 @@ import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { inputProbe, runIdleSlices } from './search/idle.ts';
 import { SearchBuild, type SearchHit, SearchIndex, type SearchWhere } from './search/index.ts';
+import { pickWithoutPlan } from './search/pick.ts';
 import { restoreNotice } from './trash.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
@@ -46,7 +47,6 @@ import { useSettings } from './useSettings.ts';
 import { replayLaunch } from './visualChecks.ts';
 
 const NODE_GONE = 'Ce nœud n’existe plus.';
-const RESULT_GONE = 'Ce résultat n’est plus là : il a été jeté, ou retiré de son plan.';
 const NOTHING_FOUND: Id[] = [];
 /**
  * The search index's builds by slices take the idle moments (plan 6a, D1), searchBuildSliceMs at most each slice; a moment
@@ -486,13 +486,13 @@ export function App() {
   const pickResult = (hit: SearchHit) => {
     closeSearch();
     if (hit.plan === null) {
-      if (hit.kind === 'node' && resolveTarget(state, { kind: 'node', node: hit.id })) {
-        const r = document.querySelector('.graph')?.getBoundingClientRect();
-        panels.current?.openNode(hit.id, r ? { x: r.left + r.width / 2 - 190, y: r.top + 80 } : { x: 200, y: 120 });
-      } else toast(RESULT_GONE);
+      const r = pickWithoutPlan(state, hit);
+      if ('say' in r) { toast(r.say); return; }
+      const box = document.querySelector('.graph')?.getBoundingClientRect();
+      panels.current?.openNode(r.popup, box ? { x: box.left + box.width / 2 - 190, y: box.top + 80 } : { x: 200, y: 120 });
       return;
     }
-    if (!graph.current?.reveal({ plan: hit.plan, id: hit.id, kind: hit.kind })) toast(RESULT_GONE);
+    if (!graph.current?.reveal({ plan: hit.plan, id: hit.id, kind: hit.kind })) toast(OBJECT_GONE);
   };
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
