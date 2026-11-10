@@ -33,6 +33,7 @@ import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SearchBox } from './ui/SearchBox.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { TagRegistryPanel } from './ui/TagRegistryPanel.tsx';
+import { TrashPanel } from './ui/TrashPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
 import { SyncVeil } from './ui/SyncVeil.tsx';
 import { Tabs } from './ui/Tabs.tsx';
@@ -127,7 +128,10 @@ export function App() {
     }
   };
   /** What is open over the graph: the settings, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
-  const { panel, setPanel, registryOpen, setRegistryOpen, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn } = useScreens();
+  const {
+    panel, setPanel, registryOpen, setRegistryOpen, openRegistry, trashOpen, setTrashOpen, openTrash, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen,
+    preambleRef, fullSteps, fullIn,
+  } = useScreens();
   /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
   const sync = useSync(toast, paramsRef);
 
@@ -555,7 +559,7 @@ export function App() {
         <GraphBoundary plan={active}>
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
-            onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={() => setRegistryOpen(true)}
+            onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={openRegistry} onTrash={openTrash}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={clickAway}
             onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
@@ -576,6 +580,11 @@ export function App() {
           />
         )}
         {registryOpen && <TagRegistryPanel state={state} rev={shown.rev} onEdit={edit} onClose={() => setRegistryOpen(false)} />}
+        {trashOpen && (
+          <TrashPanel
+            state={state} rev={shown.rev} onEdit={edit} onRestoreNode={(node) => graph.current?.restore(node)} onClose={() => setTrashOpen(false)}
+          />
+        )}
         <Panels
           ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onShowIn={showIn} onGoToNode={goToNode} files={files}
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}

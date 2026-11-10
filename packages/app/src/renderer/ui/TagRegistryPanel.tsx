@@ -2,19 +2,14 @@ import { PROTECTED_TAG_KEYS, type State, type TagKeyDef } from '@cirrus/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type Build, deleteTagKeyBuild, formSaveBuild, renameTagKeyBuild } from '../actions.ts';
 import {
-  addValue, type Draft, draftOf, filterRows, formUpdate, inferDefinition, moveValue, newDraft, type RegistryRow, registryEscapeCloses, registryRows,
-  removeValue, renameValue, rowCount, sameDraft, SCOPE_LABELS, setRank, setType, sortValues, TYPE_LABELS,
+  addValue, type Draft, draftOf, filterRows, formUpdate, inferDefinition, moveValue, newDraft, type RegistryRow, registryRows, removeValue, renameValue,
+  rowCount, sameDraft, SCOPE_LABELS, setRank, setType, sortValues, TYPE_LABELS,
 } from '../tagRegistry.ts';
 import { AskDialog, type Question } from './Dialogs.tsx';
+import { usePanelEscape } from './panelEscape.ts';
 
 const TYPES = Object.keys(TYPE_LABELS) as Draft['type'][];
 const SCOPES = Object.keys(SCOPE_LABELS) as Draft['scope'][];
-
-/**
- * What an Escape is left to while it is on screen: the floating panels (the loose ones close on the Escape nothing took,
- * and run first), a connection's pop-up, the graph's menu, the search, the import dialog, a title being typed, a full screen.
- */
-const REGISTRY_ESCAPE_YIELDS_TO = '.panels .panel, .popup, .context-menu, .search-box, .publication-dialog, .title-editor, .full-screen';
 
 /** What the panel shows: the list (null), the form of a key, or the form of a key to create. */
 type View = null | 'new' | { key: string };
@@ -191,23 +186,10 @@ function KeyForm(props: {
  * the state (`rev` counts its changes, an undo or a sync included), so the list and the counts are always its own.
  * Escape closes it, wherever the focus is — a button clicked is gone, and the focus with it —, unless something nearer took
  * it: a field that gives something up (the rename), a question, a menu, the search, a gesture of the graph, a floating
- * panel, which close first (REGISTRY_ESCAPE_YIELDS_TO).
+ * panel, which close first (usePanelEscape).
  */
 export function TagRegistryPanel(props: { state: State; rev: number; onEdit(build: Build): Promise<boolean>; onClose(): void }) {
-  const closing = useRef(props.onClose);
-  closing.current = props.onClose;
-  /** Whether something that has the Escape first was on screen when the key arrived. */
-  const yielding = useRef(false);
-  useEffect(() => {
-    // Capturing, before any handler of the key: a floating panel closes on its own Escape and may be gone from the page by the time the
-    // listener below runs (React flushes its state first), when one key would close both.
-    const arrived = (e: KeyboardEvent) => { yielding.current = e.key === 'Escape' && document.querySelector(REGISTRY_ESCAPE_YIELDS_TO) !== null; };
-    // Bubbling, after the graph's own Escape (a gesture, a menu, the pop-up of a connection) and the fields': one that took it prevented its default.
-    const key = (e: KeyboardEvent) => { if (registryEscapeCloses(e, yielding.current)) closing.current(); };
-    window.addEventListener('keydown', arrived, true);
-    window.addEventListener('keydown', key);
-    return () => { window.removeEventListener('keydown', arrived, true); window.removeEventListener('keydown', key); };
-  }, []);
+  usePanelEscape(props.onClose);
   // The filter has the focus as the panel opens, not each time the list comes back (an undo that empties the form): a field
   // owns Ctrl+Z, and the next one would undo its text, not the edit before.
   const fresh = useRef(true);

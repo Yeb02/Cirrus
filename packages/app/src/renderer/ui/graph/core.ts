@@ -50,6 +50,8 @@ export interface Graph {
   onOpenPlan(plan: Id): void;
   /** Opens the tag registry's panel (plan 6a, D4): GraphView's onTagRegistry, as of this render. */
   onTagRegistry(): void;
+  /** Opens the trash's panel (plan 6a, D5): GraphView's onTrash, as of this render. */
+  onTrash(): void;
   /** The open tabs, in their order (App's), by which a list of plans is ordered. */
   tabsRef: RefObject<readonly Id[]>;
   redraw(): void;

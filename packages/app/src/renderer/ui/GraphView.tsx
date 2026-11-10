@@ -44,7 +44,8 @@ import { useScenes } from './graph/scenes.ts';
 /**
  * What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures); a jump
  * to an object (plan 6a, D2: Revealer), false at once for one gone, which pushes the place it leaves on the stack of
- * « précédent » et « suivant » (`back` and `forward`, false when there is nowhere to go); the focus back (the search closed).
+ * « précédent » et « suivant » (`back` and `forward`, false when there is nowhere to go); the focus back (the search closed);
+ * a node of the trash to put down in the plan shown (`restore`, plan 6a, D5: « Restaurer » in the trash's panel).
  */
 export interface GraphHandle {
   dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void>;
@@ -52,6 +53,7 @@ export interface GraphHandle {
   back(): boolean;
   forward(): boolean;
   focus(): void;
+  restore(node: Id): void;
 }
 /** Nothing found: the ring of the search drawn around nothing. */
 const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
@@ -84,6 +86,8 @@ export function GraphView(props: {
   onOpenPlan(plan: Id): void;
   /** Opens the tag registry's panel, from the background's menu (plan 6a, D4: App's). */
   onTagRegistry(): void;
+  /** Opens the trash's panel, from the background's menu (plan 6a, D5: App's). */
+  onTrash(): void;
   /**
    * A click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up there, in
    * window coordinates (plan 4a, D7).
@@ -251,7 +255,8 @@ export function GraphView(props: {
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
     root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, gestures,
-    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, redraw, notify, edit, indexOf, hitAt, local, restoreScene, moveCamera, feed,
+    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, onTrash: props.onTrash, redraw, notify, edit, indexOf, hitAt, local,
+    restoreScene, moveCamera, feed,
     busy, busyReason, tabsRef,
     get jumps() { return jumps.current!; },
     get scenes() { return scenes; }, get questions() { return questions; }, get placement() { return placement; }, get copyPaste() { return copyPaste; },
@@ -532,6 +537,18 @@ export function GraphView(props: {
     back: () => jumps.current!.back(),
     forward: () => jumps.current!.forward(),
     focus: () => root.current?.focus({ preventScroll: true }),
+    restore: (node) => {
+      // Its title follows the cursor as a paste's does, from where the pointer last was over the graph (else its centre),
+      // until a click puts it down (restoreBuild) or Escape gives it up: the graph takes the focus for that Escape. Another
+      // « Restaurer » replaces one under way; any other gesture is finished or given up first.
+      const n = stateRef.current.nodes.get(node), el = root.current;
+      if (!n || !el || !engine.current || !sceneRef.current) return;
+      if (busy() && placement.placing.current?.kind !== 'restore') { notify(busyReason('de restaurer')); return; }
+      const r = el.getBoundingClientRect();
+      placement.startPlacing({ kind: 'restore', node }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
+      el.focus({ preventScroll: true });
+      redraw();
+    },
   }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {

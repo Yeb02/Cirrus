@@ -642,21 +642,21 @@ button, input, select { font: inherit; color: var(--ink); }
  * The tag registry's panel (plan 6a, D4): a side panel like the settings', with its colours and its fields. A list of keys,
  * each with its type, its scope and how many objects carry it; then, a key chosen, its form.
  */
-.registry {
+.registry, .trash {
   width: 340px; flex: none; box-sizing: border-box; padding: 12px 14px 24px; overflow: auto; user-select: text;
   background: var(--panel); border-left: 1px solid rgba(143, 184, 255, 0.18);
 }
-.registry header { display: flex; align-items: center; justify-content: space-between; }
-.registry h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.registry header, .trash header { display: flex; align-items: center; justify-content: space-between; }
+.registry h2, .trash h2 { font-size: 15px; margin: 0; font-weight: 600; }
 .registry h3.key-title { font-size: 14px; margin: 8px 0 2px; font-weight: 600; overflow-wrap: anywhere; }
 .registry h4 { font-size: 11px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
-.registry .close { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--muted); }
-.registry .close:hover { color: var(--ink); }
-.registry input[type=search], .registry input[type=text], .registry select {
+.registry .close, .trash .close { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--muted); }
+.registry .close:hover, .trash .close:hover { color: var(--ink); }
+.registry input[type=search], .registry input[type=text], .registry select, .trash input[type=search] {
   box-sizing: border-box; background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 3px 6px;
 }
-.registry input.search { display: block; width: 100%; margin: 10px 0 6px; padding: 4px 8px; }
-.registry .none, .registry .meta { margin: 2px 0; font-size: 12.5px; color: var(--muted); }
+.registry input.search, .trash input.search { display: block; width: 100%; margin: 10px 0 6px; padding: 4px 8px; }
+.registry .none, .registry .meta, .trash .none, .trash .meta { margin: 2px 0; font-size: 12.5px; color: var(--muted); }
 .registry .note { margin: 6px 0 2px; font-size: 12.5px; }
 .registry .note.warn { color: var(--warn); }
 .registry .keys { list-style: none; margin: 6px 0 0; padding: 0; }
@@ -667,8 +667,8 @@ button, input, select { font: inherit; color: var(--ink); }
 .registry .key .name { display: block; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
 .registry .key .meta { display: block; margin: 0; font-size: 12px; }
 .registry .key.undeclared .name { font-style: italic; font-weight: 500; }
-.registry button.act { padding: 5px 10px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
-.registry button.act:hover:not(:disabled) { border-color: var(--accent); }
+.registry button.act, .trash button.act { padding: 5px 10px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
+.registry button.act:hover:not(:disabled), .trash button.act:hover { border-color: var(--accent); }
 .registry button.act:disabled { opacity: 0.5; cursor: default; }
 .registry button.act.primary { border-color: var(--accent); }
 .registry button.act.cancel { background: none; border-color: transparent; color: var(--muted); }
@@ -691,3 +691,11 @@ button, input, select { font: inherit; color: var(--ink); }
 .registry .actions, .registry .rename { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
 .registry .rename input { flex: 1 1 100%; }
 .registry .rename .meta { flex: 1 1 100%; }
+/* The trash's panel (plan 6a, D5): the registry's colours and fields; each object a line, its title over its kind and its date, « Restaurer » at its end. */
+.trash .items { list-style: none; margin: 6px 0 0; padding: 0; }
+.trash .item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; }
+.trash .item:hover { background: rgba(143, 184, 255, 0.14); }
+.trash .item .what { flex: 1; min-width: 0; }
+.trash .item .title { display: block; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.trash .item .meta { display: block; margin: 0; font-size: 12px; }
+.trash .item .restore { flex: none; padding: 3px 8px; font-size: 12.5px; }
