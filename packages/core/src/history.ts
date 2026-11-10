@@ -1,4 +1,4 @@
-import { type Action, transact } from './commands.ts';
+import { type Action, addedViolation, transact } from './commands.ts';
 import { uuidv7 } from './ids.ts';
 import { invertOp, truncateLabel } from './ops.ts';
 import { OpConflictError, type State } from './state.ts';
@@ -10,10 +10,18 @@ export function invertAction(a: Action): Action {
 
 export class UndoConflictError extends Error {}
 
-/** Applies the action to the state itself, then undoes it (transact); `message` if one of its operations no longer applies. */
+/**
+ * Applies the action to the state itself, then undoes it (transact); `message` if one of its operations no longer
+ * applies, or if it would add a violation — checked as a command is, on what it touches (addedViolation): a write
+ * received since from another PC can make an undo wrong without touching its records (plan 6a, review of task 3a: an
+ * enumeration's value renamed back while another PC used the new name), and the server would refuse it.
+ */
 function dryRun(s: State, a: Action, message: string): void {
   try {
-    transact(s, (d) => { for (const op of a.ops) d.push(op); });
+    transact(s, (d) => {
+      for (const op of a.ops) d.push(op);
+      if (addedViolation(s, a.ops)) throw new UndoConflictError(message);
+    });
   } catch (e) {
     if (e instanceof OpConflictError) throw new UndoConflictError(message);
     throw e;

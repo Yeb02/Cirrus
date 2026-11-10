@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
-import { type Action, connect, createNode, createPlan, deleteEverywhere, editNode } from '../src/commands.ts';
+import { type Action, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include } from '../src/commands.ts';
 import { UndoConflictError, UndoStack } from '../src/history.ts';
+import { checkState } from '../src/invariants.ts';
 import type { Id } from '../src/model.ts';
 import { applyOp, canonical, emptyState, type State } from '../src/state.ts';
 import { sorted } from './helpers.ts';
@@ -46,6 +47,30 @@ test('objet modifié depuis : annulation refusée, état et pile intacts (Review
   expect(() => stack.undo(s)).toThrow(/modifié depuis/);
   expect(snapshot(s)).toBe(before);
   expect(stack.canUndo).toBe(true);
+});
+
+test('une annulation ou un rétablissement qui ajouterait une violation est refusé, état et pile intacts (plan 6a, relecture de la tâche 3a, Important 1)', () => {
+  const { s, plan, stack } = setup();
+  const mk = (title: string) => createdId(run(s, createNode(s, { plan, title, x: 0, y: 0, k: 0 })));
+  const X = mk('X'), G = mk('G'), H = mk('H');
+  run(s, include(s, plan, X, G));
+  // X taken out of G here; meanwhile, received from another PC, X put in H: undoing would put X in two groups.
+  stack.record(run(s, exclude(s, plan, X)));
+  run(s, include(s, plan, X, H));
+  const before = snapshot(s);
+  expect(() => stack.undo(s)).toThrow(new UndoConflictError('Impossible d’annuler : « Sortir « X » de son groupe » a été modifié depuis.'));
+  expect(snapshot(s)).toBe(before);
+  expect(stack.canUndo).toBe(true);
+  // The same for a redo: X put in G here, undone; X put in H elsewhere.
+  const t = setup(), Y = createdId(run(t.s, createNode(t.s, { plan: t.plan, title: 'Y', x: 0, y: 0, k: 0 })));
+  const [G2, H2] = ['G2', 'H2'].map((title) => createdId(run(t.s, createNode(t.s, { plan: t.plan, title, x: 0, y: 0, k: 0 }))));
+  t.stack.record(run(t.s, include(t.s, t.plan, Y, G2)));
+  run(t.s, t.stack.undo(t.s)!);
+  run(t.s, include(t.s, t.plan, Y, H2));
+  expect(() => t.stack.redo(t.s)).toThrow(new UndoConflictError('Impossible de rétablir : « Mettre « Y » dans « G2 » » a été modifié depuis.'));
+  expect(t.stack.canRedo).toBe(true);
+  expect(checkState(s)).toEqual([]);
+  expect(checkState(t.s)).toEqual([]);
 });
 
 test('annuler une action multi-opérations la défait entièrement', () => {
