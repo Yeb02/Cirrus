@@ -43,8 +43,13 @@ import { replayLaunch } from './visualChecks.ts';
 const NODE_GONE = 'Ce nœud n’existe plus.';
 const RESULT_GONE = 'Ce résultat n’est plus là : il a été jeté, ou retiré de son plan.';
 const NOTHING_FOUND: Id[] = [];
-/** A whole build of the search index takes the idle moments, this long at most each (plan 6a, D1). */
-const SEARCH_SLICE_MS = 8;
+/**
+ * The search index's builds by slices take the idle moments (plan 6a, D1), searchBuildSliceMs at most each; a slice
+ * waits this long at most for one, so that a window always busy still builds it.
+ */
+const SEARCH_IDLE: IdleRequestOptions = { timeout: 200 };
+/** The end of a slice begun in this idle moment: searchBuildSliceMs at most, what the moment leaves if less (1 ms at least). */
+const sliceEnd = (idle: IdleDeadline, sliceMs: number) => performance.now() + Math.min(sliceMs, Math.max(1, idle.timeRemaining()));
 /** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
 /** The comparison of a .tex with its conflict copy (plan 5b, D7), with @codemirror/merge, in its own chunk too. */
@@ -101,6 +106,9 @@ export function App() {
   const [searchBase, setSearchBase] = useState<SearchIndex | null>(null);
   const searchLog = useRef<Action[] | null>(null);
   const builtSearch = useRef<{ base: SearchIndex; index: SearchIndex } | null>(null);
+  /** The .tex read again by slices (fix round 1, Important 2): for which whole build, and its next slice; each slice that wrote counts one. */
+  const searchRefresh = useRef<{ base: SearchIndex; handle: number } | null>(null);
+  const [searchTick, setSearchTick] = useState(0);
   /** The box open (Ctrl+K: `asked` counts them, the field taking the focus again), and what it found in this plan. */
   const [searchBox, setSearchBox] = useState<{ asked: number } | null>(null);
   const [searchFound, setSearchFound] = useState<Id[]>(NOTHING_FOUND);
@@ -141,20 +149,22 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Ctrl+K opens the search (plan 6a, D1) from anywhere, a text field included — but not over a full screen, which is
-  // modal (a file's, the preamble's), nor in a code editor (CodeMirror), where it keeps its own meaning. Open, it gives
-  // its field the focus again.
+  // Ctrl+K opens the search (plan 6a, D1) from anywhere, a text field included — but not over a full screen or a
+  // question, which are modal (a file's, the preamble's; AskDialog), nor in a code editor (CodeMirror), where it keeps
+  // its own meaning, nor in the box itself. Heard first (capture): a panel that keeps its keys from the graph (a
+  // connection's pop-up stops them all) does not swallow it (fix round 1, Important 1). Open, it gives its field the
+  // focus again.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.key.toLowerCase() !== 'k') return;
-      if (!session.current || fullRef.current || preambleRef.current) return;
-      if (e.target instanceof Element && e.target.closest('.cm-editor')) return;
+      if (!session.current || fullRef.current || preambleRef.current || document.querySelector('.ask')) return;
+      if (e.target instanceof Element && e.target.closest('.search-box, .cm-editor')) return;
       e.preventDefault();
       setSearchWanted(true);
       setSearchBox((b) => ({ asked: (b?.asked ?? 0) + 1 }));
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
   // « Précédent » et « suivant » (plan 6a, D2): Alt+← and Alt+→, the mouse's side buttons (3 and 4, on release) and the
@@ -299,20 +309,19 @@ export function App() {
   useEffect(() => {
     if (!state || !searchWanted || searchBase?.state === state) return;
     searchLog.current = [];
-    const job = new SearchBuild(state, textsRef.current), started = performance.now();
+    const job = new SearchBuild(state, textsRef.current);
     let handle = 0;
     const slice = (idle: IdleDeadline) => {
-      const done = job.step(performance.now() + Math.min(SEARCH_SLICE_MS, Math.max(1, idle.timeRemaining())));
-      if (!done) { handle = requestIdleCallback(slice, { timeout: 200 }); return; }
-      console.log(`Index de recherche construit en ${(performance.now() - started).toFixed(0)} ms (${done.size} objets).`);
-      setSearchBase(done);
+      const done = job.step(sliceEnd(idle, paramsRef.current.searchBuildSliceMs));
+      if (done) setSearchBase(done); else handle = requestIdleCallback(slice, SEARCH_IDLE);
     };
-    handle = requestIdleCallback(slice, { timeout: 200 });
+    handle = requestIdleCallback(slice, SEARCH_IDLE);
     return () => cancelIdleCallback(handle);
   }, [state, searchWanted, searchBase]);
 
   // The search index at each change of the state (plan 6a, D1): from the last one, by the actions logged since (their
-  // subjects read again) and the .tex read since; null until its whole build is done for this state.
+  // subjects read again); new .tex texts mark their nodes, read below; a slice of that reading that wrote makes a new
+  // index too (`searchTick`). Null until its whole build is done for this state.
   const searchIndex = useMemo(() => {
     if (!state || !searchBase || searchBase.state !== state) return null;
     const b = builtSearch.current, previous = b && b.base === searchBase ? b.index : searchBase;
@@ -322,7 +331,25 @@ export function App() {
     const index = SearchIndex.build(state, texts, previous, action);
     builtSearch.current = { base: searchBase, index };
     return index;
-  }, [state, rev, texts, searchBase]);
+  }, [state, rev, texts, searchBase, searchTick]);
+
+  // The nodes whose .tex were read since the index read them (fix round 1, Important 2): read again by slices in the idle
+  // moments, as the whole build, never in a render; one reading at a time, for the storage of this whole build.
+  useEffect(() => {
+    if (!searchIndex || searchIndex.pending === 0 || searchRefresh.current?.base === searchBase) return;
+    const job = searchIndex.refresh(), base = searchBase!;
+    const slice = (idle: IdleDeadline) => {
+      const r = job.step(sliceEnd(idle, paramsRef.current.searchBuildSliceMs));
+      if (r.done) searchRefresh.current = null; else searchRefresh.current = { base, handle: requestIdleCallback(slice, SEARCH_IDLE) };
+      if (r.wrote) setSearchTick((t) => t + 1);
+    };
+    searchRefresh.current = { base, handle: requestIdleCallback(slice, SEARCH_IDLE) };
+  }, [searchIndex]);
+  // Another whole build (a state read anew), or the end: the reading of the last one's .tex stops.
+  useEffect(() => () => {
+    if (searchRefresh.current) cancelIdleCallback(searchRefresh.current.handle);
+    searchRefresh.current = null;
+  }, [searchBase]);
   /** Where the search is made from: the plan shown, the lobby, the tabs. */
   const lobbyId = state ? [...state.plans.values()].find((p) => p.type === 'lobby')?.id ?? null : null;
   const searchWhere = useMemo<SearchWhere | null>(() => (active && lobbyId ? { plan: active, lobby: lobbyId, tabs } : null), [active, lobbyId, tabs]);
@@ -387,6 +414,15 @@ export function App() {
     setSearchBox(null);
     setSearchFound(NOTHING_FOUND);
     graph.current?.focus();
+  };
+  /**
+   * A click in the graph that closes the loose pop-ups — its background, a connection, Ctrl+click — closes the search and
+   * its ring too (fix round 1, M4); the graph has the focus already.
+   */
+  const clickAway = () => {
+    panels.current?.closeLoose();
+    setSearchBox(null);
+    setSearchFound(NOTHING_FOUND);
   };
   /**
    * A result chosen (plan 6a, D2): the jump to its plan, which frames and rings it; an object in no plan (an annotation)
@@ -481,7 +517,7 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan}
-            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={() => panels.current?.closeLoose()}
+            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={clickAway}
             onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
             overlay={searchBox && searchWhere && (

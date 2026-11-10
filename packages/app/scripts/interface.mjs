@@ -718,6 +718,30 @@ const SCENARIOS = [
     },
   },
   {
+    // Fix round 1 of plan 6a's task 1: Ctrl+K from a connection's pop-up, which keeps every key from the graph, opens the
+    // search (App hears it first, Important 1); a click on the graph's background closes it, and its ring, as it closes
+    // the loose pop-ups (M4).
+    name: 'recherche : Ctrl+K depuis le pop-up d’une connexion ; un clic sur le fond la ferme',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page) {
+      const FIELD = `document.activeElement?.matches('.search-box .search-field') === true`;
+      // The connection at the view's centre (the captures' « fenetre-connexion », whose point is the graph's): its pop-up,
+      // its title field focused.
+      const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup input.title')`, 1000)); i++) await page.click(centre.x, centre.y);
+      const title = await page.centre('.popup input.title', '');
+      await page.click(title.x, title.y);
+      if (!(await page.evaluate(`document.activeElement?.matches('.popup input.title') === true`))) throw new Error('le titre du pop-up de la connexion n’a pas le focus');
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(FIELD))) throw new Error('Ctrl+K, depuis le pop-up d’une connexion, n’ouvre pas la recherche');
+      await page.type('comp');
+      if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length > 0`))) throw new Error('la recherche ne montre rien pour « comp »');
+      // The sky at the left, over no node nor envelope (above the hierarchy's corner): the box goes.
+      await page.click(60, 800);
+      if (!(await page.until(`!document.querySelector('.search-box')`))) throw new Error('un clic sur le fond ne ferme pas la recherche');
+    },
+  },
+  {
     // Plan 6a, D2: « précédent » et « suivant ». A jump by the search pushes the place left (a plan and its camera); Alt+←
     // brings the view back to it exactly (the same image, the plan's tab back), Alt+→ forward again, and so do the mouse's
     // side buttons, which are not left clicks. A plain move of the view is not a jump; the arrows with Alt move nothing.
