@@ -7,12 +7,13 @@ import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Un
 import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_JOURNAL_PAGE, MAX_PAIR_BODY_BYTES,
-  MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_SMALL_BODY_MS, MAX_UNITS_PER_REQUEST, MIN_BODY_BYTES_PER_S,
-  SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
+  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_INSTALLER_BODY_BYTES, MAX_JOURNAL_PAGE,
+  MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_SMALL_BODY_MS, MAX_UNITS_PER_REQUEST,
+  MIN_BODY_BYTES_PER_S, SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
 import { Hub } from './events.ts';
+import { contentDisposition, installerPage, ManifestError, NOTHING_PUBLISHED, type OpenInstaller, openInstaller, PAGE_HEADERS, WRONG_CODE } from './installer.ts';
 import { parsePresence, PresenceError } from './presence.ts';
 import { parsePublicationRequest, PublicationError, PublicationImports, type PublicationNetwork, serverNetwork } from './publications.ts';
 import { SeedError, Seeds } from './seed.ts';
@@ -21,8 +22,9 @@ import { baseBytes, freeBytes, StoreSize } from './storeSize.ts';
 import { hashToken, PairingError, Tokens } from './tokens.ts';
 
 // The server (plan 5a, D1 to D3, D10): HTTP on this machine only, JSON but for files and the snapshot, the token of a
-// paired PC on every route but /pair, no CORS header (no browser is answered), every body bounded and checked before
-// anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
+// paired PC on every route but /pair and the download page (/installer, plan 9, D5: installer.ts, a form, and the
+// installer for a pairing code), no CORS header (no browser is answered but there), every body bounded and checked
+// before anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
 // paired PCs, the shared settings, the files each PC has open in full screen), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
 // serves only a paired PC's import of a publication (plan 5b, D2: publications.ts). Its space, which GET /status gives
 // (plan 5b, D8), is storeSize.ts's.
@@ -168,6 +170,22 @@ async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
   } catch {
     throw new HttpError(400, 'JSON invalide.');
   }
+}
+
+/**
+ * A form's body (Content-Type application/x-www-form-urlencoded, what a page's <form> sends: POST /installer), `max`
+ * bytes at most, read as readBody reads a small body: its fields.
+ */
+async function readForm(req: IncomingMessage, max: number): Promise<URLSearchParams> {
+  if (!/^application\/x-www-form-urlencoded\s*(;|$)/i.test(req.headers['content-type'] ?? '')) throw new HttpError(415, 'Formulaire attendu (Content-Type: application/x-www-form-urlencoded).');
+  return new URLSearchParams((await readBody(req, max)).toString('utf8'));
+}
+
+/** The download page (plan 9, D5), with `message` or without, and its headers (installer.ts). */
+function sendPage(res: ServerResponse, message: string | null): void {
+  const html = installerPage(message);
+  res.writeHead(200, { ...PAGE_HEADERS, 'Content-Length': String(Buffer.byteLength(html)) });
+  res.end(html);
 }
 
 /** A non-negative integer of a query or a header; `fallback` when absent; 400 otherwise. */
@@ -516,6 +534,37 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
     },
   };
 
+  /**
+   * POST /installer (plan 9, D5): the form's code checked as /pair checks it, a wrong try counted against every pending
+   * code, a good one not spent (Tokens.checkCode). A good code gets the official installer, streamed from the file
+   * opened (openInstaller); a wrong one, the page and WRONG_CODE. Nothing is said of the version published but to a good
+   * code: none, or a manifest that names nothing it can serve (written to the server's log), the page and
+   * NOTHING_PUBLISHED.
+   */
+  const installer = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const code = (await readForm(req, MAX_INSTALLER_BODY_BYTES)).get('code');
+    if (code === null || !tokens.checkCode(code, now())) return sendPage(res, WRONG_CODE);
+    let found: OpenInstaller | null;
+    try {
+      found = await openInstaller(dataDir);
+    } catch (e) {
+      if (!(e instanceof ManifestError)) throw e;
+      console.warn(`Page de téléchargement : ${e.message}`);
+      found = null;
+    }
+    if (!found) return sendPage(res, NOTHING_PUBLISHED);
+    try {
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', 'Content-Length': String(found.size), 'Content-Disposition': contentDisposition(found.file), 'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      // Its checked size and no more, were the file to grow under it.
+      await pipeline(found.handle.createReadStream({ start: 0, end: found.size - 1, autoClose: false }), res);
+    } finally {
+      await found.handle.close();
+    }
+  };
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // Another name than this machine's or its own (--nom): a page that rebound its domain to 127.0.0.1 (DNS rebinding).
     // The refusal names none of them.
@@ -526,6 +575,11 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
     const allow = (methods: string[]) => {
       if (!methods.includes(method)) throw new HttpError(405, 'Méthode non permise.', { Allow: methods.join(', ') });
     };
+    // The download page (D5), the other route without a token: its body read for POST only.
+    if (url.pathname === '/installer') {
+      allow(['GET', 'POST']);
+      return method === 'GET' ? sendPage(res, null) : installer(req, res);
+    }
     if (url.pathname === '/pair') {
       allow(['POST']);
       const token = tokens.pair(await readJson(req, MAX_PAIR_BODY_BYTES), now());

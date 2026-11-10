@@ -22,8 +22,15 @@ export { MAX_JOURNAL_PAGE, MAX_SEED_BYTES } from '@cirrus/core';
  */
 export { MAX_ID_CHARS, MAX_LABEL_CHARS } from '@cirrus/core';
 
-/** The largest body of POST /pair, the only route without a token: a code, an identifier and a name. */
+/** The largest body of POST /pair, a route without a token: a code, an identifier and a name. */
 export const MAX_PAIR_BODY_BYTES = 4096;
+
+/**
+ * The largest body of POST /installer (plan 9, D5), the other route without a token: a form, its one field the code. It
+ * holds any code /pair would try (MAX_PAIR_CODE_CHARS characters, each 9 bytes at most once percent-encoded: 581 bytes
+ * with « code= »), and keeps its body's deadline at MAX_SMALL_BODY_MS and an eighth of a second.
+ */
+export const MAX_INSTALLER_BODY_BYTES = 1024;
 
 /**
  * The longest pairing code /pair reads (an input without a token, final review, Minor 3): a code is 16 characters, 19
@@ -112,9 +119,9 @@ export const DRAIN_MAX_MS = 5000;
 export const DRAIN_LINGER_MS = 1000;
 
 /**
- * A JSON body (/pair, every route of a paired PC, /installer of task 5) arrives whole within MAX_SMALL_BODY_MS, plus a
- * second for every MIN_BODY_BYTES_PER_S of its length (as announced, or its route's cap) — 30 s for a pairing's few
- * bytes; a page of journal of 64 Mio (MAX_BODY_BYTES) over a line of 64 kbit/s or more still passes. Otherwise 408,
+ * A JSON body (/pair, every route of a paired PC), and the form of /installer (task 5), arrives whole within
+ * MAX_SMALL_BODY_MS, plus a second for every MIN_BODY_BYTES_PER_S of its length (as announced, or its route's cap) —
+ * 30 s for a pairing's few bytes, 30,125 s at most for the form; a page of journal of 64 Mio (MAX_BODY_BYTES) over a line of 64 kbit/s or more still passes. Otherwise 408,
  * and the connection is cut (review of task 1, I2): a body trickled a byte at a time escapes SERVER_IDLE_MS. Files and
  * a seed (PUT /files, POST /seed) are streamed, bounded by their size and SERVER_IDLE_MS only.
  */
