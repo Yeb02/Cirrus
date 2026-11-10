@@ -2229,6 +2229,88 @@ const SCENARIOS = [
       if (!(await until(() => tagged(word).length === before))) throw new Error('le tag n’est pas retiré');
     },
   },
+  {
+    // Plan 6a, D5 (task 4): « Monde algorithmique » deleted everywhere, its connection with « Universalité algorithmique »
+    // left with one member and thrown away with it; the trash opened from the background's menu lists both, the most
+    // recent first, before the test base's draft note; « Restaurer » the node makes its title follow the cursor, a click puts
+    // it down in the plan shown, Ctrl+Z sends it back; Échap gives up a restore under way, the panel staying; the connection
+    // is refused, in a toast; the filter; Échap closes the panel.
+    name: 'corbeille : un nœud supprimé partout, restauré par la pose dans le plan, Ctrl+Z ; Échap abandonne la pose ; une connexion refusée ; le filtre',
+    async run(page, base) {
+      const TITLE = 'Monde algorithmique';
+      const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
+      const id = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = ${sql(TITLE)}`)[0].id;
+      const trashed = () => base(`SELECT trashed FROM nodes WHERE id = ${sql(id)}`)[0].trashed === 1;
+      const lobby = idsOf(base).lobby;
+      const items = () => page.evaluate(`[...document.querySelectorAll('.trash .item')].map((li) => [li.dataset.kind, li.querySelector('.title').textContent, li.querySelector('.meta').textContent])`);
+      const listed = (node) => page.evaluate(`!!document.querySelector('.trash .item[data-id="${node}"]')`);
+      const menuItems = () => page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+
+      // Deleted everywhere, from its menu: framed by a jump, then its menu at the graph's centre, « Partout ».
+      await searchJump(page, 'monde algo', TITLE);
+      const centre = await graphCentre(page);
+      for (let i = 0; i < 10 && !(await page.until(`[...document.querySelectorAll('.context-menu button')].some((b) => b.textContent === 'Supprimer…')`, 1000)); i++) {
+        await page.press('Escape', 'Escape', 27);
+        await page.click(centre.x, centre.y, 'right');
+      }
+      await click('.context-menu button', '^Supprimer…$');
+      if (!(await page.until(`document.querySelector('.ask p')?.textContent === ${JSON.stringify(`Supprimer « ${TITLE} » ?`)}`))) throw new Error('pas de question avant la suppression');
+      await click('.ask .choices button', '^Partout$');
+      if (!(await until(trashed))) throw new Error(`le nœud n’est pas à la corbeille ; ${await toastsText(page)}`);
+
+      // The trash, from the background's menu where the node was: « Corbeille… » before « Registre des tags… ».
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(centre.x, centre.y, 'right');
+      const menu = await menuItems();
+      if (JSON.stringify(menu.slice(-2)) !== JSON.stringify(['Corbeille…', 'Registre des tags…'])) throw new Error(`le menu du fond : ${JSON.stringify(menu)}`);
+      await click('.context-menu button', '^Corbeille…$');
+      if (!(await page.until(`!!document.querySelector('aside.trash') && document.activeElement?.matches('.trash input.search') === true`))) {
+        throw new Error('le panneau de la corbeille ne s’ouvre pas, ou son filtre n’a pas le focus');
+      }
+      const rows = await items();
+      const today = new Date().toLocaleDateString('fr-FR');
+      if (JSON.stringify(rows.slice(0, 2).map((r) => r.slice(0, 2))) !== JSON.stringify([['node', TITLE], ['connection', 'la connexion de « Universalité algorithmique »']])
+        || !rows[0][2].startsWith(`nœud · ${today} `) || !rows[1][2].startsWith(`connexion · ${today} `)) {
+        throw new Error(`la liste de la corbeille : ${JSON.stringify(rows)}`);
+      }
+      if (!rows.some((r) => r[1] === 'Note brouillon à jeter')) throw new Error(`la note jetée de la base de test n’est pas listée : ${JSON.stringify(rows)}`);
+
+      // « Restaurer »: the title follows the cursor; a click in the graph puts it down in the plan shown (the lobby).
+      await click(`.trash .item[data-id="${id}"] .restore`);
+      if (!(await page.until(`document.querySelector('.ghost')?.textContent === ${JSON.stringify(TITLE)}`))) throw new Error(`pas de fantôme « ${TITLE} » à suivre`);
+      const here = await graphCentre(page);
+      await page.move(here.x, here.y);
+      await page.click(here.x, here.y);
+      if (!(await until(() => !trashed() && placementOf(base, lobby, id) !== null))) throw new Error(`le nœud n’est pas posé dans le lobby ; ${await toastsText(page)}`);
+      if (await page.evaluate(`!!document.querySelector('.ghost')`)) throw new Error('le fantôme reste après la pose');
+      if (!(await page.until(`!!document.querySelector('aside.trash') && !document.querySelector('.trash .item[data-id="${id}"]')`))) throw new Error('le panneau ne suit pas la restauration');
+
+      // Ctrl+Z: back in the trash, and in the list.
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => trashed() && placementOf(base, lobby, id) === null))) throw new Error('Ctrl+Z ne rend pas le nœud à la corbeille');
+      if (!(await page.until(`!!document.querySelector('.trash .item[data-id="${id}"]')`))) throw new Error('le panneau ne suit pas l’annulation');
+
+      // Échap gives up a restore under way: the graph takes it, the panel stays, nothing is written.
+      await click(`.trash .item[data-id="${id}"] .restore`);
+      if (!(await page.until(`!!document.querySelector('.ghost')`))) throw new Error('pas de fantôme à la seconde restauration');
+      await page.press('Escape', 'Escape', 27);
+      if (await page.evaluate(`!!document.querySelector('.ghost')`)) throw new Error('Échap n’abandonne pas la pose');
+      if (!(await page.evaluate(`!!document.querySelector('aside.trash')`))) throw new Error('Échap ferme le panneau au lieu d’abandonner la pose');
+      if (!trashed() || !(await listed(id))) throw new Error('la pose abandonnée a écrit quelque chose');
+
+      // The connection, left with one member: refused, in a toast; still listed.
+      await click('.trash .item[data-kind="connection"] .restore');
+      if (!(await toastSays(page, 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.'))) throw new Error(`pas de notification du refus : ${await toastsText(page)}`);
+      if (!(await page.evaluate(`!!document.querySelector('.trash .item[data-kind="connection"]')`))) throw new Error('la connexion refusée n’est plus listée');
+
+      // The filter, by title, without accents; then Échap closes the panel.
+      await click('.trash input.search');
+      await page.type('BROUILLON');
+      const filtered = (await items()).map((r) => r[1]);
+      if (JSON.stringify(filtered) !== JSON.stringify(['Note brouillon à jeter'])) throw new Error(`le filtre « BROUILLON » montre ${JSON.stringify(filtered)}`);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error('Échap ne ferme pas le panneau');
+    },
+  },
   TWO_PCS,
 ];
 
