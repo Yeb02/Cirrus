@@ -22,8 +22,20 @@ export const PROTECTED_TAG_KEYS: ReadonlyMap<string, TagKeyShape> = new Map<stri
   ['suivant', { type: 'word', scope: 'connection', multi: false }],
 ]);
 
-/** A number as typed, the French way too (« 1,5 », « -2.25 », « 1 000 » once its spaces are dropped): the app's parseTag reads the same. */
+/** A number as typed, the French way too (« 1,5 », « -2.25 », « 1 000 » once its spaces are dropped). */
 const NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
+
+/**
+ * A number typed in a tag, read the French way too: its spaces dropped (the no-break ones too), a comma or a point
+ * before the decimals; null when it is no number, or none that is finite (four hundred nines). For the app's parseTag,
+ * and what tagValueFits reads a number type by.
+ */
+export function readTagNumber(text: string): number | null {
+  const compact = text.replace(/\s/g, '');
+  if (!NUMBER.test(compact)) return null;
+  const n = Number(compact.replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
 
 /**
  * Whether a definition accepts `value` (a carried tag's, or its default), as the app's parseTag reads a typed one: a
@@ -33,7 +45,7 @@ const NUMBER = /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
 export function tagValueFits(def: TagKeyDef, value: string | number | undefined): boolean {
   if (def.type === 'word') return value === undefined;
   if (value === undefined || value === '') return false;
-  if (def.type === 'number') return typeof value === 'number' ? Number.isFinite(value) : NUMBER.test(value.replace(/\s/g, ''));
+  if (def.type === 'number') return typeof value === 'number' ? Number.isFinite(value) : readTagNumber(value) !== null;
   if (def.type === 'enum') return def.enumValues?.some((e) => e.name === value || e.rank === value) ?? false;
   return true;
 }

@@ -1,15 +1,15 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addedViolation, CommandError, connect, createNode, createPlan, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey, editConnection, editNode,
-  renameEnumValue, renameTagKey,
+  type Action, addedViolation, CommandError, connect, connectionName, createNode, createPlan, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
+  editConnection, editNode, renameEnumValue, renameTagKey,
 } from '../src/commands.ts';
-import { invertAction, UndoStack } from '../src/history.ts';
+import { invertAction, UndoConflictError, UndoStack } from '../src/history.ts';
 import { uuidv7 } from '../src/ids.ts';
 import * as core from '../src/index.ts';
 import { checkState } from '../src/invariants.ts';
 import type { Id, TagKeyDef, TagValue } from '../src/model.ts';
 import { invertOp, MAX_ID_CHARS } from '../src/ops.ts';
-import { PROTECTED_TAG_KEYS } from '../src/registry.ts';
+import { PROTECTED_TAG_KEYS, readTagNumber } from '../src/registry.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
 import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State, taggedWith } from '../src/state.ts';
 import { parseUnit, reconcile, type RemoteUnit, type Unit } from '../src/sync.ts';
@@ -40,8 +40,8 @@ function world(defs: TagKeyDef[] = []) {
   for (const after of defs) applyOp(s, { t: 'tagKey', before: null, after });
   let x = 0;
   const mk = (title: string, tags: TagValue[] = []) => created(run(s, createNode(s, { plan: P, title, x: (x += 100), y: 0, k: 0, tags })), 'node');
-  const link = (a: Id, b: Id, tags: TagValue[] = [], title = '') =>
-    created(run(s, connect(s, { plan: P, title, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }], tags })), 'connection');
+  const link = (a: Id, b: Id, tags: TagValue[] = [], title = '', relation = '') =>
+    created(run(s, connect(s, { plan: P, title, relation, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }], tags })), 'connection');
   return { s, P, mk, link };
 }
 
@@ -80,6 +80,13 @@ test('PROTECTED_TAG_KEYS : les clés dont Cirrus se sert, chacune avec le type, 
   expect(PROTECTED_TAG_KEYS.get('partie')).toEqual({ type: 'number', scope: 'connection', multi: false });
   expect(PROTECTED_TAG_KEYS.get('suivant')).toEqual({ type: 'word', scope: 'connection', multi: false });
   expect(PROTECTED_TAG_KEYS.get('label')).toEqual({ type: 'text', scope: 'node', multi: false });
+});
+
+test('readTagNumber : un nombre tapé, à la française aussi, ses espaces ôtées (insécables comprises) ; sinon null, et null pour un nombre infini', () => {
+  const read = (text: string) => readTagNumber(text);
+  expect([read('1,5'), read(' 1 000 '), read('1 000'), read('-2.25'), read('+3'), read(',5'), read('5,'), read('0')]).toEqual([1.5, 1000, 1000, -2.25, 3, 0.5, 5, 0]);
+  for (const text of ['', ' ', 'abc', '1,5,2', '1e3', '1.2.3', '−3', '9'.repeat(400)]) expect(read(text), text).toBeNull();
+  expect(core.readTagNumber).toBe(readTagNumber);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -133,6 +140,19 @@ test('defineTagKey : une énumération sans nom, à deux noms ou deux rangs éga
   expect(refusal(values([{ name: '', rank: 1 }]))).toBe('Une valeur de l’énumération n’a pas de nom.');
   expect(refusal(values([{ name: 'bas', rank: 1 }, { name: 'bas', rank: 2 }]))).toBe('Deux valeurs de l’énumération s’appellent « bas ».');
   expect(refusal(values([{ name: 'bas', rank: 1 }, { name: 'haut', rank: 1 }]))).toBe('Deux valeurs de l’énumération ont le rang 1.');
+  // parseTag trims a typed value: a name with a space around it could never be typed.
+  for (const name of [' bas', 'bas ']) expect(refusal(values([{ name, rank: 1 }])), name).toBe(`Le nom de valeur « ${name} » commence ou finit par une espace.`);
+});
+
+test('defineTagKey : une valeur par défaut numérique non finie est refusée, quel que soit le type (le serveur la refuserait)', () => {
+  const { s } = world();
+  for (const type of ['text', 'number', 'date'] as const) {
+    for (const defaultValue of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(refusal(() => defineTagKey(s, { key: 'k', type, scope: 'node', multi: false, required: true, defaultValue })), `${type} ${defaultValue}`)
+        .toBe('La valeur par défaut du tag « k » n’est pas un nombre fini.');
+    }
+  }
+  expect(() => accepted(defineTagKey(s, { key: 'k', type: 'text', scope: 'node', multi: false, required: true, defaultValue: 2 }))).not.toThrow();
 });
 
 test('defineTagKey : un type qu’une valeur portée ne respecterait plus est refusé ; le message compte les objets et nomme le premier par son titre', () => {
@@ -438,6 +458,38 @@ test('renameEnumValue : refusé hors d’une énumération du registre, pour une
   expect(refusal(() => renameEnumValue(s, 'niveau', 'bas', 'haut'))).toBe('Le tag « niveau » a déjà une valeur « haut ».');
   expect(refusal(() => renameEnumValue(s, 'niveau', 'bas', ' '))).toBe('Le nom de la valeur est vide.');
   expect(refusal(() => renameEnumValue(s, 'niveau', 'bas', 'bas'))).toBe('La valeur s’appelle déjà « bas ».');
+  for (const to of [' faible', 'faible ']) expect(refusal(() => renameEnumValue(s, 'niveau', 'bas', to)), to).toBe(`Le nom de valeur « ${to} » commence ou finit par une espace.`);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// How a refusal names a connection (review of task 3a, Minor 5)
+
+test('connectionName : une connexion se nomme par son titre, sinon la première ligne de sa relation, raccourcie, sinon par ses membres', () => {
+  const { s, mk, link, P } = world([TEXT]);
+  const a = mk('A'), b = mk('B'), c = mk('C'), u = mk('');
+  const name = (id: Id) => connectionName(s, s.connections.get(id)!);
+  expect(name(link(a, b, [], 'Relie', 'est un cas de'))).toBe('« Relie »');
+  expect(name(link(a, b, [], '', '\n  est un cas\tparticulier de \\(x\\)\nsuite'))).toBe('« est un cas particulier de \\(x\\) »');
+  expect(name(link(a, b, [], '', 'x'.repeat(100)))).toBe(`« ${'x'.repeat(80)}… »`);
+  expect(name(link(a, b, [], '', ' \n\t'))).toBe('la connexion entre « A » et « B »');
+  expect(name(link(b, u))).toBe('la connexion entre « B » et « Sans titre »');
+  const three = created(run(s, connect(s, { plan: P, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }, { node: c, role: 'associate' }] })), 'connection');
+  expect(name(three)).toBe('la connexion entre « A », « B » et « C »');
+  // A connection to the trash with its node keeps the members it had left: one.
+  const ac = link(a, c);
+  run(s, deleteEverywhere(s, c));
+  expect(s.connections.get(ac)!.members).toHaveLength(1);
+  expect(name(ac)).toBe('la connexion de « A »');
+  expect(core.connectionName).toBe(connectionName);
+});
+
+test('les refus nomment une connexion comme connectionName ; une connexion nommée par sa relation passe avant une nommée par ses membres', () => {
+  const { s, mk, link } = world([TEXT]);
+  const a = mk('A'), b = mk('B');
+  link(a, b, [{ key: 'statut', value: 'x' }]);
+  expect(refusal(() => defineTagKey(s, { ...TEXT, scope: 'node' }))).toBe('1 connexion porte une valeur que ce changement rendrait invalide : la connexion entre « A » et « B ».');
+  link(b, a, [{ key: 'statut', value: 'y' }], '', 'précède');
+  expect(refusal(() => defineTagKey(s, { ...TEXT, scope: 'node' }))).toBe('2 connexions portent une valeur que ce changement rendrait invalide, dont « précède ».');
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -573,12 +625,107 @@ test.each(['mine first', 'theirs first'] as const)('synchro : une valeur d’én
   expect(server.nodes.get(N)!.tags).toEqual([{ key: 'niveau', value: order === 'mine first' ? 'faible' : 'bas' }]);
 });
 
-test('synchro : un renommage croisé avec un changement de type ailleurs converge, sans violation', () => {
-  const { s, N } = base();
+test.each([
+  { change: 'de type', def: { ...TEXT, type: 'date' } },
+  { change: 'de multiplicité', def: { ...TEXT, multi: true } },
+] as const)('synchro : un renommage croisé avec un changement $change ailleurs converge, sans violation ; la définition changée revient sous l’ancien nom, sans porteur', ({ def }) => {
   for (const order of ['mine first', 'theirs first'] as const) {
-    crossed(s, (x) => renameTagKey(x, 'statut', 'état'), (x) => defineTagKey(x, { ...TEXT, multi: true }), order, { mine: 1, theirs: 2 });
+    for (const at of [{ mine: 1, theirs: 2 }, { mine: 2, theirs: 1 }]) {
+      const { s, N } = base();
+      const { server } = crossed(s, (x) => renameTagKey(x, 'statut', 'état'), (x) => defineTagKey(x, def), order, at);
+      expect(server.nodes.get(N)!.tags, `${order} ${at.mine}`).toEqual([{ key: 'état', value: 'a' }]);
+      expect(server.tagKeys.get('statut'), `${order} ${at.mine}`).toEqual(def);
+      expect(taggedWith(server, 'statut').size).toBe(0);
+    }
   }
-  expect(N).toBeDefined();
+});
+
+test.each([
+  { order: 'mine first', at: { mine: 1, theirs: 2 } },
+  { order: 'mine first', at: { mine: 2, theirs: 1 } },
+  { order: 'theirs first', at: { mine: 1, theirs: 2 } },
+  { order: 'theirs first', at: { mine: 2, theirs: 1 } },
+] as const)('synchro : un renommage croisé avec le retrait de la clé du registre ailleurs ($order, le mien à $at.mine) : le retrait se perd, la définition reste sous le nouveau nom', ({ order, at }) => {
+  const { s, N } = base();
+  const { server, dropped } = crossed(s, (x) => renameTagKey(x, 'statut', 'état'), (x) => deleteTagKey(x, 'statut'), order, at);
+  expect(dropped).toEqual([]);
+  expect([...server.tagKeys.keys()]).toEqual(['état']);
+  expect(server.tagKeys.get('état')).toEqual({ ...TEXT, key: 'état' });
+  expect(server.nodes.get(N)!.tags).toEqual([{ key: 'état', value: 'a' }]);
+});
+
+test.each([
+  { order: 'mine first', at: { mine: 1, theirs: 2 } },
+  { order: 'mine first', at: { mine: 2, theirs: 1 } },
+  { order: 'theirs first', at: { mine: 1, theirs: 2 } },
+  { order: 'theirs first', at: { mine: 2, theirs: 1 } },
+] as const)('synchro : un renommage croisé avec la mise à la corbeille ailleurs d’un nœud qui portait la clé ($order, le mien à $at.mine) : la modification gagne (spec 6.2), le nœud revient, avec la nouvelle clé, partout pareil', ({ order, at }) => {
+  const { s, N } = base();
+  const P = [...s.plans.keys()][0];
+  const { server, dropped } = crossed(s, (x) => renameTagKey(x, 'statut', 'état'), (x) => deleteEverywhere(x, N), order, at);
+  expect(dropped).toEqual([]);
+  const n = server.nodes.get(N)!;
+  expect(n.trashedAt).toBeUndefined();
+  expect(n.tags).toEqual([{ key: 'état', value: 'a' }]);
+  // Back where its deletion took it from.
+  expect(server.placements.has(`${P}|${N}`)).toBe(true);
+});
+
+// An undo checked as a command (review of task 3a, Important 1): a write received from another PC since may make it
+// add a violation — it is then refused, like an undo whose objects changed since, before anything is written.
+
+test('Ctrl+Z d’un renommage de valeur, après qu’un autre PC a donné le nouveau nom à un objet : refusé, « a été modifié depuis », l’état et la pile intacts', () => {
+  const { s, mk } = world([NIVEAU]);
+  mk('N', [{ key: 'niveau', value: 'bas' }]);
+  const M = mk('M');
+  const server = copy(s), journal: RemoteUnit[] = [];
+  // PC A renames the value and sends it; PC B, up to date, gives the new name to M; A receives B's write.
+  const stack = new UndoStack();
+  const mine = run(s, renameEnumValue(s, 'niveau', 'bas', 'faible'));
+  stack.record(mine);
+  const u = unitOf(mine, 'pc-a', T0 + 1);
+  expect(accept(server, journal, u)).toBe('accepted');
+  const b = copy(server);
+  expect(accept(server, journal, unitOf(run(b, editNode(b, M, { tags: [{ key: 'niveau', value: 'faible' }] })), 'pc-b', T0 + 2))).toBe('accepted');
+  const r = reconcile(s, [u], journal.map(wire), []);
+  expect([r.acked, r.dropped]).toEqual([[u.unit], []]);
+  expect(image(s)).toBe(image(server));
+  const before = image(s);
+  expect(() => stack.prepareUndo(s)).toThrow(new UndoConflictError('Impossible d’annuler : « Renommer la valeur « bas » du tag « niveau » en « faible » » a été modifié depuis.'));
+  expect(image(s)).toBe(before);
+  expect(stack.canUndo).toBe(true);
+  expect(checkState(s)).toEqual([]);
+});
+
+test.each([
+  { name: 'un renommage de clé, l’ancienne clé reçue avec une valeur hors de l’énumération', command: (s: State) => renameTagKey(s, 'niveau', 'grade'), value: 'zzz' },
+  { name: 'un retrait du registre, la clé reçue avec une valeur hors de l’énumération', command: (s: State) => deleteTagKey(s, 'niveau'), value: 'zzz' },
+  {
+    name: 'une valeur ajoutée à l’énumération, reçue sur un objet', value: 'extrême',
+    command: (s: State) => defineTagKey(s, { ...NIVEAU, enumValues: [...NIVEAU.enumValues!, { name: 'extrême', rank: 4 }] }),
+  },
+])('Ctrl+Z refusé quand il ajouterait une violation : $name', ({ command, value }) => {
+  const { s, mk } = world([NIVEAU]);
+  mk('N', [{ key: 'niveau', value: 'bas' }]);
+  const M = mk('M');
+  const stack = new UndoStack();
+  const a = run(s, command(s));
+  stack.record(a);
+  // Received from another PC (not on this PC's stack).
+  run(s, editNode(s, M, { tags: [{ key: 'niveau', value } as TagValue] }));
+  expect(() => stack.undo(s)).toThrow(new UndoConflictError(`Impossible d’annuler : « ${a.label} » a été modifié depuis.`));
+  expect(checkState(s)).toEqual([]);
+});
+
+test('Ctrl+Y refusé quand il ajouterait une violation : une valeur renommée, annulée, puis donnée ailleurs sous son ancien nom', () => {
+  const { s, mk } = world([NIVEAU]);
+  const M = mk('M');
+  const stack = new UndoStack();
+  stack.record(run(s, renameEnumValue(s, 'niveau', 'bas', 'faible')));
+  run(s, stack.undo(s)!);
+  run(s, editNode(s, M, { tags: [{ key: 'niveau', value: 'bas' }] }));
+  expect(() => stack.redo(s)).toThrow(new UndoConflictError('Impossible de rétablir : « Renommer la valeur « bas » du tag « niveau » en « faible » » a été modifié depuis.'));
+  expect(stack.canRedo).toBe(true);
 });
 
 test('synchro : les actions du registre et leurs annulations passent les contrôles du serveur (parseUnit), une connexion taguée comprise', () => {

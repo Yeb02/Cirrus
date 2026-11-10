@@ -1,4 +1,4 @@
-import { validAnchor } from './annotation.ts';
+import { ANNOTATION_TITLE_CHARS, annotationTitle, validAnchor } from './annotation.ts';
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
 import type {
@@ -639,21 +639,44 @@ function misfits(s: State, def: TagKeyDef, ids: Iterable<Id>): Carrier[] {
 
 const french = new Intl.Collator('fr');
 
+/** The first line of a relation that is not blank, on one line, shortened as an annotation's title is; '' when none. */
+const relationLine = (relation: string): string => annotationTitle(relation.split('\n').find((l) => l.trim() !== '') ?? '', ANNOTATION_TITLE_CHARS);
+
+/**
+ * How a message names a connection (the registry's refusals, plan 6a, D4): « its title »; else « the first line of its
+ * relation », shortened to ANNOTATION_TITLE_CHARS characters; else by its members' titles, « la connexion entre « A »
+ * et « B » » (« « A », « B » et « C » » for more; « la connexion de « A » » for one left in the trash).
+ */
+export function connectionName(s: State, c: ConnectionRec): string {
+  if (c.title !== '') return `« ${c.title} »`;
+  const line = relationLine(c.relation);
+  if (line !== '') return `« ${line} »`;
+  const names = c.members.map((m) => `« ${s.nodes.get(m.node)?.title || 'Sans titre'} »`);
+  if (names.length === 0) return 'une connexion sans membre';
+  if (names.length === 1) return `la connexion de ${names[0]}`;
+  return `la connexion entre ${names.slice(0, -1).join(', ')} et ${names.at(-1)}`;
+}
+
 /**
  * Refuses a change of the registry that the values of `bad` would no longer respect (D4): how many objects, and the
- * first — one alive before one in the trash, one with a title before one without, then in French order.
+ * first — one alive before one in the trash, one named by its title (a connection: or its relation) before one without,
+ * then in French order of their names.
  */
-function refuseMisfits(bad: Carrier[]): void {
+function refuseMisfits(s: State, bad: Carrier[]): void {
   if (bad.length === 0) return;
-  const rank = (c: Carrier) => (c.rec.trashedAt !== undefined ? 2 : 0) + (c.rec.title === '' ? 1 : 0);
-  let first = bad[0];
-  for (const c of bad) {
-    const d = rank(c) - rank(first) || french.compare(c.rec.title, first.rec.title) || (c.rec.id < first.rec.id ? -1 : 0);
-    if (d < 0) first = c;
+  const named = bad.map((c) => {
+    const nameless = c.kind === 'node' ? c.rec.title === '' : c.rec.title === '' && relationLine(c.rec.relation) === '';
+    const name = c.kind === 'node' ? `« ${c.rec.title || 'Sans titre'} »` : connectionName(s, c.rec);
+    return { c, name, rank: (c.rec.trashedAt !== undefined ? 2 : 0) + (nameless ? 1 : 0) };
+  });
+  let first = named[0];
+  for (const x of named) {
+    const d = x.rank - first.rank || french.compare(x.name, first.name) || (x.c.rec.id < first.c.rec.id ? -1 : 0);
+    if (d < 0) first = x;
   }
   const nodes = bad.filter((c) => c.kind === 'node').length;
   const [one, many] = nodes === bad.length ? ['nœud', 'nœuds'] : nodes === 0 ? ['connexion', 'connexions'] : ['objet', 'objets'];
-  const name = `« ${first.rec.title || 'Sans titre'} »${first.rec.trashedAt !== undefined ? ' (à la corbeille)' : ''}`;
+  const name = `${first.name}${first.c.rec.trashedAt !== undefined ? ' (à la corbeille)' : ''}`;
   throw new CommandError(bad.length === 1
     ? `1 ${one} porte une valeur que ce changement rendrait invalide : ${name}.`
     : `${bad.length} ${many} portent une valeur que ce changement rendrait invalide, dont ${name}.`);
@@ -667,17 +690,27 @@ function definition(def: TagKeyDef): TagKeyDef {
   return out;
 }
 
-/** An enumeration's values each named, with a finite rank, no name nor rank twice (normalizeTag reads either); a default the definition accepts. */
+/** An enumeration value's name: parseTag trims a typed value, so a space around it could never be typed. */
+function checkValueName(name: string): void {
+  if (name.trim() !== name) throw new CommandError(`Le nom de valeur « ${name} » commence ou finit par une espace.`);
+}
+
+/**
+ * An enumeration's values each named (no space around), with a finite rank, no name nor rank twice (normalizeTag reads
+ * either); a default the definition accepts, never a number that is not finite (parseOp would refuse it at the gate).
+ */
 function checkDefinition(def: TagKeyDef): void {
   const names = new Set<string>(), ranks = new Set<number>();
   for (const e of def.enumValues ?? []) {
     if (e.name.trim() === '') throw new CommandError('Une valeur de l’énumération n’a pas de nom.');
+    checkValueName(e.name);
     if (!Number.isFinite(e.rank)) throw new CommandError(`Le rang de la valeur « ${e.name} » n’est pas un nombre.`);
     if (names.has(e.name)) throw new CommandError(`Deux valeurs de l’énumération s’appellent « ${e.name} ».`);
     if (ranks.has(e.rank)) throw new CommandError(`Deux valeurs de l’énumération ont le rang ${e.rank}.`);
     names.add(e.name);
     ranks.add(e.rank);
   }
+  if (typeof def.defaultValue === 'number' && !Number.isFinite(def.defaultValue)) throw new CommandError(`La valeur par défaut du tag « ${def.key} » n’est pas un nombre fini.`);
   if (def.defaultValue !== undefined && !tagValueFits(def, def.defaultValue)) {
     throw new CommandError(`La valeur par défaut « ${def.defaultValue} » ne convient pas au tag « ${def.key} ».`);
   }
@@ -698,7 +731,7 @@ export function defineTagKey(s: State, def: TagKeyDef): Action {
   checkDefinition(next);
   if (old && canonical(old) === canonical(next)) throw new CommandError(`La définition du tag « ${key} » est déjà celle-ci.`);
   // Whether it is required and its default never make a carried value wrong.
-  if (!old || !sameShape(old, next) || canonical(old.enumValues ?? null) !== canonical(next.enumValues ?? null)) refuseMisfits(misfits(s, next, taggedWith(s, key)));
+  if (!old || !sameShape(old, next) || canonical(old.enumValues ?? null) !== canonical(next.enumValues ?? null)) refuseMisfits(s, misfits(s, next, taggedWith(s, key)));
   return transact(s, (d) => {
     d.tagKey(key, next);
     return d.finish(old ? `Modifier le tag « ${key} »` : `Créer le tag « ${key} »`);
@@ -760,8 +793,8 @@ export function renameTagKey(s: State, from: string, to: string): Action {
       const fits = renamedHere ? single || olds.every((v) => tagValueFits(moved, v)) : tagValuesFit(moved, c.kind, olds);
       if (!fits) bad.push(c);
     }
-    refuseMisfits(bad);
-  } else if (target) refuseMisfits(carriers.filter((c, i) => !tagValuesFit(target, c.kind, valuesOf(tags[i], to))));
+    refuseMisfits(s, bad);
+  } else if (target) refuseMisfits(s, carriers.filter((c, i) => !tagValuesFit(target, c.kind, valuesOf(tags[i], to))));
   return transact(s, (d) => {
     if (moved) {
       d.tagKey(from, null);
@@ -792,6 +825,7 @@ export function renameEnumValue(s: State, key: string, from: string, to: string)
   const values = def.enumValues ?? [];
   if (!values.some((e) => e.name === from)) throw new CommandError(`Le tag « ${key} » n’a pas de valeur « ${from} ».`);
   if (to.trim() === '') throw new CommandError('Le nom de la valeur est vide.');
+  checkValueName(to);
   if (to === from) throw new CommandError(`La valeur s’appelle déjà « ${to} ».`);
   if (values.some((e) => e.name === to)) throw new CommandError(`Le tag « ${key} » a déjà une valeur « ${to} ».`);
   const next: TagKeyDef = { ...def, enumValues: values.map((e) => (e.name === from ? { name: to, rank: e.rank } : e)) };
