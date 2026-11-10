@@ -29,14 +29,23 @@ export interface Chip { text: string; title: string; retry: boolean; tone: 'ok' 
 /** What the interface shows of the synchronisation. */
 export interface SyncView { veil: boolean; status: SyncStatus; chip: Chip | null }
 
+/** What the chip says once an update is checked and armed for the app's quit (plan 9, D4). */
+export const UPDATE_READY = 'Mise à jour prête : elle s’installera à la fermeture.';
+
 /**
  * The chip (D8): none without a server; « À jour »; « Envoi de n actions… »; « Hors ligne », a click trying again — so
  * too a first connection still under way once the veil gave up (`gaveUp`); « Serveur : <raison> ». The clock's
- * warning in its tooltip.
+ * warning in its tooltip. An update armed (plan 9, D4) takes the place of « À jour » and of a refusal — the server's
+ * other format among them, which the update resolves —, the refusal kept in the tooltip; the other states keep their
+ * text, the update in their tooltip.
  */
 export function chipOf(status: SyncStatus, gaveUp: boolean): Chip | null {
-  const clock = status.clockWarning ? `\n${status.clockWarning}` : '';
+  const clock = `${status.clockWarning ? `\n${status.clockWarning}` : ''}${status.updateReady ? `\n${UPDATE_READY}` : ''}`;
   const chip = (text: string, tone: Chip['tone'], retry = false): Chip => ({ text, title: `${retry ? 'Réessayer' : text}${clock}`, retry, tone });
+  if (status.updateReady && ((status.state === 'live' && status.pending === 0) || status.state === 'refused')) {
+    const why = status.state === 'refused' ? `\nServeur : ${status.message}` : '';
+    return { text: UPDATE_READY, title: `${UPDATE_READY}${why}${status.clockWarning ? `\n${status.clockWarning}` : ''}`, retry: false, tone: 'ok' };
+  }
   switch (status.state) {
     case 'off': return null;
     case 'connecting': return gaveUp ? chip('Hors ligne', 'off', true) : chip('Connexion…', 'busy');
@@ -69,6 +78,7 @@ export class SyncSession {
   private gaveUp = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private clockTold: string | undefined;
+  private updateTold: string | undefined;
   /** This PC's identifier, which signs its writes (from the load). */
   private pc = '';
   /** The statuses the main process sent: one sent after a call began is newer than that call's answer. */
@@ -288,6 +298,11 @@ export class SyncSession {
     if (s.clockWarning && s.clockWarning !== this.clockTold) {
       this.clockTold = s.clockWarning;
       this.deps.toast(s.clockWarning);
+    }
+    // An update refused (plan 9, D4): its notification, once in the session.
+    if (s.updateRefused && s.updateRefused !== this.updateTold) {
+      this.updateTold = s.updateRefused;
+      this.deps.toast(s.updateRefused);
     }
     // Caught up, or refused (nothing more will come): the veil lifts. « off » does not: waking stops the client first.
     if (this.veil && (s.state === 'live' || s.state === 'refused')) this.lower(false);

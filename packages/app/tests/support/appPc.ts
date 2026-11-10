@@ -51,6 +51,9 @@ export class AppPc {
   /** « Tout télécharger » as the window was told it, each change (cirrus:sync:download-all, plan 5b, D8). */
   readonly downloadAllTold: DownloadAllProgress[] = [];
   veils = 0;
+  /** What the sync client told the updater (plan 9, D4): each hello's official version, and the format refusals (409). */
+  readonly versionsHeard: (string | null)[] = [];
+  formatRefusals = 0;
   /** The app's relaunches asked for (a base taken from the server, D7): the test restarts it itself. */
   relaunched = 0;
   /** Whether the window is there: closed, the host's messages find no one. */
@@ -97,6 +100,7 @@ export class AppPc {
     this.host = new SyncHost({
       fetch: this.net.fetch, store: this.store, dir: this.dir, pc: pcId(this.dir), secrets: fileSecrets(this.dir, XOR), secretsAt: (d) => fileSecrets(d, XOR),
       canEncrypt: () => this.canEncrypt, params: () => this.params, now: () => lab.clock, machineName: 'PORTABLE', window, relaunch: () => { this.relaunched++; },
+      update: { hello: (v) => { this.versionsHeard.push(v); }, refused: () => { this.formatRefusals++; } },
     });
     // A page's listeners, until it goes (SyncSession.dispose: a reload, a close).
     const on = <K extends keyof AppPc['listeners']>(k: K) => (fn: AppPc['listeners'][K][number]) => {

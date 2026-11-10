@@ -88,7 +88,20 @@ export interface SyncDeps {
   freeBytes?: (dir: string) => Promise<number>;
   downloadAll?: (p: DownloadAllProgress) => void;
   downloadAllEveryMs?: number;
+  /** The updater (plan 9, D4: update/updater.ts), told what each hello says of the versions; none: no one is told. */
+  update?: UpdateHook;
 }
+
+/** What the client tells the updater (plan 9, D4) at each hello. */
+export interface UpdateHook {
+  /** A hello answered: the official version the server serves (its version.json), or null. */
+  hello(version: string | null): void;
+  /** A hello refused for its format (409): an app older than the server's data looks for its update. */
+  refused(): void;
+}
+
+/** The official version a hello gives: a short text, which the updater reads again; null for anything else. */
+const helloVersion = (v: unknown): string | null => (typeof v === 'string' && v.length <= 32 ? v : null);
 
 /** GET /status's answer (plan 5b, D8), checked: each size a non-negative number, `counting` a boolean; null otherwise. */
 function spaceOf(body: unknown): ServerSpace | null {
@@ -390,15 +403,19 @@ export class SyncClient {
    */
   private async session(conn: Connection, started: (sender: Promise<void>) => void): Promise<void> {
     const t0 = this.deps.now();
-    const hello = await json(await conn.request('/hello', { headers: FORMAT }));
+    const answer = await conn.request('/hello', { headers: FORMAT });
+    // Another format (D10): this app is older than the server's data, or newer — the updater tells which (plan 9, D4).
+    if (answer.status === 409) this.tellUpdate((u) => u.refused());
+    const hello = await json(answer);
     const t1 = this.deps.now();
-    const { serverTime, lastSeq, baseId } = (hello ?? {}) as { serverTime?: unknown; lastSeq?: unknown; baseId?: unknown };
+    const { serverTime, lastSeq, baseId, version } = (hello ?? {}) as { serverTime?: unknown; lastSeq?: unknown; baseId?: unknown; version?: unknown };
     if (
       typeof serverTime !== 'number' || !Number.isFinite(serverTime) || !Number.isSafeInteger(lastSeq) || (lastSeq as number) < 0
       || typeof baseId !== 'string' || baseId.length === 0 || baseId.length > MAX_ID_CHARS
     ) {
       throw new Refusal('Réponse du serveur illisible à /hello : mets à jour Cirrus, ou le serveur.');
     }
+    this.tellUpdate((u) => u.hello(helloVersion(version)));
     // The base this PC follows (R31): another one, the server's data replaced, stops here, before anything of it is
     // received (Minor 2 of the final review: its lines would otherwise apply, unrelated); none known (a PC paired
     // before R31), it takes the server's.
@@ -564,6 +581,31 @@ export class SyncClient {
     return exchange(this.deps.fetch, config.url + path, path, { headers: { Authorization: `Bearer ${config.token}` } }, {
       signal, timeoutMs: this.deps.params().syncRequestTimeoutMs, transfer: true,
     });
+  }
+
+  /**
+   * A file of the server's versions/ (plan 9, D4: version.json, its signature), asked with this PC's token of the server
+   * of the connection under way, or else of the secrets now — a hello refused for its format has closed its connection —,
+   * within syncRequestTimeoutMs (exchange). Null without a server paired.
+   */
+  async versionFile(name: string): Promise<Response | null> {
+    const config = this.conn?.config ?? this.deps.secrets.read();
+    if (!config) return null;
+    const path = `/versions/${encodeURIComponent(name)}`;
+    return exchange(this.deps.fetch, config.url + path, path, { headers: { Authorization: `Bearer ${config.token}` } }, {
+      signal: new AbortController().signal, timeoutMs: this.deps.params().syncRequestTimeoutMs,
+    });
+  }
+
+  /** The updater told (deps.update), its failure only said: the sync goes on whatever it does. */
+  private tellUpdate(fn: (u: UpdateHook) => void): void {
+    const hook = this.deps.update;
+    if (!hook) return;
+    try {
+      fn(hook);
+    } catch (e) {
+      console.warn(`Mise à jour : ${messageOf(e)}`);
+    }
   }
 
   /**

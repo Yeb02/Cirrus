@@ -14,7 +14,7 @@ import type { Id, Reconciliation, RemoteUnit } from '@cirrus/core';
  * - refused: the server refuses (a token, a format, data replaced: its reason), or a write received does not apply here
  *   (`diverged`: this PC's state no longer follows the server's); not tried again until start().
  * `clockWarning` (D4), once the server's time is known, when this PC's clock differs from it by more than
- * syncClockSkewWarnMs.
+ * syncClockSkewWarnMs. The updater's word (plan 9, D4: UpdateWord) with it, whatever the state.
  */
 export type SyncStatus = (
   | { state: 'off' }
@@ -23,7 +23,14 @@ export type SyncStatus = (
   | { state: 'live'; pending: number }
   | { state: 'offline'; pending: number }
   | { state: 'refused'; message: string; diverged?: true }
-) & { clockWarning?: string };
+) & { clockWarning?: string } & UpdateWord;
+
+/**
+ * The signed updates' word (plan 9, D4: update/updater.ts), carried by the sync's status to the chip: `updateReady`, an
+ * update checked and armed, installed at the app's quit; `updateRefused`, the notification of an update refused, said
+ * once.
+ */
+export interface UpdateWord { updateReady?: true; updateRefused?: string }
 
 /** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */
 export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }

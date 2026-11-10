@@ -27,6 +27,8 @@ import { stagedDir } from './sync/firstSync.ts';
 import { SyncHost } from './sync/host.ts';
 import { quitsInsteadOfRelaunch, startBase } from './sync/swap.ts';
 import { appWindows, tokenCipher, wireSync } from './sync/wire.ts';
+import type { Updater } from './update/updater.ts';
+import { wireUpdater } from './update/wire.ts';
 import { createWindow } from './window.ts';
 
 /**
@@ -37,6 +39,8 @@ import { createWindow } from './window.ts';
  * It fetches a publication's metadata, and an arXiv article's PDF, when the user imports one (publications/, plan 4c).
  * With a server paired, it syncs the base with it (sync/, plan 5a): the interface reconciles, this process writes.
  * It writes the interface's consultations, in batches, to consultations.db beside the base (plan 6a, D6).
+ * Paired, it looks for the official version's update, checks its signature and its installer, and installs it at the
+ * app's quit (update/, plan 9, D4).
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
  * for the sync client to stop.
  * This file starts and ends the process; the interface's calls are answered by domain under ipc/ (the sync's in
@@ -63,6 +67,8 @@ let pc = '';
 let sync: SyncHost | null = null;
 /** The consultations' file (plan 6a, D6), once the base is open: created at the first batch. */
 let consultations: Consultations | null = null;
+/** The signed updates (plan 9, D4: update/), once the sync is made; never in bench or capture mode. */
+let updater: Updater | null = null;
 const capture = process.env.CIRRUS_CAPTURE;
 const bench = process.env.CIRRUS_BENCH;
 const benchBuild = process.env.CIRRUS_BENCH_BUILD;
@@ -305,13 +311,18 @@ void app.whenReady().then(() => {
     // Shared settings received (task 6): read again by what reads them here, and told to the interface.
     window: { ...appWindows, settings: (changes) => { latexParams = null; appWindows.settings(changes); } },
     // A base taken from the server (D7): the app quits as it does (the last snapshot, the sync stopped, the base closed),
-    // then starts again, and swaps it in before it opens; only quits for the interface's checks (noRelaunch, R27).
+    // then starts again, and swaps it in before it opens; only quits for the interface's checks (noRelaunch, R27). An
+    // update armed is not installed at this quit: its installer would close the app starting again (plan 9, D4).
     relaunch: () => {
+      updater?.disarm();
       if (!noRelaunch) app.relaunch();
       app.quit();
     },
+    // What each hello says of the versions, to the updater (plan 9, D4).
+    update: { hello: (version) => { void updater?.heard(version); }, refused: () => { void updater?.formatRefused(); } },
   });
   wireSync(sync);
+  if (!capture && !bench) updater = wireUpdater({ host: sync, dev: identity.dev, params: currentParams, env: process.env, capture: false });
   // A blob absent from the store is asked of the server, with one paired (D6); a thumbnail's never.
   protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request, sync?.blobFetcher() ?? null));
   createWindow({

@@ -5,7 +5,7 @@ import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { ServerImport } from '../publications/via.ts';
 import { SharedSettings } from '../settings.ts';
-import { type OpenFile, SyncClient } from './client.ts';
+import { type OpenFile, SyncClient, type UpdateHook } from './client.ts';
 import type { SecretStore } from './config.ts';
 import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
@@ -13,6 +13,7 @@ import { isBaseId } from './firstSync.ts';
 import { Pairing } from './pairing.ts';
 import type {
   Committed, DownloadAllPlan, DownloadAllProgress, DownloadAllStart, OpenElsewhere, PairResult, ReconcileOutcome, ServerInfo, ServerStatus, SyncIncoming, SyncStatus,
+  UpdateWord,
 } from './protocol.ts';
 import { Reconciliations } from './reconciliations.ts';
 import { writeRefusal } from './sender.ts';
@@ -66,6 +67,8 @@ export interface HostDeps {
   window: HostWindow;
   /** The app quits and starts again: on the base taken from the server, swapped in before it opens (D7, R17). */
   relaunch(): void;
+  /** The updater (plan 9, D4), told what each hello says of the versions, by every client this host makes. */
+  update?: UpdateHook;
 }
 
 /** A file open in full screen as the interface names it (cirrus:sync:tex:opened, :closed): null for anything that is not one. */
@@ -103,6 +106,8 @@ export class SyncHost {
   /** The reconciliations sent to the interface, awaiting its answer (reconciliations.ts). */
   private readonly reconciliations: Reconciliations;
   private last: SyncStatus = { state: 'off' };
+  /** The updater's word (plan 9, D4), carried by every status the window is told. */
+  private update: UpdateWord = {};
   /** The interface asked for the synchronisation (cirrus:sync:start), a server being paired. */
   private started = false;
   private closed = false;
@@ -131,9 +136,40 @@ export class SyncHost {
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       status: (s) => {
         this.last = s;
-        deps.window.status(s);
+        deps.window.status(this.told());
       },
+      ...(deps.update ? { update: deps.update } : {}),
     });
+  }
+
+  /** The status as the window is told it: the client's, and the updater's word. */
+  private told(): SyncStatus {
+    return { ...this.last, ...this.update };
+  }
+
+  /**
+   * The updater's word (plan 9, D4: update/updater.ts): an update armed for the quit, an update refused; the window told
+   * at once, the client's status with it.
+   */
+  updateWord(word: UpdateWord): void {
+    this.update = { ...word };
+    this.deps.window.status(this.told());
+  }
+
+  /** A file of the server's versions/, asked with this PC's token (SyncClient.versionFile); null without a server. */
+  versionFile(name: string): Promise<Response | null> {
+    return this.pairing.paired() && !this.closed ? this.client.versionFile(name) : Promise.resolve(null);
+  }
+
+  /** The server paired and this PC's token: electron-updater's feed (plan 9, D4); null without one. */
+  updateServer(): { url: string; token: string } | null {
+    const config = this.pairing.paired() ? this.deps.secrets.read() : null;
+    return config ? { url: config.url, token: config.token } : null;
+  }
+
+  /** Whether the client's connection is open (its stream): the updater's periodic check runs only then. */
+  connected(): boolean {
+    return this.pairing.paired() && !this.closed && this.client.connected();
   }
 
   /** Whether a server is paired (serveur.json read, its token opened). */
@@ -169,7 +205,7 @@ export class SyncHost {
       this.started = true;
       this.client.start();
     });
-    return this.last;
+    return this.told();
   }
 
   /** The chip's « Réessayer »: at once, after whatever step runs (a stop under way first ends). */
@@ -342,7 +378,7 @@ export class SyncHost {
       // The next server starts from nothing known: its files, its clock.
       this.client = this.newClient();
       this.last = { state: 'off' };
-      this.deps.window.status(this.last);
+      this.deps.window.status(this.told());
       this.pairing.tell();
     });
   }
