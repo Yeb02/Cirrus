@@ -1,9 +1,10 @@
-import { openAsBlob } from 'node:fs';
+import { openAsBlob, statSync } from 'node:fs';
 import {
-  applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, SyncFormatError,
+  applyOps, decodeState, encodeState, MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_JOURNAL_PAGE, MAX_LABEL_CHARS, MAX_SEED_BYTES, SNAPSHOT_VERSION, SyncFormatError,
   truncateLabel,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, type LocalStore, parseChangeRow, storedHashes } from '@cirrus/store';
+import { formatSize } from '../../renderer/files/kind.ts';
 import type { ServerConfig } from './config.ts';
 import { messageOf } from './connection.ts';
 import { isBaseId, requests } from './firstSync.ts';
@@ -79,6 +80,21 @@ function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last:
 }
 
 /**
+ * How long POST /seed/done may take (plan 9, review of task 2, M1): the server imports the base whole before it answers
+ * (A1 of the short review of plan 5a, 2 s for the user's base), and a delay that cuts it earlier only says « Base non
+ * envoyée » of a base the server is taking. A bound over the server's own work, not a setting.
+ */
+export const SEED_DONE_MS = 10 * 60_000;
+
+/** Why a seed stops for a file the server would refuse (M6), in French: its name, as a node of the base holds it. */
+function tooBigToSeed(store: LocalStore, hash: string, size: number): string {
+  let name: string | undefined;
+  for (const n of store.loadState().nodes.values()) name ??= n.files.find((f) => f.hash === hash)?.name;
+  const what = name === undefined ? 'Un fichier de cette base' : `Le fichier « ${name} »`;
+  return `${what} fait ${formatSize(size)}, et le serveur en prend ${formatSize(MAX_FILE_BYTES)} au plus : retire-le de son nœud, puis jumelle ce PC de nouveau.`;
+}
+
+/**
  * What a seed needs: the network, this PC's base and its folder, the server paired (its token), the pairing's time (its
  * /hello's: kept with the seed, B1), the abort of the app's quit, the requests' delay (syncRequestTimeoutMs, plan 9).
  */
@@ -104,6 +120,12 @@ export async function seedBase(o: SeedDeps): Promise<number> {
   // The files, the snapshot and the journal's pages are transfers (plan 9, D7): given up when idle, never for their length.
   const { send, json } = requests(o.fetch, o.config, o.signal, o.timeoutMs);
   const hashes = storedHashes(o.dir);
+  // A file the server would refuse (MAX_FILE_BYTES, review of task 2, M6) stops the seed here, before anything is sent,
+  // said why: a base the server would hold without it would not be this one. Costs a stat per file: a pairing's, once.
+  for (const hash of hashes) {
+    const size = statSync(filePath(o.dir, { name: '', hash, size: 0 })).size;
+    if (size > MAX_FILE_BYTES) throw new Error(tooBigToSeed(o.store, hash, size));
+  }
   for (let i = 0; i < hashes.length; i += MAX_HASHES_PER_REQUEST) {
     const chunk = hashes.slice(i, i + MAX_HASHES_PER_REQUEST);
     const missing = ((await json('/files/missing', { hashes: chunk })) as { missing?: unknown } | null)?.missing;
@@ -129,11 +151,12 @@ export async function seedBase(o: SeedDeps): Promise<number> {
       n = Math.ceil(n / 2);
       body = JSON.stringify({ rows: rows.slice(0, n) });
     }
-    await json('/seed/journal', body, true);
+    await json('/seed/journal', body, { transfer: true });
     after = rows[n - 1].localSeq;
   }
   o.store.setPendingSeed({ id: seedId, last, at: o.pairedAt });
-  const done = (await json('/seed/done', { last })) as { lastSeq?: unknown; baseId?: unknown } | null;
+  // The server imports the base before it answers (A1): SEED_DONE_MS, not syncRequestTimeoutMs (review of task 2, M1).
+  const done = (await json('/seed/done', { last }, { timeoutMs: Math.max(o.timeoutMs, SEED_DONE_MS) })) as { lastSeq?: unknown; baseId?: unknown } | null;
   if (done?.lastSeq !== last || done.baseId !== seedId) throw new Error('Réponse du serveur illisible à /seed/done : mets à jour Cirrus, ou le serveur.');
   // With the numbers, the identity of the base the server now holds (R31): pairing this PC again picks up from here.
   o.store.numberSeeded(last, seedId);

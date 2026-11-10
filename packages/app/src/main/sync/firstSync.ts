@@ -78,15 +78,18 @@ export const sentence = (text: string): string => (/[.!?…]$/.test(text) ? text
 
 /**
  * The server's requests for one first sync: its token on each, one abort for all, each within `timeoutMs`
- * (syncRequestTimeoutMs, plan 9, D7: connection.ts's exchange) — a transfer's idleness for the files, the snapshot and
- * the journal's pages (`transfer`), which a slow line may take long to carry; a refused one throws its reason, but the
- * statuses `answered` lets through.
+ * (syncRequestTimeoutMs, plan 9, D7: connection.ts's exchange), or `o.timeoutMs` — a transfer's idleness for the files,
+ * the snapshot and the journal's pages (`transfer`), which a slow line may take long to carry; a refused one throws its
+ * reason, but the statuses `answered` lets through.
  */
 export function requests(fetchFn: typeof fetch, config: ServerConfig, signal: AbortSignal, timeoutMs: number) {
-  const send = async (path: string, init: SyncInit = {}, o: { answered?: number[]; transfer?: boolean } = {}): Promise<Response> => {
+  type Options = { answered?: number[]; transfer?: boolean; timeoutMs?: number };
+  const send = async (path: string, init: SyncInit = {}, o: Options = {}): Promise<Response> => {
     let res: Response;
     try {
-      res = await exchange(fetchFn, config.url + path, path, { ...init, headers: { Authorization: `Bearer ${config.token}`, ...init.headers } }, { signal, timeoutMs, transfer: o.transfer });
+      res = await exchange(fetchFn, config.url + path, path, { ...init, headers: { Authorization: `Bearer ${config.token}`, ...init.headers } }, {
+        signal, timeoutMs: o.timeoutMs ?? timeoutMs, transfer: o.transfer,
+      });
     } catch (e) {
       if (signal.aborted) throw new Error('Cirrus se ferme.');
       throw new Error(`Serveur injoignable (${config.url}) : ${sentence(messageOf(e))}`);
@@ -94,9 +97,9 @@ export function requests(fetchFn: typeof fetch, config: ServerConfig, signal: Ab
     if (res.ok || o.answered?.includes(res.status)) return res;
     throw new Error(await reasonOf(res, path));
   };
-  const json = async (path: string, body?: unknown, transfer = false): Promise<unknown> => {
+  const json = async (path: string, body?: unknown, o: Options = {}): Promise<unknown> => {
     const init = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) };
-    return (await send(path, init, { transfer })).json();
+    return (await send(path, init, o)).json();
   };
   return { send, json };
 }

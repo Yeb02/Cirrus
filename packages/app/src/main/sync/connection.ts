@@ -1,4 +1,4 @@
-import { type Id, MAX_UNITS_PER_REQUEST, type RemoteUnit, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION } from '@cirrus/core';
+import { type Id, MAX_UNITS_PER_REQUEST, MIN_BODY_BYTES_PER_S, type RemoteUnit, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION } from '@cirrus/core';
 import { SCHEMA_VERSION } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { ServerConfig } from './config.ts';
@@ -65,13 +65,35 @@ export interface RequestOptions { timeoutMs?: number; transfer?: boolean }
  */
 const CHUNK_BYTES = 64 * 1024;
 
+/**
+ * Which delay ran out: a request's whole; a transfer's idleness; the answer to a transfer's body, all of it handed to
+ * the network.
+ */
+type Expiry = 'whole' | 'idle' | 'answer';
+
 /** A delay over: the network failing (an Error, never a Refusal), said in French for the console and a first sync's message. */
-function expired(path: string, ms: number, transfer: boolean): Error {
+function expired(path: string, ms: number, why: Expiry): Error {
   const s = Math.max(1, Math.round(ms / 1000));
-  return new Error(transfer
-    ? `Le serveur ne répond plus : rien envoyé ni reçu pour ${path} depuis ${s} s.`
-    : `Le serveur n’a pas répondu à ${path} en ${s} s.`);
+  switch (why) {
+    case 'whole': return new Error(`Le serveur n’a pas répondu à ${path} en ${s} s.`);
+    case 'idle': return new Error(`Le serveur ne répond plus : rien envoyé ni reçu pour ${path} depuis ${s} s.`);
+    case 'answer': return new Error(`Le serveur n’a pas répondu à ${path} en ${s} s, une fois son corps envoyé.`);
+  }
 }
+
+/** A body's bytes as they leave: a Blob's, bytes', text's in UTF-8; 0 for none, or another kind. */
+function bodyBytes(body: BodyInit | null | undefined): number {
+  if (body instanceof Blob) return body.size;
+  if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return body.byteLength;
+  if (typeof body === 'string') return Buffer.byteLength(body);
+  return 0;
+}
+
+/**
+ * How long `bytes` may take to leave at the slowest pace allowed (MIN_BODY_BYTES_PER_S, the server's: plan 9, review of
+ * task 2, C1 and I1), in ms: what a request's delay grows by for its body.
+ */
+export const sendingMs = (bytes: number): number => Math.ceil((bytes / MIN_BODY_BYTES_PER_S) * 1000);
 
 /** `p`, or `signal`'s reason once it aborts, whichever comes first; a late answer (`dropped`) is let go. */
 function untilAborted<T>(p: Promise<T>, signal: AbortSignal, dropped: (x: T) => void = () => {}): Promise<T> {
@@ -91,10 +113,10 @@ function untilAborted<T>(p: Promise<T>, signal: AbortSignal, dropped: (x: T) => 
 
 /**
  * A transfer's body as the network takes it: a stream of chunks of CHUNK_BYTES at most — a Blob's own (a file's come
- * so; one in memory comes whole), bytes or text cut so —, `moved` told as each is asked for: the one before taken.
- * Nothing is copied: views of the bytes.
+ * so; one in memory comes whole), bytes or text cut so —, `moved` told as each is asked for: the one before taken;
+ * `taken`, once the network has asked past the last. Nothing is copied: views of the bytes.
  */
-function sentBody(body: Blob | Uint8Array | string, moved: () => void): ReadableStream<Uint8Array> {
+function sentBody(body: Blob | Uint8Array | string, moved: () => void, taken: () => void): ReadableStream<Uint8Array> {
   const source = body instanceof Blob ? body.stream().getReader() : null;
   let bytes: Uint8Array = body instanceof Blob ? new Uint8Array(0) : typeof body === 'string' ? new TextEncoder().encode(body) : body, at = 0;
   return new ReadableStream<Uint8Array>({
@@ -106,8 +128,12 @@ function sentBody(body: Blob | Uint8Array | string, moved: () => void): Readable
         bytes = value;
         at = 0;
       }
-      if (at < bytes.length) c.enqueue(bytes.subarray(at, (at += CHUNK_BYTES)));
-      else c.close();
+      if (at < bytes.length) {
+        c.enqueue(bytes.subarray(at, (at += CHUNK_BYTES)));
+      } else {
+        c.close();
+        taken();
+      }
     },
     cancel: (reason) => source?.cancel(reason),
   }, { highWaterMark: 0 });
@@ -149,12 +175,15 @@ function receivedBody(body: ReadableStream<Uint8Array>, signal: AbortSignal, eac
 
 /**
  * A request to the server within a delay (plan 9, D7), ended with `o.signal` too (its connection, a pairing's quit):
- * - a request (by default): the whole exchange within `timeoutMs`, from its start until its answer is read — its head
- *   and its body;
+ * - a request (by default): the whole exchange, from its start until its answer is read — its head and its body —, within
+ *   `timeoutMs` and its body's time at the slowest pace allowed (sendingMs: review of task 2, I1 — a batch of writes of
+ *   a few Mio on a slow line is not a dead server);
  * - a transfer (`transfer`: a file, a base, a journal, the event stream): no total delay, which would cut a large one on
  *   a slow line, but one of idleness — its body (bytes, text or a Blob) sent as a stream, each chunk taken by the network
- *   within `timeoutMs` of the one before; its answer's head within `timeoutMs` of the last; each chunk of its answer's
- *   body within `timeoutMs` of being asked for.
+ *   within `timeoutMs` of the one before; once it has taken the last, its answer's head within `timeoutMs` and the
+ *   body's time at the slowest pace (review of task 2, C1: Electron's net.fetch reads a body whole before it sends it,
+ *   then sends it where nothing can see it); then each chunk of its answer's body within `timeoutMs` of being asked for.
+ *   Once its answer's head is in, nothing of its body arms a delay any more (M3).
  * Past it, the request is aborted, and its promise, or its answer's reading, rejects with an Error (expired): the network
  * failing, as `fetch` failing, never a refusal. Whether `fetchFn` heeds the abort or not: a test's network, or one that
  * never answers, cannot hold it. Costs one timer and two small streams per request.
@@ -165,37 +194,45 @@ export async function exchange(
   // A delay that is no number (a caller's mistake) bounds nothing, rather than end every request at once.
   const ms = Math.max(1, o.timeoutMs), bounded = Number.isFinite(ms), transfer = o.transfer === true, delay = new AbortController();
   const signal = AbortSignal.any([o.signal, delay.signal]);
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  const { body } = init, bodyMs = sendingMs(bodyBytes(body));
+  let timer: ReturnType<typeof setTimeout> | null = null, answered = false;
   const disarm = () => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
   };
-  const arm = () => {
+  /** The delay from now: `wait` ms, past which the request is given up for `why`. */
+  const arm = (wait: number, why: Expiry) => {
     disarm();
     if (!bounded) return;
     timer = setTimeout(() => {
       timer = null;
-      delay.abort(expired(path, ms, transfer));
-    }, ms);
+      delay.abort(expired(path, wait, why));
+    }, wait);
   };
-  const { body } = init;
   const sendable = transfer && (body instanceof Blob || body instanceof Uint8Array || typeof body === 'string') ? body : null;
   // A body sent as a stream: Node's fetch, as the standard, asks it be said (duplex), Electron's as well.
-  const sent = sendable !== null ? { body: sentBody(sendable, arm), duplex: 'half' } : {};
-  arm();
+  const sent = sendable === null ? {} : {
+    body: sentBody(sendable, () => { if (!answered) arm(ms, 'idle'); }, () => { if (!answered) arm(ms + bodyMs, 'answer'); }),
+    duplex: 'half',
+  };
+  if (transfer) arm(ms, 'idle');
+  else arm(ms + bodyMs, 'whole');
   let res: Response;
   try {
     res = await untilAborted(fetchFn(url, { ...init, ...sent, signal } as RequestInit), signal, (late) => { late.body?.cancel().catch(() => {}); });
   } catch (e) {
     disarm();
     throw delay.signal.aborted ? delay.signal.reason : e;
+  } finally {
+    answered = true;
   }
   if (transfer) disarm();
   if (!res.body) {
     disarm();
     return res;
   }
-  return new Response(receivedBody(res.body, signal, transfer ? arm : null, disarm), { status: res.status, statusText: res.statusText, headers: res.headers });
+  const each = transfer ? () => arm(ms, 'idle') : null;
+  return new Response(receivedBody(res.body, signal, each, disarm), { status: res.status, statusText: res.statusText, headers: res.headers });
 }
 
 /** What a connection's requests read of the settings: their delay. */
@@ -227,7 +264,9 @@ export class Connection {
   timer: ReturnType<typeof setTimeout> | null = null;
   /** A reconciliation of what arrived waits in the client's chain: it will take what arrives meanwhile. */
   queued = false;
-  /** Running from the stream's opening: once it fires, the connection has proven itself (the backoff starts again from the shortest pause). */
+  /** Its stream has brought bytes (SyncClient.heard): the proof runs from then. */
+  heard = false;
+  /** Running from the stream's first bytes: once it fires, the connection has proven itself (the backoff starts again from the shortest pause). */
   proof: ReturnType<typeof setTimeout> | null = null;
   /** The run: the hello, the stream, then the sender awaited. */
   done: Promise<void> = Promise.resolve();

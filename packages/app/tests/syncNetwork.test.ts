@@ -2,13 +2,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { createServer, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createNode, createPlan, type RemoteUnit } from '@cirrus/core';
+import { createNode, createPlan, MIN_BODY_BYTES_PER_S, type RemoteUnit } from '@cirrus/core';
 import { filePath, LocalStore, storeBytes } from '@cirrus/store';
 import { afterEach, expect, test, vi } from 'vitest';
 import { SyncClient, type SyncParams } from '../src/main/sync/client.ts';
 import { fileSecrets, SERVER_FILE, type ServerConfig, serverUrl, type SecretStore } from '../src/main/sync/config.ts';
-import { Connection } from '../src/main/sync/connection.ts';
+import { Connection, JSON_BODY } from '../src/main/sync/connection.ts';
 import type { SyncStatus } from '../src/main/sync/protocol.ts';
+import { seedBase } from '../src/main/sync/seed.ts';
 import { chipOf } from '../src/renderer/sync/syncSession.ts';
 import { created, image, Lab, PLAIN, sleep, T0, TEST_PARAMS, until } from './support/virtualPc.ts';
 
@@ -117,7 +118,8 @@ test('un serveur qui ne répond plus, sans couper : le flux tenu pour coupé, ch
   // The hellos tried meanwhile: each given up after syncRequestTimeoutMs, its connection closed by the client.
   await until(() => server.log.filter((e) => e.path === '/hello' && e.at > muted && e.closedAt !== null).length >= 2, 8000);
   for (const h of server.log.filter((e) => e.path === '/hello' && e.at > muted && e.closedAt !== null)) {
-    expect(h.closedAt! - h.at).toBeGreaterThanOrEqual(350);
+    // 400 ms on the client's clock; the server's sees the close a little earlier or later (a loaded machine): a margin.
+    expect(h.closedAt! - h.at).toBeGreaterThanOrEqual(300);
     expect(h.closedAt! - h.at).toBeLessThan(4000);
   }
   expect(last()?.state).toBe('offline');
@@ -137,6 +139,8 @@ test('un flux silencieux : coupé après syncStreamSilenceMs sans rien recevoir,
   server.state.mode = 'silent';
   const silent = Date.now();
   await until(() => server.count('/events') === 2, 8000);
+  // The silent one closed by the client, not left open beside the new one.
+  await until(() => server.log.find((e) => e.path === '/events')!.closedAt !== null);
   const reopened = server.log.filter((e) => e.path === '/events').at(-1)!.at;
   expect(reopened - silent).toBeGreaterThanOrEqual(600);
   expect(statuses.some((s) => s.state === 'offline')).toBe(true);
@@ -399,4 +403,210 @@ test('l’import d’une publication par le serveur (horloge simulée) : borné 
   expect(outcome).toBeNull();
   await vi.advanceTimersByTimeAsync(100);
   expect(outcome).toBeInstanceOf(Error);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Fix round 1 (review of task 2).
+
+/** What happened to a promise by now: its value, its error, or still nothing. */
+function watch<T>(p: Promise<T>): { outcome: T | Error | null } {
+  const w: { outcome: T | Error | null } = { outcome: null };
+  p.then((x) => { w.outcome = x; }, (e: unknown) => { w.outcome = e instanceof Error ? e : new Error(String(e)); });
+  return w;
+}
+
+/**
+ * A network as Electron's net.fetch sends a body (C1): the request's body read whole into memory first, then sent in
+ * `uploadMs`, where nothing can see it, then the answer; with `stallAfter`, it stops reading after so many chunks.
+ */
+const buffering = (uploadMs: number, stallAfter?: number): typeof fetch => async (_input, init) => {
+  const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+  for (let n = 0; ; n++) {
+    if (n === stallAfter) await new Promise<never>(() => {});
+    if ((await reader.read()).done) break;
+  }
+  await new Promise((r) => setTimeout(r, uploadMs));
+  return new Response(null, { status: 204 });
+};
+
+test('C1 (horloge simulée) : un envoi que le réseau lit d’un bloc puis envoie sans qu’on le voie (net.fetch d’Electron) passe au-delà du délai ; sa réponse attendue syncRequestTimeoutMs plus sa taille au rythme de MIN_BODY_BYTES_PER_S ; un envoi arrêté avant sa fin échoue encore après le délai', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  // Bytes, cut in chunks without reading anything (a Blob in memory is read by Node outside the simulated clock; the
+  // reviewer's reproduction, on the real clock, sends a Blob).
+  const size = 5 * 2 ** 20, put = () => ({ method: 'PUT', body: new Uint8Array(size) });
+  // Sent in 3 s, the delay 1 s: it passes.
+  const sent = watch(connection(buffering(3000), 1000).request('/files/a', put(), { transfer: true }));
+  await vi.advanceTimersByTimeAsync(3100);
+  expect(sent.outcome instanceof Error ? sent.outcome.message : (sent.outcome as Response | null)?.status).toBe(204);
+  // Never answered: given up once the delay and the body's time at the slowest pace have passed after its last chunk.
+  const bound = 1000 + Math.ceil((size / MIN_BODY_BYTES_PER_S) * 1000);
+  expect(bound).toBeGreaterThan(600_000);
+  const silent = watch(connection(buffering(10 * bound), 1000).request('/files/b', put(), { transfer: true }));
+  await vi.advanceTimersByTimeAsync(bound - 100);
+  expect(silent.outcome).toBeNull();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(silent.outcome).toBeInstanceOf(Error);
+  // Stopped after three chunks of its body: given up after the delay, as any transfer that stops.
+  const stalled = watch(connection(buffering(0, 3), 1000).request('/files/c', put(), { transfer: true }));
+  await vi.advanceTimersByTimeAsync(900);
+  expect(stalled.outcome).toBeNull();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(stalled.outcome).toBeInstanceOf(Error);
+});
+
+test('I1 (horloge simulée) : une requête qui envoie un corps (POST /units) a syncRequestTimeoutMs plus le temps de son corps au rythme de MIN_BODY_BYTES_PER_S, et non un délai plat', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  // About 160 Kio: 20 s at the slowest pace.
+  const body = JSON.stringify({ units: ['é'.repeat(80 * 1024)] }), bound = 1000 + Math.ceil((Buffer.byteLength(body) / MIN_BODY_BYTES_PER_S) * 1000);
+  expect(bound).toBeGreaterThan(20_000);
+  const answeredAfter = (ms: number): typeof fetch => async () => {
+    await new Promise((r) => setTimeout(r, ms));
+    return Response.json({ results: [] });
+  };
+  // A slow line takes 15 s to send it: it passes.
+  const slow = watch(connection(answeredAfter(15_000), 1000).request('/units', { method: 'POST', headers: JSON_BODY, body }).then((r) => r.json()));
+  await vi.advanceTimersByTimeAsync(15_100);
+  expect(slow.outcome).toEqual({ results: [] });
+  // Never answered: given up at that bound, not before.
+  const never = watch(connection(answeredAfter(10 * bound), 1000).request('/units', { method: 'POST', headers: JSON_BODY, body }));
+  await vi.advanceTimersByTimeAsync(bound - 100);
+  expect(never.outcome).toBeNull();
+  await vi.advanceTimersByTimeAsync(200);
+  expect(never.outcome).toBeInstanceOf(Error);
+  // A request without a body keeps the delay alone.
+  const hello = watch(connection(answeredAfter(10_000), 1000).request('/hello'));
+  await vi.advanceTimersByTimeAsync(1100);
+  expect(hello.outcome).toBeInstanceOf(Error);
+});
+
+test('M3 (horloge simulée) : une réponse arrivée avant que le corps soit tout pris ; le reste du corps pris ensuite ne réarme plus aucun délai : la requête finie n’est jamais abandonnée', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  let signal: AbortSignal | null = null;
+  const early: typeof fetch = async (_input, init) => {
+    signal = init!.signal!;
+    const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+    // The answer at once; the body still taken afterwards, a chunk every 100 ms.
+    void (async () => {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 100));
+        if ((await reader.read()).done) return;
+      }
+    })();
+    return new Response('reçu');
+  };
+  const res = await connection(early, 500).request('/files/d', { method: 'PUT', body: new Blob([new Uint8Array(10 * 65_536)]) }, { transfer: true });
+  expect(await res.text()).toBe('reçu');
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(signal!.aborted).toBe(false);
+});
+
+test('M2 (horloge simulée) : un flux ouvert mais muet (un mandataire qui le retient) ne fait pas ses preuves : l’attente avant l’essai suivant continue de croître', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const hellos: number[] = [];
+  let mode: 'closes' | 'holds' = 'closes', held: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const f: typeof fetch = async (input) => {
+    const path = new URL(String(input)).pathname, m = mode;
+    if (path === '/hello') {
+      hellos.push(Date.now());
+      return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: false, nodes: 0, baseId: 'base-x' });
+    }
+    if (path !== '/events') throw new Error(`requête inattendue : ${path}`);
+    // Open, its headers given, and not a byte after (a proxy that holds the stream back).
+    return new Response(new ReadableStream<Uint8Array>({ start(c) { if (m === 'closes') c.close(); else held = c; } }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  const store = LocalStore.open(tempDir(), { pc: 'pc-r' });
+  closing.push(() => store.close());
+  const client = new SyncClient({
+    fetch: f, store, storeDir: tempDir(), secrets: memorySecrets({ url: 'http://127.0.0.1:7310', token: TOKEN, name: 'R' }), reconcile: async () => {}, now: () => Date.now(),
+    params: () => ({ ...TEST_PARAMS, syncRetryMinMs: 1000, syncRetryMaxMs: 30_000, syncStreamSilenceMs: 3_600_000 }), status: () => {},
+  });
+  closing.push(() => client.stop());
+  const t0 = Date.now();
+  client.start();
+  await vi.advanceTimersByTimeAsync(15_000);
+  mode = 'holds';
+  await vi.advanceTimersByTimeAsync(46_000);
+  mode = 'closes';
+  held!.close();
+  await vi.advanceTimersByTimeAsync(31_000);
+  // Open 30 s without a byte: not proven; the pause after it the longest, not the shortest.
+  expect(hellos.map((t) => t - t0)).toEqual([0, 1000, 3000, 7000, 15_000, 31_000, 91_000]);
+});
+
+test('M4 : l’écart d’horloge mesuré n’est écrit dans serveur.json que s’il a changé d’une seconde au moins ; en mémoire, toujours la dernière mesure', async () => {
+  const times = [1_004_321, 1_004_821, 1_005_821];
+  let hello = 0;
+  const f: typeof fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/hello') return Response.json({ serverTime: times[Math.min(hello++, times.length - 1)], lastSeq: 0, empty: false, nodes: 0, baseId: 'base-x' });
+    // A stream that ends at once: a new connection, a new hello.
+    if (path === '/events') return new Response(new ReadableStream({ start: (c) => c.close() }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    throw new Error(`requête inattendue : ${path}`);
+  };
+  const secrets = memorySecrets({ url: 'http://127.0.0.1:7310', token: TOKEN, name: 'R', clockOffsetMs: -600_000 }), written: number[] = [];
+  const write = secrets.write;
+  secrets.write = (c) => {
+    written.push(c?.clockOffsetMs ?? Number.NaN);
+    write(c);
+  };
+  const store = LocalStore.open(tempDir(), { pc: 'pc-r' });
+  closing.push(() => store.close());
+  const offsets: number[] = [];
+  const client = new SyncClient({
+    fetch: f, store, storeDir: tempDir(), secrets, reconcile: async () => {}, now: () => 1_000_000, params: () => TEST_PARAMS,
+    status: () => { offsets.push(client.clockOffset()); },
+  });
+  closing.push(() => client.stop());
+  client.start();
+  await until(() => hello >= 4);
+  await client.stop();
+  // 4 321, then 4 821 (half a second more: not written, but used), then 5 821 (a second and a half from the one written).
+  expect(offsets).toContain(4821);
+  expect(written).toEqual([4321, 5821]);
+  expect(secrets.config?.clockOffsetMs).toBe(5821);
+});
+
+test('M5 : un fichier que le serveur refuse (413) pendant son envoi en flux : dit dans la console, l’écriture refusée par le serveur et écartée, rien d’envoyé de nouveau, la synchro à jour', async () => {
+  const l = (lab = await Lab.start());
+  const a = await l.pc('pc-a');
+  const P = created(a.act((s) => createPlan(s, 'P', 'plan')), 'plan');
+  await l.settle();
+  const file = storeBytes(a.dir, 'grand.bin', new Uint8Array(200_000).map((_, i) => i % 7));
+  let streamed: boolean | null = null;
+  a.net.respond = (method, path, _signal, init) => {
+    if (method !== 'PUT' || path !== `/files/${file.hash}`) return null;
+    streamed = init?.body instanceof ReadableStream;
+    return Response.json({ error: 'Fichier trop gros pour le serveur.' }, { status: 413 });
+  };
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  a.act((s) => createNode(s, { plan: P, title: 'Grand', x: 0, y: 0, k: 0, files: [file] }));
+  await until(() => a.dropped.length > 0, 8000, () => JSON.stringify(a.status));
+  expect(streamed).toBe(true);
+  expect(warn).toHaveBeenCalledWith(expect.stringMatching(/refusé par le serveur : Fichier trop gros pour le serveur\.$/));
+  expect(a.dropped).toEqual([expect.stringMatching(/écartée : Fichier manquant au serveur\.$/)]);
+  await l.settle();
+  expect(a.net.count('PUT', `/files/${file.hash}`)).toBe(1);
+  expect(a.statuses.some((s) => s.state === 'offline')).toBe(false);
+}, 30_000);
+
+test('M1 (horloge simulée) : /seed/done, que le serveur fait attendre le temps d’importer la base, a dix minutes, et non syncRequestTimeoutMs', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const dir = tempDir(), store = LocalStore.open(dir, { pc: 'pc-s' });
+  closing.push(() => store.close());
+  store.commit(createPlan(store.loadState(), 'P', 'plan'));
+  const last = store.lastSeq();
+  const f: typeof fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/seed') return Response.json({ baseId: 'base-s' });
+    if (path === '/seed/journal') return Response.json({ ok: true });
+    if (path === '/seed/done') {
+      // The server imports the base before it answers (A1).
+      await new Promise((r) => setTimeout(r, 5 * 60_000));
+      return Response.json({ lastSeq: last, baseId: 'base-s' });
+    }
+    throw new Error(`requête inattendue : ${path}`);
+  };
+  const seeded = watch(seedBase({ fetch: f, store, dir, config: { url: 'http://127.0.0.1:7310', token: TOKEN, name: 'S' }, pairedAt: 0, signal: new AbortController().signal, timeoutMs: 1000 }));
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 100);
+  expect(seeded.outcome).toBe(last);
 });

@@ -74,8 +74,11 @@ export class Net {
   readonly results: UnitResult[] = [];
   /** The body of each POST /publications (plan 5b, task 3). */
   readonly publications: unknown[] = [];
-  /** An answer given instead of the server's (a 5xx, say; a body that breaks: `signal`, the request's), or null: the server's. */
-  respond: ((method: string, path: string, signal?: AbortSignal) => Response | null) | null = null;
+  /**
+   * An answer given instead of the server's (a 5xx, say; a body that breaks: `signal`, the request's; `init`, the request
+   * as sent), or null: the server's.
+   */
+  respond: ((method: string, path: string, signal?: AbortSignal, init?: RequestInit) => Response | null) | null = null;
   corruptBlobs = false;
   onUnitsAnswered: ((results: UnitResult[]) => void) | null = null;
   /** Awaited before each request leaves (a test holds one: a seed at its first request, say). */
@@ -137,7 +140,7 @@ export class Net {
     }
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
     if (url.pathname === '/publications' && method === 'POST') this.publications.push(JSON.parse(String(init?.body)));
-    const instead = this.respond?.(method, url.pathname, init?.signal ?? undefined);
+    const instead = this.respond?.(method, url.pathname, init?.signal ?? undefined, init);
     if (instead) return instead;
     if (method === 'GET' && url.pathname.startsWith('/files/')) {
       const signal = init?.signal ?? undefined;

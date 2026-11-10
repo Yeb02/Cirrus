@@ -87,7 +87,7 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
     const store = LocalStore.open(staged, { pc: o.pc });
     try {
       for (let after = 0; after < last; ) {
-        const page = ((await json(`/journal?after=${after}&limit=${Math.min(MAX_JOURNAL_PAGE, last - after)}`, undefined, true)) as { rows?: unknown } | null)?.rows;
+        const page = ((await json(`/journal?after=${after}&limit=${Math.min(MAX_JOURNAL_PAGE, last - after)}`, undefined, { transfer: true })) as { rows?: unknown } | null)?.rows;
         if (!Array.isArray(page)) throw new Error('Réponse du serveur illisible à /journal : mets à jour Cirrus, ou le serveur.');
         if (page.length === 0) throw new Error(`Le journal du serveur s’arrête à la ligne ${after}, avant la ${last}.`);
         const rows = page.slice(0, last - after).map((x, i) => adoptedRow(x, after + i + 1, o.pc));

@@ -491,7 +491,11 @@ test('un flux qui s’ouvre puis se ferme aussitôt ne remet pas l’attente à 
     const body = new ReadableStream<Uint8Array>({
       start(c) {
         if (m === 'closes') c.close();
-        else if (m === 'holds') held = c;
+        // Open, and alive: a ping (plan 9, review of task 2, M2: a stream proves itself once it has brought bytes).
+        else if (m === 'holds') {
+          held = c;
+          c.enqueue(bytes(': ping\n\n'));
+        }
         else {
           c.enqueue(bytes(`id: 1\nevent: unit\ndata: ${JSON.stringify(unit)}\n\n`));
           setTimeout(() => c.close(), 200);

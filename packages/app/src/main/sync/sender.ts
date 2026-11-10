@@ -1,8 +1,9 @@
 import { MAX_BODY_BYTES, MAX_LABEL_CHARS, MAX_OPS_PER_UNIT, MAX_UNITS_PER_REQUEST, parseUnit, SyncFormatError, truncateLabel, type Unit, type UnitResult } from '@cirrus/core';
 import type { SyncDeps } from './client.ts';
 import { type Connection, JSON_BODY, json, Refusal } from './connection.ts';
+import { filesToSend } from './downloads.ts';
 import { sendSettings } from './settingsSync.ts';
-import type { Uploads } from './uploads.ts';
+import { fileTooBig, type Uploads } from './uploads.ts';
 
 // The sync client's sender (plan 5a, task 3): this PC's pending writes sent to the server on a connection, in order, a
 // batch per request, the files they add first (uploads.ts) and the shared settings changed here before them
@@ -85,8 +86,17 @@ export async function send(conn: Connection, client: SenderClient): Promise<void
         await conn.sleep();
         continue;
       }
-      await client.uploads.send(conn, batch);
-      const results = await post(conn, batch, client);
+      const tooBig = await client.uploads.send(conn, batch);
+      // A file larger than the server takes (plan 9, review of task 2, M6), never sent: the writes that add it refused
+      // here, said why, as the server would refuse them; the others go.
+      const sending = tooBig.size === 0 ? batch : batch.filter((u) => {
+        const hash = filesToSend([u]).find((h) => tooBig.has(h));
+        if (hash !== undefined) conn.refused.push({ unit: u.unit, message: fileTooBig(u, hash, tooBig.get(hash)!) });
+        return hash === undefined;
+      });
+      if (sending.length < batch.length) client.schedule(conn);
+      if (sending.length === 0) continue;
+      const results = await post(conn, sending, client);
       if (!results) continue;
       const miss = results.find((r) => !('accepted' in r));
       // Stale, though the base had everything up to that number when the write was read: it can never apply there.
@@ -94,9 +104,9 @@ export async function send(conn: Connection, client: SenderClient): Promise<void
         throw new Refusal('Une écriture de ce PC ne s’applique pas au serveur, qui n’a pourtant rien de plus que lui : la base de ce PC ne suit plus celle du serveur.', true);
       }
       results.forEach((r, i) => {
-        if ('accepted' in r) conn.accepted.set(batch[i].unit, r.accepted);
+        if ('accepted' in r) conn.accepted.set(sending[i].unit, r.accepted);
         else if ('stale' in r) conn.waitFor = Math.max(conn.waitFor, r.stale);
-        else conn.refused.push({ unit: batch[i].unit, message: r.refused });
+        else conn.refused.push({ unit: sending[i].unit, message: r.refused });
       });
       if (conn.refused.length > 0) client.schedule(conn);
       client.report();

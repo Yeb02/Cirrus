@@ -7,9 +7,10 @@ interface SseEvent { id: string | null; event: string; data: string }
 /**
  * The events of `body`, as they come. Its bytes are decoded as UTF-8 across chunks, and each line is put together from
  * its pieces once: an event of any size costs its length, never more. `signal` aborted: the stream cancelled, the
- * reading ended.
+ * reading ended. `heard`, told at each chunk received, a comment's (a ping) included: the stream is alive (plan 9,
+ * review of task 2, M2).
  */
-export async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<SseEvent> {
+export async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSignal, heard?: () => void): AsyncGenerator<SseEvent> {
   const reader = body.getReader(), decoder = new TextDecoder();
   const cancel = () => { reader.cancel().catch(() => {}); };
   signal?.addEventListener('abort', cancel, { once: true });
@@ -45,6 +46,7 @@ export async function* readEvents(body: ReadableStream<Uint8Array>, signal?: Abo
       if (signal?.aborted) return;
       const { value, done } = await reader.read();
       if (done) return;
+      if (value.length > 0) heard?.();
       // A character split between two chunks is decoded once whole (an empty text: nothing yet).
       const text = decoder.decode(value, { stream: true });
       if (text === '') continue;

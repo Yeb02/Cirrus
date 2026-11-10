@@ -43,6 +43,13 @@ export type SyncParams = Pick<
  */
 export const PUBLICATION_MARGIN_MS = 60_000;
 
+/**
+ * The clock's offset is written to serveur.json again only once it has moved by this much (review of task 2, M4): a
+ * hello measures it within a few milliseconds of the last, and a write is synced to the disk. A second is far below
+ * what the warning of D4 counts (syncClockSkewWarnMs, minutes), and what dates the writes made before the next hello.
+ */
+const CLOCK_KEPT_STEP_MS = 1000;
+
 export interface SyncDeps {
   fetch: typeof fetch;
   /**
@@ -414,19 +421,13 @@ export class SyncClient {
     if (shared) receiveAllSettings(shared, await json(await conn.request('/settings')));
     conn.received = from;
     conn.open = true;
-    // Opened is not proven: a stream the server ends at once, or a reconciliation that always fails, would otherwise
-    // bring the client back every syncRetryMinMs, forever (review of task 3, I1).
-    conn.proof = setTimeout(() => {
-      conn.proof = null;
-      this.retryDelay = 0;
-    }, this.deps.params().syncRetryMaxMs);
     this.downloads.retry();
     // The .tex open here (D6): what this PC has open now, an empty list included — a list left by a stop without closing
     // them (a laptop shut) goes so at its next connection.
     void this.presence();
     this.progress(conn);
     started(send(conn, this.sending));
-    for await (const e of readEvents(res.body, conn.abort.signal)) {
+    for await (const e of readEvents(res.body, conn.abort.signal, () => this.heard(conn))) {
       if (e.event === 'settings') {
         settingsEvent(this.deps.settings, e.data);
         continue;
@@ -447,6 +448,22 @@ export class SyncClient {
       // Bounded memory (D7): the stream read no further while a batch waits whole — a reconciliation taking it makes room.
       while (!conn.closed && conn.inbox.length >= this.receiveMax()) await conn.room();
     }
+  }
+
+  /**
+   * The stream brought its first bytes (a ping counts): from there, open for syncRetryMaxMs, the connection has proven
+   * itself — the backoff starts again from the shortest pause. Opened is not proven: a stream the server ends at once, or
+   * a reconciliation that always fails, would otherwise bring the client back every syncRetryMinMs, forever (review of
+   * task 3, I1); nor is a stream open but mute, a proxy holding it back, cut by its silence each time (plan 9, review of
+   * task 2, M2).
+   */
+  private heard(conn: Connection): void {
+    if (conn.heard || conn.closed) return;
+    conn.heard = true;
+    conn.proof = setTimeout(() => {
+      conn.proof = null;
+      this.retryDelay = 0;
+    }, this.deps.params().syncRetryMaxMs);
   }
 
   /** The most writes received a reconciliation takes (syncReceiveMaxUnits, one at least); without a number, no bound. */
@@ -550,14 +567,16 @@ export class SyncClient {
   }
 
   /**
-   * The offset just measured, kept in serveur.json when it changed (plan 9, D7): for the server of `config` only, still
-   * paired with the same token — an unpairing meanwhile writes nothing back. Read and written at once, nothing in
+   * The offset just measured, kept in serveur.json when it moved by CLOCK_KEPT_STEP_MS at least from the one kept (plan
+   * 9, D7; review of task 2, M4: it moves by a few milliseconds at each hello) — for the server of `config` only, still
+   * paired with the same token: an unpairing meanwhile writes nothing back. Read and written at once, nothing in
    * between. A file that cannot be written is said, and the sync goes on.
    */
   private keepClock(config: ServerConfig): void {
     try {
       const now = this.deps.secrets.read();
-      if (!now || now.url !== config.url || now.token !== config.token || now.clockOffsetMs === this.offset) return;
+      if (!now || now.url !== config.url || now.token !== config.token) return;
+      if (now.clockOffsetMs !== undefined && Math.abs(now.clockOffsetMs - this.offset) < CLOCK_KEPT_STEP_MS) return;
       this.deps.secrets.write({ ...now, clockOffsetMs: this.offset });
     } catch (e) {
       console.warn(`Écart d’horloge avec le serveur non gardé (${SERVER_FILE}) : ${messageOf(e)}`);
