@@ -148,15 +148,18 @@ export function addValue(d: Draft): Draft {
 export function removeValue(d: Draft, id: number): Draft {
   const gone = d.values.find((v) => v.id === id);
   const next = withValues(d, d.values.filter((v) => v.id !== id));
-  return gone && gone.name === d.defaultValue ? { ...next, defaultValue: '' } : next;
+  return gone && d.defaultValue !== '' && gone.name === d.defaultValue ? { ...next, defaultValue: '' } : next;
 }
 
-/** A value renamed in the form; the default follows it. The objects are rewritten when the form is saved (planRenames). */
+/**
+ * A value renamed in the form; the default follows it (when there is one: a value added has no name yet, as no default is
+ * ''). The objects are rewritten when the form is saved (planRenames).
+ */
 export function renameValue(d: Draft, id: number, name: string): Draft {
   const was = d.values.find((v) => v.id === id);
   if (!was) return d;
   const next = withValues(d, d.values.map((v) => (v.id === id ? { ...v, name } : v)));
-  return was.name === d.defaultValue ? { ...next, defaultValue: name } : next;
+  return d.defaultValue !== '' && was.name === d.defaultValue ? { ...next, defaultValue: name } : next;
 }
 
 /** A rank as typed. */

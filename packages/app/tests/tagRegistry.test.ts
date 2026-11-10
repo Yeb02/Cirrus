@@ -317,6 +317,13 @@ test('les valeurs d’une énumération : ajoutée, retirée, renommée (le déf
   d = removeValue(d, d.values[1].id);
   expect(d.defaultValue).toBe('');
   expect(d.values.map((v) => v.name)).toEqual(['bas', 'critique', 'haut']);
+  // No default: a value added and named is not taken for it (its name was empty, as the default is).
+  let fresh: Draft = { ...newDraft('niveau'), type: 'enum' };
+  fresh = addValue(addValue(fresh));
+  fresh = renameValue(fresh, fresh.values[0].id, 'basse');
+  expect(fresh.defaultValue).toBe('');
+  expect(definitionOf(fresh).defaultValue).toBeUndefined();
+  expect(definitionOf(removeValue(fresh, fresh.values[1].id)).enumValues).toEqual([{ name: 'basse', rank: 1 }]);
   // Sorted by rank, a rank that is no number last.
   let e = draftOf(NIVEAU);
   e = setRank(e, e.values[0].id, '9');
