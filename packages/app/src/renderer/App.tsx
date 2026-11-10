@@ -2,11 +2,12 @@ import { type Action, type Anchor, annotationTitle, createAnnotation, type Id, t
 import { withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ImportResult } from '../main/files.ts';
-import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
+import { type Build, deleteAnnotationBuild, preambleBuild, restoreConnectionBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { inputProbe, runIdleSlices } from './search/idle.ts';
 import { SearchBuild, type SearchHit, SearchIndex, type SearchWhere } from './search/index.ts';
+import { restoreNotice } from './trash.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { loading } from './files/read.ts';
@@ -493,6 +494,21 @@ export function App() {
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
   /**
+   * « Restaurer » on a connection of the trash (plan 6a, D5): back at once, a refusal told in a toast; restored with no
+   * branch written — its nodes share no plan —, it is told too (restoreNotice), since nothing then appears in any plan.
+   */
+  const restoreConnection = (connection: Id) => {
+    void session.current!.run(restoreConnectionBuild(connection)!).then((r) => {
+      report(r);
+      if (r.ok) { const notice = restoreNotice(r.action); if (notice !== null) toast(notice); }
+    });
+  };
+  /** The trash's panel closed (×, Escape): a node being restored, still following the cursor, is given up with it. */
+  const closeTrash = () => {
+    graph.current?.cancelRestore();
+    setTrashOpen(false);
+  };
+  /**
    * A passage annotated in a reader (plan 4c, D3): a node of its own, in no plan, its title the start of the passage
    * (annotationTitleChars), one action. Too long a passage is refused, said in a notification (false: the selection
    * stays); so is a PDF gone meanwhile (createAnnotation's refusal). Made in the full screen, the step is its own: its
@@ -590,7 +606,7 @@ export function App() {
         {registryOpen && <TagRegistryPanel state={state} rev={shown.rev} onEdit={edit} onClose={() => setRegistryOpen(false)} />}
         {trashOpen && (
           <TrashPanel
-            state={state} rev={shown.rev} onEdit={edit} onRestoreNode={(node) => graph.current?.restore(node)} onClose={() => setTrashOpen(false)}
+            state={state} rev={shown.rev} onRestoreConnection={restoreConnection} onRestoreNode={(node) => graph.current?.restore(node)} onClose={closeTrash}
           />
         )}
         <Panels

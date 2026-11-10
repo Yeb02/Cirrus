@@ -668,8 +668,8 @@ button, input, select { font: inherit; color: var(--ink); }
 .registry .key .meta { display: block; margin: 0; font-size: 12px; }
 .registry .key.undeclared .name { font-style: italic; font-weight: 500; }
 .registry button.act, .trash button.act { padding: 5px 10px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
-.registry button.act:hover:not(:disabled), .trash button.act:hover { border-color: var(--accent); }
-.registry button.act:disabled { opacity: 0.5; cursor: default; }
+.registry button.act:hover:not(:disabled), .trash button.act:hover:not(:disabled) { border-color: var(--accent); }
+.registry button.act:disabled, .trash button.act:disabled { opacity: 0.5; cursor: default; }
 .registry button.act.primary { border-color: var(--accent); }
 .registry button.act.cancel { background: none; border-color: transparent; color: var(--muted); }
 .registry button.act.new { display: block; width: 100%; margin: 10px 0 0; text-align: left; }

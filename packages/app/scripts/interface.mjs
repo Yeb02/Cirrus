@@ -2234,8 +2234,9 @@ const SCENARIOS = [
     // left with one member and thrown away with it; the trash opened from the background's menu lists both, the most
     // recent first, before the test base's draft note; « Restaurer » the node makes its title follow the cursor, a click puts
     // it down in the plan shown, Ctrl+Z sends it back; Échap gives up a restore under way, the panel staying; the connection
-    // is refused, in a toast; the filter; Échap closes the panel.
-    name: 'corbeille : un nœud supprimé partout, restauré par la pose dans le plan, Ctrl+Z ; Échap abandonne la pose ; une connexion refusée ; le filtre',
+    // can never come back, its button is off with the reason, the row listed; closing the panel (Échap in its filter, ×) gives up a
+    // restore under way; the filter; Échap closes the panel.
+    name: 'corbeille : un nœud supprimé partout, restauré par la pose dans le plan, Ctrl+Z ; Échap abandonne la pose ; une connexion qui ne revient pas, éteinte ; fermer le panneau abandonne la pose ; le filtre',
     async run(page, base) {
       const TITLE = 'Monde algorithmique';
       const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
@@ -2297,10 +2298,34 @@ const SCENARIOS = [
       if (!(await page.evaluate(`!!document.querySelector('aside.trash')`))) throw new Error('Échap ferme le panneau au lieu d’abandonner la pose');
       if (!trashed() || !(await listed(id))) throw new Error('la pose abandonnée a écrit quelque chose');
 
-      // The connection, left with one member: refused, in a toast; still listed.
+      // The connection, left with one member, can never come back: its button is off, the core's own refusal is its reason
+      // (its title), the row stays listed; a click on it says nothing.
+      const NEVER = 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.';
+      const off = await page.evaluate(`(() => { const b = document.querySelector('.trash .item[data-kind="connection"] .restore'); return b ? [b.disabled, b.title] : null; })()`);
+      if (JSON.stringify(off) !== JSON.stringify([true, NEVER])) throw new Error(`le bouton « Restaurer » de la connexion : ${JSON.stringify(off)}`);
+      if (await page.evaluate(`document.querySelector('.trash .item[data-kind="node"] .restore').disabled`)) throw new Error('le bouton « Restaurer » d’un nœud est éteint');
       await click('.trash .item[data-kind="connection"] .restore');
-      if (!(await toastSays(page, 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.'))) throw new Error(`pas de notification du refus : ${await toastsText(page)}`);
-      if (!(await page.evaluate(`!!document.querySelector('.trash .item[data-kind="connection"]')`))) throw new Error('la connexion refusée n’est plus listée');
+      if (await toastSays(page, NEVER, 800)) throw new Error('un clic sur le bouton éteint a dit le refus');
+      if (!(await page.evaluate(`!!document.querySelector('.trash .item[data-kind="connection"]')`))) throw new Error('la connexion qui ne revient pas n’est plus listée');
+
+      // Closing the panel gives up a restore under way (the graph has lost the focus, so its own Escape is out of reach): by
+      // Escape typed in the filter, then by the ×; nothing is written, the node stays in the trash.
+      const reopen = async () => {
+        for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(centre.x, centre.y, 'right');
+        await click('.context-menu button', '^Corbeille…$');
+        if (!(await page.until(`!!document.querySelector('aside.trash') && document.activeElement?.matches('.trash input.search') === true`))) throw new Error('le panneau ne se rouvre pas');
+      };
+      for (const closing of ['Échap dans le filtre', 'la croix']) {
+        await click(`.trash .item[data-id="${id}"] .restore`);
+        if (!(await page.until(`!!document.querySelector('.ghost')`))) throw new Error(`pas de fantôme avant ${closing}`);
+        if (closing === 'la croix') await click('.trash .close');
+        else { await click('.trash input.search'); await page.press('Escape', 'Escape', 27); }
+        if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error(`${closing} ne ferme pas le panneau`);
+        if (await page.evaluate(`!!document.querySelector('.ghost')`)) throw new Error(`${closing} laisse la pose en cours`);
+        if (!trashed()) throw new Error(`${closing} a écrit quelque chose`);
+        await reopen();
+        if (!(await listed(id))) throw new Error(`le nœud n’est plus listé après ${closing}`);
+      }
 
       // The filter, by title, without accents; then Échap closes the panel.
       await click('.trash input.search');

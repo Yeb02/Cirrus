@@ -12,6 +12,7 @@ import { connectionDrafts, consultations, jumpDraft } from '../consultations.ts'
 import { createGl, type Gl } from '../gl/context.ts';
 import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
+import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
@@ -45,7 +46,8 @@ import { useScenes } from './graph/scenes.ts';
  * What App asks of the graph: files dropped at a point of it, as a drop of the user's (CIRRUS_IMPORT, captures); a jump
  * to an object (plan 6a, D2: Revealer), false at once for one gone, which pushes the place it leaves on the stack of
  * « précédent » et « suivant » (`back` and `forward`, false when there is nowhere to go); the focus back (the search closed);
- * a node of the trash to put down in the plan shown (`restore`, plan 6a, D5: « Restaurer » in the trash's panel).
+ * a node of the trash to put down in the plan shown (`restore`, plan 6a, D5: « Restaurer » in the trash's panel), and that placement
+ * given up (`cancelRestore`: the panel is closed).
  */
 export interface GraphHandle {
   dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void>;
@@ -54,6 +56,7 @@ export interface GraphHandle {
   forward(): boolean;
   focus(): void;
   restore(node: Id): void;
+  cancelRestore(): void;
 }
 /** Nothing found: the ring of the search drawn around nothing. */
 const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
@@ -543,12 +546,17 @@ export function GraphView(props: {
       // « Restaurer » replaces one under way; any other gesture is finished or given up first.
       const n = stateRef.current.nodes.get(node), el = root.current;
       if (!n || !el || !engine.current || !sceneRef.current) return;
+      // A stale row: the node is back in a plan since (restored elsewhere, a sync, an undo) — no ghost follows the cursor for it.
+      const refusal = restoreRefusal(n);
+      if (refusal !== null) { notify(refusal); return; }
       if (busy() && placement.placing.current?.kind !== 'restore') { notify(busyReason('de restaurer')); return; }
       const r = el.getBoundingClientRect();
       placement.startPlacing({ kind: 'restore', node }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
       el.focus({ preventScroll: true });
       redraw();
     },
+    // The trash's panel closed (× or Escape): the placement of a node being restored goes with it, as with its own Escape.
+    cancelRestore: () => { if (trashCloseGivesUp(placement.placing.current)) feed({ t: 'cancel' }); },
   }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
