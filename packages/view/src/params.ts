@@ -333,6 +333,11 @@ export interface RenderParams {
   searchBuildSliceMs: number;
   /** Previous and next (plan 6a, D2): the places kept by the jumps, for the session. */
   navHistoryMax: number;
+  // The local recording of consultations (plan 6a, D6)
+  /** The switch: 1 records them, 0 stops (no setting has two states: a number from 0 to 1 stands for it). */
+  consultationsRecord: number;
+  /** How long the interface keeps its events before it hands them to the main process, which writes them in one go. */
+  consultationsFlushMs: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -525,6 +530,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   searchFlashMs: 1200,
   searchBuildSliceMs: 8,
   navHistoryMax: 100,
+  consultationsRecord: 1,
+  consultationsFlushMs: 10_000,
 };
 
 /**
@@ -751,6 +758,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('searchFlashMs', 'Durée du cercle autour d’un objet après un saut (ms)', A, 'Recherche', 0, 10_000, 100),
   num('searchBuildSliceMs', 'Temps pris par tranche pour construire l’index de la recherche (ms)', A, 'Recherche', 2, 50, 1),
   num('navHistoryMax', 'Endroits gardés par « précédent » et « suivant » (Alt+←, Alt+→)', A, 'Recherche', 10, 1000, 10),
+  num('consultationsRecord', 'Enregistrer mes consultations (1 : oui, 0 : non)', G, 'Consultations', 0, 1, 1),
+  num('consultationsFlushMs', 'Délai entre deux enregistrements des consultations sur le disque (ms)', A, 'Consultations', 1000, 600_000, 1000),
 ];
 
 /**
@@ -763,7 +772,7 @@ export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications'] },
   { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
-  { title: 'Performances et base', groups: ['Rendu', 'Base'] },
+  { title: 'Performances et base', groups: ['Rendu', 'Base', 'Consultations'] },
   { title: 'Serveur', groups: ['Synchronisation'] },
 ];
 

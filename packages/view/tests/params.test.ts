@@ -432,3 +432,19 @@ test('précédent et suivant : navHistoryMax, réglage avancé du groupe « Rech
   expect(withOverrides({ navHistoryMax: 0 })).toMatchObject({ navHistoryMax: 10 });
   expect(withOverrides({ navHistoryMax: 1e9 })).toMatchObject({ navHistoryMax: 1000 });
 });
+
+test('les consultations (plan 6a, D6, tâche 5) : l’interrupteur est un nombre de 0 à 1 (aucun réglage à deux états), 1 par défaut ; l’envoi par lots toutes les 10 s, de 1 s à 10 min ; groupe « Consultations » de « Performances et base »', () => {
+  expect(PARAM_SPECS.some((s) => (s.kind as string) === 'boolean')).toBe(false);
+  expect(DEFAULT_PARAMS.consultationsRecord).toBe(1);
+  expect(DEFAULT_PARAMS.consultationsFlushMs).toBe(10_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'consultationsRecord')).toEqual({
+    key: 'consultationsRecord', label: 'Enregistrer mes consultations (1 : oui, 0 : non)', section: 'graphique', group: 'Consultations', kind: 'number', min: 0, max: 1, step: 1,
+  });
+  expect(PARAM_SPECS.find((s) => s.key === 'consultationsFlushMs')).toEqual({
+    key: 'consultationsFlushMs', label: 'Délai entre deux enregistrements des consultations sur le disque (ms)', section: 'avancé', group: 'Consultations', kind: 'number', min: 1000, max: 600_000, step: 1000,
+  });
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Performances et base')!.groups).toEqual(['Rendu', 'Base', 'Consultations']);
+  expect(withOverrides({ consultationsRecord: 0, consultationsFlushMs: 5 })).toMatchObject({ consultationsRecord: 0, consultationsFlushMs: 1000 });
+  expect(withOverrides({ consultationsRecord: 7, consultationsFlushMs: 1e12 })).toMatchObject({ consultationsRecord: 1, consultationsFlushMs: 600_000 });
+  expect(withOverrides({ consultationsRecord: 'non' })).toMatchObject({ consultationsRecord: 1 });
+});
