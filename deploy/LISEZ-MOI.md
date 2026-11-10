@@ -86,18 +86,31 @@ Si tu n'as pas donné ta clé à Hetzner (tu es entré par un mot de passe), don
 bash installer-serveur.sh cirrus.mondomaine.fr "ssh-ed25519 AAAA… toi@ton-pc"
 ```
 
-Le script refuse de couper les mots de passe tant qu'aucune clé n'est autorisée : il ne peut pas t'enfermer dehors. Il installe :
+Le script refuse de couper les mots de passe tant qu'aucune clé n'est autorisée. Il ne vérifie pourtant que la forme de la clé, pas qu'elle t'ouvre une session : la vérification est à faire toi-même, à la fin (ci-dessous). Il installe :
 
 - Node 26 (depuis NodeSource) et Caddy (depuis son dépôt), git ;
 - l'utilisateur système `cirrus`, et le dépôt dans `/opt/cirrus`, à sa dernière version publiée ;
-- les données dans `/var/lib/cirrus`, que seul `cirrus` lit ;
+- les données dans `/var/lib/cirrus`, que seul `cirrus` lit ; les versions servies dans `/var/lib/cirrus-maj`, que seul root écrit ;
 - le service `cirrus-serveur`, et sa mise à jour chaque heure (`cirrus-maj.timer`) ;
 - Caddy, qui porte le HTTPS et obtient seul son certificat Let's Encrypt ;
 - le pare-feu (ufw) : 22, 80 et 443, rien d'autre ;
 - les mises à jour de sécurité automatiques, avec un redémarrage à 4 h 30 quand un noyau l'attend ;
 - SSH par clé seulement.
 
-Il finit par la liste de ce qui suit. Tu peux le relancer sans rien casser : `bash /opt/cirrus/deploy/installer-serveur.sh cirrus.mondomaine.fr`. C'est aussi ainsi que tu remets le serveur sur la dernière version, ou que tu changes de domaine.
+**Avant de fermer ta session SSH**, ouvre un second terminal sur ton PC et vérifie que tu entres encore :
+
+```
+ssh root@<IPv4 de la VM>
+```
+
+Si ce second terminal est refusé, ne ferme pas le premier : depuis lui, rends les mots de passe à SSH, puis règle ta clé et relance le script.
+
+```
+rm /etc/ssh/sshd_config.d/00-cirrus.conf
+systemctl reload ssh
+```
+
+Le script finit par la liste de ce qui suit. Tu peux le relancer sans rien casser : `bash /opt/cirrus/deploy/installer-serveur.sh cirrus.mondomaine.fr`. C'est aussi ainsi que tu remets le serveur sur la dernière version, ou que tu changes de domaine.
 
 ## 6. Vérifier
 
@@ -153,8 +166,10 @@ Cinq codes faux, tapés sur la page ou dans Cirrus, brûlent les codes en attent
 
 Tu n'as rien à faire :
 
-1. **Chaque push sur `main`** : la CI construit Cirrus, le teste, signe son manifeste et publie `v0.1.<n>`.
-2. **Dans l'heure, le serveur** la prend. Il vérifie la signature avec la clé du code qu'il fait tourner, puis l'empreinte de l'installateur. Il passe son code au tag de la version et redémarre, puis sert le nouvel installateur. Il ne revient jamais en arrière. Un échec, quel qu'il soit, laisse la version d'avant en place.
+1. **Chaque push sur `main`** qui change autre chose que `docs/` ou des fichiers `.md` : la CI construit Cirrus, le teste, signe son manifeste et publie `v0.1.<n>`. Un push qui ne change que la documentation ne fait pas de version.
+2. **Dans l'heure, le serveur** la prend. Il vérifie la signature avec la clé du code qu'il fait tourner, puis l'empreinte de l'installateur. Il passe son code au tag de la version, copie ses bases et redémarre, puis sert le nouvel installateur. Il ne revient jamais en arrière.
+   - Un échec avant le redémarrage (un téléchargement, une vérification, `npm ci`) laisse la version d'avant en place, et l'heure suivante réessaie.
+   - Si le nouveau serveur ne répond pas dans la minute, ses bases d'avant et le code d'avant sont remis et relancés. Cette version n'est plus essayée ; la suivante le sera.
 3. **Chaque PC**, à sa connexion suivante, la télécharge et la vérifie, puis sa pastille dit « Mise à jour prête : elle s'installera à la fermeture. ». Elle s'installe quand tu fermes Cirrus ; rouvre-le ensuite.
 
 Une version refusée, signature fausse ou installateur différent, ne s'installe nulle part : le PC le dit par une notification, et le serveur dans son journal. « Cirrus Dev » ne se met jamais à jour.
@@ -206,5 +221,6 @@ Ce que tu peux voir :
 - **La page ne s'ouvre pas, ou sans cadenas** : le domaine ne pointe pas vers la VM (`nslookup`), ou Caddy n'a pas encore son certificat (`journalctl -u caddy -e`).
 - **« Aucune version n'est encore publiée sur ce serveur. »** sur la page : aucune version n'est publiée sur GitHub, ou le serveur l'a refusée (`journalctl -u cirrus-maj -e`).
 - **`cirrus-maj` en échec, « la clé publique … est encore provisoire »** : fais l'étape 4, attends la version qu'elle publie, puis relance `installer-serveur.sh`.
+- **`cirrus-maj` en échec, « le serveur de v0.1.<n> n'a pas répondu ici »** : le serveur de cette version ne démarrait pas, et la version d'avant tourne. Son journal le dit (`journalctl -u cirrus-serveur -e`). Une fois la cause réglée, ou pour la réessayer : `rm /var/lib/cirrus-maj/echec`, puis `systemctl start cirrus-maj.service`.
 - **« Code inconnu ou expiré. »** : le code a plus de 10 minutes, a servi à jumeler un PC, ou cinq essais faux l'ont brûlé. Refais `cirrus-serveur jumeler`.
 - **Une mise à jour refusée** sur un PC : regarde le journal de `cirrus-maj` sur le serveur, et l'onglet Actions sur GitHub.
