@@ -251,3 +251,9 @@ Le relecteur final (Opus, en lecture seule, de `0727723` à `3a75528`) n'a trouv
 - tsc : core, view, app propres. vitest (un paquet à la fois, `--maxWorkers=1`) : core 18 fichiers, 264 tests ; view 31 fichiers, 264 tests ; app 66 fichiers, 811 tests (dix de plus pour cette passe : cinq dans `panelEscape.test.ts`, deux dans `searchOverlay.test.ts`, trois dans `searchPick.test.ts` ; le reste est du plan 9). Aucun échec, `latexKill.test.ts` compris.
 - Les scénarios de la recherche (5), de la corbeille (2) et du registre (10), seuls, puis `npm run interface` : 50 scénarios sur 50.
 - `npm run captures` : 45 captures, toutes à 0 pixel de leur référence la plus récente (`plan9` 4, `plan6a` 7 dont `recherche` — le z-index ne la change pas —, `plan5b` 6, `plan5a` 2, `plan4c` 4, `plan4b` 4, `plan4a` 8, `reference-3c` 10) ; ne diffèrent que les images qu'une référence plus récente remplace : `serveur-etat`, `serveur-jumele`, `serveur-non-jumele` et `tout-telecharger` (`plan5a` et `plan5b`, par `plan9`), `import-publication` (`plan4c`, par `plan5b`), `relation-compilee` (`plan4b`) et `fenetre-connexion` (`reference-3c`), par `plan6a`. Aucune référence à refaire.
+
+## Plan clos (2026-11-10)
+
+- La revue finale n'a trouvé que des points mineurs. L'un d'eux a été relevé à « important » pour son effet : la boîte de recherche couvrait les questions. Ils ont été corrigés en une passe (94bbccb..661c91f), avec des tests et des scénarios vus en échec avant la correction ; interface 50/50, captures 45/45.
+- Restent à essayer par l'utilisateur, au premier plan : Alt+←, Alt+→, Alt seul, et les boutons latéraux d'une vraie souris.
+- Reste à mesurer plus tard : l'effet des tranches enchaînées par `isInputPending` sur une base riche.
