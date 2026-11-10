@@ -163,6 +163,11 @@ export const memberOfAt = (s: State, row: number, i: number): number => {
 };
 /** The plan rows node row `row` is placed in, as a copy. */
 export const placedIn = (s: State, row: number): Int32Array => dataOf(s).index.placedIn.view(row).slice();
+/** Without a copy, for hot loops: how many plans node row `row` is placed in (the search's groups: plan 6a, D1). */
+export const placedInCount = (s: State, row: number): number => {
+  const pool = dataOf(s).index.placedIn;
+  return row >= 0 && row < pool.len.length ? pool.len[row] : 0;
+};
 /** The node rows whose direct group in plan row `plan` is node row `group`. */
 export const groupMembers = (s: State, plan: number, group: number): readonly number[] => dataOf(s).index.groupMembers[plan]?.get(group) ?? [];
 /** The direct group's node row of node row `node` in plan row `plan`, or −1. */

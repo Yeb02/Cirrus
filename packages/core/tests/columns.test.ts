@@ -5,7 +5,7 @@ import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot } from '../src/snapshot.ts';
 import {
   applyOp, canonical, checkRecord, connId, connRelation, connRow, dataOf, emptyState, formerConnRow, formerNodeRow, groupMembers, memberOf, nodeRow,
-  OpConflictError, phantomsIn, phantomsOf, placedIn, placementOf, planRow, reindex, relationRows, type State,
+  OpConflictError, phantomsIn, phantomsOf, placedIn, placedInCount, placementOf, planRow, reindex, relationRows, type State,
 } from '../src/state.ts';
 import { rng, view } from './helpers.ts';
 import * as oracleRules from './oracle/invariants.ts';
@@ -228,6 +228,8 @@ function indicesMatchOracle(s: State, o: oracle.State): void {
     expect(conns).toEqual([...o.connections.values()].filter((c) => c.members.some((m) => m.node === n)).map((c) => c.id).sort());
     const plans = r < 0 ? [] : Array.from(placedIn(s, r), (p) => T.plans.rows.ids[p]).sort();
     expect(plans).toEqual([...o.placements.values()].filter((p) => p.node === n).map((p) => p.plan).sort());
+    // The count without a copy (plan 6a: the search's groups) agrees.
+    expect(placedInCount(s, r)).toBe(plans.length);
   }
   for (const c of CONNS) {
     expect([...phantomsOf(s, c)].sort()).toEqual([...o.phantoms.values()].filter((p) => p.connection === c).map((p) => p.id).sort());

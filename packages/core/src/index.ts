@@ -9,7 +9,7 @@ export { INCLUSION, KNOWLEDGE, NO_RECORD, ROLES, SOURCE, STRUCTURE } from './tab
 export {
   applyOp, applyOps, branchNodes, canonical, checkRecord, connectionOfRow, connId, connKind, connRelation, connRow, connRowCount, connTags, connTitle, connTrashed, directGroup,
   emptyState, formerConnRow, formerNodeRow, groupMembers, hasBranch, layoutKey, memberAt, memberCount, memberOf, memberOfAt, memberOfCount, nodeAt, nodeId, nodeRow, OpConflictError, phantomsIn, phantomsOf,
-  placedIn, placementKey, placementOf, placementsIn, planId, planRow, preambleText, relationRows, type State,
+  placedIn, placedInCount, placementKey, placementOf, placementsIn, planId, planRow, preambleText, relationRows, type State,
 } from './state.ts';
 export * from './latex.ts';
 export * from './bibtex.ts';
