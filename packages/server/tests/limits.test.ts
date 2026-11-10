@@ -53,12 +53,13 @@ interface Upload { status: number | null; body: string; error: string | null; ms
  * A body sent by pieces of « a », its length not announced (chunked), up to `total` bytes — as a client streams a file.
  * Two kinds of client: one that sends its whole body before it reads the answer (as Chromium's uploads do), done once
  * both are through, and one that stops at the answer (`stopOnAnswer`, as Node's fetch). `stallAfter`: the bytes after
- * which it says nothing more, its connection kept open. Resolves with the answer, or the connection ended (`error`: its
- * code; an answer may have come before); `limitMs` past, it gives up. Written on a plain socket: Node's own client stops
- * sending once an answer has come whole, which neither kind does.
+ * which it says nothing more, its connection kept open; `pauseMs`: a pause after each piece (a slow line). Resolves with
+ * the answer, or the connection ended (`error`: its code; an answer may have come before); `limitMs` past, it gives up.
+ * Written on a plain socket: Node's own client stops sending once an answer has come whole, which neither kind does.
  */
 function upload(
-  url: string, method: string, path: string, headers: Record<string, string>, opts: { total: number; stallAfter?: number; stopOnAnswer?: boolean; limitMs?: number },
+  url: string, method: string, path: string, headers: Record<string, string>,
+  opts: { total: number; stallAfter?: number; stopOnAnswer?: boolean; pauseMs?: number; limitMs?: number },
 ): Promise<Upload> {
   const { hostname, port } = new URL(url);
   return new Promise((resolve) => {
@@ -100,6 +101,10 @@ function upload(
         sent += n;
         if (!socket.write(Buffer.concat([Buffer.from(`${n.toString(16)}\r\n`), piece.subarray(0, n), Buffer.from('\r\n')]))) {
           socket.once('drain', pump);
+          return;
+        }
+        if (opts.pauseMs !== undefined && sent < opts.total) {
+          setTimeout(pump, opts.pauseMs);
           return;
         }
       }
@@ -175,6 +180,17 @@ test('inactivité (D1) : un envoi qui ne dit plus rien pendant SERVER_IDLE_MS es
   expect(stalled.ms).toBeGreaterThanOrEqual(SERVER_IDLE_MS - 50);
   await until(() => stored().length === 0);
   expect((await a.hello()).lastSeq).toBe(0);
+});
+
+test('un envoi lent (Review Focus 1) : plus long que plusieurs délais d’inactivité, mais jamais muet si longtemps, il passe', async () => {
+  const { url } = await start();
+  const a = await paired(url, 'pc-a');
+  // 8 pieces, one every SERVER_IDLE_MS / 2: about four idle delays in all.
+  const total = 8 * 4096, hash = sha256('a'.repeat(total));
+  const slow = await upload(url, 'PUT', `/files/${hash}`, { Authorization: `Bearer ${a.token}` }, { total, pauseMs: SERVER_IDLE_MS / 2 });
+  expect(slow).toMatchObject({ status: 204, error: null });
+  expect(slow.ms).toBeGreaterThan(SERVER_IDLE_MS * 3);
+  expect(stored()).toEqual([join(hash.slice(0, 2), hash)]);
 });
 
 test('inactivité : un flux d’événements, que ses pings font parler, n’est pas coupé', async () => {
