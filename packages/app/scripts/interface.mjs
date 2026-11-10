@@ -2049,6 +2049,186 @@ const SCENARIOS = [
       }
     },
   },
+  {
+    // Plan 6a, D4 (task 3b): the tag registry's panel, opened from the background's menu and closed by Échap; a key created
+    // as an enumeration, two nodes tagged with it, a value renamed, the key renamed, Ctrl+Z; a refusal told in a toast; a key
+    // removed from the registry (its tags stay, « non déclarée »), then declared again; each change one action.
+    name: 'registre des tags : une énumération créée, deux nœuds tagués, une valeur puis la clé renommées, Ctrl+Z ; un refus ; Supprimer et Déclarer',
+    async run(page, base) {
+      const rowsOf = () => page.evaluate(`[...document.querySelectorAll('.registry .key')].map((b) => [b.dataset.key, b.querySelector('.meta').textContent])`);
+      const tagsOf = (title) => JSON.parse(base(`SELECT json_extract(json, '$.tags') AS t FROM nodes WHERE json_extract(json, '$.title') = '${title}'`)[0].t);
+      const defOf = (key) => { const r = base(`SELECT json FROM tag_keys WHERE key = '${key}'`); return r.length > 0 ? JSON.parse(r[0].json) : null; };
+      const has = (title, key, value) => tagsOf(title).some((t) => t.key === key && t.value === value);
+      const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
+      const select = (label, value) => page.evaluate(`(() => {
+        const s = [...document.querySelectorAll('.registry label.field')].find((l) => l.querySelector('span').textContent === ${JSON.stringify(label)}).querySelector('select');
+        s.value = ${JSON.stringify(value)};
+        s.dispatchEvent(new Event('change', { bubbles: true }));
+        return s.value;
+      })()`);
+      const openRegistry = async () => {
+        for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(250, 850, 'right');
+        const items = await page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+        if (items.at(-1) !== 'Registre des tags…') throw new Error(`le menu du fond finit par ${JSON.stringify(items.at(-1))}, pas « Registre des tags… »`);
+        await click('.context-menu button', '^Registre des tags');
+        if (!(await page.until(`!!document.querySelector('aside.registry') && document.activeElement?.matches('.registry input.search') === true`))) {
+          throw new Error('le panneau ne s’ouvre pas, ou son champ n’a pas le focus');
+        }
+      };
+      const closed = () => page.until(`!document.querySelector('aside.registry')`);
+      const listed = (key) => page.evaluate(`[...document.querySelectorAll('.registry .key')].some((b) => b.dataset.key === ${JSON.stringify(key)})`);
+
+      // The list: the declared keys in the French order, then the carried ones with no definition; counts on each.
+      await openRegistry();
+      const rows = await rowsOf();
+      if (rows[0]?.[0] !== 'arxiv') throw new Error(`la liste commence par ${JSON.stringify(rows[0])}`);
+      const lastDeclared = rows.map((r) => !r[1].startsWith('non déclarée')).lastIndexOf(true), firstUndeclared = rows.findIndex((r) => r[1].startsWith('non déclarée'));
+      if (firstUndeclared < 0 || firstUndeclared !== lastDeclared + 1) throw new Error(`les clés non déclarées ne suivent pas les déclarées : ${JSON.stringify(rows)}`);
+      if (!rows.some(([k, m]) => k === 'pertinence' && m.startsWith('énumération ordonnée · nœud · '))) throw new Error(`pertinence : ${JSON.stringify(rows.find((r) => r[0] === 'pertinence'))}`);
+      // The filter, then Échap closes the panel (the focus is in the filter).
+      await page.type('pert');
+      if (JSON.stringify((await rowsOf()).map((r) => r[0])) !== '["pertinence"]') throw new Error(`le filtre « pert » montre ${JSON.stringify(await rowsOf())}`);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await closed())) throw new Error('Échap ne ferme pas le panneau');
+
+      // A key created as an enumeration, with two values.
+      await openRegistry();
+      await click('.registry button.new');
+      if (!(await page.until(`document.activeElement?.matches('.registry input.name-field') === true`))) throw new Error('le nom du nouveau tag n’a pas le focus');
+      await page.type('importance');
+      await select('Type', 'enum');
+      for (const name of ['basse', 'haute']) {
+        await click('.registry button.add');
+        if (!(await page.until(`document.activeElement?.matches('.registry .value-name') === true`))) throw new Error('la valeur ajoutée n’a pas le focus');
+        await page.type(name);
+      }
+      await click('.registry button.primary', '^Créer$');
+      if (!(await until(() => defOf('importance') !== null))) throw new Error(`la clé n’est pas créée ; ${await toastsText(page)}`);
+      const made = defOf('importance');
+      if (JSON.stringify(made.enumValues) !== '[{"name":"basse","rank":1},{"name":"haute","rank":2}]' || made.type !== 'enum' || made.scope !== 'node') {
+        throw new Error(`la définition créée : ${JSON.stringify(made)}`);
+      }
+      if (!(await page.until(`document.querySelector('.registry .key-title')?.textContent === 'importance'`))) throw new Error('le formulaire de la clé créée ne s’ouvre pas');
+      // The focus left with the button pressed: Échap still closes.
+      await page.press('Escape', 'Escape', 27);
+      if (!(await closed())) throw new Error('Échap ne ferme pas le panneau, le focus perdu');
+
+      // Two nodes tagged with it, from their pop-ups.
+      for (const [query, node, value] of [['monde algo', 'Monde algorithmique', 'basse'], ['sans perte', 'Compression sans perte', 'haute']]) {
+        await searchJump(page, query, node);
+        await openPopup(page, await graphCentre(page), node);
+        await click('.node-popup .tag-field');
+        await page.type(`importance:${value}`);
+        await page.press('Enter', 'Enter', 13);
+        if (!(await until(() => has(node, 'importance', value)))) throw new Error(`« ${node} » ne porte pas importance:${value} ; ${await toastsText(page)}`);
+        await page.press('Escape', 'Escape', 27);
+        await page.press('Escape', 'Escape', 27);
+        if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('le pop-up ne se ferme pas');
+      }
+
+      // The panel counts them; the key's form shows the values.
+      await openRegistry();
+      const line = (await rowsOf()).find((r) => r[0] === 'importance');
+      if (!line || line[1] !== 'énumération ordonnée · nœud · 2 objets') throw new Error(`la ligne de importance : ${JSON.stringify(line)}`);
+      await click('.registry .key[data-key="importance"]');
+      const names = () => page.evaluate(`[...document.querySelectorAll('.registry .value-name')].map((i) => i.value)`);
+      if (JSON.stringify(await names()) !== '["basse","haute"]') throw new Error(`les valeurs du formulaire : ${JSON.stringify(await names())}`);
+      if (await page.evaluate(`document.querySelector('.registry button.primary').disabled !== true`)) throw new Error('« Enregistrer » est actif sans changement');
+
+      // A value renamed: its objects follow, in one action.
+      await click('.registry .value-name');
+      await page.press('a', 'KeyA', 65, 2);
+      await page.type('faible');
+      await click('.registry button.primary', '^Enregistrer$');
+      if (!(await until(() => has('Monde algorithmique', 'importance', 'faible')))) throw new Error(`la valeur n’est pas renommée sur le nœud ; ${await toastsText(page)}`);
+      if (defOf('importance').enumValues[0].name !== 'faible') throw new Error(`la définition : ${JSON.stringify(defOf('importance'))}`);
+
+      // The key renamed, inline: the definition and the tags follow.
+      await click('.registry button.act', '^Renommer…$');
+      if (!(await page.until(`document.activeElement?.matches('.registry .rename input') === true`))) throw new Error('le champ du nouveau nom n’a pas le focus');
+      await page.press('a', 'KeyA', 65, 2);
+      await page.type('priorité');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => defOf('priorité') !== null && defOf('importance') === null))) throw new Error(`la clé n’est pas renommée ; ${await toastsText(page)}`);
+      if (!has('Monde algorithmique', 'priorité', 'faible') || !has('Compression sans perte', 'priorité', 'haute')) throw new Error('les tags ne suivent pas la clé');
+      if (!(await page.until(`document.querySelector('.registry .key-title')?.textContent === 'priorité'`))) throw new Error('le formulaire ne montre pas le nouveau nom');
+
+      // Ctrl+Z gives the key back; the panel follows (the form of a key gone is the list); a second one, the value.
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => defOf('importance') !== null && defOf('priorité') === null))) throw new Error('Ctrl+Z ne rend pas la clé');
+      if (!has('Monde algorithmique', 'importance', 'faible')) throw new Error('Ctrl+Z ne rend pas les tags de la clé');
+      if (!(await page.until(`!document.querySelector('.registry .key-form') && !!document.querySelector('.registry .key[data-key="importance"]')`))) throw new Error('le panneau ne suit pas l’annulation');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => has('Monde algorithmique', 'importance', 'basse')))) throw new Error('un second Ctrl+Z ne rend pas la valeur');
+      if (!(await page.until(`document.querySelector('.registry .key[data-key="importance"] .meta')?.textContent === 'énumération ordonnée · nœud · 2 objets'`))) throw new Error('le compte ne suit pas');
+
+      // A refusal of the core is a toast: « nature » cannot take a name the registry has.
+      await click('.registry .key[data-key="nature"]');
+      await click('.registry button.act', '^Renommer…$');
+      await page.press('a', 'KeyA', 65, 2);
+      await page.type('pertinence');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await toastSays(page, 'Le tag « pertinence » existe déjà dans le registre.'))) throw new Error(`pas de notification du refus : ${await toastsText(page)}`);
+      // Échap gives the rename up and keeps the panel.
+      await page.press('Escape', 'Escape', 27);
+      if (await page.evaluate(`!!document.querySelector('.registry .rename')`) || !(await page.evaluate(`!!document.querySelector('aside.registry')`))) throw new Error('Échap ne fait qu’abandonner le renommage');
+      await click('.registry button.back');
+
+      // Removed from the registry after a question: its tags stay on the nodes, the key is « non déclarée »; declared again.
+      await click('.registry .key[data-key="importance"]');
+      await click('.registry button.act', '^Supprimer$');
+      if (!(await page.until(`document.querySelector('.ask p')?.textContent === 'Retirer « importance » du registre ?'`))) throw new Error('pas de question avant de retirer la clé');
+      await click('.ask .choices button', '^Retirer du registre$');
+      if (!(await until(() => defOf('importance') === null))) throw new Error(`la clé n’est pas retirée ; ${await toastsText(page)}`);
+      if (!has('Monde algorithmique', 'importance', 'basse')) throw new Error('les tags ne restent pas sur les nœuds');
+      if (!(await page.until(`document.querySelector('.registry .key-form .meta')?.textContent === 'non déclarée · 2 objets'`))) throw new Error('le formulaire ne dit pas « non déclarée »');
+      await click('.registry button.primary', '^Déclarer$');
+      if (!(await until(() => defOf('importance') !== null))) throw new Error(`la clé n’est pas déclarée ; ${await toastsText(page)}`);
+      const declared = defOf('importance');
+      if (declared.type !== 'text' || declared.scope !== 'node' || declared.multi !== false) throw new Error(`la définition déduite des objets : ${JSON.stringify(declared)}`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => defOf('importance') === null))) throw new Error('Ctrl+Z ne défait pas « Déclarer »');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => defOf('importance') !== null))) throw new Error('Ctrl+Z ne rend pas la clé retirée');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await closed())) throw new Error('Échap ne ferme pas le panneau à la fin');
+      if (await listed('importance')) throw new Error('le panneau fermé a encore sa liste');
+    },
+  },
+  {
+    // Plan 6a, D4 (task 3b): the tags of a connection, in its pop-up as in a node's, suggested from the keys of scope
+    // connection or both only, written by editConnection, a tag removed by its ×.
+    name: 'tags d’une connexion : suggestions de portée connexion, ajout, refus, retrait',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page, base) {
+      const tagged = (key) => base(`SELECT json FROM connections WHERE trashed = 0`).map((r) => JSON.parse(r.json)).filter((c) => c.tags.some((t) => t.key === key));
+      const centre = await graphCentre(page);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup .tag-field')`, 1000)); i++) await page.click(centre.x, centre.y);
+      const field = await page.centre('.popup .tag-field', '');
+      await page.click(field.x, field.y);
+      // Focused and empty: the keys of scope connection (or both), none of a node's.
+      const picks = await page.evaluate(`[...document.querySelectorAll('.popup .suggestions .pick')].map((b) => b.textContent)`);
+      if (JSON.stringify(picks) !== JSON.stringify(['parallèle', 'déduction', 'partie', 'suivant'])) throw new Error(`suggestions d’une connexion : ${JSON.stringify(picks)}`);
+      // The connection's own tags are chips already; the word it lacks is the one added.
+      const chips = await page.evaluate(`[...document.querySelectorAll('.popup .tags .tag')].map((t) => t.textContent)`);
+      if (chips.length === 0) throw new Error('le pop-up de la connexion ne montre aucun de ses tags');
+      const word = chips.some((c) => c.startsWith('parallèle')) ? 'déduction' : 'parallèle';
+      const before = tagged(word).length;
+      await page.type(word);
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => tagged(word).length === before + 1))) throw new Error(`le tag n’est pas écrit ; ${await toastsText(page)}`);
+      if (!(await page.until(`[...document.querySelectorAll('.popup .tags .tag')].some((t) => t.textContent.startsWith(${JSON.stringify(word)}))`))) throw new Error('la puce du tag n’est pas dans le pop-up');
+      // A refused tag stays in the field and says why.
+      await page.type('partie:deux');
+      await page.press('Enter', 'Enter', 13);
+      const error = await page.evaluate(`document.querySelector('.popup .error')?.textContent ?? null`);
+      if (error !== 'Le tag « partie » demande un nombre : « deux » n’en est pas un.') throw new Error(`le refus : ${JSON.stringify(error)}`);
+      // Taken off by its ×.
+      const remove = await page.evaluate(`(() => { const b = [...document.querySelectorAll('.popup .tags .tag')].find((t) => t.textContent.startsWith(${JSON.stringify(word)})).querySelector('.remove').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+      await page.click(remove.x, remove.y);
+      if (!(await until(() => tagged(word).length === before))) throw new Error('le tag n’est pas retiré');
+    },
+  },
   TWO_PCS,
 ];
 
