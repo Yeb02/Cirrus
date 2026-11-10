@@ -94,9 +94,9 @@ function checkName(name: unknown): string | null {
 
 /**
  * serveur.db (WAL: the command line pairs and revokes while the server runs): the paired PCs and the pending codes. A
- * code lives PAIRING_TTL_MS and serves once; PAIRING_TRIES wrong /pair attempts burn every pending code — the codes are
- * kept hashed, so a wrong attempt cannot be laid at one code's door, and with one code pending at a time (the usual
- * case) that is exactly D3's « 5 essais faux ».
+ * code lives PAIRING_TTL_MS and serves once; PAIRING_TRIES wrong attempts (/pair, /installer of plan 9) burn every
+ * pending code — the codes are kept hashed, so a wrong attempt cannot be laid at one code's door, and with one code
+ * pending at a time (the usual case) that is exactly D3's « 5 essais faux ».
  */
 export class Tokens {
   private readonly db: DatabaseSync;
@@ -173,22 +173,42 @@ export class Tokens {
     const machine = checkName(name) ?? shape();
     const token = randomBytes(32).toString('base64url');
     const paired = this.transaction(() => {
-      this.q('DELETE FROM codes WHERE expires_at <= ?').run(now);
-      const hash = sha256(normalizeCode(code as string));
-      const row = this.q('SELECT name FROM codes WHERE code_hash = ?').get(hash) as { name: string } | undefined;
-      if (!row) {
-        this.q('UPDATE codes SET failures = failures + 1').run();
-        this.q('DELETE FROM codes WHERE failures >= ?').run(PAIRING_TRIES);
-        return false;
-      }
-      this.q('DELETE FROM codes WHERE code_hash = ?').run(hash);
+      const found = this.attempt(code as string, now);
+      if (!found) return false;
+      this.q('DELETE FROM codes WHERE code_hash = ?').run(found.hash);
       this.q(`INSERT INTO pcs (id, name, machine, token_hash, paired_at) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET name = excluded.name, machine = excluded.machine, token_hash = excluded.token_hash, paired_at = excluded.paired_at`)
-        .run(pc as string, row.name, machine, hashToken(token), now);
+        .run(pc as string, found.name, machine, hashToken(token), now);
       return true;
     });
     if (!paired) throw new PairingError(403, 'Code de jumelage faux, expiré ou déjà servi : demande un nouveau code au serveur (jumeler).');
     return token;
+  }
+
+  /**
+   * POST /installer (plan 9, D5): whether `code` is a pending code, checked as /pair checks it — a wrong one counts
+   * against every pending code, and burns those that reach PAIRING_TRIES; the two routes share the count — but not
+   * spent, nor its count cleared: the PC that downloads the installer pairs with it next. A code longer than
+   * MAX_PAIR_CODE_CHARS is not tried, nor counted, as /pair's 400 (it could not be one).
+   */
+  checkCode(code: string, now: number): boolean {
+    if (code.length > MAX_PAIR_CODE_CHARS) return false;
+    return this.transaction(() => this.attempt(code, now) !== null);
+  }
+
+  /**
+   * A code tried, as typed (normalizeCode), within a transaction: the pending code it is, its hash and its name; null
+   * otherwise, and the attempt counts against every pending code, burning those that reach PAIRING_TRIES. Expired codes
+   * go first.
+   */
+  private attempt(code: string, now: number): { hash: string; name: string } | null {
+    this.q('DELETE FROM codes WHERE expires_at <= ?').run(now);
+    const hash = sha256(normalizeCode(code));
+    const row = this.q('SELECT name FROM codes WHERE code_hash = ?').get(hash) as { name: string } | undefined;
+    if (row) return { hash, name: row.name };
+    this.q('UPDATE codes SET failures = failures + 1').run();
+    this.q('DELETE FROM codes WHERE failures >= ?').run(PAIRING_TRIES);
+    return null;
   }
 
   /** The PC whose token has this hash, while it is paired; null otherwise (unknown, or revoked since). */
