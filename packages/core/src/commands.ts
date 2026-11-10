@@ -2,13 +2,13 @@ import { validAnchor } from './annotation.ts';
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
 import type {
-  Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagValue,
+  Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagKeyDef, TagValue,
 } from './model.ts';
-import { type Op, truncateLabel } from './ops.ts';
-import { normalizeTag, TagError } from './registry.ts';
+import { MAX_ID_CHARS, type Op, truncateLabel } from './ops.ts';
+import { normalizeTag, PROTECTED_TAG_KEYS, TagError, type TagKeyShape, tagValueFits, tagValuesFit } from './registry.ts';
 import {
-  applyKnown, applyOp, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn, phantomsOf,
-  placedIn, placementOf, preambleText, rollback, type State,
+  applyKnown, applyOp, canonical, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn,
+  phantomsOf, placedIn, placementOf, preambleText, rollback, type State, taggedWith,
 } from './state.ts';
 import { INCLUSION } from './tables.ts';
 
@@ -119,6 +119,9 @@ class Draft {
   }
   phantom(id: Id, after: PhantomRec | null): void {
     this.write({ t: 'phantom', before: this.s.phantoms.get(id) ?? null, after });
+  }
+  tagKey(key: string, after: TagKeyDef | null): void {
+    this.write({ t: 'tagKey', before: this.s.tagKeys.get(key) ?? null, after });
   }
   /** Removes phantom `ph`, which must be its current record (OpConflictError otherwise). */
   dropPhantom(ph: PhantomRec): void {
@@ -591,5 +594,213 @@ export function setPreamble(s: State, text: string): Action {
   return transact(s, (d) => {
     d.push({ t: 'preamble', before: s.preamble, after: { text } });
     return d.finish('Modifier le préambule LaTeX');
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The tag registry (plan 6a, D4): a key created or changed, renamed everywhere, taken out of the registry, an
+// enumeration's value renamed. Each is one action, checked as any other (Draft.finish, then the server's parseUnit and
+// rules); the carriers of a key are read from the index (taggedWith), trash included, never by a scan of the base.
+
+/**
+ * A tag key's name (D4): 1 to MAX_ID_CHARS characters, as the server bounds a key a write adds (R32); no « : » and no
+ * space around it, since parseTag, which splits at the first colon and trims, could never give one.
+ */
+function checkKeyName(key: string): void {
+  if (key.trim() === '') throw new CommandError('Le nom du tag est vide.');
+  if (key.length > MAX_ID_CHARS) throw new CommandError(`Le nom d’un tag compte ${MAX_ID_CHARS} caractères au plus (ici ${key.length}).`);
+  if (key.includes(':') || key.trim() !== key) throw new CommandError('Un nom de tag ne contient pas « : », et ne commence ni ne finit par une espace.');
+}
+
+const sameShape = (a: TagKeyShape, b: TagKeyShape): boolean => a.type === b.type && a.scope === b.scope && a.multi === b.multi;
+
+/** A node or a connection that carries a key, with its kind (the index lists both, identifiers being unique across kinds). */
+type Carrier = { rec: NodeRec; kind: 'node' } | { rec: ConnectionRec; kind: 'connection' };
+const carrierOf = (s: State, id: Id): Carrier => {
+  const n = s.nodes.get(id);
+  return n ? { rec: n, kind: 'node' } : { rec: s.connections.get(id)!, kind: 'connection' };
+};
+const valuesOf = (tags: readonly TagValue[], key: string) => tags.filter((t) => t.key === key).map((t) => t.value);
+/** Its record with these tags, written by the draft. */
+function retag(d: Draft, c: Carrier, tags: TagValue[]): void {
+  if (c.kind === 'node') d.node(c.rec.id, { ...c.rec, tags });
+  else d.connection(c.rec.id, { ...c.rec, tags });
+}
+
+/** The carriers among `ids` whose values of `def`'s key it does not accept (tagValuesFit). */
+function misfits(s: State, def: TagKeyDef, ids: Iterable<Id>): Carrier[] {
+  const out: Carrier[] = [];
+  for (const id of ids) {
+    const c = carrierOf(s, id);
+    if (!tagValuesFit(def, c.kind, valuesOf(c.rec.tags, def.key))) out.push(c);
+  }
+  return out;
+}
+
+const french = new Intl.Collator('fr');
+
+/**
+ * Refuses a change of the registry that the values of `bad` would no longer respect (D4): how many objects, and the
+ * first — one alive before one in the trash, one with a title before one without, then in French order.
+ */
+function refuseMisfits(bad: Carrier[]): void {
+  if (bad.length === 0) return;
+  const rank = (c: Carrier) => (c.rec.trashedAt !== undefined ? 2 : 0) + (c.rec.title === '' ? 1 : 0);
+  let first = bad[0];
+  for (const c of bad) {
+    const d = rank(c) - rank(first) || french.compare(c.rec.title, first.rec.title) || (c.rec.id < first.rec.id ? -1 : 0);
+    if (d < 0) first = c;
+  }
+  const nodes = bad.filter((c) => c.kind === 'node').length;
+  const [one, many] = nodes === bad.length ? ['nœud', 'nœuds'] : nodes === 0 ? ['connexion', 'connexions'] : ['objet', 'objets'];
+  const name = `« ${first.rec.title || 'Sans titre'} »${first.rec.trashedAt !== undefined ? ' (à la corbeille)' : ''}`;
+  throw new CommandError(bad.length === 1
+    ? `1 ${one} porte une valeur que ce changement rendrait invalide : ${name}.`
+    : `${bad.length} ${many} portent une valeur que ce changement rendrait invalide, dont ${name}.`);
+}
+
+/** A definition as the registry keeps it: its own fields only, the values of an enumeration for an enumeration only, copied. */
+function definition(def: TagKeyDef): TagKeyDef {
+  const out: TagKeyDef = { key: def.key, type: def.type, scope: def.scope, multi: def.multi, required: def.required };
+  if (def.defaultValue !== undefined) out.defaultValue = def.defaultValue;
+  if (def.type === 'enum') out.enumValues = (def.enumValues ?? []).map((e) => ({ name: e.name, rank: e.rank }));
+  return out;
+}
+
+/** An enumeration's values each named, with a finite rank, no name nor rank twice (normalizeTag reads either); a default the definition accepts. */
+function checkDefinition(def: TagKeyDef): void {
+  const names = new Set<string>(), ranks = new Set<number>();
+  for (const e of def.enumValues ?? []) {
+    if (e.name.trim() === '') throw new CommandError('Une valeur de l’énumération n’a pas de nom.');
+    if (!Number.isFinite(e.rank)) throw new CommandError(`Le rang de la valeur « ${e.name} » n’est pas un nombre.`);
+    if (names.has(e.name)) throw new CommandError(`Deux valeurs de l’énumération s’appellent « ${e.name} ».`);
+    if (ranks.has(e.rank)) throw new CommandError(`Deux valeurs de l’énumération ont le rang ${e.rank}.`);
+    names.add(e.name);
+    ranks.add(e.rank);
+  }
+  if (def.defaultValue !== undefined && !tagValueFits(def, def.defaultValue)) {
+    throw new CommandError(`La valeur par défaut « ${def.defaultValue} » ne convient pas au tag « ${def.key} ».`);
+  }
+}
+
+/**
+ * Creates a key of the registry, or changes its definition (D4). Refused when a value already carried (trash included)
+ * would no longer fit: its type, its scope (node, connection), one value or several, an enumeration's values. A key
+ * Cirrus reads (PROTECTED_TAG_KEYS) keeps the shape Cirrus gives it, or the one it has: only whether it is required and
+ * its default change.
+ */
+export function defineTagKey(s: State, def: TagKeyDef): Action {
+  checkKeyName(def.key);
+  const next = definition(def), key = next.key, old = s.tagKeys.get(key), shape = PROTECTED_TAG_KEYS.get(key);
+  if (shape && !sameShape(next, shape) && !(old && sameShape(next, old))) {
+    throw new CommandError(`Cirrus se sert du tag « ${key} » : seuls son caractère obligatoire et sa valeur par défaut se changent.`);
+  }
+  checkDefinition(next);
+  if (old && canonical(old) === canonical(next)) throw new CommandError(`La définition du tag « ${key} » est déjà celle-ci.`);
+  // Whether it is required and its default never make a carried value wrong.
+  if (!old || !sameShape(old, next) || canonical(old.enumValues ?? null) !== canonical(next.enumValues ?? null)) refuseMisfits(misfits(s, next, taggedWith(s, key)));
+  return transact(s, (d) => {
+    d.tagKey(key, next);
+    return d.finish(old ? `Modifier le tag « ${key} »` : `Créer le tag « ${key} »`);
+  });
+}
+
+/**
+ * A record's tags with key `from` renamed `to`, each in its place (D4). When the record carries `to` already, a key of
+ * one value (`single`) keeps the old key's value — it is the one renamed into place —, and any other unites the values
+ * of both keys, without duplicates (the number 3 and the text « 3 » are two values).
+ */
+function renamedTags(tags: readonly TagValue[], from: string, to: string, single: boolean): TagValue[] {
+  const renamed = (t: TagValue): TagValue => (t.value === undefined ? { key: to } : { key: to, value: t.value });
+  if (!tags.some((t) => t.key === to)) return tags.map((t) => (t.key === from ? renamed(t) : t));
+  const out: TagValue[] = [], seen = new Set<string>();
+  for (const t of tags) {
+    if (t.key !== from && t.key !== to) out.push(t);
+    else if (single) {
+      if (t.key === from) out.push(renamed(t));
+    } else {
+      const v = JSON.stringify(t.value ?? null);
+      if (!seen.has(v)) {
+        seen.add(v);
+        out.push(renamed(t));
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Renames a key everywhere (D4), in one action: its definition, moved to the new name, and every node and connection
+ * that carries it, trash included. A key with no definition (only carried) is renamed too, and the action writes none;
+ * renamed into a key the registry declares, it comes under that definition — how a key a sync brought back undeclared
+ * is put away. Refused: a key Cirrus reads; a bad name; a new name another definition holds; a value the definition
+ * would newly judge and not accept (one already carried under the new name, or one coming under its definition).
+ */
+export function renameTagKey(s: State, from: string, to: string): Action {
+  if (PROTECTED_TAG_KEYS.has(from)) throw new CommandError(`Cirrus se sert du tag « ${from} » : il ne se renomme pas.`);
+  checkKeyName(to);
+  if (to === from) throw new CommandError(`Le tag s’appelle déjà « ${to} ».`);
+  const def = s.tagKeys.get(from), target = s.tagKeys.get(to);
+  const carriers = Array.from(taggedWith(s, from), (id) => carrierOf(s, id));
+  if (!def && carriers.length === 0) throw new CommandError(`Aucun tag ne s’appelle « ${from} ».`);
+  if (def && target) throw new CommandError(`Le tag « ${to} » existe déjà dans le registre.`);
+  const moved: TagKeyDef | undefined = def && { ...def, key: to }, shape = PROTECTED_TAG_KEYS.get(to);
+  if (moved && shape && !sameShape(moved, shape)) {
+    throw new CommandError(`Cirrus se sert du tag « ${to} » : « ${from} » n’a pas le type, la portée ou la multiplicité qu’il lui donne.`);
+  }
+  // The definition the values come under: the key's own, moved; or the one the new name has.
+  const rule = moved ?? target, single = rule !== undefined && !rule.multi;
+  const tags = carriers.map((c) => renamedTags(c.rec.tags, from, to, single));
+  if (moved) {
+    // What the definition newly judges: the values already carried under `to` — all of a record's that did not carry
+    // `from`; with several values, those united with the renamed ones (one value: the old key's is kept).
+    const bad: Carrier[] = [];
+    for (const id of taggedWith(s, to)) {
+      const c = carrierOf(s, id), olds = valuesOf(c.rec.tags, to), renamedHere = c.rec.tags.some((t) => t.key === from);
+      const fits = renamedHere ? single || olds.every((v) => tagValueFits(moved, v)) : tagValuesFit(moved, c.kind, olds);
+      if (!fits) bad.push(c);
+    }
+    refuseMisfits(bad);
+  } else if (target) refuseMisfits(carriers.filter((c, i) => !tagValuesFit(target, c.kind, valuesOf(tags[i], to))));
+  return transact(s, (d) => {
+    if (moved) {
+      d.tagKey(from, null);
+      d.tagKey(to, moved);
+    }
+    carriers.forEach((c, i) => retag(d, c, tags[i]));
+    return d.finish(`Renommer le tag « ${from} » en « ${to} »`);
+  });
+}
+
+/** Takes a key out of the registry (D4): its tags stay on the objects, as a key the registry does not declare (spec 5.4). */
+export function deleteTagKey(s: State, key: string): Action {
+  if (!s.tagKeys.has(key)) throw new CommandError(`Le tag « ${key} » n’est pas dans le registre.`);
+  if (PROTECTED_TAG_KEYS.has(key)) throw new CommandError(`Cirrus se sert du tag « ${key} » : il ne se supprime pas.`);
+  return transact(s, (d) => {
+    d.tagKey(key, null);
+    return d.finish(`Retirer le tag « ${key} » du registre`);
+  });
+}
+
+/**
+ * Renames a value of an enumeration (D4), in one action: in its definition (its rank kept, the default following it),
+ * and on every node and connection that carries it by its name, trash included; one carrying its rank still designates it.
+ */
+export function renameEnumValue(s: State, key: string, from: string, to: string): Action {
+  const def = s.tagKeys.get(key);
+  if (def?.type !== 'enum') throw new CommandError(`Le tag « ${key} » n’est pas une énumération du registre.`);
+  const values = def.enumValues ?? [];
+  if (!values.some((e) => e.name === from)) throw new CommandError(`Le tag « ${key} » n’a pas de valeur « ${from} ».`);
+  if (to.trim() === '') throw new CommandError('Le nom de la valeur est vide.');
+  if (to === from) throw new CommandError(`La valeur s’appelle déjà « ${to} ».`);
+  if (values.some((e) => e.name === to)) throw new CommandError(`Le tag « ${key} » a déjà une valeur « ${to} ».`);
+  const next: TagKeyDef = { ...def, enumValues: values.map((e) => (e.name === from ? { name: to, rank: e.rank } : e)) };
+  if (def.defaultValue === from) next.defaultValue = to;
+  const has = (t: TagValue) => t.key === key && t.value === from;
+  const carriers = Array.from(taggedWith(s, key), (id) => carrierOf(s, id)).filter((c) => c.rec.tags.some(has));
+  return transact(s, (d) => {
+    d.tagKey(key, next);
+    for (const c of carriers) retag(d, c, c.rec.tags.map((t) => (has(t) ? { key, value: to } : t)));
+    return d.finish(`Renommer la valeur « ${from} » du tag « ${key} » en « ${to} »`);
   });
 }
