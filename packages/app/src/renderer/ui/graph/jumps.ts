@@ -15,6 +15,8 @@ export interface JumpHost {
   max(): number;
   /** A gesture, a question, a repercussion or a .bib's import under way: the history waits for it. */
   busy(): boolean;
+  /** Ends the ring of a jump still in progress: a step back or forward is a move of its own, nothing blinks after it. */
+  stopFlash(): void;
   /** The camera `plan` opens with the next time it is shown (GraphView's cameras). */
   remember(plan: Id, camera: Camera): void;
   /** Shows a plan in its tab (App's openPlan). */
@@ -26,7 +28,7 @@ export interface JumpHost {
  * The jumps and the stack behind « précédent » et « suivant » (plan 6a, D2), around the revealer: a jump pushes the place
  * it leaves, once it is known to go (an object gone pushes nothing: the stack stays right); `back` and `forward` restore
  * a place — its plan opened in its tab if it is not the one shown, and that plan's camera exactly — without ringing
- * anything, and skip a place whose plan has been deleted. A simple move of the view never enters the stack.
+ * anything (the ring of a jump in progress ends: `stopFlash`), and skip a place whose plan has been deleted. A simple move of the view never enters the stack.
  */
 export class Jumps {
   readonly history = new NavHistory();
@@ -65,6 +67,7 @@ export class Jumps {
     if (!here || h.busy()) return false;
     const to = this.history[dir]({ plan: here.plan, camera: { ...here.camera } }, (plan) => h.state().plans.has(plan));
     if (!to) return false;
+    h.stopFlash();
     if (to.plan === here.plan) {
       h.moveCamera({ ...to.camera, widthPx: here.camera.widthPx, heightPx: here.camera.heightPx });
     } else {

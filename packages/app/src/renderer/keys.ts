@@ -1,5 +1,5 @@
 /** A key's target, as the app's shortcuts read it (an Element, in the window). */
-interface KeyTarget { tagName: string; isContentEditable: boolean; closest(selector: string): unknown }
+export interface KeyTarget { tagName: string; isContentEditable: boolean; closest(selector: string): unknown }
 
 /**
  * Whether a key belongs to the text being typed, not to the app's shortcuts (Ctrl+Z, Ctrl+Y: spec 6.4): a field —

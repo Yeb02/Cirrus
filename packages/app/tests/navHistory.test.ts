@@ -6,7 +6,9 @@ import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { buildScene, type Camera, DEFAULT_PARAMS as P, fitItem, type PlanScene } from '@cirrus/view';
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
-import { destination, elsewhere, historyKey, NavHistory, navKeyOf, type Place, sideButton } from '../src/renderer/navigation.ts';
+import {
+  destination, elsewhere, historyButtonFor, historyCommandFor, historyKey, historyKeyFor, NavHistory, navKeyOf, type Place, sideButton,
+} from '../src/renderer/navigation.ts';
 import { type JumpHost, Jumps, showNodeIn } from '../src/renderer/ui/graph/jumps.ts';
 import { type RevealHost, Revealer } from '../src/renderer/ui/graph/reveal.ts';
 
@@ -44,6 +46,14 @@ test('la pile : pousser, revenir, repartir — chaque pas rend l’endroit d’o
   // And back again: the place left is where the view was (moved since the jump, or not).
   expect(h.back(at('C', 30), alive)).toEqual(at('B', 2));
   expect(h.forward(at('B', 2), alive)).toEqual(at('C', 30));
+});
+
+test('la pile : sans prédicat, tout plan existe ; sans borne donnée, celle du réglage navHistoryMax (fix round 1, M2)', () => {
+  const h = new NavHistory();
+  expect(h.max).toBe(P.navHistoryMax);
+  h.push(at('A', 1));
+  expect(h.back(at('B', 2))).toEqual(at('A', 1));
+  expect(h.forward(at('A', 1))).toEqual(at('B', 2));
 });
 
 test('la pile : un saut après un retour efface ce qui était en avant', () => {
@@ -126,6 +136,45 @@ test('les touches : Alt+← et Alt+→ vont en arrière et en avant, sans autre 
   expect(navKeyOf(key('a'))).toBeNull();
 });
 
+/** A target as the shortcuts read it: a tag, whether it is editable, and what it sits in (`closest`, by selector). */
+const field = (tagName: string, inside: string[] = [], isContentEditable = false) => ({
+  tagName, isContentEditable, closest: (selector: string) => (inside.some((i) => selector.split(',').map((x) => x.trim()).includes(i)) ? {} : null),
+});
+const BODY = field('BODY'), BUTTON = field('BUTTON');
+const alt = (k: string) => ({ key: k, altKey: true, ctrlKey: false, shiftKey: false, metaKey: false });
+
+test('Alt+← et Alt+→ partent de partout sauf d’un champ de texte, d’un champ LaTeX en édition ou de CodeMirror (fix round 1, M3)', () => {
+  // The graph, the body, a button of a panel: heard.
+  for (const t of [BODY, BUTTON, null]) {
+    expect(historyKeyFor(alt('ArrowLeft'), t)).toBe('back');
+    expect(historyKeyFor(alt('ArrowRight'), t)).toBe('forward');
+  }
+  // A field keeps the keys (Alt+← is a move of its cursor): input, text area, select, editable element, LaTeX field being edited, CodeMirror.
+  for (const t of [field('INPUT'), field('TEXTAREA'), field('SELECT'), field('DIV', [], true), field('SPAN', ['.latex-field.edit']), field('DIV', ['.cm-editor'])]) {
+    expect(historyKeyFor(alt('ArrowLeft'), t), t.tagName).toBeNull();
+    expect(historyKeyFor(alt('ArrowRight'), t), t.tagName).toBeNull();
+  }
+  // Not the keys: another key, or Alt with another modifier.
+  expect(historyKeyFor(alt('ArrowUp'), BODY)).toBeNull();
+  expect(historyKeyFor({ ...alt('ArrowLeft'), ctrlKey: true }, BODY)).toBeNull();
+});
+
+test('un champ qui a le focus garde aussi les boutons latéraux et app-command (fix round 1, M6)', () => {
+  const typing = [field('INPUT'), field('TEXTAREA'), field('DIV', [], true), field('SPAN', ['.latex-field.edit']), field('DIV', ['.cm-editor'])];
+  expect(historyButtonFor(3, BODY)).toBe('back');
+  expect(historyButtonFor(4, BUTTON)).toBe('forward');
+  expect(historyButtonFor(0, BODY)).toBeNull();
+  expect(historyCommandFor('browser-backward', BODY)).toBe('back');
+  expect(historyCommandFor('browser-forward', null)).toBe('forward');
+  expect(historyCommandFor('media-play', BODY)).toBeNull();
+  for (const t of typing) {
+    expect(historyButtonFor(3, t), t.tagName).toBeNull();
+    expect(historyButtonFor(4, t), t.tagName).toBeNull();
+    expect(historyCommandFor('browser-backward', t), t.tagName).toBeNull();
+    expect(historyCommandFor('browser-forward', t), t.tagName).toBeNull();
+  }
+});
+
 test('les boutons de la souris : les boutons latéraux (3 et 4) vont en arrière et en avant, et ne sont aucun des trois boutons du graphe', () => {
   expect(sideButton(3)).toBe('back');
   expect(sideButton(4)).toBe('forward');
@@ -142,6 +191,7 @@ function view(start: Id, max = 100) {
   const cameras = new Map<Id, Camera>();
   let shown = start, asked = start, busy = false;
   const flashed: Id[][] = [], opened: Id[] = [];
+  let stops = 0;
   cameras.set(start, cam(0));
   const cameraNow = () => cameras.get(shown)!;
   const moveCamera = (c: Camera) => { cameras.set(shown, c); };
@@ -151,7 +201,7 @@ function view(start: Id, max = 100) {
   };
   const revealer = new Revealer(rv);
   const host: JumpHost = {
-    state: () => s, place: () => ({ plan: shown, camera: cameraNow() }), max: () => max, busy: () => busy,
+    state: () => s, place: () => ({ plan: shown, camera: cameraNow() }), max: () => max, busy: () => busy, stopFlash: () => { stops++; },
     remember: (plan, c) => cameras.set(plan, c), openPlan: (plan) => nav.openPlan(plan), moveCamera,
   };
   const nav = {
@@ -165,7 +215,7 @@ function view(start: Id, max = 100) {
     },
   };
   const jumps = new Jumps(host, revealer);
-  return { jumps, cameras, opened, flashed, sceneOf, shown: () => shown, setBusy: (b: boolean) => { busy = b; } };
+  return { jumps, cameras, opened, flashed, stops: () => stops, sceneOf, shown: () => shown, setBusy: (b: boolean) => { busy = b; } };
 }
 
 test('un saut pousse l’endroit d’où l’on part ; Alt+← y revient, avec son plan et sa caméra exacte, sans cercle ; Alt+→ repart', () => {
@@ -203,6 +253,28 @@ test('un saut dans le même plan : retour à la caméra d’avant, la taille de 
   expect(v.jumps.back()).toBe(true);
   expect(v.cameras.get(ids.plans.lobby)).toEqual({ x: 10, y: 20, zoom: 2, widthPx: 1000, heightPx: 700 });
   expect(v.opened).toEqual([]);
+});
+
+test('un cercle en cours ne survit pas à un retour ni à une avance, dans le même plan ou dans un autre ; un pas refusé le laisse (fix round 1, M1)', () => {
+  const v = view(ids.plans.lobby);
+  expect(v.jumps.back()).toBe(false);
+  expect(v.stops()).toBe(0);
+  v.jumps.reveal({ plan: ids.plans.lobby, id: ids.nodes.kolmogorov, kind: 'node' });
+  v.jumps.reveal({ plan: ids.plans.these, id: ids.nodes.mdl, kind: 'node' });
+  // A jump rings: it does not stop the ring it makes.
+  expect(v.stops()).toBe(0);
+  expect(v.flashed.length).toBe(2);
+  v.setBusy(true);
+  expect(v.jumps.back()).toBe(false);
+  expect(v.stops()).toBe(0);
+  v.setBusy(false);
+  // Another plan, then the same plan, then forward.
+  expect(v.jumps.back()).toBe(true);
+  expect(v.stops()).toBe(1);
+  expect(v.jumps.back()).toBe(true);
+  expect(v.stops()).toBe(2);
+  expect(v.jumps.forward()).toBe(true);
+  expect(v.stops()).toBe(3);
 });
 
 test('un saut manqué (objet jeté, retiré de son plan) ne pousse rien : « précédent » ne revient pas à un endroit où l’on n’a pas bougé', () => {

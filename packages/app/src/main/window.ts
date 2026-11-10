@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BrowserWindow, ipcMain, screen } from 'electron';
+import { devShortcut } from './devKeys.ts';
 import { captureWhenReady } from './ipc/bench.ts';
 import type { LatexSetup } from './latex/setup.ts';
 import { navigationAllowed } from './navigation.ts';
@@ -41,7 +42,7 @@ export function createWindow(deps: WindowDeps): void {
   const win = new BrowserWindow({
     ...(display ? { ...display.bounds, fullscreen: true } : { width, height }),
     ...(background && !display ? { x: beyond, y: 0, skipTaskbar: true } : {}),
-    show: false, title: 'Cirrus', backgroundColor: '#0a1120', autoHideMenuBar: true,
+    show: false, title: 'Cirrus', backgroundColor: '#0a1120',
     webPreferences: {
       preload: join(import.meta.dirname, '..', 'preload', 'index.cjs'),
       contextIsolation: true,
@@ -53,6 +54,17 @@ export function createWindow(deps: WindowDeps): void {
     },
   });
   win.once('ready-to-show', () => (background ? win.showInactive() : win.show()));
+  // The window has no menu (main/index.ts: Menu.setApplicationMenu(null)): Alt shows no bar. In development, the two
+  // shortcuts of the default menu that the work needs are given back (devShortcut); in the built app, none.
+  if (process.env.ELECTRON_RENDERER_URL) {
+    win.webContents.on('before-input-event', (e, input) => {
+      const action = devShortcut(input);
+      if (action === null) return;
+      e.preventDefault();
+      if (action === 'reload') win.webContents.reload();
+      else win.webContents.toggleDevTools();
+    });
+  }
   // Windows' « Précédent » et « Suivant » (plan 6a, D2): the browser keys, and the mouse's side buttons when the system turns
   // them into app commands. The interface acts on them like Alt+← and Alt+→.
   win.on('app-command', (_e, command) => {

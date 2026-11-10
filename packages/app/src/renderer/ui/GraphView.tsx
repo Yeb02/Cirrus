@@ -275,6 +275,8 @@ export function GraphView(props: {
   const [flash, setFlash] = useState<readonly Id[] | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
+  /** The ring of a jump ended before its time: a step back or forward leaves nothing blinking (fix round 1, M1). */
+  const stopFlash = () => { clearTimeout(flashTimer.current); setFlash(null); };
   /** The jumps (D2): the plan opened, then its scene framed once shown (the [scene] effect below). */
   const revealer = useRef<Revealer | null>(null);
   revealer.current ??= new Revealer({
@@ -298,7 +300,7 @@ export function GraphView(props: {
   jumps.current ??= new Jumps({
     state: () => stateRef.current,
     place: () => { const sc = sceneRef.current, cam = engine.current?.renderer.camera; return sc && cam ? { plan: sc.plan.id, camera: cam } : null; },
-    max: () => paramsRef.current.navHistoryMax, busy: () => latest.current.busy(),
+    max: () => paramsRef.current.navHistoryMax, busy: () => latest.current.busy(), stopFlash,
     remember: (plan, camera) => { cameras.current.set(plan, camera); },
     openPlan: (plan) => onOpenPlanRef.current(plan), moveCamera: (c) => latest.current.moveCamera(c),
   }, revealer.current);

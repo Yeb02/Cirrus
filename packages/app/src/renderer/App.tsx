@@ -10,7 +10,7 @@ import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop
 import { loading } from './files/read.ts';
 import { ViewStates } from './files/viewState.ts';
 import { textOwnsKeys } from './keys.ts';
-import { destination, historyKey, type HistoryMove, sideButton } from './navigation.ts';
+import { destination, historyButtonFor, historyCommandFor, historyKeyFor, type HistoryMove } from './navigation.ts';
 import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { withSetting } from './settingChanges.ts';
@@ -168,27 +168,29 @@ export function App() {
   }, []);
 
   // « Précédent » et « suivant » (plan 6a, D2): Alt+← and Alt+→, the mouse's side buttons (3 and 4, on release) and the
-  // app commands of Windows, from anywhere — a panel's focus included —, but not in a text field or a code editor, which
-  // keep their keys, nor over a full screen, which is modal. The graph does not take a side button for a left press.
+  // app commands of Windows, from anywhere — a panel's focus included —, but not while a text field, a title editor or a
+  // code editor has the keys (historyKeyFor, historyButtonFor, historyCommandFor), nor over a full screen, which is modal.
+  // The graph does not take a side button for a left press.
   useEffect(() => {
     const go = (dir: HistoryMove) => { if (session.current && !fullRef.current && !preambleRef.current) graph.current?.[dir](); };
     const onKey = (e: KeyboardEvent) => {
-      const dir = historyKey(e);
+      const dir = historyKeyFor(e, e.target instanceof Element ? (e.target as HTMLElement) : null);
       if (dir === null) return;
-      const target = e.target instanceof Element ? (e.target as HTMLElement) : null;
-      if (textOwnsKeys(target) || target?.closest('.cm-editor')) return;
       e.preventDefault();
       go(dir);
     };
     const onMouse = (e: MouseEvent) => {
-      const dir = sideButton(e.button);
+      const dir = historyButtonFor(e.button, document.activeElement as HTMLElement | null);
       if (dir === null) return;
       e.preventDefault();
       go(dir);
     };
     // The browser keys, and the mouse buttons a driver sends as app commands (the main process hears them, window.ts): a
     // side button itself reaches the page as mouseup — Chromium consumes it, no app command follows (tested).
-    const off = window.cirrus.onAppCommand((command) => go(command === 'browser-backward' ? 'back' : 'forward'));
+    const off = window.cirrus.onAppCommand((command) => {
+      const dir = historyCommandFor(command, document.activeElement as HTMLElement | null);
+      if (dir !== null) go(dir);
+    });
     window.addEventListener('keydown', onKey);
     window.addEventListener('mouseup', onMouse, true);
     return () => { off(); window.removeEventListener('keydown', onKey); window.removeEventListener('mouseup', onMouse, true); };

@@ -3,7 +3,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LocalStore } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, net, protocol, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, Menu, net, protocol, safeStorage } from 'electron';
 import { dataDir, openBase, pcId } from './base.ts';
 import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
@@ -171,6 +171,9 @@ if (process.env.CIRRUS_NO_RELAUNCH && !noRelaunch) {
 }
 
 void app.whenReady().then(() => {
+  // No menu (plan 6a, fix round 1): Electron's default one, hidden by autoHideMenuBar, came back as a bar when Alt was
+  // released after Alt+← or an Alt+drag. The app uses none of its shortcuts (window.ts gives back two in development).
+  Menu.setApplicationMenu(null);
   if (!first) return;
   if (benchBuild) {
     // The bench's base (scripts/bench.mjs): built once per generator version and scale, then copied for each pass.
