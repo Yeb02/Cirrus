@@ -233,7 +233,7 @@ function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | num
   let made = 0;
   const files = o.files ?? {};
   const u = new Updater({
-    version: '0.1.1', dev: false, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000 }), server: () => SERVER,
+    version: '0.1.1', dev: false, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000 }), server: () => SERVER,
     fetchFile: async (name) => {
       asked.push(name);
       const f = files[name];
@@ -455,11 +455,46 @@ test('Updater (D4) : le format refusé par le serveur (409) fait chercher la mis
   u.dispose();
 });
 
+test('Updater (revue finale du plan 9, I1) : un format refusé pendant que le serveur sert encore l’ancien manifeste ; cherché de nouveau toutes les syncRetryMaxMs, connecté ou non, jusqu’au manifeste nouveau : armé sans clic', async () => {
+  setUp();
+  vi.useFakeTimers();
+  const old = manifestText({ version: '0.1.1' });
+  const files: Record<string, string> = { 'version.json': old, 'version.json.sig': signed(old, key.priv) };
+  // Refused, the sync client is not connected: only the format's retry looks again.
+  const { u, feed, told, asked } = updater({ files, connected: () => false, checkInstaller: async () => true });
+  feed.download = { version: '0.1.2', file: installer.path };
+  await u.formatRefused();
+  expect(asked).toEqual(['version.json', 'version.json.sig']);
+  expect(told).toEqual([]);
+  // The server, restarted on its new format, places its manifest a few seconds later.
+  Object.assign(files, published());
+  await vi.advanceTimersByTimeAsync(30_000);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(asked).toHaveLength(4);
+  expect(feed.downloads).toBe(1);
+  expect(told.at(-1)).toEqual({ updateReady: true });
+  u.dispose();
+});
+
+test('Updater (revue finale du plan 9, I1) : un /hello passé après le format refusé arrête la recherche répétée ; hors connexion, plus rien', async () => {
+  setUp();
+  vi.useFakeTimers();
+  const old = manifestText({ version: '0.1.1' });
+  const { u, asked } = updater({ files: { 'version.json': old, 'version.json.sig': signed(old, key.priv) }, connected: () => false });
+  await u.formatRefused();
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(asked).toHaveLength(4);
+  await u.heard('0.1.1');
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(asked).toHaveLength(4);
+  u.dispose();
+});
+
 test('Updater : toutes les updateCheckMs tant que la connexion est ouverte ; rien hors connexion', async () => {
   setUp();
   vi.useFakeTimers();
   let connected = false;
-  const { u, asked, told, warned } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000 }) });
+  const { u, asked, told, warned } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000, syncRetryMaxMs: 30_000 }) });
   await vi.advanceTimersByTimeAsync(600_000);
   expect(asked).toEqual([]);
   connected = true;

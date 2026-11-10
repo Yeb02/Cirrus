@@ -4,7 +4,8 @@ import { checkInstaller, compareVersions, type Manifest, parseVersion, usableKey
 
 // The signed updates in the app (plan 9, D4; Review Focus 2): a compromised server must never install code on a PC.
 // 1. Looked for at each hello that says a newer official version than this app's, at a hello refused for its format
-//    (409), and every updateCheckMs while connected.
+//    (409) and then every syncRetryMaxMs until a hello passes, connected or not (final review of plan 9, I1), and every
+//    updateCheckMs while connected.
 // 2. version.json and its signature asked of the server with this PC's token; the signature checked with the key the app
 //    carries (key.ts), the manifest's version newer than this app's — never a downgrade, never « Cirrus Dev », never a
 //    pre-release (spec 18.1).
@@ -83,7 +84,7 @@ export interface UpdaterDeps {
   server(): { url: string; token: string } | null;
   /** Whether a connection to the server is open: the periodic check runs only then. */
   connected(): boolean;
-  params(): { updateCheckMs: number };
+  params(): { updateCheckMs: number; syncRetryMaxMs: number };
   /** electron-updater's autoUpdater, loaded the first time an update is to be downloaded. */
   updater(): FeedUpdater | Promise<FeedUpdater>;
   /** The chip and the notification (SyncHost.updateWord). */
@@ -142,6 +143,12 @@ export class Updater {
   private ended = false;
   /** A newer version a hello announced, not yet compared with the manifest the server serves (M3). */
   private announced: string | null = null;
+  /**
+   * A hello refused for its format, none passed since (final review of plan 9, I1): the server restarts on its new
+   * format before it places its manifest, so a check at the 409 may still find the old one, and the client, refused, no
+   * longer connects. Looked for again every syncRetryMaxMs, connected or not.
+   */
+  private formatPending = false;
 
   constructor(deps: UpdaterDeps) {
     this.deps = deps;
@@ -150,6 +157,7 @@ export class Updater {
 
   /** A hello's official version (null: the server publishes none): looked for when newer than this app's. */
   heard(version: string | null): Promise<void> {
+    this.formatPending = false;
     if (version === null || !(compareVersions(version, this.deps.version) > 0)) return Promise.resolve();
     this.announced = version;
     return this.check();
@@ -157,6 +165,12 @@ export class Updater {
 
   /** A hello refused for its format (409): this app is older than the server's data, its update is looked for. */
   formatRefused(): Promise<void> {
+    if (!this.formatPending) {
+      this.formatPending = true;
+      if (this.timer !== null) clearTimeout(this.timer);
+      this.timer = null;
+      this.schedule();
+    }
     return this.check();
   }
 
@@ -205,15 +219,19 @@ export class Updater {
     (this.deps.warn ?? console.warn)(text);
   }
 
-  /** Every updateCheckMs (read each time: a change applies at the next), a check while connected. */
+  /**
+   * Every updateCheckMs (read each time: a change applies at the next), a check while connected; a format refused and
+   * no hello passed since, every syncRetryMaxMs, connected or not.
+   */
   private schedule(): void {
     if (this.disposed) return;
-    const every = this.deps.params().updateCheckMs;
+    const p = this.deps.params();
+    const every = this.formatPending ? p.syncRetryMaxMs : Number.isFinite(p.updateCheckMs) ? Math.max(MIN_CHECK_MS, p.updateCheckMs) : MIN_CHECK_MS;
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (this.deps.connected()) void this.check();
+      if (this.formatPending || this.deps.connected()) void this.check();
       this.schedule();
-    }, Number.isFinite(every) ? Math.max(MIN_CHECK_MS, every) : MIN_CHECK_MS);
+    }, Number.isFinite(every) ? every : MIN_CHECK_MS);
   }
 
   private async run(): Promise<void> {

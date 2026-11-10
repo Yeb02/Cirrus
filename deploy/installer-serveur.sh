@@ -317,11 +317,20 @@ installer() {
   etape "Installateur de la dernière version"
   # The lock released: the update takes it itself, then the timer.
   exec 9>&-
-  if bash "$DEPOT/deploy/mettre-a-jour.sh"; then
-    dire "La page de téléchargement sert la dernière version publiée."
+  # Through its unit (final review of plan 9, M1): this first run is in its journal, with the timer's; what it said shown
+  # here. The page's version said only once one is in place (M2).
+  local servie
+  if systemctl start cirrus-maj.service; then
+    servie=$(version_des_fichiers)
+    if [[ -n $servie ]]; then
+      dire "La page de téléchargement sert la version $servie."
+    else
+      dire "Aucune version n’est encore publiée sur GitHub : la mise à jour la prendra dans l’heure qui suit sa publication."
+    fi
   else
-    dire "Attention : l’installateur n’est pas encore en place (le message ci-dessus dit pourquoi). La mise à jour réessaie chaque heure ; une fois la cause réglée : systemctl start cirrus-maj.service."
+    dire "Attention : l’installateur n’est pas encore en place (le journal ci-dessous dit pourquoi). La mise à jour réessaie chaque heure ; une fois la cause réglée : systemctl start cirrus-maj.service."
   fi
+  journalctl -u cirrus-maj.service -n 20 --no-pager || true
   systemctl start cirrus-maj.timer
   dire "La mise à jour passe chaque heure (cirrus-maj.timer)."
   verifier_le_dns "$domaine"

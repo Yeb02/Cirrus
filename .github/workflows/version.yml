@@ -16,6 +16,9 @@ on:
     branches: [main]
     # A push that changes only docs changes no app: no version (review of task 6, M4; registry, task 6, fix round 1).
     paths-ignore: ['docs/**', '**.md']
+  # By hand (Actions › Version › Run workflow): a version without a code push, after a publish that failed or a secret
+  # added after its push (final review of plan 9, M3).
+  workflow_dispatch:
 
 permissions:
   contents: read

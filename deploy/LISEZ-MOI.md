@@ -64,7 +64,7 @@ GitHub construit et signe chaque version de Cirrus avec une clé que tu crées u
    git push
    ```
 
-4. Ce push lance la CI (onglet **Actions**, « Version »). Une demi-heure plus tard environ, une version `v0.1.<n>` apparaît dans **Releases**, avec l'installateur, `latest.yml`, `version.json` et `version.json.sig`.
+4. Ce push lance la CI (onglet **Actions**, « Version »). Une demi-heure plus tard environ, une version `v0.1.<n>` apparaît dans **Releases**, avec l'installateur, `latest.yml`, `version.json` et `version.json.sig`. Si aucune n'apparaît (le secret ajouté après le push, une publication ratée) : **Actions › Version › Run workflow**, sur `main`.
 
 Sans le secret, la CI construit et teste chaque push, mais ne publie rien, et son résumé le dit : « Pas de clé de signature : version construite et testée, rien n'est publié. »
 
@@ -136,6 +136,8 @@ Il affiche un code de jumelage, valable 10 minutes pour un seul PC, et l'adresse
 
 Si Cirrus n'est pas encore installé sur ce PC par un installateur (tu le lances depuis le dépôt), installe-le d'abord par la page, comme à l'étape 8. L'app installée retrouve ta base : elle garde son dossier, `%APPDATA%\@cirrus\app`.
 
+Si ce PC est encore jumelé à un serveur local d'essai, **Réglages › Serveur** montre ce jumelage au lieu du formulaire : **Dissocier ce PC** d'abord. Cela marche même le serveur local éteint, et ta base reste sur ce PC.
+
 Puis, dans Cirrus, **Réglages › Serveur** :
 
 - **Adresse du serveur :** `https://cirrus.mondomaine.fr` ;
@@ -198,6 +200,7 @@ cirrus-serveur revoquer "Portable"
 - **SmartScreen** avertit à chaque installation par la page (étape 8) : l'installateur n'a pas de signature de Windows.
 - **Le code du serveur vient de GitHub.** La signature couvre le manifeste et l'installateur. Le code, lui, est pris au tag de la version par git, en HTTPS, et seulement si son manifeste signé est bon. Qui tient ton compte GitHub tient donc ton serveur et tes versions : protège-le (double authentification).
 - **Changer de clé de signature** (`--remplacer`) bloque tout : les PC refusent les nouvelles versions, et le serveur aussi tant que tu n'as pas relancé `installer-serveur.sh`. Il faut ensuite réinstaller chaque PC par la page.
+- **Essayer une version en développement :** pas par `npm run dev`, qui ouvre ta vraie base et, jumelée, parle au vrai serveur. Construis plutôt « Cirrus Dev » (`npm run paquet:dev -w packages/app`, l'installateur dans `packages/app/dist`) : il a ses propres dossiers, et ne se met jamais à jour.
 - **Un redémarrage la nuit**, à 4 h 30, quand une mise à jour du noyau l'attend. Les services repartent seuls, et les PC se reconnectent seuls.
 
 ## Dépannage

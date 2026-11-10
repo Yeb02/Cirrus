@@ -266,3 +266,31 @@ Laissés pour l'usage :
 - **les écritures pendant une mise à jour :** `cirrus-serveur jumeler`/`revoquer`, lancés pendant une mise à jour, peuvent écrire la base entre sa copie et un retour arrière.
 
 La simulation passe 80 sur 80, l'installation 46 sur 46.
+
+### Tâche 7 et revue finale : le plan clos
+
+**La revue finale** (Opus, `edb8ece..be1a4d9`) conclut : à livrer après une correction importante, sans rien de critique. La chaîne de la CI au PC concorde : la version, le tag, l'épinglage de `latest.yml`, les noms avec espace, les empreintes en base64 et la clé. Les deux variantes restent séparées, aucun essai n'atteint la base de l'utilisateur, et les trois points du Review Focus tiennent.
+- **I1, corrigé :** une version qui change le format pouvait laisser un PC refusé, sans mise à jour. Le serveur redémarre sur son nouveau format avant de poser son manifeste ; un `/hello` refusé entre les deux lisait l'ancien manifeste, et le client refusé ne se reconnecte plus. Désormais, un format refusé fait chercher la mise à jour toutes les `syncRetryMaxMs`, connecté ou non, jusqu'à un `/hello` passé (`Updater.formatPending`). Deux tests, rouges puis verts ; update 33 sur 33, tsc propre.
+- **Mineurs corrigés :**
+  - M1 : la première mise à jour passe par son unité, donc par son journal ;
+  - M2 : l'installation ne dit la version servie qu'une fois posée ;
+  - M3 : `workflow_dispatch`, et « Run workflow » dans le guide ;
+  - M6 : « Dissocier ce PC » d'un serveur local d'essai, à l'étape 7 ;
+  - le guide dit d'essayer une version en développement par « Cirrus Dev », jamais par `npm run dev`.
+- **M4 vérifié :** le nom canonique du dépôt est bien `Yeb02/Cirrus`.
+- **M5 laissé :** la borne de 64 Kio de `version.json` est écrite trois fois (l'app, le serveur, le vérificateur).
+- **Laissés à l'utilisateur :**
+  - l'installation à la fermeture sans relance. La revue ajoute un argument pour la relance : rouvrir Cirrus pendant l'installation silencieuse lance un exécutable en cours de remplacement ;
+  - `npm run dev` sur la vraie base.
+- **Acceptés :**
+  - une mise à jour coupée par l'arrêt de Windows (le comportement d'electron-updater ; les données ne sont pas touchées) ;
+  - Node et Caddy mis à jour sans retour arrière ;
+  - les codes en attente qu'on peut brûler depuis Internet (D5).
+
+**Étape 1 de la tâche 7 :** les scénarios et les captures du dernier passage valent (interface 50 sur 50, captures 45 sur 45). Depuis, seul le minuteur de `updater.ts` a changé dans l'app, et aucun scénario ne produit de 409. La suite complète de l'app, relancée après I1, a été arrêtée par le système, faute de mémoire.
+
+**La CI :**
+- la première exécution a trouvé un test périmé depuis la revue finale du plan 5b (`open.test.ts`, 1 000 caractères pour une borne de 2 048), corrigé ;
+- les exécutions suivantes sont vertes. Sans clé, la signature et la publication sautent, et GitHub n'a aucune version ni aucun tag.
+
+**L'essai de bout en bout** `maj-essai.mjs`, relancé après les corrections des tâches 3 et 4 : 27 sur 27.
