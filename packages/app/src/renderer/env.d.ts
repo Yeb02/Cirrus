@@ -177,11 +177,12 @@ export interface CirrusBridge {
   /**
    * Launch options for visual checks: plan name, view "x,y,zoom", simulated hover "x,y", settings panel open; `bench`:
    * the bench pass's label; `capture`: a capture is taken (CIRRUS_CAPTURE); `import`: "sx,sy|path", files dropped there
-   * once the first frame is drawn (CIRRUS_IMPORT, capture mode only).
+   * once the first frame is drawn (CIRRUS_IMPORT, capture mode only); `app`: the app's name and version, « Cirrus 0.1.0 »
+   * (plan 9, D3).
    */
   launch: {
     plan?: string; view?: string; hover?: string; panel?: boolean; bench?: string; capture?: boolean; hide?: string; keys?: string; pointer?: string;
-    click?: string; import?: string;
+    click?: string; import?: string; app?: string;
   };
 }
 

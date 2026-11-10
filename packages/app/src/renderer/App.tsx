@@ -603,7 +603,7 @@ export function App() {
             // Key by key, from the latest settings (review of task 6, Important 1); « Tout réinitialiser »: every default.
             params={params} onChange={(key, v) => setParams(withSetting(key, v))} onResetAll={() => setParams(withOverrides({}))}
             onClose={() => setPanel(false)} latex={latex} onInstallLatex={installLatex}
-            onEditPreamble={() => setPreambleOpen(true)} server={sync.serverBlock}
+            onEditPreamble={() => setPreambleOpen(true)} server={sync.serverBlock} app={window.cirrus.launch.app}
           />
         )}
         {registryOpen && <TagRegistryPanel state={state} rev={shown.rev} onEdit={edit} onClose={() => setRegistryOpen(false)} />}

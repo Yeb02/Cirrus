@@ -1,5 +1,8 @@
 {
   "name": "@cirrus/app",
+  "version": "0.1.0",
+  "description": "Cirrus, un graphe de connaissances personnel",
+  "author": "Yeb02",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",

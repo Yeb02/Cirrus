@@ -8,6 +8,7 @@ import { dataDir, openBase, pcId } from './base.ts';
 import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
 import { Consultations } from './consultations.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
+import { appIdentity, applyIdentity, copiesDir } from './identity.ts';
 import { wireBase } from './ipc/base.ts';
 import { markNow, wireBench } from './ipc/bench.ts';
 import { wireConsultations } from './ipc/consultations.ts';
@@ -39,12 +40,20 @@ import { createWindow } from './window.ts';
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
  * for the sync client to stop.
  * This file starts and ends the process; the interface's calls are answered by domain under ipc/ (the sync's in
- * sync/wire.ts), and the window is window.ts's.
+ * sync/wire.ts), and the window is window.ts's. It first gives the app its identity (identity.ts, plan 9, D3).
  * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
  * times instead, without a window, and the file's size recorded.
  */
+/**
+ * The app's identity (plan 9, D3), before anything reads userData (the single-instance lock, Chromium's profile, the
+ * base): its name, its data folder — %APPDATA%\@cirrus\app for the official app, where the user's base is, its own for
+ * « Cirrus Dev » —, its AppUserModelId. A profile given by --user-data-dir (the checks, the captures) is kept; bench and
+ * captures then take their own (below).
+ */
+const identity = appIdentity({ appData: app.getPath('appData') });
+applyIdentity(app, identity, { platform: process.platform, userDataGiven: app.commandLine.hasSwitch('user-data-dir') });
 let store: LocalStore | null = null;
 let dir = '';
 /** This PC's identifier (pc.json), once the base is open: it signs the writes. */
@@ -70,6 +79,8 @@ const launch = {
   click: process.env.CIRRUS_CLICK,
   // "sx,sy|path": files dropped on the graph at that point; captures only, whose base is a test copy (never the user's).
   import: capture ? process.env.CIRRUS_IMPORT : undefined,
+  // The app and its version (package.json, which the CI completes), said by the rubric « Serveur » (plan 9, D3).
+  app: `${identity.name} ${app.getVersion()}`,
 };
 if (bench) {
   app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -93,13 +104,13 @@ protocol.registerSchemesAsPrivileged([
 ]);
 /**
  * The read-only copies opened by the system's applications (plan 4a, D5), cleared at the next startup; a file saved
- * beside them, writable, is kept (cleanCopies).
+ * beside them, writable, is kept (cleanCopies). One folder per variant (plan 9, D3).
  */
-const copies = join(tmpdir(), 'cirrus-ouverts');
+const copies = copiesDir(tmpdir(), identity);
 /**
  * One instance per base (I3 of the final review): every base has its lock (lockBase, taken below). On the user's own
  * base (no CIRRUS_DATA, neither bench nor capture), Electron's lock too, which is per profile: a second launch shows the
- * first one's window and quits.
+ * first one's window and quits. Per variant, then (plan 9, D3): « Cirrus Dev » runs beside the official app.
  */
 const ownBase = !bench && !capture && !benchBuild && !process.env.CIRRUS_DATA;
 const first = !ownBase || app.requestSingleInstanceLock();

@@ -127,7 +127,7 @@ const advancedShown = new Set<string>();
  * undoable. The « LaTeX » rubric (plan 4b, task 7) says LaTeX's state on this PC (`latex`), offers « Installer LaTeX »
  * when it is absent or its installation failed, and opens the preamble's full screen. The « Serveur » rubric (plan 5a)
  * begins with its block: pairing this PC, or its server, its state, « Télécharger tous les PDF… » (plan 5b, D8) and
- * « Dissocier ce PC » (`server`).
+ * « Dissocier ce PC » (`server`); then, discreetly, the app and its version (`app`, « Cirrus 0.1.0 »: plan 9, D3).
  */
 export function SettingsPanel(props: {
   /**
@@ -135,7 +135,7 @@ export function SettingsPanel(props: {
    * batch received from the server may have outdated (review of task 6, Important 1). `onResetAll`: « Tout réinitialiser ».
    */
   params: RenderParams; onChange: Change; onResetAll(): void; onClose(): void; latex: LatexStatus | null; onInstallLatex(): void; onEditPreamble(): void;
-  server: ServerBlockProps;
+  server: ServerBlockProps; app?: string;
 }) {
   const [query, setQuery] = useState('');
   const [, refresh] = useState(0);
@@ -173,6 +173,7 @@ export function SettingsPanel(props: {
                 <div className="rubric-body">
                   {r.title === 'LaTeX' && latexSetup}
                   {r.title === 'Serveur' && <ServerBlock {...props.server} />}
+                  {r.title === 'Serveur' && props.app && <p className="app-version">{props.app}</p>}
                   <Groups groups={r.groups} pick="main" params={props.params} onChange={set} />
                   {count > 0 && <button className="toggle" aria-expanded={advanced} onClick={() => toggle(advancedShown, r.title)}>{advanced ? '▾' : '▸'} Avancés ({count})</button>}
                   {advanced && <Groups groups={r.groups} pick="advanced" params={props.params} onChange={set} />}
