@@ -268,6 +268,26 @@ async function searchJump(page, query, title) {
   await page.press('Enter', 'Enter', 13);
   if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('Entrée ne ferme pas la recherche');
 }
+// Plan 6a, task 5 (D6): the recording of consultations, in consultations.db beside the base.
+/** The consultations' rows as the app wrote them (a read-only connection of this script's own), or null if the file is not there. */
+function consultationsOf(data) {
+  const file = join(data, 'consultations.db');
+  if (!existsSync(file)) return null;
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return db.prepare('SELECT at, pc, kind, subject, plan, detail FROM events ORDER BY rowid').all(); } finally { db.close(); }
+}
+/**
+ * The window closed as a click on its button does: Browser.close reaches the window's own « close » event, where the app's
+ * closing runs (the last snapshot, the last consultations), which `app.quit()` (window.close() from the page, which destroys
+ * the window at once) does not. Whether the app quit by itself within `ms`.
+ */
+async function closeAsUser(app, ms = 20_000) {
+  void app.page.send('Browser.close');
+  const code = await Promise.race([app.exited, sleep(ms).then(() => null)]);
+  return code !== null;
+}
+/** The events that tell what was looked at: the window's focus, which these background windows emulate, is left out. */
+const looked = (rows) => rows.filter((r) => r.kind !== 'focus' && r.kind !== 'blur');
 /** The centre of the graph, where a jump frames its object. */
 const graphCentre = (page) => page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 
@@ -838,6 +858,79 @@ const SCENARIOS = [
       await onTab(page, 'Thèse', 'Alt+→ ×2');
       await page.press('ArrowRight', 'ArrowRight', 39, 1);
       await onTab(page, 'Article MDL', 'Alt+→ ×3');
+    },
+  },
+  {
+    // Plan 6a, D6 and Review Focus 5: the consultations are written as they happen, by batches every consultationsFlushMs
+    // (10 s) and at closing. A plan shown, a search, a jump, a pop-up: in consultations.db after one interval, with this
+    // PC's identifier; what is done just before the window closes (Alt+←) is in it too, with the app's closing.
+    name: 'consultations : un plan, une recherche, un saut, un pop-up, puis la fermeture ; tout est dans consultations.db',
+    async run(page, base, data, app) {
+      await onTab(page, 'Lobby', 'au départ');
+      await searchJump(page, 'motiv', 'Motivation');
+      await onTab(page, 'Article MDL', 'après le saut');
+      await openPopup(page, await graphCentre(page), 'Motivation');
+      // After one interval, with no closing: the batches go by themselves.
+      if (!(await until(() => consultationsOf(data)?.some((r) => r.kind === 'node_popup'), 30_000))) {
+        throw new Error(`les consultations ne sont pas écrites toutes les 10 s : ${JSON.stringify(consultationsOf(data)?.map((r) => r.kind) ?? null)}`);
+      }
+      // And what comes after that, by the closing alone: back to the lobby, then the window closed.
+      await page.press('Escape', 'Escape', 27);
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('ArrowLeft', 'ArrowLeft', 37, 1);
+      await onTab(page, 'Lobby', 'Alt+←');
+      if (!(await closeAsUser(app))) throw new Error('la fenêtre ne se ferme pas d’elle-même');
+      const rows = consultationsOf(data);
+      if (!rows) throw new Error('pas de consultations.db après la fermeture');
+      const seen = looked(rows);
+      const motivation = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Motivation'`)[0].id;
+      const plan = (name) => base(`SELECT id FROM plans WHERE json_extract(json, '$.name') = '${name}'`)[0].id;
+      const lobby = base(`SELECT id FROM plans WHERE json_extract(json, '$.type') = 'lobby'`)[0].id, article = plan('Article MDL');
+      const pc = JSON.parse(readFileSync(join(data, 'pc.json'), 'utf8')).id;
+      if (rows.some((r) => r.pc !== pc)) throw new Error(`une ligne ne porte pas l’identifiant de ce PC : ${JSON.stringify([...new Set(rows.map((r) => r.pc))])}`);
+      // In order (the jump is told as it is made, the plan when it is drawn).
+      const wanted = [
+        ['app_open', null, null, null], ['plan_shown', null, lobby, null], ['search', motivation, lobby, 'motiv'], ['jump', motivation, article, null],
+        ['plan_shown', null, article, null], ['node_popup', motivation, article, null], ['jump', null, lobby, 'back'], ['plan_shown', null, lobby, null],
+        ['app_close', null, lobby, null],
+      ];
+      const got = seen.map((r) => [r.kind, r.subject, r.plan, r.detail]);
+      if (JSON.stringify(got) !== JSON.stringify(wanted)) throw new Error(`les consultations sont ${JSON.stringify(got)}, pas ${JSON.stringify(wanted)}`);
+      if (seen.some((r, i) => i > 0 && r.at < seen[i - 1].at)) throw new Error('les consultations ne sont pas dans l’ordre du temps');
+    },
+  },
+  {
+    // Plan 6a, D6: the switch « Enregistrer mes consultations » at 0: nothing is queued, nothing is written, not even the file.
+    name: 'consultations : l’interrupteur éteint, rien n’est écrit, pas même le fichier',
+    settings: { consultationsRecord: 0, consultationsFlushMs: 1000 },
+    async run(page, base, data, app) {
+      await searchJump(page, 'motiv', 'Motivation');
+      await onTab(page, 'Article MDL', 'après le saut');
+      await openPopup(page, await graphCentre(page), 'Motivation');
+      await sleep(3500);
+      if (consultationsOf(data)) throw new Error('un fichier de consultations existe, interrupteur éteint');
+      if (!(await closeAsUser(app))) throw new Error('la fenêtre ne se ferme pas d’elle-même');
+      if (consultationsOf(data)) throw new Error('un fichier de consultations existe après la fermeture, interrupteur éteint');
+    },
+  },
+  {
+    // Plan 6a, Review Focus 5: a consultations.db that cannot be written (here, damaged): nothing visible, the app goes on,
+    // and closing is not held up. The interval is the longest, so that the batch goes at closing.
+    name: 'consultations : un fichier abîmé, rien de visible, et la fermeture n’attend pas',
+    settings: { consultationsFlushMs: 600_000 },
+    async run(page, base, data, app) {
+      const damaged = 'ceci n’est pas une base de données SQLite '.repeat(60);
+      writeFileSync(join(data, 'consultations.db'), damaged, 'utf8');
+      await searchJump(page, 'motiv', 'Motivation');
+      await onTab(page, 'Article MDL', 'après le saut');
+      await openPopup(page, await graphCentre(page), 'Motivation');
+      // The notice of LaTeX, absent from the test machine, may be there: it is not about the file.
+      const toasts = await toastsText(page);
+      if (/consultation|enregistr|fichier|base de donn/i.test(toasts)) throw new Error(`une notification parle du fichier des consultations : ${toasts}`);
+      const t0 = Date.now();
+      if (!(await closeAsUser(app))) throw new Error('la fenêtre ne se ferme pas d’elle-même, un fichier abîmé');
+      if (Date.now() - t0 > 10_000) throw new Error(`la fermeture a pris ${Date.now() - t0} ms`);
+      if (readFileSync(join(data, 'consultations.db'), 'utf8') !== damaged) throw new Error('le fichier abîmé a été changé');
     },
   },
   {
@@ -2013,7 +2106,7 @@ for (const s of chosen) {
     if (!s.empty) execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
     app = await launch(data, profile, s.env);
-    await s.run(app.page, reader(data), data);
+    await s.run(app.page, reader(data), data, app);
     console.log(`ok   ${s.name}`);
   } catch (e) {
     failed++;
