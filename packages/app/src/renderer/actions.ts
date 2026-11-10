@@ -1,7 +1,8 @@
 import {
   type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
   editConnection, editNode, exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
-  removeMember, renameEnumValue, renameTagKey, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef, type TagValue, truncateLabel, type Vec2,
+  removeMember, renameEnumValue, renameTagKey, restoreConnection, restoreNode, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef,
+  type TagValue, truncateLabel, type Vec2,
 } from '@cirrus/core';
 import {
   type Clip, type ConnectTarget, deleteSummary, dropEffects, dropTarget, type Layout, PART_MAIN, partEnds, partOf, pasteSteps, type PlanScene, type RenderParams,
@@ -303,6 +304,25 @@ export function importBuild(
     (x) => placeNode(x, plan, node, at.x, at.y, readableStep(zoom, p)),
     ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
   ]);
+}
+
+/**
+ * « Restaurer » a node of the trash (plan 6a, D5): it followed the cursor as a paste does, and is put down at `at` in the
+ * plan shown, at the step readable at this zoom (restoreNode), entering the group whose envelope receives it — one action,
+ * one Ctrl+Z. Refused when it is computed if the node is no longer in the trash (put back elsewhere meanwhile, a sync).
+ * `index`: the scene's visibility index, if at hand (groupAt).
+ */
+export function restoreBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
+  const plan = scene.plan.id, k = readableStep(zoom, p), group = groupAt(scene, at, zoom, p, index);
+  return (st) => combine(st, `Restaurer « ${st.nodes.get(node)?.title ?? ''} »`, [
+    (x) => restoreNode(x, node, plan, at.x, at.y, k),
+    ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
+  ]);
+}
+
+/** « Restaurer » a connection of the trash (D5): its branches where two of its members are placed; the core's refusals told. */
+export function restoreConnectionBuild(connection: Id): Build {
+  return (st) => restoreConnection(st, connection);
 }
 
 /** What a node dropped into a plan that holds it already is told (placeDroppedBuild); the view is framed on it. */
