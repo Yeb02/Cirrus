@@ -12,6 +12,7 @@ import { connectionDrafts, consultations, jumpDraft } from '../consultations.ts'
 import { createGl, type Gl } from '../gl/context.ts';
 import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
+import { overlayClosesSearch, type Overlays } from '../search/overlay.ts';
 import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
@@ -112,6 +113,8 @@ export function GraphView(props: {
    * (`overlay`, App's), over the graph like the publication dialog.
    */
   found?: readonly Id[]; overlay?: ReactNode;
+  /** A question or the graph's menu has opened: App closes the search box, so that none is hidden under its list. */
+  onOverlay(): void;
   ref?: Ref<GraphHandle>;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -269,6 +272,16 @@ export function GraphView(props: {
   const scene = scenes.scene;
   const { tip, chain, hover, clearHover } = useHover(graph);
   const questions = useQuestions(graph);
+  // A question or the menu that opens over the search box closes it: it would be live under the list (overlayClosesSearch).
+  const overlays = useRef<Overlays>({ question: false, menu: false });
+  const onOverlay = useRef(props.onOverlay);
+  onOverlay.current = props.onOverlay;
+  const asked = questions.question !== null, menuOpen = menu !== null;
+  useEffect(() => {
+    const now = { question: asked, menu: menuOpen };
+    if (overlayClosesSearch(overlays.current, now)) onOverlay.current();
+    overlays.current = now;
+  }, [asked, menuOpen]);
   const placement = usePlacement(graph);
   const copyPaste = useCopyPaste(graph);
   const bib = useBibImport(graph);

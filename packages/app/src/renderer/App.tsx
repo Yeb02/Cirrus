@@ -461,10 +461,14 @@ export function App() {
     if (plan === null) toast('Ce nœud n’est dans aucun plan.');
     else if (!graph.current?.reveal({ plan, id: node, kind: 'node' })) toast(OBJECT_GONE);
   };
-  /** The search box closed: nothing ringed any more, the focus back to the graph (plan 6a, D1). */
-  const closeSearch = () => {
+  /** The search box gone, and what it ringed with it; the focus stays where it is. */
+  const dropSearch = () => {
     setSearchBox(null);
     setSearchFound(NOTHING_FOUND);
+  };
+  /** The search box closed: nothing ringed any more, the focus back to the graph (plan 6a, D1). */
+  const closeSearch = () => {
+    dropSearch();
     graph.current?.focus();
   };
   /**
@@ -473,8 +477,7 @@ export function App() {
    */
   const clickAway = () => {
     panels.current?.closeLoose();
-    setSearchBox(null);
-    setSearchFound(NOTHING_FOUND);
+    dropSearch();
   };
   /**
    * A result chosen (plan 6a, D2): the jump to its plan, which frames and rings it; an object in no plan (an annotation)
@@ -584,7 +587,7 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={openRegistry} onTrash={openTrash}
-            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={clickAway}
+            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={clickAway} onOverlay={dropSearch}
             onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
             overlay={searchBox && searchWhere && (

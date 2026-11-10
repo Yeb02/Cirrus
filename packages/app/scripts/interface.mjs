@@ -735,6 +735,63 @@ const SCENARIOS = [
       // Framed: the node fills the view's centre.
       const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
       await openPopup(page, centre, 'Motivation');
+
+      // Final review of plan 6a: a question asked while the box is open closes it, and is seen — it stood under the list, hidden
+      // but live, and a blind Entrée answered it. The pop-up closed (Échap), the box opened with one row, the node clicked (the
+      // box stays, M4), then Suppr: the question is over the graph and the box is gone.
+      const topmost = (selector) => page.evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) return 'absent';
+        const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit?.closest(${JSON.stringify(selector)}) ? 'dessus' : (hit?.closest('.search-box') ? 'sous la recherche' : (hit?.className ?? 'rien'));
+      })()`);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.node-popup')`))) throw new Error('Échap ne ferme pas le pop-up du nœud');
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(FIELD))) throw new Error('Ctrl+K ne rouvre pas la recherche pour la question');
+      await page.type('motiv');
+      if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length === 1`))) throw new Error('la recherche de « motiv » ne montre pas une ligne');
+      await page.click(centre.x, centre.y);
+      if (!(await page.until(`!!document.querySelector('.node-popup')`))) throw new Error('un clic sur le nœud n’ouvre pas son pop-up');
+      if (!(await page.evaluate(`!!document.querySelector('.search-box')`))) throw new Error('un clic sur le nœud ferme la recherche (elle reste ouverte)');
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('Delete', 'Delete', 46);
+      if (!(await page.until(`!!document.querySelector('.ask')`))) throw new Error('Suppr ne pose pas la question de la suppression');
+      if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('la question est posée sous la recherche, restée ouverte');
+      if ((await topmost('.ask')) !== 'dessus') throw new Error(`la question n’est pas visible : ${await topmost('.ask')}`);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.ask')`))) throw new Error('Échap ne donne pas la question pour abandonnée');
+      // The graph's menu opened over the box closes it as well; opened before the box, it stands over it.
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(FIELD))) throw new Error('Ctrl+K ne rouvre pas la recherche pour le menu');
+      await page.type('motiv');
+      if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length === 1`))) throw new Error('la recherche de « motiv » ne montre pas une ligne (menu)');
+      await page.click(centre.x, centre.y, 'right');
+      if (!(await page.until(`!!document.querySelector('.context-menu')`))) throw new Error('le clic droit sur le nœud n’ouvre pas son menu');
+      if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('le menu est ouvert sous la recherche, restée ouverte');
+      if ((await topmost('.context-menu')) !== 'dessus') throw new Error(`le menu n’est pas visible : ${await topmost('.context-menu')}`);
+      await page.press('Escape', 'Escape', 27);
+      // Below the notification at the top (the LaTeX notice sits where the box does), the menu is opened first; the box, with a
+      // long list, then covers its place: the menu stays over it.
+      const top = await page.evaluate(`document.querySelector('.graph canvas').getBoundingClientRect().top`);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(centre.x, top + 120, 'right');
+      if (!(await page.evaluate(`!!document.querySelector('.context-menu')`))) throw new Error('le clic droit sur le fond n’ouvre pas son menu');
+      await page.press('k', 'KeyK', 75, 2);
+      if (!(await page.until(FIELD))) throw new Error('Ctrl+K ne rouvre pas la recherche sous un menu ouvert');
+      await page.type('a');
+      if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length >= 3`))) throw new Error('la recherche de « a » ne montre pas trois lignes');
+      if (!(await page.evaluate(`!!document.querySelector('.context-menu')`))) throw new Error('Ctrl+K ferme le menu du graphe');
+      const covered = await page.evaluate(`(() => {
+        const m = document.querySelector('.context-menu button').getBoundingClientRect(), b = document.querySelector('.search-box').getBoundingClientRect();
+        const x = m.left + m.width / 2, y = m.top + m.height / 2;
+        return x > b.left && x < b.right && y > b.top && y < b.bottom;
+      })()`);
+      if (!covered) throw new Error('la recherche ne couvre pas la place du menu : l’essai ne prouve rien');
+      const onTop = await page.evaluate(`(() => {
+        const m = document.querySelector('.context-menu button').getBoundingClientRect();
+        return document.elementFromPoint(m.left + m.width / 2, m.top + m.height / 2)?.closest('.context-menu') !== null;
+      })()`);
+      if (!onTop) throw new Error('le menu ouvert avant la recherche est caché sous elle');
     },
   },
   {
