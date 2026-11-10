@@ -75,6 +75,15 @@ export class PairingError extends Error {
 interface PairedPc { id: string; name: string; machine: string; pairedAt: number }
 interface PendingCode { name: string; expiresAt: number }
 
+/**
+ * The characters a terminal would act on rather than show (plan 9, D8): C0 (escape sequences among them), DEL, C1, and
+ * the bidi overrides and isolates, which reorder what follows (« Trojan Source »).
+ */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
+
+/** A text of serveur.db as `pcs` prints it, over SSH: without UNPRINTABLE's characters. What is kept is not touched. */
+export const printable = (text: string): string => text.replace(UNPRINTABLE, '');
+
 /** A PC's name: what `jumeler` gives, and what the PC says of itself; text of 1 to MAX_PC_NAME_CHARS characters, no control character. */
 function checkName(name: unknown): string | null {
   if (typeof name !== 'string') return null;
@@ -191,16 +200,16 @@ export class Tokens {
     return TOKEN.test(token) ? this.pcOfHash(hashToken(token)) : null;
   }
 
-  /** The paired PCs, in the order they were paired (`pcs`). */
+  /** The paired PCs, in the order they were paired, as `pcs` prints them (printable). */
   pcs(): PairedPc[] {
     return (this.q('SELECT id, name, machine, paired_at FROM pcs ORDER BY paired_at, name').all() as { id: string; name: string; machine: string; paired_at: number }[])
-      .map((r) => ({ id: r.id, name: r.name, machine: r.machine, pairedAt: r.paired_at }));
+      .map((r) => ({ id: printable(r.id), name: printable(r.name), machine: printable(r.machine), pairedAt: r.paired_at }));
   }
 
-  /** The codes not yet spent nor burnt, expired ones included until the next code or pairing clears them (`pcs`). */
+  /** The codes not yet spent nor burnt, expired ones included until the next code or pairing clears them, as `pcs` prints them. */
   codes(): PendingCode[] {
     return (this.q('SELECT name, expires_at FROM codes ORDER BY expires_at').all() as { name: string; expires_at: number }[])
-      .map((r) => ({ name: r.name, expiresAt: r.expires_at }));
+      .map((r) => ({ name: printable(r.name), expiresAt: r.expires_at }));
   }
 
   /**
