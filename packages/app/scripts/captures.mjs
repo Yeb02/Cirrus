@@ -5,7 +5,8 @@
 // docs/captures/plan4b, docs/captures/plan4c, docs/captures/plan5a, docs/captures/plan5b and docs/captures/plan6a (those
 // new in plans 4a, 4b, 4c, 5a, 5b and 6a, or changed by them; the last ones of plans 5a, 5b and 6a go through DevTools:
 // serverCaptures, plan5bCaptures, plan6aCaptures; plan 6a changed two more: a connection's pop-up gained its « Tags »),
-// each compared on its own images. A
+// and docs/captures/plan9 (plan 9, task 2: four images of the block « Serveur », its address field empty and four more
+// settings in its group), each compared on its own images. A
 // folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
 // captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
 // reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
