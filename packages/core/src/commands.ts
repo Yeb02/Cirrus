@@ -370,6 +370,11 @@ export function deleteEverywhere(s: State, node: Id): Action {
   });
 }
 
+/** restoreNode's refusal of a node that is not in the trash; the app tells it as well, before a restoring node follows the cursor. */
+export const RESTORE_NODE_NOT_IN_TRASH = 'Ce nœud n’est pas à la corbeille.';
+/** restoreConnection's refusal of a connection left with fewer than two members; the reason the app's « Restaurer » is off. */
+export const RESTORE_CONNECTION_LOST = 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.';
+
 /**
  * A node out of the trash, put down in `plan` (plan 6a, D5: the plan shown, whatever plan it left — that one may be gone).
  * What its deletion took does not come back with it: its memberships, its connections thrown away with it (spec 6.2);
@@ -378,7 +383,7 @@ export function deleteEverywhere(s: State, node: Id): Action {
  */
 export function restoreNode(s: State, node: Id, plan: Id, x: number, y: number, k: number): Action {
   const n = nodeOf(s, node);
-  if (n.trashedAt === undefined) throw new CommandError('Ce nœud n’est pas à la corbeille.');
+  if (n.trashedAt === undefined) throw new CommandError(RESTORE_NODE_NOT_IN_TRASH);
   planOf(s, plan);
   return transact(s, (d) => {
     const { trashedAt: _trashed, ...rest } = n;
@@ -885,7 +890,7 @@ export function restoreConnection(s: State, id: Id): Action {
   const c = connectionOf(s, id);
   if (c.trashedAt === undefined) throw new CommandError('Cette connexion n’est pas à la corbeille.');
   if (c.kind !== 'knowledge') throw new CommandError('Seules les connexions de connaissance se restaurent.');
-  if (c.members.length < 2) throw new CommandError('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
+  if (c.members.length < 2) throw new CommandError(RESTORE_CONNECTION_LOST);
   const alive = c.members.filter((m) => { const n = s.nodes.get(m.node); return n !== undefined && n.trashedAt === undefined; });
   if (alive.length < 2) throw new CommandError('Ses nœuds sont à la corbeille : restaure-les d’abord.');
   // The members placed in each plan (placed: alive), by plan row, in the members' order.

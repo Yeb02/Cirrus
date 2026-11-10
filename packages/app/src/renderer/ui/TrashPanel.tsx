@@ -1,6 +1,6 @@
-import type { Id, State } from '@cirrus/core';
+import { type Id, RESTORE_CONNECTION_LOST, type State } from '@cirrus/core';
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
-import { CONNECTION_LOST, filterTrash, type TrashRow, trashCache, trashRows } from '../trash.ts';
+import { filterTrash, type TrashRow, trashCache, trashRows } from '../trash.ts';
 import { usePanelEscape } from './panelEscape.ts';
 
 /** Two rows that show the same: a row is drawn again only when what it shows changes, not at each action (a long trash). */
@@ -20,7 +20,7 @@ const Row = memo(function Row({ row, onRestore }: { row: TrashRow; onRestore(row
       </span>
       <button
         className="act restore" onClick={() => onRestore(row)} disabled={!row.restorable}
-        title={!row.restorable ? CONNECTION_LOST : row.kind === 'node' ? 'Le poser dans ce plan, d’un clic' : 'La rendre aux plans où ses nœuds sont'}
+        title={!row.restorable ? RESTORE_CONNECTION_LOST : row.kind === 'node' ? 'Le poser dans ce plan, d’un clic' : 'La rendre aux plans où ses nœuds sont'}
       >
         Restaurer
       </button>

@@ -1,13 +1,13 @@
 import {
   type Action, type Anchor, applyOps, connect, createAnnotation, createNode, createPlan, deleteConnection, deleteEverywhere, emptyState, groupOf, type Id, include,
-  placementKey, placeNode, removeFromPlan, restoreNode, type State, type Vec2,
+  placementKey, placeNode, removeFromPlan, RESTORE_CONNECTION_LOST, RESTORE_NODE_NOT_IN_TRASH, restoreNode, type State, type Vec2,
 } from '@cirrus/core';
 import { buildScene, DEFAULT_PARAMS as P, offsetPolygon, type SceneItem } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';
 import { readableStep, restoreBuild, restoreConnectionBuild } from '../src/renderer/actions.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import {
-  CONNECTION_LOST, filterTrash, NOT_IN_TRASH, restoreNotice, restoreRefusal, RESTORED_WITHOUT_BRANCH, trashCache, trashCloseGivesUp, trashDate, trashRows,
+  filterTrash, restoreNotice, restoreRefusal, RESTORED_WITHOUT_BRANCH, trashCache, trashCloseGivesUp, trashDate, trashRows,
 } from '../src/renderer/trash.ts';
 
 // The trash's panel (plan 6a, task 4, D5), without its screen: the rows it lists and their filter, and the builds of its
@@ -114,8 +114,8 @@ test('trashRows : une connexion réduite à un nœud est listée mais non restau
   expect(row(ab)).toMatchObject({ kind: 'connection', restorable: true });
   expect(row(X)).toMatchObject({ kind: 'node', restorable: true });
   // The reason shown is the core's own refusal, word for word.
-  expect(await session.run(restoreConnectionBuild(xy)!)).toEqual({ ok: false, message: CONNECTION_LOST });
-  expect(CONNECTION_LOST).toBe('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
+  expect(await session.run(restoreConnectionBuild(xy)!)).toEqual({ ok: false, message: RESTORE_CONNECTION_LOST });
+  expect(RESTORE_CONNECTION_LOST).toBe('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
   // Two members, one of them still in the trash: it will come back once the node does (« restaure-les d’abord »).
   run(s, deleteEverywhere(s, B));
   expect(row(ab)).toMatchObject({ restorable: true });
@@ -242,9 +242,9 @@ test('restoreRefusal : un nœud qui n’est plus à la corbeille — ou qui n’
   const sc = buildScene(s, plan, measure, P);
   expect((await session.run(restoreBuild(sc, A, { x: 0, y: 900 }, 1, P)!)).ok).toBe(true);
   // A stale row: the node is back in a plan, no ghost must follow the cursor.
-  expect(restoreRefusal(s.nodes.get(A))).toBe(NOT_IN_TRASH);
-  expect(restoreRefusal(undefined)).toBe(NOT_IN_TRASH);
-  expect(await session.run(restoreBuild(sc, A, { x: 0, y: 1800 }, 1, P)!)).toEqual({ ok: false, message: NOT_IN_TRASH });
+  expect(restoreRefusal(s.nodes.get(A))).toBe(RESTORE_NODE_NOT_IN_TRASH);
+  expect(restoreRefusal(undefined)).toBe(RESTORE_NODE_NOT_IN_TRASH);
+  expect(await session.run(restoreBuild(sc, A, { x: 0, y: 1800 }, 1, P)!)).toEqual({ ok: false, message: RESTORE_NODE_NOT_IN_TRASH });
 });
 
 test('trashCloseGivesUp : fermer le panneau abandonne la pose d’un nœud restauré, non celle d’un autre geste', () => {

@@ -1,4 +1,4 @@
-import { type Action, connRow, type Id, memberCount, type State, trashedItems } from '@cirrus/core';
+import { type Action, connRow, type Id, memberCount, RESTORE_NODE_NOT_IN_TRASH, type State, trashedItems } from '@cirrus/core';
 import { foldedWords } from './search/index.ts';
 
 // The trash's panel, without its screen (plan 6a, D5, task 4): the rows it lists and their filter. Pure, so that the rules
@@ -8,14 +8,10 @@ import { foldedWords } from './search/index.ts';
  * An object of the trash as the panel shows it: its kind in French (an annotation is a node with an anchor), its title
  * (« Sans titre » for a node without one; a connection named by connectionName), when it was thrown away (`at`, and
  * `when` in French, short), and its title as the filter reads it (`folded`). `restorable`: false for a connection left with
- * fewer than two nodes, which the core refuses for good (CONNECTION_LOST); the row stays listed, its button off.
+ * fewer than two nodes, which the core refuses for good (RESTORE_CONNECTION_LOST); the row stays listed, its button off.
  */
 export interface TrashRow { id: Id; kind: 'node' | 'connection'; label: 'nœud' | 'connexion' | 'annotation'; title: string; at: number; when: string; folded: string; restorable: boolean }
 
-/** The core's refusal of a connection left with fewer than two nodes (restoreConnection), and the reason its button gives. */
-export const CONNECTION_LOST = 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.';
-/** The core's refusal of a node that is not in the trash (restoreNode), told before a restoring node follows the cursor. */
-export const NOT_IN_TRASH = 'Ce nœud n’est pas à la corbeille.';
 /** What a connection restored with no branch written is told: its nodes share no plan, so it appears in none. */
 export const RESTORED_WITHOUT_BRANCH = 'Connexion restaurée ; aucun plan ne réunit deux de ses nœuds.';
 
@@ -61,7 +57,7 @@ export function restoreNotice(restored: Action): string | null {
 }
 
 /** Why « Restaurer » on this node must not begin (a stale row: it is no longer in the trash); null when it may. */
-export const restoreRefusal = (node: { trashedAt?: number } | undefined): string | null => (node?.trashedAt === undefined ? NOT_IN_TRASH : null);
+export const restoreRefusal = (node: { trashedAt?: number } | undefined): string | null => (node?.trashedAt === undefined ? RESTORE_NODE_NOT_IN_TRASH : null);
 
 /** Whether closing the panel (×, Escape) gives up the placement in progress: a node being restored, not another gesture. */
 export const trashCloseGivesUp = (placing: { kind: string } | null): boolean => placing?.kind === 'restore';
