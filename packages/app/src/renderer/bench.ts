@@ -21,9 +21,15 @@ export interface Stats { p50: number; p95: number; p99: number; max: number; n: 
 /** The interface's steps of the load, in absolute time (the main process makes them ms since its own start). */
 type LoadMark = 'dataReceived' | 'stateReady' | 'sceneReady' | 'engineReady' | 'firstFrame';
 const marks: Partial<Record<LoadMark, number>> = {};
-/** Records the first time a load step is reached (cheap: called in every mode). */
+/**
+ * Records the first time a load step is reached (cheap: called in every mode), and marks it in the page's timeline
+ * (`cirrus:load:<step>`), where the measures of a session out of bench mode read it (scripts/mesures-recherche.mjs:
+ * the first frame, with and without the search index's build, plan 6a).
+ */
 export function mark(name: LoadMark): void {
-  if (marks[name] === undefined) marks[name] = performance.timeOrigin + performance.now();
+  if (marks[name] !== undefined) return;
+  marks[name] = performance.timeOrigin + performance.now();
+  performance.mark(`cirrus:load:${name}`);
 }
 
 export interface EditMeasures {

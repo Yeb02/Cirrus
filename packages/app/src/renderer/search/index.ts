@@ -477,6 +477,9 @@ export class SearchRefresh {
   }
 }
 
+/** The measure of an index's update by the actions applied since the last one (SearchIndex.build). */
+const UPDATE_MEASURE = 'cirrus:search:update';
+
 /** A result being chosen: its entry, its group of plans (0 this plan, 1 the lobby, 2 another, 3 none) and its field. */
 interface Candidate { e: Entry; group: number; rank: number }
 
@@ -519,7 +522,7 @@ export class SearchIndex {
 
   static build(s: State, texts: ReadonlyMap<string, string>, previous?: SearchIndex, action?: Action | null): SearchIndex {
     if (!previous || previous.state !== s || action === null) return new SearchBuild(s, texts).step(Infinity)!;
-    const st = previous.store, done = new Set<Id>();
+    const start = performance.now(), st = previous.store, done = new Set<Id>();
     st.takeTexts(texts);
     for (const op of action?.ops ?? []) {
       if (op.t !== 'node' && op.t !== 'connection') continue;
@@ -528,6 +531,10 @@ export class SearchIndex {
       done.add(id);
       if (op.t === 'node') st.readNode(s, id); else st.readConnection(s, id, connRow(s, id));
     }
+    // What an action costs the index, for plan 6a's measures (scripts/mesures-recherche.mjs, whose observer reads each):
+    // the last one only is kept in the page's timeline.
+    performance.clearMeasures(UPDATE_MEASURE);
+    performance.measure(UPDATE_MEASURE, { start });
     return new SearchIndex(s, st);
   }
 
