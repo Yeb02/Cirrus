@@ -37,14 +37,16 @@ test('élément d’une sélection de plusieurs : le menu de sélection (spec 9.
 test('fantôme, amorce, connexion, fond', () => {
   expect(actions(menuFor(s, sc, item(sc, ids.phantoms.node), emptySelection(), false))).toEqual(['teleport', 'joinArm']);
   expect(actions(menuFor(s, these, { kind: 'stub', conn: 0, stub: 0, connection: ids.connections.twoToOne, node: ids.nodes.entropie, title: '' }, emptySelection(), false))).toEqual(['importNode']);
-  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode', 'importPublication', 'importBib', 'tagRegistry']);
-  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste', 'importPublication', 'importBib', 'tagRegistry']);
+  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), false))).toEqual(['newNode', 'importPublication', 'importBib', 'trash', 'tagRegistry']);
+  expect(actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true))).toEqual(['newNode', 'paste', 'importPublication', 'importBib', 'trash', 'tagRegistry']);
   // Plan 4c, task 5: a publication imported by its identifier, put down where the menu was opened.
   expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[1].label).toBe('Importer une publication…');
   // Task 6: a whole .bib, chosen in the system's dialog, its publications following the cursor in a block.
   expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[2].label).toBe('Importer un fichier .bib…');
+  // Plan 6a, D5: the trash's panel, opened from the sky's menu, before the registry's.
+  expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[3]).toEqual({ action: 'trash', label: 'Corbeille…' });
   // Plan 6a, D4: the tag registry's panel, opened from the sky's menu, last.
-  expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[3]).toEqual({ action: 'tagRegistry', label: 'Registre des tags…' });
+  expect(menuFor(s, sc, { kind: 'background' }, emptySelection(), false)[4]).toEqual({ action: 'tagRegistry', label: 'Registre des tags…' });
 });
 
 test('chaque article a un libellé français', () => {
@@ -69,7 +71,7 @@ test('une connexion disposée à la main peut retrouver sa disposition automatiq
 
 test('clic droit sur le fond d’un groupe ouvert : le menu de ce groupe, puis de quoi créer ou coller (spec 9.1, I11 de la relecture 3b)', () => {
   const m = actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true, ids.nodes.groupeML));
-  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste', 'importPublication', 'importBib', 'tagRegistry']);
+  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste', 'importPublication', 'importBib', 'trash', 'tagRegistry']);
 });
 
 test('« Voir dans un autre plan » (plan 6a, D3) : proposé à un nœud ou à une connexion seulement s’il est dans un autre plan — le lobby compte —, libellé en français', () => {
