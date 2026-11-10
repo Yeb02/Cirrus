@@ -5,8 +5,10 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
 import type { Plugin } from 'vite';
 
-// The workspace packages are TypeScript sources: bundle them instead of leaving them to Electron's Node.
-const bundled = { exclude: ['@cirrus/core', '@cirrus/sources', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures'] };
+// The workspace packages are TypeScript sources: bundle them instead of leaving them to Electron's Node. electron-updater
+// too (plan 9, D4): the packaged app carries no node_modules (electron-builder.yml); it lands in a chunk of its own,
+// loaded only once an update is to be downloaded (update/wire.ts).
+const bundled = { exclude: ['@cirrus/core', '@cirrus/sources', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures', 'electron-updater'] };
 
 const PDFJS = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
 /**
