@@ -1,7 +1,7 @@
 import { buildLargeState, forceGc } from '@cirrus/fixtures';
 import { expect, test } from 'vitest';
 import {
-  type Action, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode, transact,
+  type Action, combine, CommandError, connect, createNode, createPlan, deleteEverywhere, editNode, exclude, include, moveNodes, placeNode, transact, trashedItems,
 } from '../src/commands.ts';
 import { decodeState, encodeState } from '../src/codec.ts';
 import { UndoStack } from '../src/history.ts';
@@ -10,6 +10,7 @@ import type { TagKeyDef } from '../src/model.ts';
 import {
   applyOp, applyOps, connId, dataOf, directGroup, emptyState, groupMembers, nodeId, placementOf, planId, planRow, reindex, type State,
 } from '../src/state.ts';
+import { KNOWLEDGE } from '../src/tables.ts';
 
 // Timed tests run one after the other in this file, not against each other.
 /** 20 000 placed nodes and 20 000 connections, written by raw operations (commands would take minutes). */
@@ -180,3 +181,28 @@ test('base de référence : l’instantané binaire s’encode et se décode d�
   expect(firstLookup).toBeLessThanOrEqual(FIRST_LOOKUP_CEILING_MS);
   expect([decoded!.nodes.size, decoded!.connections.size, decoded!.branches.size]).toEqual([state.nodes.size, state.connections.size, state.branches.size]);
 }, 180_000);
+
+/** trashedItems on the reference base: 3.5 ms measured, 2 000 objects in the trash (registry, task 4 of plan 6a); the gate three times that. */
+const TRASH_CEILING_MS = 10.5;
+
+test('base de référence : trashedItems lit la corbeille en un passage sur les nœuds et les colonnes des connexions (plan 6a, D5)', () => {
+  const { state: s } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
+  const C = dataOf(s).tables.conns;
+  // A thousand nodes and a thousand knowledge connections in the trash, written as raw operations.
+  for (let n = 0; n < 1000; n++) {
+    const r = s.nodes.get(nodeId(s, 50 * n))!;
+    applyOp(s, { t: 'node', before: r, after: { ...r, trashedAt: 1000 + n } });
+  }
+  let thrown = 0;
+  for (let c = 0; c < C.rows.end && thrown < 1000; c += 400) {
+    if (C.kind[c] !== KNOWLEDGE) continue;
+    const rec = s.connections.get(connId(s, c))!;
+    applyOp(s, { t: 'connection', before: rec, after: { ...rec, trashedAt: 3000 + thrown++ } });
+  }
+  const listed = cost(() => trashedItems(s));
+  expect(listed.out).toHaveLength(2000);
+  expect([listed.out[0].kind, listed.out[0].at, listed.out[1999].kind]).toEqual(['connection', 3999, 'node']);
+  // The value measured, for the registry: CIRRUS_COSTS=1 npx vitest run tests/scale.test.ts --silent=false
+  if (process.env.CIRRUS_COSTS) console.log(`trashedItems ${listed.ms.toFixed(2)} ms (${listed.out.length} objets, ${s.nodes.size} nœuds, ${s.connections.size} connexions)`);
+  expect(listed.ms).toBeLessThanOrEqual(TRASH_CEILING_MS);
+}, 120_000);

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import {
-  type Action, addedViolation, CommandError, connect, connectionName, createNode, createPlan, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
+  type Action, CommandError, connect, connectionName, createNode, createPlan, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
   editConnection, editNode, renameEnumValue, renameTagKey,
 } from '../src/commands.ts';
 import { invertAction, UndoConflictError, UndoStack } from '../src/history.ts';
@@ -8,12 +8,12 @@ import { uuidv7 } from '../src/ids.ts';
 import * as core from '../src/index.ts';
 import { checkState } from '../src/invariants.ts';
 import type { Id, TagKeyDef, TagValue } from '../src/model.ts';
-import { invertOp, MAX_ID_CHARS } from '../src/ops.ts';
+import { MAX_ID_CHARS } from '../src/ops.ts';
 import { PROTECTED_TAG_KEYS, readTagNumber } from '../src/registry.ts';
-import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
-import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State, taggedKeys, taggedWith } from '../src/state.ts';
+import { applyOp, applyOps, emptyState, type State, taggedKeys, taggedWith } from '../src/state.ts';
 import { parseUnit, reconcile, type RemoteUnit, type Unit } from '../src/sync.ts';
 import { created, view } from './helpers.ts';
+import { accept, copy, crossed, image } from './twoPcs.ts';
 
 // The tag registry's commands (plan 6a, task 3, D4): create or change a key, rename it everywhere, remove it from the
 // registry, rename an enumeration's value; each one action, checked, that an undo gives back and the sync carries.
@@ -508,72 +508,7 @@ test('les refus nomment une connexion comme connectionName ; une connexion nommÃ
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The sync (Review Focus 2): a rename crossed with an edit made elsewhere of an object that carried the key. A server
-// as reconcile.test.ts's sequencer (shape, "befores", rules), two PCs.
-
-type Answer = 'accepted' | 'stale' | { refused: string };
-
-/** POST /units for one write, as the server takes it: parseUnit, the "befores", no violation added. */
-function accept(server: State, journal: RemoteUnit[], u: Unit): Answer {
-  const unit = parseUnit(wire(u));
-  try {
-    applyOps(server, unit.ops);
-  } catch (e) {
-    if (e instanceof OpConflictError) return 'stale';
-    throw e;
-  }
-  const v = addedViolation(server, unit.ops);
-  if (v) {
-    applyOps(server, [...unit.ops].reverse().map(invertOp));
-    return { refused: v.message };
-  }
-  journal.push({ ...wire(unit), seq: (journal.at(-1)?.seq ?? 0) + unit.ops.length });
-  return 'accepted';
-}
-
-const image = (s: State): string => canonical(Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)])));
-const copy = (s: State): State => fromSnapshot(wire(toSnapshot(s)));
-
-interface Pc { s: State; pending: Unit[]; next: number; refused: { unit: Id; message: string }[]; dropped: string[] }
-
-/**
- * Two PCs make a write each on the same base; the server receives them in `order`; each PC sends what is pending
- * (stale: it waits for the journal), receives the journal, reconciles; until nothing moves. Every state is then the
- * server's, and valid.
- */
-function crossed(s0: State, mine: (s: State) => Action, theirs: (s: State) => Action, order: 'mine first' | 'theirs first', at: { mine: number; theirs: number }) {
-  const server = copy(s0), journal: RemoteUnit[] = [];
-  const pcs: Pc[] = [copy(s0), copy(s0)].map((s) => ({ s, pending: [], next: 0, refused: [], dropped: [] }));
-  const [A, B] = pcs;
-  A.pending.push(unitOf(run(A.s, mine(A.s)), 'pc-a', T0 + at.mine));
-  B.pending.push(unitOf(run(B.s, theirs(B.s)), 'pc-b', T0 + at.theirs));
-  const send = (pc: Pc) => {
-    for (const u of pc.pending) {
-      if (journal.some((j) => j.unit === u.unit)) continue;
-      const answer = accept(server, journal, u);
-      if (answer === 'stale') break;
-      if (answer !== 'accepted') pc.refused.push({ unit: u.unit, message: answer.refused });
-    }
-  };
-  const receive = (pc: Pc) => {
-    const r = reconcile(pc.s, pc.pending, journal.slice(pc.next).map(wire), pc.refused);
-    pc.pending = r.rebased;
-    pc.next = journal.length;
-    pc.refused = [];
-    pc.dropped.push(...r.dropped.map((d) => d.message));
-  };
-  for (const pc of order === 'mine first' ? [A, B] : [B, A]) send(pc);
-  for (let round = 0; pcs.some((pc) => pc.pending.length > 0 || pc.next < journal.length); round++) {
-    if (round > 10) throw new Error('pas de repos');
-    for (const pc of pcs) { receive(pc); send(pc); }
-  }
-  for (const pc of pcs) receive(pc);
-  for (const [i, pc] of pcs.entries()) {
-    expect(image(pc.s), `PC ${i}`).toBe(image(server));
-    expect(checkState(pc.s), `PC ${i}`).toEqual([]);
-  }
-  expect(checkState(server)).toEqual([]);
-  return { server, dropped: pcs.flatMap((pc) => pc.dropped) };
-}
+// as reconcile.test.ts's sequencer (shape, "befores", rules), two PCs (twoPcs.ts).
 
 /** Node N carries statut:a (a key of one value); M carries nothing. */
 function base() {

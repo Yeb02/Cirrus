@@ -8,9 +8,9 @@ import { MAX_ID_CHARS, type Op, truncateLabel } from './ops.ts';
 import { normalizeTag, PROTECTED_TAG_KEYS, TagError, type TagKeyShape, tagValueFits, tagValuesFit } from './registry.ts';
 import {
   applyKnown, applyOp, canonical, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn,
-  phantomsOf, placedIn, placementOf, preambleText, rollback, type State, taggedWith,
+  phantomsOf, placedIn, placementOf, planId, preambleText, rollback, type State, taggedWith,
 } from './state.ts';
-import { INCLUSION } from './tables.ts';
+import { INCLUSION, KNOWLEDGE } from './tables.ts';
 
 /** One user action: one undo step, one group of journal lines (spec 6.4). */
 export interface Action { id: Id; label: string; ops: Op[] }
@@ -370,6 +370,12 @@ export function deleteEverywhere(s: State, node: Id): Action {
   });
 }
 
+/**
+ * A node out of the trash, put down in `plan` (plan 6a, D5: the plan shown, whatever plan it left — that one may be gone).
+ * What its deletion took does not come back with it: its memberships, its connections thrown away with it (spec 6.2);
+ * the connections it is still a member of show it where they have a branch to it. Its absent phantoms in this plan go,
+ * as placeNode's do: it is placed there now.
+ */
 export function restoreNode(s: State, node: Id, plan: Id, x: number, y: number, k: number): Action {
   const n = nodeOf(s, node);
   if (n.trashedAt === undefined) throw new CommandError('Ce nœud n’est pas à la corbeille.');
@@ -378,6 +384,7 @@ export function restoreNode(s: State, node: Id, plan: Id, x: number, y: number, 
     const { trashedAt: _trashed, ...rest } = n;
     d.node(node, rest);
     d.placement(plan, node, { plan, node, x, y, k });
+    for (const ph of phantomsFor(s, node)) if (ph.plan === plan && ph.of.kind === 'absent') d.dropPhantom(ph);
     return d.finish(`Restaurer « ${n.title} »`);
   });
 }
@@ -836,5 +843,65 @@ export function renameEnumValue(s: State, key: string, from: string, to: string)
     d.tagKey(key, next);
     for (const c of carriers) retag(d, c, c.rec.tags.map((t) => (has(t) ? { key, value: to } : t)));
     return d.finish(`Renommer la valeur « ${from} » du tag « ${key} » en « ${to} »`);
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The trash (plan 6a, D5): what it holds, and a connection given back — a node comes back by restoreNode, put down in a
+// plan. Nothing is emptied: a content's removal goes through « Poids de l’historique » (plan 6b).
+
+/** An object of the trash as its panel lists it: a node (an annotation is one) or a connection, its name, when it was thrown away. */
+export interface TrashedItem { id: Id; kind: 'node' | 'connection'; title: string; at: number }
+
+/**
+ * What the trash holds (D5): its nodes, annotations included, and its knowledge connections, each named as the
+ * registry's refusals name one (connectionName); from the most recent to the oldest — at the same moment, a node before
+ * the connections its deletion took, then by identifier. A group link or a document's structure is not an object of the
+ * user's: it is not listed (restoreConnection refuses it). One pass over the nodes' records and the connections' columns:
+ * its panel computes it only while it is open.
+ */
+export function trashedItems(s: State): TrashedItem[] {
+  const T = dataOf(s).tables, out: TrashedItem[] = [];
+  for (const n of T.nodes.recs) if (n !== undefined && n.trashedAt !== undefined) out.push({ id: n.id, kind: 'node', title: n.title, at: n.trashedAt });
+  // The columns read through locals: through the table at each row, the pass over half a million rows took ten times longer.
+  const { kind, trashedAt, rows } = T.conns;
+  for (let r = 0, end = rows.end; r < end; r++) {
+    const at = trashedAt[r];
+    if (Number.isNaN(at) || kind[r] !== KNOWLEDGE) continue;
+    out.push({ id: rows.ids[r], kind: 'connection', title: connectionName(s, connectionOfRow(s, r)), at });
+  }
+  return out.sort((a, b) => b.at - a.at || (a.kind === b.kind ? 0 : a.kind === 'node' ? -1 : 1) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * A connection out of the trash (D5), in one action: its record alive again, its members as they are, and its branches
+ * given back in every plan where at least two of its members are placed, one for each member placed there — documents
+ * aside, which draw structure only, as « partout » shows a new connection (otherPlans); no stub, no phantom. A member
+ * still in the trash stays a member, shown nowhere (it is placed nowhere: rule trashedPlaced). Refused: a connection not
+ * in the trash; a group link or a document's structure; one left with fewer than two members — its deletion took them,
+ * and what a deletion took does not come back (spec 6.2) —; one with fewer than two members alive, to restore first.
+ */
+export function restoreConnection(s: State, id: Id): Action {
+  const c = connectionOf(s, id);
+  if (c.trashedAt === undefined) throw new CommandError('Cette connexion n’est pas à la corbeille.');
+  if (c.kind !== 'knowledge') throw new CommandError('Seules les connexions de connaissance se restaurent.');
+  if (c.members.length < 2) throw new CommandError('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
+  const alive = c.members.filter((m) => { const n = s.nodes.get(m.node); return n !== undefined && n.trashedAt === undefined; });
+  if (alive.length < 2) throw new CommandError('Ses nœuds sont à la corbeille : restaure-les d’abord.');
+  // The members placed in each plan (placed: alive), by plan row, in the members' order.
+  const plans = dataOf(s).tables.plans.recs, placed = new Map<number, Id[]>();
+  for (const m of alive) {
+    for (const p of placedIn(s, nodeRow(s, m.node))) {
+      const type = plans[p]?.type;
+      if (type === undefined || type === 'document') continue;
+      const here = placed.get(p);
+      if (here) here.push(m.node); else placed.set(p, [m.node]);
+    }
+  }
+  return transact(s, (d) => {
+    const { trashedAt: _trashed, ...rest } = c;
+    d.connection(id, rest);
+    for (const [p, nodes] of placed) if (nodes.length >= 2) for (const node of nodes) d.branch(planId(s, p), id, node, true);
+    return d.finish(`Restaurer ${connectionName(s, c)}`);
   });
 }
