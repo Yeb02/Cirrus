@@ -79,7 +79,7 @@ interface PendingCode { name: string; expiresAt: number }
  * The characters a terminal would act on rather than show (plan 9, D8): C0 (escape sequences among them), DEL, C1, and
  * the bidi overrides and isolates, which reorder what follows (« Trojan Source »).
  */
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 
 /** A text of serveur.db as `pcs` prints it, over SSH: without UNPRINTABLE's characters. What is kept is not touched. */
 export const printable = (text: string): string => text.replace(UNPRINTABLE, '');

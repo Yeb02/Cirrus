@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -101,3 +101,14 @@ test('pcs (D8) : les noms affichés sans caractère de contrôle ni de sens d’
     check.close();
   }
 }, 30_000);
+
+test('les sources et les tests du serveur ne portent aucun caractère de contrôle ni de sens d’écriture, écrits tels quels', () => {
+  // Line breaks and tabs aside: each is written as its escape (\u…), which the eye and a review read.
+  const LITERAL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+  for (const folder of ['src', 'tests']) {
+    const at = join(import.meta.dirname, '..', folder);
+    for (const file of readdirSync(at).filter((f) => f.endsWith('.ts'))) {
+      expect(readFileSync(join(at, file), 'utf8').match(LITERAL), `${folder}/${file}`).toBeNull();
+    }
+  }
+});
