@@ -1,0 +1,122 @@
+# Each push to main: Cirrus built and tested on Windows, then, with the signing key in the repository's secrets, its
+# manifest signed and the version published as the release v0.1.<n> (plan 9, D6). The rented server takes it within the
+# hour (deploy/mettre-a-jour.sh), and the PCs at their next connection. Without the secret, the version is built and
+# tested, and nothing is published: the job's summary says so.
+name: Version
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# One run at a time, in the order of the pushes: v0.1.<n> is never published after v0.1.<n+1>.
+concurrency:
+  group: version
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The files as the repository keeps them (LF), as on the user's PC: the tests' data were written so, and some
+      # tests read sources (the runner's Git would turn every text file into CRLF).
+      - name: Fins de ligne du dépôt
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      # Node 26: the packages are TypeScript that Node runs itself (types stripped), and the server needs node:sqlite.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: tsc
+        run: |
+          failed=''
+          for p in core store fixtures view server sources app; do
+            echo "::group::tsc $p"
+            npx tsc -p "packages/$p" || failed="$failed $p"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "::error::tsc en échec :$failed"; exit 1; fi
+
+      # Each package's suite, one file at a time, as on the user's PC (--maxWorkers=1). The runner being slower than that
+      # PC, the default delay of a test and of a hook is raised, and a test that fails is tried once more. Nothing here
+      # needs Electron or a display: every test runs under Node, and none imports Electron (electron-updater is loaded
+      # only by import(), and mocked by its test); the interface's scenarios, the captures and the benches (packages/app/scripts) are not run in the CI. The LaTeX
+      # tests skip themselves without TinyTeX (texTest: bench/latex/vendor/TinyTeX or CIRRUS_TINYTEX, neither here).
+      # Left to the next step: the measures of the reference base (core and store scale.test.ts, view scale-perf.test.ts),
+      # which hold the user's PC to its targets in milliseconds (plan 3c) and mean nothing on a shared runner.
+      - name: Tests
+        run: |
+          failed=''
+          for p in core store fixtures view server sources app; do
+            echo "::group::vitest $p"
+            npm test -w "packages/$p" -- --maxWorkers=1 --testTimeout=30000 --hookTimeout=60000 --retry=1 \
+              --exclude '**/scale.test.ts' --exclude '**/scale-perf.test.ts' || failed="$failed $p"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "::error::Tests en échec :$failed"; exit 1; fi
+
+      # Indicative: a measure out of its target is said, and does not stop the version.
+      - name: Mesures de la base de référence (indicatives)
+        continue-on-error: true
+        run: |
+          failed=''
+          npm test -w packages/core -- --maxWorkers=1 scale.test || failed="$failed core"
+          npm test -w packages/store -- --maxWorkers=1 scale.test || failed="$failed store"
+          npm test -w packages/view -- --maxWorkers=1 scale-perf || failed="$failed view"
+          if [ -n "$failed" ]; then echo "::warning::Mesures hors de leurs cibles sur ce runner :$failed (indicatif)."; exit 1; fi
+
+      # electron-vite build, then electron-builder (--win nsis --publish never): packages/app/dist holds the installer
+      # and latest.yml. The version is the archive's (extraMetadata), the repository's package.json untouched.
+      - name: Installateur ${{ env.VERSION }}
+        run: npm run paquet -w packages/app -- "-c.extraMetadata.version=$VERSION"
+
+      # The secret reaches only this step and the signature's, never npm ci nor the tests.
+      - name: Clé de signature
+        id: cle
+        env:
+          CIRRUS_SIGNING_KEY: ${{ secrets.CIRRUS_SIGNING_KEY }}
+        run: |
+          if [ -n "$CIRRUS_SIGNING_KEY" ]; then
+            echo "presente=oui" >> "$GITHUB_OUTPUT"
+          else
+            echo "presente=non" >> "$GITHUB_OUTPUT"
+            echo "Pas de clé de signature : version construite et testée, rien n'est publié." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Pas de clé de signature : version construite et testée, rien n'est publié."
+          fi
+
+      # version.json { version, file, sha512, size, date } and version.json.sig, beside the installer; refused if the
+      # secret is not the pair of the public key in packages/app/src/main/update/key.ts.
+      - name: Signature du manifeste
+        if: steps.cle.outputs.presente == 'oui'
+        env:
+          CIRRUS_SIGNING_KEY: ${{ secrets.CIRRUS_SIGNING_KEY }}
+        run: node packages/app/scripts/signer-version.mjs packages/app/dist
+
+      # The tag made on the commit built. GitHub renames the installer's spaces into dots; the server finds it as the
+      # release's only .exe, and places it under the name of the signed manifest.
+      - name: Publication de v${{ env.VERSION }}
+        if: steps.cle.outputs.presente == 'oui'
+        working-directory: packages/app/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          installateur=$(node -p "require('./version.json').file")
+          gh release create "v$VERSION" "$installateur" latest.yml version.json version.json.sig \
+            --target "$GITHUB_SHA" --title "Cirrus $VERSION" \
+            --notes "Construite et signée par la CI depuis $GITHUB_SHA. Le serveur la prend dans l'heure, les PC à leur connexion suivante."
+          echo "Version $VERSION publiée : $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION" >> "$GITHUB_STEP_SUMMARY"
