@@ -14,7 +14,7 @@ import { OBJECT_GONE } from './jumps.ts';
  */
 export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: { x: number; y: number }): void {
   const {
-    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, redraw, notify, edit, tabsRef,
+    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, onTagRegistry, redraw, notify, edit, tabsRef,
   } = graph;
   const { placement, copyPaste, questions, bib, publication, jumps } = graph;
   root.current?.focus({ preventScroll: true });
@@ -41,6 +41,9 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
       break;
     case 'importBib':
       bib.chooseBib(sc.plan.id, at);
+      break;
+    case 'tagRegistry':
+      onTagRegistry();
       break;
     case 'rename': {
       if (clicked < 0) break;

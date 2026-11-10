@@ -638,3 +638,56 @@ button, input, select { font: inherit; color: var(--ink); }
 /* The first pairing's question (plan 5a, D7): a long button, its counts with it, then « Annuler », each on its line if need be. */
 .settings .server-offer .server-actions { flex-wrap: wrap; }
 .settings .server-offer .server-actions button { text-align: left; }
+/*
+ * The tag registry's panel (plan 6a, D4): a side panel like the settings', with its colours and its fields. A list of keys,
+ * each with its type, its scope and how many objects carry it; then, a key chosen, its form.
+ */
+.registry {
+  width: 340px; flex: none; box-sizing: border-box; padding: 12px 14px 24px; overflow: auto; user-select: text;
+  background: var(--panel); border-left: 1px solid rgba(143, 184, 255, 0.18);
+}
+.registry header { display: flex; align-items: center; justify-content: space-between; }
+.registry h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.registry h3.key-title { font-size: 14px; margin: 8px 0 2px; font-weight: 600; overflow-wrap: anywhere; }
+.registry h4 { font-size: 11px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+.registry .close { border: none; background: none; font-size: 18px; cursor: pointer; color: var(--muted); }
+.registry .close:hover { color: var(--ink); }
+.registry input[type=search], .registry input[type=text], .registry select {
+  box-sizing: border-box; background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 3px 6px;
+}
+.registry input.search { display: block; width: 100%; margin: 10px 0 6px; padding: 4px 8px; }
+.registry .none, .registry .meta { margin: 2px 0; font-size: 12.5px; color: var(--muted); }
+.registry .note { margin: 6px 0 2px; font-size: 12.5px; }
+.registry .note.warn { color: var(--warn); }
+.registry .keys { list-style: none; margin: 6px 0 0; padding: 0; }
+.registry .key {
+  display: block; width: 100%; box-sizing: border-box; padding: 5px 8px; border: none; border-radius: 6px; background: none; text-align: left; cursor: pointer;
+}
+.registry .key:hover { background: rgba(143, 184, 255, 0.14); }
+.registry .key .name { display: block; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.registry .key .meta { display: block; margin: 0; font-size: 12px; }
+.registry .key.undeclared .name { font-style: italic; font-weight: 500; }
+.registry button.act { padding: 5px 10px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); }
+.registry button.act:hover:not(:disabled) { border-color: var(--accent); }
+.registry button.act:disabled { opacity: 0.5; cursor: default; }
+.registry button.act.primary { border-color: var(--accent); }
+.registry button.act.cancel { background: none; border-color: transparent; color: var(--muted); }
+.registry button.act.new { display: block; width: 100%; margin: 10px 0 0; text-align: left; }
+.registry button.back, .registry button.link { border: none; background: none; padding: 2px 0; color: var(--accent); cursor: pointer; }
+.registry .name-field { display: block; width: 100%; margin: 8px 0 4px; }
+.registry .field { display: block; margin: 8px 0; font-size: 12.5px; }
+.registry .field > span { display: block; margin-bottom: 3px; }
+.registry .field select, .registry .field input { width: 100%; }
+.registry .check { display: block; margin: 5px 0; font-size: 12.5px; }
+.registry .check input { margin: 0 4px 0 0; accent-color: var(--accent); }
+.registry .values { list-style: none; margin: 0; padding: 0; }
+.registry .values li { display: flex; align-items: center; gap: 4px; padding: 2px 0; }
+.registry .values .value-name { flex: 1; min-width: 0; }
+.registry .values .value-rank { flex: none; width: 52px; text-align: right; }
+.registry .values button { flex: none; border: none; background: none; padding: 0 4px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.registry .values button:hover:not(:disabled) { color: var(--ink); }
+.registry .values button:disabled { opacity: 0.35; cursor: default; }
+.registry .add { margin-top: 6px; border: none; background: none; color: var(--accent); cursor: pointer; padding: 2px 0; }
+.registry .actions, .registry .rename { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.registry .rename input { flex: 1 1 100%; }
+.registry .rename .meta { flex: 1 1 100%; }

@@ -38,13 +38,15 @@ export function fullDraft(t: FullTarget | null): ConsultationDraft | null {
 }
 
 /**
- * What App opens over the graph: the settings panel (`panel`), a file in full screen (`full`; a .tex's workbench,
+ * What App opens over the graph: the settings panel (`panel`), the tag registry's (`registryOpen`, plan 6a, D4), a file in full screen (`full`; a .tex's workbench,
  * plan 4b, D6; or a .tex compared with its conflict copy, plan 5b, D7), the preamble's full screen (`preambleOpen`, D5);
  * and the steps made in a file's full screen, the only ones its Ctrl+Z and Ctrl+Y undo and redo (`fullSteps`, plan
  * 4c). A comparison makes none: its save is one action, made as it closes, and undone by Ctrl+Z in the graph.
  */
 export function useScreens() {
   const [panel, setPanel] = useState(window.cirrus.launch.panel === true);
+  /** The tag registry's panel, opened from the graph's background menu: a side panel beside the settings', not instead. */
+  const [registryOpen, setRegistryOpen] = useState(false);
   /** The file in full screen, if any, by its name (a comparison: both): closed once it is gone (resolveFull). */
   const [full, setFull] = useState<FullTarget | null>(null);
   const fullRef = useRef(full);
@@ -87,5 +89,5 @@ export function useScreens() {
     }
     return fullNow;
   };
-  return { panel, setPanel, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn };
+  return { panel, setPanel, registryOpen, setRegistryOpen, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn };
 }

@@ -48,6 +48,8 @@ export interface Graph {
   dragging(): boolean;
   /** Shows a plan in its tab: GraphView's onOpenPlan, as of this render. */
   onOpenPlan(plan: Id): void;
+  /** Opens the tag registry's panel (plan 6a, D4): GraphView's onTagRegistry, as of this render. */
+  onTagRegistry(): void;
   /** The open tabs, in their order (App's), by which a list of plans is ordered. */
   tabsRef: RefObject<readonly Id[]>;
   redraw(): void;

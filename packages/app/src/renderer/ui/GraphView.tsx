@@ -82,6 +82,8 @@ export function GraphView(props: {
   session: EditSession | null; onResult(r: Result): void; onLongNotice(text: string): void;
   /** Shows a plan in its tab (« ajouter au lobby » opens the lobby, spec 7). */
   onOpenPlan(plan: Id): void;
+  /** Opens the tag registry's panel, from the background's menu (plan 6a, D4: App's). */
+  onTagRegistry(): void;
   /**
    * A click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up there, in
    * window coordinates (plan 4a, D7).
@@ -249,7 +251,7 @@ export function GraphView(props: {
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
     root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, gestures,
-    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, redraw, notify, edit, indexOf, hitAt, local, restoreScene, moveCamera, feed,
+    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, redraw, notify, edit, indexOf, hitAt, local, restoreScene, moveCamera, feed,
     busy, busyReason, tabsRef,
     get jumps() { return jumps.current!; },
     get scenes() { return scenes; }, get questions() { return questions; }, get placement() { return placement; }, get copyPaste() { return copyPaste; },
