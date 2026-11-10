@@ -166,7 +166,7 @@ FIN
   mv -f "$CONFIG/serveur.env.nouveau" "$CONFIG/serveur.env"
   poser_les_fichiers_systeme || mourir "les unités systemd n’ont pas pu être posées."
   systemctl daemon-reload
-  # The timer enabled now, started at the end: its first run waits for this one's lock to be released.
+  # The timer enabled now, started at the end, once this script's lock is released.
   systemctl enable --quiet cirrus-serveur.service cirrus-maj.timer
   # Restarted, not only started: a run again takes the code just placed.
   systemctl restart cirrus-serveur.service
@@ -275,7 +275,9 @@ installer() {
   etape "Utilisateur $UTILISATEUR"
   creer_l_utilisateur
   # The update's lock, held from here to the update run below: neither the timer nor a run by hand works in /opt/cirrus,
-  # /var/lib/cirrus-maj or the service meanwhile (review of task 6, M2).
+  # /var/lib/cirrus-maj or the service meanwhile (review of task 6, M2). On a run again, the timer stops until the end;
+  # a run of the update under way is waited for.
+  if systemctl cat cirrus-maj.timer >/dev/null 2>&1; then systemctl stop cirrus-maj.timer; fi
   exec 9>"$VERROU"
   if ! flock --nonblock 9; then
     dire "Une mise à jour du serveur est en cours : j’attends qu’elle finisse."
