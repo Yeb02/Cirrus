@@ -1,0 +1,17 @@
+# The update of Cirrus's server from the versions published on GitHub (plan 9, D6): deploy/mettre-a-jour.sh, started
+# every hour by cirrus-maj.timer; by hand, `systemctl start cirrus-maj.service`. Its journal: `journalctl -u cirrus-maj`.
+[Unit]
+Description=Mise à jour de Cirrus depuis les versions publiées sur GitHub
+Documentation=https://github.com/Yeb02/Cirrus/blob/main/deploy/LISEZ-MOI.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# As root: it writes the code that the server's user runs, so never as that user. HOME for git and npm.
+Environment=HOME=/root
+ExecStart=/bin/bash /opt/cirrus/deploy/mettre-a-jour.sh
+# An installer of some hundred MB to download, then npm ci: an hour at most.
+TimeoutStartSec=1h
+Nice=10
+PrivateTmp=yes

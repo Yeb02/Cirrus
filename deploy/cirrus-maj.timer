@@ -1,0 +1,13 @@
+# Every hour, the update of Cirrus's server (cirrus-maj.service, plan 9, D6). `systemctl list-timers cirrus-maj.timer`
+# says when it ran and when it runs next.
+[Unit]
+Description=Chaque heure, la mise à jour de Cirrus
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10min
+# A run missed while the machine was off is made at its start.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

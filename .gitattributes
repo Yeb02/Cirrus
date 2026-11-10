@@ -6,3 +6,6 @@ packages/app/tests/data/publications/** -text
 packages/core/tests/data/** -text
 # The pages of the open web's tests (plan 5b, task 2): read as the sites write them.
 packages/sources/tests/data/** -text
+# The deployment runs on Linux (plan 9, task 6): its scripts, units and Caddyfile keep LF on every checkout, Windows'
+# included, so that a copy made from a PC still runs (bash refuses a CR at the end of its lines).
+deploy/** text eol=lf
