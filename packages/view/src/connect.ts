@@ -39,17 +39,33 @@ export function otherPlans(s: State, plan: Id, nodes: Id[], connection?: Id): Id
 }
 
 /**
+ * Whether an object is alive (plan 6a, final review): a node outside the trash, or a knowledge connection outside the
+ * trash. What a search finds, and a jump can frame; a connection of structure is none.
+ */
+export function objectAlive(s: State, kind: 'node' | 'connection', id: Id): boolean {
+  if (kind === 'node') {
+    const row = nodeRow(s, id);
+    return row >= 0 && nodeAt(s, row)?.trashedAt === undefined;
+  }
+  const row = connRow(s, id);
+  return row >= 0 && connKind(s, row) === KNOWLEDGE && !connTrashed(s, row);
+}
+
+/**
  * The plans an object is shown in (plan 6a, D3): a node, by its placements; a knowledge connection, by its branches and
  * its phantoms — what a jump to it can frame (the revealer). Empty for an object gone or in the trash, and for a
  * connection of structure. The lobby is a plan like the others; the order is the state's.
  */
 export function plansShowing(s: State, kind: 'node' | 'connection', id: Id): Id[] {
-  if (kind === 'node') {
-    const row = nodeRow(s, id);
-    return row < 0 || nodeAt(s, row)?.trashedAt !== undefined ? [] : Array.from(placedIn(s, row), (p) => planId(s, p));
-  }
-  const row = connRow(s, id);
-  if (row < 0 || connKind(s, row) !== KNOWLEDGE || connTrashed(s, row)) return [];
+  if (!objectAlive(s, kind, id)) return [];
+  return kind === 'node' ? Array.from(placedIn(s, nodeRow(s, id)), (p) => planId(s, p)) : connectionPlans(s, id);
+}
+
+/**
+ * The plans a live knowledge connection is drawn in: where it has branches, and where its phantoms are. The one reading
+ * of it — plansShowing, the search's groups of plans, the revealer: no liveness check here, for a caller that made it.
+ */
+export function connectionPlans(s: State, id: Id): Id[] {
   const plans = s.branches.plansOf(id);
   for (const ph of phantomsOf(s, id)) {
     const p = s.phantoms.get(ph)?.plan;

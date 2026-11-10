@@ -1,20 +1,13 @@
-import { connKind, connRow, connTrashed, type Id, KNOWLEDGE, phantomsOf, placementKey, type State } from '@cirrus/core';
-import { type Camera, fitBounds, fitItem, type PlanScene, type RenderParams } from '@cirrus/view';
+import type { Id, State } from '@cirrus/core';
+import { type Camera, fitBounds, fitItem, type PlanScene, plansShowing, type RenderParams } from '@cirrus/view';
 import { foundItems, itemsBounds } from '../../render/found.ts';
 
 /** What a jump shows (plan 6a, D2): a node or a connection, in a plan. */
 export interface RevealTarget { plan: Id; id: Id; kind: 'node' | 'connection' }
 
-/** Whether the target is there to be shown: live, and in that plan (a node placed there; a connection drawn there). */
+/** Whether the target is there to be shown: live, and in that plan (a node placed there; a connection drawn there — plansShowing's). */
 export function revealable(s: State, t: RevealTarget): boolean {
-  if (!s.plans.has(t.plan)) return false;
-  if (t.kind === 'node') {
-    const n = s.nodes.get(t.id);
-    return n !== undefined && n.trashedAt === undefined && s.placements.has(placementKey(t.plan, t.id));
-  }
-  const row = connRow(s, t.id);
-  if (row < 0 || connKind(s, row) !== KNOWLEDGE || connTrashed(s, row)) return false;
-  return s.branches.plansOf(t.id).includes(t.plan) || phantomsOf(s, t.id).some((ph) => s.phantoms.get(ph)?.plan === t.plan);
+  return s.plans.has(t.plan) && plansShowing(s, t.kind, t.id).includes(t.plan);
 }
 
 /** The camera that frames the target in its plan's scene (D2): a node as the hierarchy's corner does, a connection by its parts; null if not shown. */

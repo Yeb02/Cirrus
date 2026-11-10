@@ -1,9 +1,10 @@
 import {
   type Action, connId, connKind, connRelation, connRow, connRowCount, connTags, connTitle, connTrashed, type Id, KNOWLEDGE, type NodeRec, nodeRow,
-  phantomsOf, placedIn, placedInCount, placementsIn, planId, planRow, type State, type TagValue,
+  placedInCount, placementsIn, planRow, type State, type TagValue,
 } from '@cirrus/core';
-import { fold } from '@cirrus/view';
+import { connectionPlans, fold } from '@cirrus/view';
 import { fileKind } from '../files/kind.ts';
+import { destination } from '../navigation.ts';
 
 /**
  * The search of Ctrl+K (plan 6a, D1): an index in the interface's memory, over every node and every knowledge
@@ -667,29 +668,15 @@ export class SearchIndex {
     }
     const row = connRow(s, e.id);
     if (row < 0 || connTrashed(s, row)) return -1;
-    const plans = this.connectionPlans(e.id);
+    const plans = connectionPlans(s, e.id);
     return plans.includes(where.plan) ? 0 : plans.includes(where.lobby) ? 1 : plans.length > 0 ? 2 : 3;
   }
 
-  /** A connection's plans (D3): where it has branches, and where its phantoms are. */
-  private connectionPlans(id: Id): Id[] {
-    const s = this.state, plans = s.branches.plansOf(id);
-    for (const ph of phantomsOf(s, id)) {
-      const p = s.phantoms.get(ph)?.plan;
-      if (p !== undefined && !plans.includes(p)) plans.push(p);
-    }
-    return plans;
-  }
-
-  /** Where its jump goes (D2): this plan, the lobby, the first of its other plans among the tabs then by name, or none. */
+  /**
+   * Where its jump goes (D2): destination's — this plan, the lobby, the first of its other plans among the tabs then by
+   * name — or none. Read for the results kept only, not for each candidate.
+   */
   private planOf(c: Candidate, where: SearchWhere): Id | null {
-    if (c.group === 0) return where.plan;
-    if (c.group === 1) return where.lobby;
-    if (c.group === 3) return null;
-    const s = this.state;
-    const plans = c.e.kind === 'node' ? [...placedIn(s, nodeRow(s, c.e.id))].map((r) => planId(s, r)) : this.connectionPlans(c.e.id);
-    const tab = (p: Id) => { const i = where.tabs.indexOf(p); return i < 0 ? where.tabs.length : i; };
-    const name = (p: Id) => s.plans.get(p)?.name ?? '';
-    return plans.sort((a, b) => tab(a) - tab(b) || COLLATOR.compare(name(a), name(b)) || order(a, b))[0] ?? null;
+    return destination(this.state, c.e.kind, c.e.id, where.plan, where.tabs);
   }
 }
