@@ -11,8 +11,9 @@
 //   LOCALAPPDATA of its own (electron-updater's cache), paired with the server through the block « Serveur »;
 //   CIRRUS_NO_RELAUNCH=1, so that it never starts again out of the script's hands, and any instance of it left after a
 //   run is stopped and counted as a failure.
-// Three runs: the update found, verified, downloaded and armed (the chip says so); a signature of another key: refused;
-// an installer that is not the signed one (latest.yml rewritten to its hash): downloaded, then refused. Each app is ended
+// Four runs: the update found, verified, downloaded and armed (the chip says so); a signature of another key: refused;
+// an installer that is not the signed one, latest.yml rewritten to its hash: refused before any download (review of
+// task 4, M2); the same installer, latest.yml the manifest's: electron-updater's own check fails, refused. Each app is ended
 // by a kill, never quit. All along, no installer nor uninstaller process may appear; afterwards, nothing is installed
 // (%LOCALAPPDATA%\Programs\@cirrusapp-dev, …\cirrus, and the former …\Cirrus Dev: their existence only, nothing listed).
 // Everything temporary removed.
@@ -156,19 +157,28 @@ try {
   check(b.result, `une signature d’une autre clé : la notification « ${REFUSED} »`);
   check(b.chip !== READY && b.pending.length === 0, `rien d’armé ni de téléchargé (pastille « ${b.chip} », ${b.pending.length} fichier(s))`);
 
-  // ——— 3. Another installer, latest.yml rewritten to its hash: downloaded, then refused ———
-  let forged = '';
-  const c = await once('empreinte', (page) => refusal(page, 240_000), (versions) => {
+  // ——— 3. Another installer, latest.yml rewritten to its hash: refused before any download (review of task 4, M2) ———
+  const forge = (versions) => {
     const bytes = readFileSync(join(versions, file));
     bytes[bytes.length - 1] ^= 1;
     writeFileSync(join(versions, file), bytes);
-    forged = createHash('sha512').update(bytes).digest('base64');
+    return createHash('sha512').update(bytes).digest('base64');
+  };
+  const c = await once('empreinte', (page) => refusal(page, 240_000), (versions) => {
+    const forged = forge(versions);
     writeFileSync(join(versions, 'latest.yml'), readFileSync(join(versions, 'latest.yml'), 'utf8').replaceAll(signedSha, forged));
   });
   console.log(`  journal :\n    ${updaterLines(c.log)}`);
-  check(c.result, `un installateur qui n’est pas celui du manifeste signé : la notification « ${REFUSED} »`);
-  check(/New version 0\.1\.2 has been downloaded/.test(c.log) && c.pending.some(([, h]) => h === forged), 'electron-updater l’a téléchargé (sa propre vérification, sur latest.yml, passe)');
+  check(c.result, `un latest.yml qui ne nomme pas l’installateur du manifeste signé : la notification « ${REFUSED} »`);
+  check(!/has been downloaded/.test(c.log) && c.pending.length === 0, `rien de téléchargé (${c.pending.length} fichier(s))`);
   check(c.chip !== READY && !/Executing:|Install: isSilent/.test(c.log), `rien d’armé ni lancé (pastille « ${c.chip} »)`);
+
+  // ——— 4. Another installer, latest.yml the manifest's: electron-updater's own check fails, refused ———
+  const d = await once('octets', (page) => refusal(page, 240_000), (versions) => { forge(versions); });
+  console.log(`  journal :\n    ${updaterLines(d.log)}`);
+  check(d.result, `d’autres octets que ceux du manifeste signé servis : la notification « ${REFUSED} »`);
+  check(!/has been downloaded/.test(d.log) && !d.pending.some(([, h]) => h !== signedSha), `rien de gardé que le manifeste ne signe pas (${d.pending.length} fichier(s))`);
+  check(d.chip !== READY && !/Executing:|Install: isSilent/.test(d.log), `rien d’armé ni lancé (pastille « ${d.chip} »)`);
 } catch (e) {
   check(false, e instanceof Error ? e.stack ?? e.message : String(e));
 } finally {
