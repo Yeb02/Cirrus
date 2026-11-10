@@ -1,7 +1,7 @@
 import { PAIRING_TTL_MS } from './bounds.ts';
 import { type Args, parse, USAGE, UsageError } from './cli.ts';
 import { startServer } from './server.ts';
-import { Tokens } from './tokens.ts';
+import { printable, Tokens } from './tokens.ts';
 
 // The command line (plan 5a): `npm run serveur -w packages/server -- [--data <dossier>] [--port 7310] [--nom <domaine>]`
 // starts the server; `jumeler "<nom>"`, `pcs` and `revoquer "<nom>"` manage the paired PCs, the server running or not
@@ -53,11 +53,12 @@ function main(): Promise<void> | void {
       return;
     }
     case 'pcs': {
+      // Read as kept, printed without what a terminal would act on (plan 9, D8).
       const { pcs, codes } = withTokens(args.dataDir, (t) => ({ pcs: t.pcs(), codes: t.codes() }));
       if (pcs.length === 0) console.log('Aucun PC jumelé.');
-      else console.log(['PC jumelés :', ...pcs.map((p) => `  ${p.name} — ${p.machine}, jumelé le ${when(p.pairedAt)} (identifiant ${p.id})`)].join('\n'));
+      else console.log(['PC jumelés :', ...pcs.map((p) => `  ${printable(p.name)} — ${printable(p.machine)}, jumelé le ${when(p.pairedAt)} (identifiant ${printable(p.id)})`)].join('\n'));
       const now = Date.now();
-      if (codes.length > 0) console.log(['Codes en attente :', ...codes.map((c) => `  ${c.name} — ${c.expiresAt > now ? `jusqu’au ${when(c.expiresAt)}` : 'expiré'}`)].join('\n'));
+      if (codes.length > 0) console.log(['Codes en attente :', ...codes.map((c) => `  ${printable(c.name)} — ${c.expiresAt > now ? `jusqu’au ${when(c.expiresAt)}` : 'expiré'}`)].join('\n'));
       return;
     }
     case 'revoquer': {

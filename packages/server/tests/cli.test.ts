@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { PAIRING_TTL_MS } from '../src/bounds.ts';
@@ -75,8 +75,11 @@ test('jumeler (D2, D5) : l’adresse de la page de téléchargement, https://<no
   await expect(cli(['jumeler', 'Autre', '--nom', 'https://cirrus.exemple.fr'])).rejects.toMatchObject({ code: 2 });
 }, 30_000);
 
-/** C0 (escape sequences among them), DEL, C1, and the bidi overrides and isolates (« Trojan Source »). */
-const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+/**
+ * printable's class: the control characters (C0, escape sequences among them, DEL, C1), the bidi controls (overrides,
+ * isolates, marks: « Trojan Source »), the line and paragraph separators.
+ */
+const CONTROL = /[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/u;
 
 test('pcs (D8) : les noms affichés sans caractère de contrôle ni de sens d’écriture ; serveur.db les garde tels quels', async () => {
   // Names as an older or altered serveur.db may hold them, written past the checks of `jumeler` and /pair.
@@ -84,31 +87,51 @@ test('pcs (D8) : les noms affichés sans caractère de contrôle ni de sens d’
   const db = new DatabaseSync(join(dir, 'serveur.db'));
   const name = 'Port\u001b[2Jable\u0007\u007f\u009b31m\u202eelbat\u2066x\u2069', machine = 'DESKTOP\u202d-A\r\u0085', id = 'pc-\u001b]0;titre\u0007a';
   const code = 'Tab\u2067lette\u001b[1A';
+  // The bidi marks and the separators too (review, M2): ALM, LRM, RLM, LS and PS.
+  const marks = String.fromCodePoint(0x61c, 0x200e, 0x200f, 0x2028, 0x2029), other = `Mar${marks}ques`;
   db.prepare('INSERT INTO pcs (id, name, machine, token_hash, paired_at) VALUES (?, ?, ?, ?, ?)').run(id, name, machine, 'h'.repeat(64), T0);
+  db.prepare('INSERT INTO pcs (id, name, machine, token_hash, paired_at) VALUES (?, ?, ?, ?, ?)').run('pc-b', other, `M${marks}`, 'i'.repeat(64), T0 + 1);
   db.prepare('INSERT INTO codes (code_hash, name, expires_at) VALUES (?, ?, ?)').run('c'.repeat(64), code, Date.now() + PAIRING_TTL_MS);
   db.close();
   const out = await cli(['pcs']);
   for (const line of out.split('\n')) expect(line, JSON.stringify(line)).not.toMatch(CONTROL);
   expect(out).toContain('Port[2Jable31melbatx — DESKTOP-A, jumelé le');
   expect(out).toContain('(identifiant pc-]0;titrea)');
+  expect(out).toContain('Marques — M, jumelé le');
   expect(out).toContain('Tablette[1A — jusqu’au');
-  // Stored as they were.
+  // Stored as they were, and read so (review, M4): `pcs` makes them printable as it prints them.
   const check = new DatabaseSync(join(dir, 'serveur.db'));
   try {
-    expect(check.prepare('SELECT id, name, machine FROM pcs').all()).toEqual([{ id, name, machine }]);
+    expect(check.prepare('SELECT id, name, machine FROM pcs ORDER BY paired_at').all()).toEqual([{ id, name, machine }, { id: 'pc-b', name: other, machine: `M${marks}` }]);
     expect(check.prepare('SELECT name FROM codes').all()).toEqual([{ name: code }]);
   } finally {
     check.close();
   }
+  const tokens = Tokens.open(dir);
+  try {
+    expect(tokens.pcs().map((p) => [p.id, p.name, p.machine])).toEqual([[id, name, machine], ['pc-b', other, `M${marks}`]]);
+    expect(tokens.codes().map((c) => c.name)).toEqual([code]);
+  } finally {
+    tokens.close();
+  }
 }, 30_000);
 
-test('les sources et les tests du serveur ne portent aucun caractère de contrôle ni de sens d’écriture, écrits tels quels', () => {
-  // Line breaks and tabs aside: each is written as its escape (\u…), which the eye and a review read.
-  const LITERAL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
-  for (const folder of ['src', 'tests']) {
-    const at = join(import.meta.dirname, '..', folder);
-    for (const file of readdirSync(at).filter((f) => f.endsWith('.ts'))) {
-      expect(readFileSync(join(at, file), 'utf8').match(LITERAL), `${folder}/${file}`).toBeNull();
+test('aucune source ni aucun test des paquets ne porte de caractère de contrôle ou de sens d’écriture écrit tel quel (relecture, M3)', () => {
+  // printable's class, line breaks and tabs aside: each is written as its escape, which the eye and a review read. The
+  // agents' editing tools turn such an escape into its character without a word: this finds it.
+  const LITERAL = /(?![\t\n\r])[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/u;
+  const packages = join(import.meta.dirname, '..', '..');
+  const found: string[] = [];
+  for (const pkg of readdirSync(packages)) {
+    for (const folder of ['src', 'tests']) {
+      const at = join(packages, pkg, folder);
+      if (!existsSync(at)) continue;
+      for (const entry of readdirSync(at, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile() || !/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(entry.name)) continue;
+        const path = join(entry.parentPath, entry.name);
+        if (LITERAL.test(readFileSync(path, 'utf8'))) found.push(relative(packages, path));
+      }
     }
   }
+  expect(found).toEqual([]);
 });
