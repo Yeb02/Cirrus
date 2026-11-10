@@ -2,9 +2,9 @@
 // Every scene below is captured on a fresh artificial test base, in a window of a fixed size, into <dossier>.
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
 // suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a,
-// docs/captures/plan4b, docs/captures/plan4c, docs/captures/plan5a and docs/captures/plan5b (those new in plans 4a, 4b,
-// 4c, 5a and 5b, or changed by them; the last ones of plans 5a and 5b go through DevTools: serverCaptures,
-// plan5bCaptures), each compared on its own images. A
+// docs/captures/plan4b, docs/captures/plan4c, docs/captures/plan5a, docs/captures/plan5b and docs/captures/plan6a (those
+// new in plans 4a, 4b, 4c, 5a, 5b and 6a, or changed by them; the last ones of plans 5a and 5b go through DevTools:
+// serverCaptures, plan5bCaptures; plan 6a changed two: a connection's pop-up gained its « Tags »), each compared on its own images. A
 // folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
 // captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
 // reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
