@@ -542,7 +542,8 @@ export async function runBench(v: BenchView, label: string): Promise<BenchRun> {
 
   // The memory is read before the edit pass too: what the load keeps, apart from what the edits add.
   const editFrom = label === 'vsync' && deep ? { ...deep, widthPx: g.width, heightPx: g.height } : null;
-  const beforeEdits = editFrom ? { heapMb: heapAfterGc().heapMb, processMb: await window.cirrus.benchMemory() } : null;
+  // benchMemory is there in bench mode (launch.bench), the only one that runs this.
+  const beforeEdits = editFrom ? { heapMb: heapAfterGc().heapMb, processMb: await window.cirrus.benchMemory!() } : null;
   const edits = editFrom ? await editPass(v, editFrom) : null;
   return {
     label, gpuName, timer: timer !== null, disjoint: timer?.disjoint ?? 0, canvasPx: [g.canvas.width, g.canvas.height], gpuMs: summarize(gpu),

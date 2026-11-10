@@ -3,14 +3,13 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LocalStore } from '@cirrus/store';
 import { type RenderParams, withOverrides } from '@cirrus/view';
-import { app, BrowserWindow, dialog, Menu, net, protocol, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, Menu, net, protocol, safeStorage, session } from 'electron';
 import { dataDir, openBase, pcId } from './base.ts';
-import { ensureBenchBase, recordSnapshots, snapshotRewrites } from './bench.ts';
+import { markNow, wireBenchMode } from './benchMode.ts';
 import { Consultations } from './consultations.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
 import { appIdentity, applyIdentity, copiesDir } from './identity.ts';
 import { wireBase } from './ipc/base.ts';
-import { markNow, wireBench } from './ipc/bench.ts';
 import { wireConsultations } from './ipc/consultations.ts';
 import { wireFiles } from './ipc/files.ts';
 import { tellLatexStatus, wireLatex } from './ipc/latex.ts';
@@ -20,6 +19,7 @@ import { LatexService } from './latex/compiler.ts';
 import { LatexSetup } from './latex/setup.ts';
 import { type Deps, fetchDownload, findBinaries, Packages, provision, runFile, type TexBinaries, tinyTexRoot } from './latex/tinytex.ts';
 import { lockBase } from './lock.ts';
+import { refuseAllPermissions } from './permissions.ts';
 import { freeBytesOf } from './pick.ts';
 import { readSettings } from './settings.ts';
 import { fileSecrets } from './sync/config.ts';
@@ -40,11 +40,12 @@ import { createWindow } from './window.ts';
  * Closing waits, at most snapshotQuitMs, for the interface's last snapshot, and quitting for every pdfLaTeX to exit and
  * for the sync client to stop.
  * This file starts and ends the process; the interface's calls are answered by domain under ipc/ (the sync's in
- * sync/wire.ts), and the window is window.ts's. It first gives the app its identity (identity.ts, plan 9, D3).
+ * sync/wire.ts), and the window is window.ts's. It first gives the app its identity (identity.ts, plan 9, D3), and
+ * refuses the web platform's permissions (permissions.ts, D8).
  * CIRRUS_CAPTURE=<png> captures the window once the first frame is drawn, then quits (visual checks).
  * CIRRUS_BENCH=<nodes>,<connections> runs the rendering bench on the base CIRRUS_DATA names (scripts/bench.mjs), which
  * CIRRUS_BENCH_BUILD=<dir> builds beforehand; with CIRRUS_BENCH_SNAPSHOTS=<n>, the snapshot of that base is rewritten n
- * times instead, without a window, and the file's size recorded.
+ * times instead, without a window, and the file's size recorded. The bench's modules are loaded in that mode only (D8).
  */
 /**
  * The app's identity (plan 9, D3), before anything reads userData (the single-instance lock, Chromium's profile, the
@@ -159,7 +160,12 @@ wireBase({
   store: () => store, sync: () => sync, pc: () => pc, settings, settingsWritten: () => { latexParams = null; }, bench: Boolean(bench),
 });
 wireFiles({ dir: () => dir, sync: () => sync, settings, copies, capture: capture !== undefined, background });
-wireBench({ scale: bench, exit: exitAfterLatex });
+// The bench's calls, in bench mode only, their module and @cirrus/fixtures loaded then (plan 9, D8): long before the
+// pass's end asks for them.
+wireBenchMode(bench, exitAfterLatex, () => import('./ipc/bench.ts')).catch((e: unknown) => {
+  console.error('Banc non branché :', e);
+  exitAfterLatex(2);
+});
 wireLatex({ params: currentParams, latex: () => latex, setup: () => latexSetup });
 wirePublications({ dir: () => dir, store: () => store, params: currentParams, sync: () => sync, capture: capture !== undefined });
 wireConsultations({ consultations: () => consultations });
@@ -191,20 +197,22 @@ void app.whenReady().then(() => {
   // No menu (plan 6a, fix round 1): Electron's default one, hidden by autoHideMenuBar, came back as a bar when Alt was
   // released after Alt+← or an Alt+drag. The app uses none of its shortcuts (window.ts gives back two in development).
   Menu.setApplicationMenu(null);
+  // No permission of the web platform (plan 9, D8): Cirrus asks for none.
+  refuseAllPermissions(session.defaultSession);
   if (!first) return;
   if (benchBuild) {
-    // The bench's base (scripts/bench.mjs): built once per generator version and scale, then copied for each pass.
+    // The bench's base (scripts/bench.mjs): built once per generator version and scale, then copied for each pass. Its
+    // module, with @cirrus/fixtures, loaded in this mode only (D8).
     const [nodes, connections] = (bench ?? '50000,500000').split(',').map(Number);
     const t0 = performance.now();
-    try {
+    void import('./bench.ts').then(({ ensureBenchBase }) => {
       const built = ensureBenchBase(benchBuild, { seed: 1, nodes, connections });
       console.log(built ? `Base du banc écrite en ${((performance.now() - t0) / 1000).toFixed(1)} s : ${benchBuild}` : `Base du banc à jour : ${benchBuild}`);
-    } catch (e) {
+      app.exit(0);
+    }).catch((e: unknown) => {
       console.error(e instanceof Error ? e.message : String(e));
       app.exit(2);
-      return;
-    }
-    app.exit(0);
+    });
     return;
   }
   try {
@@ -248,17 +256,17 @@ void app.whenReady().then(() => {
   }
   if (benchSnapshots) {
     // The base file over snapshot rewrites (plan 3c task 10, M3 of the final review), on the bench's copy of its base.
-    try {
+    const held = lock;
+    void import('./bench.ts').then(({ recordSnapshots, snapshotRewrites }) => {
       const growth = snapshotRewrites(dir, Number(benchSnapshots));
       recordSnapshots(join(app.getAppPath(), '..', '..', 'docs', 'bancs'), growth);
       console.log(`Réécritures de l’instantané : ${growth.sizes.map((x) => `${x.step} ${x.dbMb.toFixed(1)} + ${x.walMb.toFixed(1)} Mo`).join(' ; ')}`);
-    } catch (e) {
+      held.release();
+      app.exit(0);
+    }).catch((e: unknown) => {
       console.error(e instanceof Error ? e.message : String(e));
       app.exit(2);
-      return;
-    }
-    lock.release();
-    app.exit(0);
+    });
     return;
   }
   try {

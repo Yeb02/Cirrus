@@ -465,7 +465,7 @@ export function GraphView(props: {
                     resume: () => { stopped = false; redraw(); },
                     drawn: (until) => new Promise((done) => { frameWaiters.current.push({ until, done }); }),
                   };
-                  void runBench(view, label).then((run) => window.cirrus.benchDone(run));
+                  void runBench(view, label).then((run) => window.cirrus.benchDone!(run));
                 }
               }
             }

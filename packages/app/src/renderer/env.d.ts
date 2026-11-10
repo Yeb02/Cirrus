@@ -168,10 +168,13 @@ export interface CirrusBridge {
   downloadAllStart(refs: FileRef[]): Promise<DownloadAllStart>;
   downloadAllStop(): void;
   onDownloadAll(fn: (p: DownloadAllProgress) => void): () => void;
-  /** Bench: every process's private memory now (Mo), the main process's collections forced first. */
-  benchMemory(): Promise<{ browser: number; tab: number; gpu: number }>;
+  /**
+   * Bench: every process's private memory now (Mo), the main process's collections forced first. In bench mode only
+   * (`launch.bench`), like benchDone (plan 9, D8).
+   */
+  benchMemory?(): Promise<{ browser: number; tab: number; gpu: number }>;
   /** The bench pass (CIRRUS_BENCH) is over: the main process adds its load phases and memory, records the run and quits. */
-  benchDone(run: unknown): Promise<void>;
+  benchDone?(run: unknown): Promise<void>;
   /** The first frame is drawn (captures wait for it). */
   ready(): void;
   /**

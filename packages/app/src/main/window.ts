@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BrowserWindow, ipcMain, screen } from 'electron';
+import { captureWhenReady } from './capture.ts';
 import { devShortcut } from './devKeys.ts';
-import { captureWhenReady } from './ipc/bench.ts';
 import type { LatexSetup } from './latex/setup.ts';
 import { navigationAllowed } from './navigation.ts';
 import { type SyncHost, watchWindow } from './sync/host.ts';

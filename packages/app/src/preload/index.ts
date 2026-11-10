@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { benchCalls } from './bench.ts';
 
 // The interface's only door to the system (spec 4): a few calls, no Node access.
 const arg = process.argv.find((a) => a.startsWith('--cirrus-launch='));
@@ -27,8 +28,8 @@ contextBridge.exposeInMainWorld('cirrus', {
   // The shared settings received from the server (plan 5a, task 6), one batch per message.
   onSettingsChanged: (fn: (changes: unknown) => void) => on('cirrus:settings:changed', fn),
   ready: () => ipcRenderer.send('cirrus:ready'),
-  benchMemory: () => ipcRenderer.invoke('cirrus:bench:memory'),
-  benchDone: (run: unknown) => ipcRenderer.invoke('cirrus:bench:done', run),
+  // The bench's calls, in bench mode only (plan 9, D8).
+  ...benchCalls(launch, (channel, ...args) => ipcRenderer.invoke(channel, ...args)),
   commit: (action: unknown, unit: string) => ipcRenderer.invoke('cirrus:commit', action, unit),
   // The consultations (plan 6a, D6): sent, never awaited, on the channel the closing's « ready » is sent on, so that they
   // arrive before it.

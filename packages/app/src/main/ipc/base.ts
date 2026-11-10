@@ -3,8 +3,8 @@ import type { LocalStore } from '@cirrus/store';
 import { ipcMain } from 'electron';
 import { keepSnapshot, loadPayload, saveSnapshot } from '../base.ts';
 import { historySummary } from '../files.ts';
+import { markNow } from '../benchMode.ts';
 import type { SyncHost } from '../sync/host.ts';
-import { markNow } from './bench.ts';
 
 /** What the base's calls read when the interface makes them: by then, the base is open (index.ts). */
 interface BaseDeps {
