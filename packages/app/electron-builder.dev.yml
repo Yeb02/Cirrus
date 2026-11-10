@@ -4,6 +4,10 @@
 extends: ./electron-builder.yml
 appId: io.github.yeb02.cirrus.dev
 productName: Cirrus Dev
+# Its own package name: the uninstaller's --delete-app-data removes %APPDATA%\<package name>, which under the package's
+# own name, « @cirrus/app », is the official app's folder and the user's base. Under this one, it is « Cirrus Dev »'s.
+extraMetadata:
+  name: "@cirrus/app-dev"
 win:
   target: nsis
   icon: build/icon-dev.ico
@@ -11,5 +15,6 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
   installerIcon: build/icon-dev.ico
   uninstallerIcon: build/icon-dev.ico

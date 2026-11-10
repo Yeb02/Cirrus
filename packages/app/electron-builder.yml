@@ -25,10 +25,13 @@ electronFuses:
 win:
   target: nsis
   icon: build/icon.ico
-# Per user, without administrator rights (%LOCALAPPDATA%\Programs), the folder left to choose.
+# Per user, without administrator rights (%LOCALAPPDATA%\Programs), the folder left to choose. The uninstaller never
+# removes the app's data: with --delete-app-data, or deleteAppDataOnUninstall, it would remove %APPDATA%\<package name>,
+# which is %APPDATA%\@cirrus\app — the user's base (identity.ts). Not turned on; not to be.
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
