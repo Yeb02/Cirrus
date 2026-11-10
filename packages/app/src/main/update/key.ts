@@ -28,3 +28,17 @@ export function updateKeyOf(env: Record<string, string | undefined>, capture: bo
 export function devUpdatesOf(env: Record<string, string | undefined>, capture: boolean): boolean {
   return testPickOf(env, 'CIRRUS_UPDATE_PUBLIC_KEY', capture) !== null && testPickOf(env, 'CIRRUS_UPDATE_DEV', capture) === '1';
 }
+
+/** How this app updates (update/wire.ts): the key its manifests are checked with, whether it is held as « Cirrus Dev », whether it may install. */
+export interface UpdateMode { publicKey: string; dev: boolean; neverInstall: boolean }
+
+/**
+ * The updater's mode, for a build that is « Cirrus Dev » (`dev`) or not. Any key but UPDATE_PUBLIC_KEY — a test key —
+ * never installs, whatever the variant (review of task 4, I1): signed by a test pair, an update may be found, checked,
+ * downloaded and armed, but its installer never runs, not even at a quit by accident, so that no check can put a
+ * version on the machine. « Cirrus Dev » looks for updates only with CIRRUS_UPDATE_DEV=1 and the test key (devUpdatesOf).
+ */
+export function updateModeOf(env: Record<string, string | undefined>, capture: boolean, dev: boolean): UpdateMode {
+  const publicKey = updateKeyOf(env, capture);
+  return { publicKey, dev: dev && !devUpdatesOf(env, capture), neverInstall: publicKey !== UPDATE_PUBLIC_KEY };
+}

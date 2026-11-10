@@ -8,15 +8,21 @@ import { checkInstaller, compareVersions, type Manifest, parseVersion, usableKey
 // 2. version.json and its signature asked of the server with this PC's token; the signature checked with the key the app
 //    carries (key.ts), the manifest's version newer than this app's — never a downgrade, never « Cirrus Dev », never a
 //    pre-release (spec 18.1).
-// 3. electron-updater then downloads the installer from the server's versions/ (its generic provider, the token in a
-//    header, the whole file: its own sha512 check of latest.yml stays a second layer), never installing by itself.
+// 3. electron-updater then reads the server's latest.yml (its generic provider, the token in a header), which must name
+//    the signed manifest's version and installer — its one file, its name, its sha512, its size, neither administrator
+//    rights nor a web installer's packages — before anything is downloaded (review of task 4, M2); then it downloads
+//    the whole file (its own sha512 check stays a second layer), never installing by itself.
 // 4. The file downloaded checked against the signed manifest's sha512 and size; only then is the install armed, for the
 //    app's quit, silently (`--updated /S`), the app not started again: the chip says so.
-// A refusal — a signature that does not match, an installer that is not the one signed — installs nothing, and is said
-// once a session: one console warning, one notification. Nothing of Electron here: the tests drive it (wire.ts binds it).
+// A refusal — a signature that does not match, a latest.yml or an installer that is not the one signed, a newer version
+// announced but not served — installs nothing, and is said once a session: one console warning, one notification. A
+// disarm (the app starting again on a base taken from the server) is final for the session (M1). Nothing of Electron
+// here: the tests drive it (wire.ts binds it).
 
 /** The notification of a refused update (D4), once a session. */
 export const REFUSED = 'Mise à jour refusée : sa signature ne correspond pas.';
+/** The notification of a hello that announced a newer version than the server's signed manifest (review of task 4, M3). */
+export const NOT_SERVED = 'Mise à jour refusée : le serveur annonce une version qu’il ne sert pas.';
 
 /** The most bytes version.json or its signature may have: a server that sends more is not read further. */
 const MAX_MANIFEST_BYTES = 64 * 1024;
@@ -27,6 +33,11 @@ const MIN_CHECK_MS = 60_000;
 /** What electron-updater says once it has downloaded an update: the version latest.yml gave, the file it kept. */
 export interface Downloaded { version: string; downloadedFile: string }
 
+/** A file of latest.yml, as electron-updater reads it (builder-util-runtime's UpdateFileInfo). */
+export interface LatestFile { url: string; sha512: string; size?: number; isAdminRightsRequired?: boolean }
+/** latest.yml, as electron-updater read it at its check (UpdateInfo): what it would download. */
+export interface LatestInfo { version: string; files: LatestFile[] }
+
 /** electron-updater's autoUpdater (NsisUpdater), as much of it as the updater drives. */
 export interface FeedUpdater {
   autoDownload: boolean;
@@ -36,9 +47,28 @@ export interface FeedUpdater {
   allowDowngrade: boolean;
   requestHeaders: OutgoingHttpHeaders | null;
   setFeedURL(options: { provider: 'generic'; url: string }): void;
-  checkForUpdates(): Promise<{ downloadPromise?: Promise<unknown> | null } | null>;
+  checkForUpdates(): Promise<{ isUpdateAvailable: boolean; updateInfo: LatestInfo } | null>;
+  downloadUpdate(): Promise<unknown>;
   install(isSilent?: boolean, isForceRunAfter?: boolean): boolean;
   on(event: 'update-downloaded', listener: (e: Downloaded) => void): unknown;
+}
+
+/**
+ * Why latest.yml, as electron-updater read it, is not the signed manifest's (review of task 4, M2); null when it is: its
+ * version; exactly one file, the manifest's — its name (a plain name: no other host, no other folder), its sha512, its
+ * size —; neither administrator rights (an installer started through elevate.exe) nor packages (a web installer's).
+ */
+export function latestMismatch(info: unknown, m: Manifest): string | null {
+  if (typeof info !== 'object' || info === null) return 'latest.yml illisible';
+  const i = info as Record<string, unknown>;
+  if (i.version !== m.version) return `latest.yml annonce la version ${String(i.version).slice(0, 40)}, le manifeste signé la ${m.version}`;
+  if (i.packages != null) return 'latest.yml nomme les paquets d’un installateur web';
+  if (i.isAdminRightsRequired) return 'latest.yml demande les droits d’administrateur';
+  if (!Array.isArray(i.files) || i.files.length !== 1) return 'latest.yml doit nommer un seul fichier, celui du manifeste signé';
+  const f = (i.files[0] ?? {}) as Record<string, unknown>;
+  if (f.url !== m.file || f.sha512 !== m.sha512 || f.size !== m.size) return 'le fichier de latest.yml n’est pas l’installateur du manifeste signé (nom, empreinte ou taille)';
+  if (f.isAdminRightsRequired) return 'latest.yml demande les droits d’administrateur';
+  return null;
 }
 
 export interface UpdaterDeps {
@@ -108,6 +138,10 @@ export class Updater {
   private keySaid = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /** Disarmed (the app starts again, D7): nothing more is looked for, downloaded nor armed this session (M1). */
+  private ended = false;
+  /** A newer version a hello announced, not yet compared with the manifest the server serves (M3). */
+  private announced: string | null = null;
 
   constructor(deps: UpdaterDeps) {
     this.deps = deps;
@@ -117,6 +151,7 @@ export class Updater {
   /** A hello's official version (null: the server publishes none): looked for when newer than this app's. */
   heard(version: string | null): Promise<void> {
     if (version === null || !(compareVersions(version, this.deps.version) > 0)) return Promise.resolve();
+    this.announced = version;
     return this.check();
   }
 
@@ -146,9 +181,11 @@ export class Updater {
 
   /**
    * Not installed at this quit (the app starts again on a base taken from the server, D7: an installer running then would
-   * close the app it starts). The next session finds it again, its download kept by electron-updater.
+   * close the app it starts), and final (M1): a check or an installer's verification under way arms nothing afterwards.
+   * The next session finds it again, its download kept by electron-updater.
    */
   disarm(): void {
+    this.ended = true;
     this.armed = false;
     if (this.feed) this.feed.autoInstallOnAppQuit = false;
   }
@@ -180,7 +217,7 @@ export class Updater {
   }
 
   private async run(): Promise<void> {
-    if (this.disposed || this.armed || !this.allowed()) return;
+    if (this.disposed || this.ended || this.armed || !this.allowed()) return;
     if (!usableKey(this.deps.publicKey)) {
       if (!this.keySaid) this.warn('Mise à jour : cette version de Cirrus ne porte aucune clé de signature (update/key.ts) ; aucune mise à jour ne s’installe.');
       this.keySaid = true;
@@ -193,19 +230,44 @@ export class Updater {
     if (text === null || sig === null) return;
     const m = verifyManifest(text, sig, this.deps.publicKey);
     if (!m) return this.refuse('la signature de version.json ne correspond pas à la clé de Cirrus');
-    // Signed, but not newer: a server that says a newer version than it serves, an old manifest served again. Nothing.
-    if (!(compareVersions(m.version, this.deps.version) > 0) || text === this.refusedText) return;
+    // Signed, but not newer: nothing. A hello announced a newer one (M3): the server says a version it does not serve —
+    // said; a periodic check, or a format refused, finds the version it has: silent.
+    const announced = this.announced;
+    this.announced = null;
+    if (!(compareVersions(m.version, this.deps.version) > 0)) {
+      if (announced !== null) this.refuse(`le serveur annonce la version ${announced} à /hello, mais son manifeste signé est la ${m.version}`, NOT_SERVED);
+      return;
+    }
+    if (text === this.refusedText) return;
     const feed = await this.feedOf();
+    if (this.ended) return;
     this.manifest = { m, text };
     feed.autoInstallOnAppQuit = false;
-    feed.autoDownload = true;
+    // Nothing downloaded until latest.yml is known to name the signed installer (M2).
+    feed.autoDownload = false;
     feed.disableDifferentialDownload = true;
     feed.disableWebInstaller = true;
     feed.allowDowngrade = false;
     feed.requestHeaders = { Authorization: `Bearer ${server.token}` };
     feed.setFeedURL({ provider: 'generic', url: `${server.url}/versions/` });
     const found = await feed.checkForUpdates();
-    await found?.downloadPromise;
+    // Null: electron-updater inactive (an app run unpackaged).
+    if (!found || this.ended) return;
+    const mismatch = latestMismatch(found.updateInfo, m);
+    if (mismatch !== null) {
+      this.refusedText = text;
+      return this.refuse(mismatch);
+    }
+    if (!found.isUpdateAvailable) return;
+    try {
+      await feed.downloadUpdate();
+    } catch (e) {
+      // latest.yml pinned to the manifest, but other bytes served: electron-updater's own check failed. Refused for this
+      // manifest, rather than downloaded again at each check; any other failure is the network's, tried again later.
+      if ((e as { code?: unknown } | null)?.code !== 'ERR_CHECKSUM_MISMATCH') throw e;
+      this.refusedText = text;
+      return this.refuse('l’installateur servi n’a pas l’empreinte du manifeste signé');
+    }
     await this.verifying;
   }
 
@@ -248,17 +310,19 @@ export class Updater {
         this.refuse(`l’installateur téléchargé (${e.version}) n’a pas l’empreinte ni la taille du manifeste signé (${signed.m.version})`);
         return;
       }
+      // Disarmed meanwhile (M1): final.
+      if (this.ended) return;
       this.armed = true;
       feed.autoInstallOnAppQuit = true;
       this.deps.tell({ updateReady: true });
     })().catch((err: unknown) => this.warn(`Mise à jour : installateur non vérifié (${messageOf(err)}) ; rien n’est installé.`));
   }
 
-  /** Nothing installed; said once a session, in the console and by a notification. */
-  private refuse(why: string): void {
+  /** Nothing installed; said once a session, in the console and by a notification (`notice`). */
+  private refuse(why: string, notice = REFUSED): void {
     if (this.refusalSaid) return;
     this.refusalSaid = true;
     this.warn(`Mise à jour refusée : ${why}. Rien n’est installé.`);
-    this.deps.tell({ updateRefused: REFUSED });
+    this.deps.tell({ updateRefused: notice });
   }
 }

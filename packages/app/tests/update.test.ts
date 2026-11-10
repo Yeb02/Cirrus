@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, expect, test, vi } from 'vitest';
-import { devUpdatesOf, KEY_PLACEHOLDER, UPDATE_PUBLIC_KEY, updateKeyOf } from '../src/main/update/key.ts';
+import { devUpdatesOf, KEY_PLACEHOLDER, UPDATE_PUBLIC_KEY, updateKeyOf, updateModeOf } from '../src/main/update/key.ts';
 import { checkInstaller, compareVersions, type Manifest, verifyManifest } from '../src/main/update/manifest.ts';
-import { type FeedUpdater, REFUSED, Updater, type UpdaterDeps } from '../src/main/update/updater.ts';
+import { type FeedUpdater, type LatestInfo, NOT_SERVED, REFUSED, Updater, type UpdaterDeps } from '../src/main/update/updater.ts';
 import type { UpdateWord } from '../src/main/sync/protocol.ts';
 import { chipOf, UPDATE_READY as READY } from '../src/renderer/sync/syncSession.ts';
 import { AppPc } from './support/appPc.ts';
@@ -158,13 +158,21 @@ test('updateKeyOf : la clé de test (CIRRUS_UPDATE_PUBLIC_KEY) seulement sur une
 
 // ——— The updater ———
 
+/** latest.yml as electron-builder writes it for the installer of 0.1.2 (as electron-updater reads it), `fields` over it. */
+function latestYml(fields: Record<string, unknown> = {}): Record<string, unknown> {
+  const file = { url: 'Cirrus Setup 0.1.2.exe', sha512: installer.sha512, size: installer.bytes.length };
+  return { version: '0.1.2', files: [file], path: file.url, sha512: file.sha512, releaseDate: '2026-11-10T09:00:00.000Z', ...fields };
+}
+
 /**
- * electron-updater's autoUpdater as the updater drives it: what it was set to, its checks, its installs. A check finds
- * `download` (the version latest.yml says, the file it kept), downloads it and says so ('update-downloaded'), then, as
- * BaseUpdater does at once after, looks whether it would install at the app's quit by itself (`armedByItself`).
+ * electron-updater's autoUpdater as the updater drives it: what it was set to, its checks, its downloads, its installs.
+ * A check reads `latest` (latest.yml; null: the updater inactive, an app run unpackaged), and downloads at once when
+ * autoDownload is set, as electron-updater does. A download gives `download` (the version latest.yml says, the file it
+ * kept) and says so ('update-downloaded'), then, as BaseUpdater does at once after, looks whether it would install at the
+ * app's quit by itself (`armedByItself`).
  */
 class FakeFeed extends EventEmitter implements FeedUpdater {
-  autoDownload = false;
+  autoDownload = true;
   autoInstallOnAppQuit = true;
   disableDifferentialDownload = false;
   disableWebInstaller = false;
@@ -173,11 +181,15 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
   readonly feeds: unknown[] = [];
   /** At each check: autoInstallOnAppQuit then, and its settings. */
   readonly checks: { autoInstallOnAppQuit: boolean; autoDownload: boolean; differential: boolean; webInstaller: boolean; downgrade: boolean; headers: unknown }[] = [];
+  downloads = 0;
   readonly installs: [boolean | undefined, boolean | undefined][] = [];
   /** Whether electron-updater, right after its 'update-downloaded', would have added its own quit handler (BaseUpdater.addQuitHandler). */
   readonly armedByItself: boolean[] = [];
+  latest: Record<string, unknown> | null = null;
   download: { version: string; file: string } | null = null;
   fails: Error | null = null;
+  /** A download that fails (electron-updater's own sha512 check of latest.yml: ERR_CHECKSUM_MISMATCH). */
+  downloadFails: Error | null = null;
 
   setFeedURL(options: unknown): void {
     this.feeds.push(options);
@@ -189,15 +201,21 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
       downgrade: this.allowDowngrade, headers: this.requestHeaders,
     });
     if (this.fails) throw this.fails;
+    if (!this.latest) return null;
+    const updateInfo = this.latest as unknown as LatestInfo;
+    if (this.autoDownload) void this.downloadUpdate();
+    return { isUpdateAvailable: compareVersions(String(updateInfo.version), '0.1.1') > 0, updateInfo };
+  }
+
+  async downloadUpdate(): Promise<string[]> {
+    this.downloads++;
+    if (this.downloadFails) throw this.downloadFails;
     const d = this.download;
-    if (!d) return { downloadPromise: null };
-    const downloadPromise = (async () => {
-      await new Promise((r) => setTimeout(r, 1));
-      this.emit('update-downloaded', { version: d.version, downloadedFile: d.file });
-      this.armedByItself.push(this.autoInstallOnAppQuit);
-      return [d.file];
-    })();
-    return { downloadPromise };
+    if (!d) return [];
+    await new Promise((r) => setTimeout(r, 1));
+    this.emit('update-downloaded', { version: d.version, downloadedFile: d.file });
+    this.armedByItself.push(this.autoInstallOnAppQuit);
+    return [d.file];
   }
 
   install(isSilent?: boolean, isForceRunAfter?: boolean): boolean {
@@ -227,6 +245,7 @@ function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | num
     warn: (t) => warned.push(t),
     ...o,
   });
+  feed.latest = latestYml();
   return { u, feed, told, warned, asked, made: () => made };
 }
 
@@ -245,7 +264,9 @@ test('Updater (D4) : un /hello qui annonce une version plus récente ; le manife
   // electron-updater: the server's versions/, the token in a header; a full download, never differential nor a web
   // installer; never a downgrade; never installed at the quit by itself.
   expect(feed.feeds).toEqual([{ provider: 'generic', url: `${SERVER.url}/versions/` }]);
-  expect(feed.checks).toEqual([{ autoInstallOnAppQuit: false, autoDownload: true, differential: false, webInstaller: false, downgrade: false, headers: { Authorization: `Bearer ${SERVER.token}` } }]);
+  // latest.yml read first, nothing downloaded with it (M2); then, latest.yml being the signed manifest's, one download.
+  expect(feed.checks).toEqual([{ autoInstallOnAppQuit: false, autoDownload: false, differential: false, webInstaller: false, downgrade: false, headers: { Authorization: `Bearer ${SERVER.token}` } }]);
+  expect(feed.downloads).toBe(1);
   // Right after the download, unchecked: electron-updater does not arm itself.
   expect(feed.armedByItself).toEqual([false]);
   // Checked: armed — autoInstallOnAppQuit, and the app's quit installs it, silently.
@@ -305,7 +326,7 @@ test('Updater (Review Focus 2) : un installateur dont l’empreinte diffère du 
   u.dispose();
 });
 
-test('Updater : electron-updater rend une autre version que celle du manifeste signé — refusé', async () => {
+test('Updater : electron-updater dit avoir téléchargé une autre version que celle du manifeste signé — refusé (seconde couche)', async () => {
   setUp();
   const { u, feed, told } = updater({ files: published() });
   feed.download = { version: '0.1.3', file: installer.path };
@@ -317,16 +338,76 @@ test('Updater : electron-updater rend une autre version que celle du manifeste s
   u.dispose();
 });
 
-test('Updater (Review Focus 2) : un serveur qui ment sur sa version — /hello annonce 0.1.9, le manifeste signé est plus ancien ou égal : rien, ni refus', async () => {
+test('Updater (revue, M2) : un latest.yml hostile — autre version, deux fichiers, une adresse absolue, un autre nom, une autre empreinte, une autre taille, les droits d’administrateur, des paquets : rien n’est téléchargé, refusé', async () => {
+  setUp();
+  const file = (f: Record<string, unknown>) => ({ files: [{ url: 'Cirrus Setup 0.1.2.exe', sha512: installer.sha512, size: installer.bytes.length, ...f }] });
+  const hostile: Record<string, unknown>[] = [
+    { version: '0.1.3' }, { version: '0.1.1' },
+    { files: [latestYml().files, { url: 'autre.exe', sha512: installer.sha512, size: 1 }].flat() }, { files: [] }, { files: 'Cirrus Setup 0.1.2.exe' },
+    file({ url: 'https://ailleurs.example/Cirrus Setup 0.1.2.exe' }), file({ url: '../Cirrus Setup 0.1.2.exe' }), file({ url: 'Autre Setup 0.1.2.exe' }),
+    file({ sha512: createHash('sha512').update('autre').digest('base64') }), file({ size: installer.bytes.length + 1 }), file({ size: undefined }),
+    file({ isAdminRightsRequired: true }), { isAdminRightsRequired: true },
+    { packages: { x64: { path: 'paquet.7z', sha512: installer.sha512, size: 1 } } },
+  ];
+  for (const fields of hostile) {
+    const { u, feed, told, warned } = updater({ files: published() });
+    feed.latest = latestYml(fields);
+    feed.download = { version: '0.1.2', file: installer.path };
+    await u.heard('0.1.2');
+    expect(feed.checks, JSON.stringify(fields)).toHaveLength(1);
+    expect(feed.downloads, JSON.stringify(fields)).toBe(0);
+    expect(told, JSON.stringify(fields)).toEqual([{ updateRefused: REFUSED }]);
+    expect(warned.at(-1)).toMatch(/latest\.yml/);
+    // The same manifest is not tried again this session.
+    await u.heard('0.1.2');
+    expect(feed.checks).toHaveLength(1);
+    u.quit(0);
+    expect(feed.installs).toEqual([]);
+    u.dispose();
+  }
+});
+
+test('Updater (revue, M2) : latest.yml celui du manifeste, mais d’autres octets servis — la vérification d’electron-updater échoue : refusé, non retéléchargé ; une autre panne du téléchargement : réessayée, sans refus', async () => {
+  setUp();
+  const { u, feed, told } = updater({ files: published() });
+  feed.downloadFails = Object.assign(new Error('sha512 checksum mismatch'), { code: 'ERR_CHECKSUM_MISMATCH' });
+  await u.heard('0.1.2');
+  expect(told).toEqual([{ updateRefused: REFUSED }]);
+  await u.heard('0.1.2');
+  expect(feed.downloads).toBe(1);
+  u.dispose();
+  const net = updater({ files: published() });
+  net.feed.downloadFails = Object.assign(new Error('net::ERR_CONNECTION_RESET'), { code: 'ERR_CONNECTION_RESET' });
+  await net.u.heard('0.1.2');
+  expect(net.told).toEqual([]);
+  net.feed.downloadFails = null;
+  net.feed.download = { version: '0.1.2', file: installer.path };
+  await net.u.heard('0.1.2');
+  expect(net.feed.downloads).toBe(2);
+  expect(net.told).toEqual([{ updateReady: true }]);
+  net.u.dispose();
+});
+
+test('Updater (Review Focus 2 ; revue, M3) : un serveur qui ment sur sa version — /hello annonce 0.1.9, le manifeste signé est plus ancien ou égal : rien de téléchargé, refusé une fois ; la recherche périodique reste muette', async () => {
   setUp();
   for (const version of ['0.1.0', '0.1.1']) {
     const text = manifestText({ version });
-    const { u, feed, told } = updater({ files: published({ text }) });
+    const { u, feed, told, warned } = updater({ files: published({ text }) });
+    await u.heard('0.1.9');
     await u.heard('0.1.9');
     expect(feed.checks, version).toEqual([]);
-    expect(told, version).toEqual([]);
+    expect(told, version).toEqual([{ updateRefused: NOT_SERVED }]);
+    expect(warned.filter((w) => w.includes('annonce'))).toHaveLength(1);
+    // The same manifest found by a format refused, or the periodic check: nothing said.
+    const quiet = updater({ files: published({ text }) });
+    await quiet.u.formatRefused();
+    await quiet.u.check();
+    expect(quiet.told).toEqual([]);
+    expect(quiet.warned).toEqual([]);
     u.dispose();
+    quiet.u.dispose();
   }
+  expect(NOT_SERVED).toBe('Mise à jour refusée : le serveur annonce une version qu’il ne sert pas.');
 });
 
 test('Updater : /hello sans version, ou une plus ancienne, ou égale — rien n’est demandé', async () => {
@@ -378,7 +459,7 @@ test('Updater : toutes les updateCheckMs tant que la connexion est ouverte ; rie
   setUp();
   vi.useFakeTimers();
   let connected = false;
-  const { u, asked } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000 }) });
+  const { u, asked, told, warned } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000 }) });
   await vi.advanceTimersByTimeAsync(600_000);
   expect(asked).toEqual([]);
   connected = true;
@@ -386,9 +467,75 @@ test('Updater : toutes les updateCheckMs tant que la connexion est ouverte ; rie
   expect(asked).toEqual(['version.json', 'version.json.sig']);
   await vi.advanceTimersByTimeAsync(600_000);
   expect(asked).toHaveLength(4);
+  // The version this app has already: silent (M3).
+  expect(told).toEqual([]);
+  expect(warned).toEqual([]);
   u.dispose();
   await vi.advanceTimersByTimeAsync(3_600_000);
   expect(asked).toHaveLength(4);
+});
+
+test('Updater (revue, M1 et M5) : une fermeture pendant la vérification n’installe rien ; une relance qui désarme pendant la vérification est définitive — rien d’armé ensuite, ni cherché', async () => {
+  setUp();
+  let release!: (ok: boolean) => void;
+  const pending = () => new Promise<boolean>((r) => { release = r; });
+  // A quit while the installer is checked: not armed yet, nothing installed; armed once checked.
+  const first = updater({ files: published(), checkInstaller: pending });
+  first.feed.download = { version: '0.1.2', file: installer.path };
+  const looking = first.u.heard('0.1.2');
+  await until(() => first.feed.downloads === 1 && first.feed.armedByItself.length === 1);
+  first.u.quit(0);
+  expect(first.feed.installs).toEqual([]);
+  release(true);
+  await looking;
+  expect(first.told.at(-1)).toEqual({ updateReady: true });
+  first.u.dispose();
+  // Disarmed (the app starting again, D7) while the installer is checked: the check ends, nothing is armed, quit(0)
+  // installs nothing, and nothing more is looked for.
+  const second = updater({ files: published(), checkInstaller: pending });
+  second.feed.download = { version: '0.1.2', file: installer.path };
+  const again = second.u.heard('0.1.2');
+  await until(() => second.feed.downloads === 1 && second.feed.armedByItself.length === 1);
+  second.u.disarm();
+  release(true);
+  await again;
+  expect(second.feed.autoInstallOnAppQuit).toBe(false);
+  expect(second.told).toEqual([]);
+  second.u.quit(0);
+  expect(second.feed.installs).toEqual([]);
+  await second.u.heard('0.1.3');
+  await second.u.check();
+  expect(second.asked).toHaveLength(2);
+  second.u.dispose();
+});
+
+test('updateModeOf (revue, I1) : une clé d’essai n’installe jamais, quelle que soit la variante ; « Cirrus Dev » ne cherche qu’avec CIRRUS_UPDATE_DEV=1 et la clé d’essai', () => {
+  const testBase = { CIRRUS_DATA: 'C:\\essai', CIRRUS_BACKGROUND: '1' }, testKey = { CIRRUS_UPDATE_PUBLIC_KEY: key.pub };
+  // The official app: the key it carries, installs.
+  expect(updateModeOf({}, false, false)).toEqual({ publicKey: UPDATE_PUBLIC_KEY, dev: false, neverInstall: false });
+  // The official app with a test key on a test base, without CIRRUS_UPDATE_DEV: checked by the test key, never installed.
+  expect(updateModeOf({ ...testBase, ...testKey }, false, false)).toEqual({ publicKey: key.pub, dev: false, neverInstall: true });
+  expect(updateModeOf({ CIRRUS_DATA: 'C:\\essai', ...testKey }, true, false)).toEqual({ publicKey: key.pub, dev: false, neverInstall: true });
+  // A test key outside a test base: ignored, the app's own key.
+  expect(updateModeOf({ ...testKey }, false, false)).toEqual({ publicKey: UPDATE_PUBLIC_KEY, dev: false, neverInstall: false });
+  expect(updateModeOf({ CIRRUS_DATA: 'C:\\essai', ...testKey, CIRRUS_UPDATE_DEV: '1' }, false, true)).toEqual({ publicKey: UPDATE_PUBLIC_KEY, dev: true, neverInstall: false });
+  // « Cirrus Dev »: never, but with CIRRUS_UPDATE_DEV=1 and the test key — never installing then either.
+  expect(updateModeOf({}, false, true)).toEqual({ publicKey: UPDATE_PUBLIC_KEY, dev: true, neverInstall: false });
+  expect(updateModeOf({ ...testBase, CIRRUS_UPDATE_DEV: '1' }, false, true)).toEqual({ publicKey: UPDATE_PUBLIC_KEY, dev: true, neverInstall: false });
+  expect(updateModeOf({ ...testBase, ...testKey }, false, true)).toEqual({ publicKey: key.pub, dev: true, neverInstall: true });
+  expect(updateModeOf({ ...testBase, ...testKey, CIRRUS_UPDATE_DEV: '1' }, false, true)).toEqual({ publicKey: key.pub, dev: false, neverInstall: true });
+});
+
+test('updateModeOf → Updater (revue, I1) : l’app officielle avec une clé d’essai arme une mise à jour signée par elle, et sa fermeture n’installe rien', async () => {
+  setUp();
+  const mode = updateModeOf({ CIRRUS_DATA: 'C:\\essai', CIRRUS_BACKGROUND: '1', CIRRUS_UPDATE_PUBLIC_KEY: key.pub }, false, false);
+  const { u, feed, told } = updater({ files: published(), ...mode });
+  feed.download = { version: '0.1.2', file: installer.path };
+  await u.heard('0.1.2');
+  expect(told.at(-1)).toEqual({ updateReady: true });
+  u.quit(0);
+  expect(feed.installs).toEqual([]);
+  u.dispose();
 });
 
 test('Updater : armée, plus rien n’est cherché ni téléchargé ; une relance (base prise du serveur) la désarme ; une sortie en erreur n’installe pas', async () => {
@@ -528,27 +675,43 @@ test('signer-version.mjs (D6) : version.json et sa signature écrits depuis l’
   expect(existsSync(join(dist, 'version.json.sig'))).toBe(false);
 });
 
-test('cle-de-signature.mjs (D4) : la clé publique écrite dans key.ts, la privée affichée seulement, jamais écrite ; une clé déjà là n’est remplacée qu’à la demande', async () => {
+test('cle-de-signature.mjs (D4 ; revue, M4) : la clé publique écrite dans key.ts ; la privée jamais sur une sortie qui n’est pas un terminal, mais dans le fichier neuf que nomme --fichier ; une clé déjà là n’est remplacée qu’à la demande', async () => {
   setUp();
-  const copy = join(dir, 'key.ts');
-  copyFileSync(join(import.meta.dirname, '..', 'src', 'main', 'update', 'key.ts'), copy);
+  const copy = join(dir, 'key.ts'), original = join(import.meta.dirname, '..', 'src', 'main', 'update', 'key.ts');
+  copyFileSync(original, copy);
   const script = join(ROOT, 'deploy', 'cle-de-signature.mjs');
-  const { stdout } = await run(process.execPath, [script, '--fichier', copy]);
-  const pem = /-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/.exec(stdout)?.[0];
-  expect(pem).toBeDefined();
+  // Its output a pipe (not a terminal), no --fichier: refused before anything is made; key.ts untouched.
+  const refused = await run(process.execPath, [script, '--source', copy]).then(() => null, (e: { stdout: string; stderr: string }) => e);
+  expect(refused).not.toBeNull();
+  expect(refused!.stderr).toMatch(/terminal/);
+  expect(`${refused!.stdout}${refused!.stderr}`).not.toMatch(/PRIVATE KEY/);
+  expect(readFileSync(copy, 'utf8')).toBe(readFileSync(original, 'utf8'));
+  // --fichier: the private key in that new file, never on the output.
+  const pemFile = join(dir, 'cle-privee.pem');
+  const { stdout } = await run(process.execPath, [script, '--source', copy, '--fichier', pemFile]);
+  expect(stdout).not.toMatch(/PRIVATE KEY/);
+  expect(stdout).toMatch(/EFFACE/);
+  const pem = readFileSync(pemFile, 'utf8');
+  expect(pem).toMatch(/^-----BEGIN PRIVATE KEY-----[\s\S]+-----END PRIVATE KEY-----\n$/);
   const pub = /UPDATE_PUBLIC_KEY(?:: string)? = '([^']*)'/.exec(readFileSync(copy, 'utf8'))?.[1];
   expect(pub).toBeDefined();
   expect(pub).not.toBe(KEY_PLACEHOLDER);
   // The pair is one: what the private key signs, the public key in key.ts verifies.
   const text = manifestText();
-  const sig = sign(null, Buffer.from(text), pem!).toString('base64');
+  const sig = sign(null, Buffer.from(text), pem).toString('base64');
   expect(verifyManifest(text, sig, pub!)).not.toBeNull();
   expect(verify(null, Buffer.from(text), { key: Buffer.from(pub!, 'base64'), format: 'der', type: 'spki' }, Buffer.from(sig, 'base64'))).toBe(true);
-  // Nothing else written: no private key on the disk.
-  expect(readdirSync(dir).sort()).toEqual(['Cirrus Setup 0.1.2.exe', 'key.ts']);
-  // Again: refused, key.ts untouched; with --remplacer, a new one.
-  await expect(run(process.execPath, [script, '--fichier', copy])).rejects.toThrow();
+  // Nothing else written.
+  expect(readdirSync(dir).sort()).toEqual(['Cirrus Setup 0.1.2.exe', 'cle-privee.pem', 'key.ts']);
+  // Again: a key already in key.ts is refused, key.ts untouched; with --remplacer, but a --fichier that exists: refused,
+  // neither the file nor key.ts changed; with a new file, a new pair.
+  await expect(run(process.execPath, [script, '--source', copy, '--fichier', join(dir, 'autre.pem')])).rejects.toThrow();
   expect(readFileSync(copy, 'utf8')).toContain(pub!);
-  await run(process.execPath, [script, '--fichier', copy, '--remplacer']);
+  await expect(run(process.execPath, [script, '--source', copy, '--fichier', pemFile, '--remplacer'])).rejects.toThrow();
+  expect(readFileSync(pemFile, 'utf8')).toBe(pem);
+  expect(readFileSync(copy, 'utf8')).toContain(pub!);
+  await run(process.execPath, [script, '--source', copy, '--fichier', join(dir, 'autre.pem'), '--remplacer']);
   expect(readFileSync(copy, 'utf8')).not.toContain(pub!);
+  // The repository's key.ts never touched by these runs.
+  expect(readFileSync(original, 'utf8')).toContain(KEY_PLACEHOLDER);
 });
