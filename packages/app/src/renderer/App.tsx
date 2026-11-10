@@ -5,6 +5,7 @@ import type { ImportResult } from '../main/files.ts';
 import { type Build, deleteAnnotationBuild, preambleBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
+import { inputProbe, runIdleSlices } from './search/idle.ts';
 import { SearchBuild, type SearchHit, SearchIndex, type SearchWhere } from './search/index.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
@@ -47,12 +48,11 @@ const NODE_GONE = 'Ce nœud n’existe plus.';
 const RESULT_GONE = 'Ce résultat n’est plus là : il a été jeté, ou retiré de son plan.';
 const NOTHING_FOUND: Id[] = [];
 /**
- * The search index's builds by slices take the idle moments (plan 6a, D1), searchBuildSliceMs at most each; a slice
- * waits this long at most for one, so that a window always busy still builds it.
+ * The search index's builds by slices take the idle moments (plan 6a, D1), searchBuildSliceMs at most each slice; a moment
+ * holds as many slices as it has time and no input waits for (search/idle.ts), one where the page cannot tell. A request
+ * waits this long at most for a moment, so that a window always busy still builds it.
  */
 const SEARCH_IDLE: IdleRequestOptions = { timeout: 200 };
-/** The end of a slice begun in this idle moment: searchBuildSliceMs at most, what the moment leaves if less (1 ms at least). */
-const sliceEnd = (idle: IdleDeadline, sliceMs: number) => performance.now() + Math.min(sliceMs, Math.max(1, idle.timeRemaining()));
 /** The preamble's full screen, with CodeMirror and pdf.js, in its own chunk (as the .tex workbench: FullScreen.tsx). */
 const PreambleEditor = lazy(() => loading(import('./ui/latex/PreambleEditor.tsx')).then((m) => ({ default: m.PreambleEditor })));
 /** The comparison of a .tex with its conflict copy (plan 5b, D7), with @codemirror/merge, in its own chunk too. */
@@ -354,8 +354,10 @@ export function App() {
     searchLog.current = [];
     const job = new SearchBuild(state, textsRef.current);
     let handle = 0;
+    const pending = inputProbe();
     const slice = (idle: IdleDeadline) => {
-      const done = job.step(sliceEnd(idle, paramsRef.current.searchBuildSliceMs));
+      let done = null as SearchIndex | null;
+      runIdleSlices(idle, paramsRef.current.searchBuildSliceMs, (end) => (done = job.step(end)) !== null, pending);
       if (done) setSearchBase(done); else handle = requestIdleCallback(slice, SEARCH_IDLE);
     };
     handle = requestIdleCallback(slice, SEARCH_IDLE);
@@ -380,11 +382,17 @@ export function App() {
   // moments, as the whole build, never in a render; one reading at a time, for the storage of this whole build.
   useEffect(() => {
     if (!searchIndex || searchIndex.pending === 0 || searchRefresh.current?.base === searchBase) return;
-    const job = searchIndex.refresh(), base = searchBase!;
+    const job = searchIndex.refresh(), base = searchBase!, pending = inputProbe();
     const slice = (idle: IdleDeadline) => {
-      const r = job.step(sliceEnd(idle, paramsRef.current.searchBuildSliceMs));
-      if (r.done) searchRefresh.current = null; else searchRefresh.current = { base, handle: requestIdleCallback(slice, SEARCH_IDLE) };
-      if (r.wrote) setSearchTick((t) => t + 1);
+      // Each slice's result counts: a write in any of them makes a new index (the last slice's `done` ends the moment's loop).
+      let wrote = false, finished = false;
+      runIdleSlices(idle, paramsRef.current.searchBuildSliceMs, (end) => {
+        const r = job.step(end);
+        wrote ||= r.wrote;
+        return (finished = r.done);
+      }, pending);
+      if (finished) searchRefresh.current = null; else searchRefresh.current = { base, handle: requestIdleCallback(slice, SEARCH_IDLE) };
+      if (wrote) setSearchTick((t) => t + 1);
     };
     searchRefresh.current = { base, handle: requestIdleCallback(slice, SEARCH_IDLE) };
   }, [searchIndex]);
