@@ -1,27 +1,39 @@
-# Each push to main: Cirrus built and tested on Windows, then, with the signing key in the repository's secrets, its
-# manifest signed and the version published as the release v0.1.<n> (plan 9, D6). The rented server takes it within the
-# hour (deploy/mettre-a-jour.sh), and the PCs at their next connection. Without the secret, the version is built and
-# tested, and nothing is published: the job's summary says so.
+# Each push to main that changes the software: Cirrus built and tested on Windows, then, with the signing key in the
+# repository's secrets, its manifest signed and the version published as the release v0.1.<n> (plan 9, D6). The rented
+# server takes it within the hour (deploy/mettre-a-jour.sh), and the PCs at their next connection. Without the secret,
+# the version is built and tested, and nothing is published: the summary says so.
+#
+# Two jobs (review of task 6, I2): `build` runs npm ci, every dependency, the tests and electron-builder, with a read-only
+# token and no secret; `publish` gets the installer as an artifact, signs and publishes from a fresh checkout, running no
+# npm ci and no dependency's code (scripts/signer-version.mjs imports only node: modules): the signing key and the write
+# token never meet third-party code.
+#
+# Do not rename this file: the version's number is its run_number, which a new workflow starts again from 1.
 name: Version
 
 on:
   push:
     branches: [main]
+    # A push that changes only docs changes no app: no version (review of task 6, M4; registry, task 6, fix round 1).
+    paths-ignore: ['docs/**', '**.md']
 
 permissions:
-  contents: write
+  contents: read
 
 # One run at a time, in the order of the pushes: v0.1.<n> is never published after v0.1.<n+1>.
 concurrency:
   group: version
   cancel-in-progress: false
 
+env:
+  VERSION: 0.1.${{ github.run_number }}
+
 jobs:
-  version:
+  build:
     runs-on: windows-latest
     timeout-minutes: 90
-    env:
-      VERSION: 0.1.${{ github.run_number }}
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
@@ -31,10 +43,12 @@ jobs:
       - name: Fins de ligne du dépôt
         run: git config --global core.autocrlf false
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # Node 26: the packages are TypeScript that Node runs itself (types stripped), and the server needs node:sqlite.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '26'
           cache: npm
@@ -55,8 +69,9 @@ jobs:
       # Each package's suite, one file at a time, as on the user's PC (--maxWorkers=1). The runner being slower than that
       # PC, the default delay of a test and of a hook is raised, and a test that fails is tried once more. Nothing here
       # needs Electron or a display: every test runs under Node, and none imports Electron (electron-updater is loaded
-      # only by import(), and mocked by its test); the interface's scenarios, the captures and the benches (packages/app/scripts) are not run in the CI. The LaTeX
-      # tests skip themselves without TinyTeX (texTest: bench/latex/vendor/TinyTeX or CIRRUS_TINYTEX, neither here).
+      # only by import(), and replaced by its test); the interface's scenarios, the captures and the benches
+      # (packages/app/scripts) are not run in the CI. The LaTeX tests skip themselves without TinyTeX (texTest:
+      # bench/latex/vendor/TinyTeX or CIRRUS_TINYTEX, neither here).
       # Left to the next step: the measures of the reference base (core and store scale.test.ts, view scale-perf.test.ts),
       # which hold the user's PC to its targets in milliseconds (plan 3c) and mean nothing on a shared runner.
       - name: Tests
@@ -85,7 +100,24 @@ jobs:
       - name: Installateur ${{ env.VERSION }}
         run: npm run paquet -w packages/app -- "-c.extraMetadata.version=$VERSION"
 
-      # The secret reaches only this step and the signature's, never npm ci nor the tests.
+      # What the publish job signs and publishes: the installer and latest.yml, nothing of node_modules.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installateur
+          path: |
+            packages/app/dist/*.exe
+            packages/app/dist/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      # The secret reaches only this step and the signature's.
       - name: Clé de signature
         id: cle
         env:
@@ -99,24 +131,37 @@ jobs:
             echo "::notice::Pas de clé de signature : version construite et testée, rien n'est publié."
           fi
 
+      # A fresh tree at the commit built: the signer and key.ts, which it checks the secret against. No npm ci.
+      - uses: actions/checkout@v5
+        if: steps.cle.outputs.presente == 'oui'
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        if: steps.cle.outputs.presente == 'oui'
+        with:
+          name: installateur
+          path: dist
+
       # version.json { version, file, sha512, size, date } and version.json.sig, beside the installer; refused if the
-      # secret is not the pair of the public key in packages/app/src/main/update/key.ts.
+      # secret is not the pair of the public key in packages/app/src/main/update/key.ts. The runner's own Node: the
+      # signer needs only node:crypto, node:fs, node:path and node:url (ed25519 since Node 12).
       - name: Signature du manifeste
         if: steps.cle.outputs.presente == 'oui'
         env:
           CIRRUS_SIGNING_KEY: ${{ secrets.CIRRUS_SIGNING_KEY }}
-        run: node packages/app/scripts/signer-version.mjs packages/app/dist
+        run: node packages/app/scripts/signer-version.mjs dist
 
       # The tag made on the commit built. GitHub renames the installer's spaces into dots; the server finds it as the
       # release's only .exe, and places it under the name of the signed manifest.
       - name: Publication de v${{ env.VERSION }}
         if: steps.cle.outputs.presente == 'oui'
-        working-directory: packages/app/dist
+        working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           installateur=$(node -p "require('./version.json').file")
           gh release create "v$VERSION" "$installateur" latest.yml version.json version.json.sig \
-            --target "$GITHUB_SHA" --title "Cirrus $VERSION" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Cirrus $VERSION" \
             --notes "Construite et signée par la CI depuis $GITHUB_SHA. Le serveur la prend dans l'heure, les PC à leur connexion suivante."
           echo "Version $VERSION publiée : $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/v$VERSION" >> "$GITHUB_STEP_SUMMARY"
