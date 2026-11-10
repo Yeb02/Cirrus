@@ -1,6 +1,6 @@
 import { ANNOTATION_TITLE_CHARS } from '@cirrus/core';
 import { expect, test } from 'vitest';
-import { DEFAULT_PARAMS, diffFromDefaults, PARAM_RUBRICS, PARAM_SPECS, withOverrides } from '../src/params.ts';
+import { DEFAULT_PARAMS, diffFromDefaults, PARAM_RUBRICS, PARAM_SPECS, settingValue, withOverrides } from '../src/params.ts';
 import { sceneParamsKey } from '../src/scene.ts';
 
 test('seuls les écarts aux défauts sont écrits, et l’aller-retour est exact', () => {
@@ -433,18 +433,25 @@ test('précédent et suivant : navHistoryMax, réglage avancé du groupe « Rech
   expect(withOverrides({ navHistoryMax: 1e9 })).toMatchObject({ navHistoryMax: 1000 });
 });
 
-test('les consultations (plan 6a, D6, tâche 5) : l’interrupteur est un nombre de 0 à 1 (aucun réglage à deux états), 1 par défaut ; l’envoi par lots toutes les 10 s, de 1 s à 10 min ; groupe « Consultations » de « Performances et base »', () => {
-  expect(PARAM_SPECS.some((s) => (s.kind as string) === 'boolean')).toBe(false);
-  expect(DEFAULT_PARAMS.consultationsRecord).toBe(1);
+test('les consultations (plan 6a, D6, tâche 5) : l’interrupteur est un choix Oui/Non (yes par défaut), qui s’éteint de lui-même sur toute autre valeur ; l’envoi par lots toutes les 10 s, de 1 s à 10 min ; groupe « Consultations » de « Performances et base »', () => {
+  expect(DEFAULT_PARAMS.consultationsRecord).toBe('yes');
   expect(DEFAULT_PARAMS.consultationsFlushMs).toBe(10_000);
   expect(PARAM_SPECS.find((s) => s.key === 'consultationsRecord')).toEqual({
-    key: 'consultationsRecord', label: 'Enregistrer mes consultations (1 : oui, 0 : non)', section: 'graphique', group: 'Consultations', kind: 'number', min: 0, max: 1, step: 1,
+    key: 'consultationsRecord', label: 'Enregistrer mes consultations', section: 'graphique', group: 'Consultations', kind: 'choice',
+    choices: [{ value: 'yes', label: 'Oui' }, { value: 'no', label: 'Non' }], invalid: 'no',
   });
   expect(PARAM_SPECS.find((s) => s.key === 'consultationsFlushMs')).toEqual({
     key: 'consultationsFlushMs', label: 'Délai entre deux enregistrements des consultations sur le disque (ms)', section: 'avancé', group: 'Consultations', kind: 'number', min: 1000, max: 600_000, step: 1000,
   });
   expect(PARAM_RUBRICS.find((r) => r.title === 'Performances et base')!.groups).toEqual(['Rendu', 'Base', 'Consultations']);
-  expect(withOverrides({ consultationsRecord: 0, consultationsFlushMs: 5 })).toMatchObject({ consultationsRecord: 0, consultationsFlushMs: 1000 });
-  expect(withOverrides({ consultationsRecord: 7, consultationsFlushMs: 1e12 })).toMatchObject({ consultationsRecord: 1, consultationsFlushMs: 600_000 });
-  expect(withOverrides({ consultationsRecord: 'non' })).toMatchObject({ consultationsRecord: 1 });
+  expect(withOverrides({ consultationsRecord: 'no', consultationsFlushMs: 5 })).toMatchObject({ consultationsRecord: 'no', consultationsFlushMs: 1000 });
+  expect(withOverrides({ consultationsFlushMs: 1e12 })).toMatchObject({ consultationsRecord: 'yes', consultationsFlushMs: 600_000 });
+  // The switch fails closed: a stored value that is neither reads as 'no' (a hand-edited file, a number, null), not as the default;
+  // absent, it is the default; and no other setting does the same.
+  for (const corrupt of [0, 1, true, null, 'oui', 'YES', '', ['yes']]) {
+    expect(withOverrides({ consultationsRecord: corrupt }), String(corrupt)).toMatchObject({ consultationsRecord: 'no' });
+  }
+  expect(withOverrides({})).toMatchObject({ consultationsRecord: 'yes' });
+  expect(PARAM_SPECS.filter((s) => s.invalid !== undefined).map((s) => s.key)).toEqual(['consultationsRecord']);
+  expect(settingValue('consultationsRecord', 'oui')).toBeUndefined();
 });

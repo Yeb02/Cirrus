@@ -104,6 +104,13 @@ export class ConsultationQueue {
     }
   }
 
+  /** The switch turned off: what waits is dropped, and nothing is awake for it. */
+  clear(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.events = [];
+  }
+
   /** Closing: what waits goes now, once; a failed attempt is dropped silently. */
   finish(): void {
     clearTimeout(this.timer);
@@ -124,9 +131,13 @@ export class ConsultationQueue {
   }
 }
 
-/** The recording as the settings have it: on if the switch is 1, never in bench and capture modes (they measure, they do not use). */
+/**
+ * The recording as the settings have it: on only if the switch is exactly 'yes', and never in bench and capture modes (they
+ * measure, they do not use). Any other value — a settings file edited by hand, a setting of another version — is off: a
+ * privacy switch fails closed.
+ */
 export function consultationSettings(p: Pick<RenderParams, 'consultationsRecord' | 'consultationsFlushMs'>, measuring: boolean): { record: boolean; flushMs: number } {
-  return { record: !measuring && p.consultationsRecord >= 1, flushMs: p.consultationsFlushMs };
+  return { record: !measuring && p.consultationsRecord === 'yes', flushMs: p.consultationsFlushMs };
 }
 
 /** A plan shown (App's active tab): none while the state is not there. */
@@ -189,8 +200,12 @@ export const consultations = new ConsultationQueue({
   plan: () => planShown(),
 });
 
-/** The settings as they now are (consultationSettings), and where the plan shown is read. */
+/**
+ * The settings as they now are (consultationSettings), and where the plan shown is read. Turned off, the queue is emptied
+ * at once: the events that waited were made under the switch's old value and are not written (« éteint : rien n'est écrit »).
+ */
 export function configureConsultations(next: { record: boolean; flushMs: number }, plan?: () => Id | undefined): void {
   settings = next;
   if (plan) planShown = plan;
+  if (!next.record) consultations.clear();
 }

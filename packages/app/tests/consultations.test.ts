@@ -1,16 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MAX_ID_CHARS } from '@cirrus/core';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { openBase } from '../src/main/base.ts';
 import { CONSULTATIONS_FILE, Consultations, parseConsultations } from '../src/main/consultations.ts';
 import { READY_FILE, stagedDir } from '../src/main/sync/firstSync.ts';
 import { swapStaged } from '../src/main/sync/swap.ts';
 import {
-  CONSULTATION_KINDS, type Consultation, ConsultationQueue, consultationSettings, connectionDrafts, FocusTracker, jumpDraft, MAX_CONSULTATION_BATCH,
-  MAX_DETAIL_CHARS, planShownDraft, searchDraft,
+  CONSULTATION_KINDS, configureConsultations, type Consultation, ConsultationQueue, consultations, consultationSettings, connectionDrafts, FocusTracker, jumpDraft,
+  MAX_CONSULTATION_BATCH, MAX_DETAIL_CHARS, planShownDraft, searchDraft,
 } from '../src/renderer/consultations.ts';
 import { type JumpHost, Jumps } from '../src/renderer/ui/graph/jumps.ts';
 import { openedPanels, type Panel, withFile, withLinked, withNode, withoutLoose } from '../src/renderer/ui/panels/Panels.tsx';
@@ -199,6 +200,47 @@ test('un fichier verrouillé par un autre : le lot est perdu avec un avertisseme
   c.close();
 });
 
+test('un lot refusé par la validation ne lâche pas la connexion ni ne couvre l’avertissement d’un fichier : les deux avertissements sont séparés', () => {
+  const dir = folder();
+  const c = Consultations.open(dir, 'pc-1');
+  c.write([ev('app_open', 1)]);
+  // A bad batch: said once (the validation's own flag), the file still open and in use.
+  c.write('pas un lot');
+  c.write('pas un lot non plus');
+  expect(warn).toHaveBeenCalledTimes(1);
+  // A damaged file's failure is said though the validation was, and a bad batch after it is not said again.
+  const other = new DatabaseSync(join(dir, CONSULTATIONS_FILE));
+  other.exec('BEGIN IMMEDIATE');
+  c.write([ev('focus', 2)]);
+  expect(warn).toHaveBeenCalledTimes(2);
+  c.write([ev('focus', 3)]);
+  c.write('encore un mauvais lot');
+  expect(warn).toHaveBeenCalledTimes(2);
+  other.exec('ROLLBACK');
+  other.close();
+  c.write([ev('focus', 4)]);
+  expect(rows(dir).map((r) => r.at)).toEqual([1, 4]);
+  // Each flag is reset by a write that succeeded: the next bad batch is said again, and so is the next I/O failure.
+  c.write('un dernier mauvais lot');
+  expect(warn).toHaveBeenCalledTimes(3);
+  c.close();
+});
+
+test('un lot refusé par la validation laisse la connexion ouverte : le lot suivant s’écrit dans la même, et seul close() la lâche', () => {
+  const dir = folder();
+  const c = Consultations.open(dir, 'pc-1');
+  c.write([ev('app_open', 1)]);
+  const spy = vi.spyOn(DatabaseSync.prototype, 'close');
+  c.write([{ at: 2, kind: 'inconnu' }]);
+  expect(spy).not.toHaveBeenCalled();
+  c.write([ev('focus', 3)]);
+  expect(spy).not.toHaveBeenCalled();
+  c.close();
+  expect(spy).toHaveBeenCalledTimes(1);
+  spy.mockRestore();
+  expect(rows(dir).map((r) => r.at)).toEqual([1, 3]);
+});
+
 test('un dossier absent : le lot est perdu avec un avertissement, sans lever', () => {
   const c = Consultations.open(join(folder(), 'absent'), 'pc-1');
   expect(() => c.write([ev('app_open', 1)])).not.toThrow();
@@ -237,6 +279,80 @@ test('une base prise du serveur prend la place de celle-ci : les consultations d
   again.write([ev('app_open', 3)]);
   again.close();
   expect(rows(dir).map((r) => r.at)).toEqual([1, 2, 3]);
+});
+
+// The swap's care of the file (fix round 1, Important 2). The old base is `ancienne` (a file no store opens: not blank) or a
+// base as its first opening made it (blank); the staged one is `prise`.
+const DAY = new Date(2026, 10, 8);
+const SWAP = { tries: 1, pauseMs: 0 };
+const MOVED = ['', '-wal', '-shm'].map((x) => CONSULTATIONS_FILE + x);
+/** The swap's rename, refusing the files whose name ends with `what`, as a program holding them would (EPERM). */
+const refusing = (what: string) => (from: string, to: string) => {
+  if (from.endsWith(what)) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
+  renameSync(from, to);
+};
+/** A base folder with its consultations (and, `leftover`, the -wal and -shm of a file never closed) and a staged base beside it. */
+function swapSetup(blank: boolean, leftover = false) {
+  const root = folder();
+  const dir = join(root, 'base'), staged = stagedDir(dir), archive = join(root, 'base-avant-jumelage-2026-11-08');
+  if (blank) openBase(dir).close();
+  else {
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'cirrus.db'), 'ancienne');
+  }
+  writeFileSync(join(dir, CONSULTATIONS_FILE), 'événements');
+  if (leftover) for (const x of ['-wal', '-shm']) writeFileSync(join(dir, CONSULTATIONS_FILE + x), `reste${x}`);
+  mkdirSync(staged);
+  writeFileSync(join(staged, 'cirrus.db'), 'prise');
+  writeFileSync(join(staged, READY_FILE), '{}');
+  return { root, dir, archive };
+}
+const texts = (dir: string) => MOVED.map((f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), 'utf8') : null));
+
+test.each([['non vierge', false], ['vierge', true]])('l’échange emmène le fichier avec ses -wal et -shm, qu’une fermeture par app.quit() a pu laisser (base %s) ; une base vierge est alors effacée', (_what, blank) => {
+  const { dir, archive } = swapSetup(blank, true);
+  expect(swapStaged(dir, DAY, SWAP)).toBe('swapped');
+  expect(texts(dir)).toEqual(['événements', 'reste-wal', 'reste-shm']);
+  expect(texts(archive)).toEqual([null, null, null]);
+  expect(existsSync(archive)).toBe(!blank);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test.each([['non vierge', false], ['vierge', true]])('un fichier de consultations dont le renommage est refusé : l’échange se fait, un avertissement, et l’ancien dossier est gardé avec lui, même d’une base vierge (base %s)', (_what, blank) => {
+  const { dir, archive } = swapSetup(blank);
+  expect(swapStaged(dir, DAY, { ...SWAP, rename: refusing(CONSULTATIONS_FILE) })).toBe('swapped');
+  expect(readFileSync(join(dir, 'cirrus.db'), 'utf8')).toBe('prise');
+  expect(texts(dir)).toEqual([null, null, null]);
+  expect(texts(archive)).toEqual(['événements', null, null]);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0][0])).toContain('Consultations de ce PC non reprises');
+  expect(String(warn.mock.calls[0][0])).toContain(archive);
+});
+
+test('un -wal refusé après le fichier : l’ancien dossier est gardé aussi (il tient encore ce -wal), un avertissement', () => {
+  const { dir, archive } = swapSetup(true, true);
+  expect(swapStaged(dir, DAY, { ...SWAP, rename: refusing('-wal') })).toBe('swapped');
+  expect(texts(archive)).toEqual([null, 'reste-wal', 'reste-shm']);
+  expect(warn).toHaveBeenCalledTimes(1);
+});
+
+test.each([['non vierge', false], ['vierge', true]])('la nouvelle base a déjà un fichier de consultations : le sien est gardé, tout l’ensemble de l’ancienne reste dans son dossier, qui n’est pas effacé (base %s)', (_what, blank) => {
+  const { dir, archive } = swapSetup(blank, true);
+  // The base taken from the server would hold one already (it should not).
+  const staged = stagedDir(dir);
+  writeFileSync(join(staged, CONSULTATIONS_FILE), 'neuf');
+  expect(swapStaged(dir, DAY, SWAP)).toBe('swapped');
+  expect(texts(dir)).toEqual(['neuf', null, null]);
+  expect(texts(archive)).toEqual(['événements', 'reste-wal', 'reste-shm']);
+  expect(warn).toHaveBeenCalledTimes(1);
+});
+
+test('une base vierge sans consultations est effacée comme avant, sans avertissement', () => {
+  const { dir, archive } = swapSetup(true);
+  rmSync(join(dir, CONSULTATIONS_FILE));
+  expect(swapStaged(dir, DAY, SWAP)).toBe('swapped');
+  expect([existsSync(archive), texts(dir)]).toEqual([false, [null, null, null]]);
+  expect(warn).not.toHaveBeenCalled();
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -304,6 +420,37 @@ test('l’interrupteur : éteint, rien n’est mis en file, rien n’est envoyé
   q.finish();
   expect(sent).toHaveLength(1);
   expect(sent[0].map((e) => e.kind)).toEqual(['focus']);
+});
+
+test('configureConsultations : éteindre l’interrupteur vide la file tout de suite (ce qui attendait n’est jamais écrit, même rallumé), le rallumer n’y remet rien', () => {
+  vi.useFakeTimers();
+  const sent: Consultation[][] = [];
+  configureConsultations({ record: true, flushMs: 10_000 }, () => 'p1');
+  const window = globalThis as unknown as { window?: unknown };
+  const had = window.window;
+  window.window = { cirrus: { recordConsultations: (events: Consultation[]) => sent.push(events) } };
+  try {
+    consultations.record({ kind: 'app_open' });
+    consultations.record({ kind: 'focus' });
+    expect(consultations.size).toBe(2);
+    configureConsultations({ record: false, flushMs: 10_000 });
+    expect(consultations.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    configureConsultations({ record: true, flushMs: 10_000 });
+    expect(consultations.size).toBe(0);
+    vi.advanceTimersByTime(60_000);
+    consultations.finish();
+    expect(sent).toEqual([]);
+    // A later change of the interval alone keeps what waits.
+    consultations.record({ kind: 'blur' });
+    configureConsultations({ record: true, flushMs: 2000 });
+    expect(consultations.size).toBe(1);
+    consultations.finish();
+    expect(sent.map((b) => b.map((e) => e.kind))).toEqual([['blur']]);
+  } finally {
+    window.window = had;
+    configureConsultations({ record: false, flushMs: 10_000 });
+  }
 });
 
 test('à la fermeture, finish envoie tout de suite ce qui attend et arrête le minuteur ; rien à envoyer, rien n’est envoyé', () => {
@@ -394,10 +541,13 @@ test('les champs absents ne sont pas écrits dans l’événement, le plan du br
 // ---------------------------------------------------------------------------------------------------------------------
 // The emission points: what each decides, without a window.
 
-test('le réglage : enregistrer si l’interrupteur vaut 1 et que ce n’est ni le banc ni une capture ; l’intervalle est celui du réglage', () => {
+test('le réglage : enregistrer si l’interrupteur vaut « yes » et que ce n’est ni le banc ni une capture ; toute autre valeur, abîmée comprise, éteint ; l’intervalle est celui du réglage', () => {
   expect(consultationSettings(DEFAULT_PARAMS, false)).toEqual({ record: true, flushMs: 10_000 });
-  expect(consultationSettings({ ...DEFAULT_PARAMS, consultationsRecord: 0 }, false)).toEqual({ record: false, flushMs: 10_000 });
-  expect(consultationSettings({ ...DEFAULT_PARAMS, consultationsRecord: 0.5 }, false).record).toBe(false);
+  expect(consultationSettings({ ...DEFAULT_PARAMS, consultationsRecord: 'no' }, false)).toEqual({ record: false, flushMs: 10_000 });
+  // A privacy switch fails closed: a value that is neither (a settings file edited by hand, a shared setting of another version).
+  for (const corrupt of ['YES', 'oui', 'true', '', 1, true, null, undefined, ['yes']]) {
+    expect(consultationSettings({ ...DEFAULT_PARAMS, consultationsRecord: corrupt as never }, false).record, String(corrupt)).toBe(false);
+  }
   expect(consultationSettings({ ...DEFAULT_PARAMS, consultationsFlushMs: 3000 }, false).flushMs).toBe(3000);
   expect(consultationSettings(DEFAULT_PARAMS, true).record).toBe(false);
 });

@@ -334,8 +334,11 @@ export interface RenderParams {
   /** Previous and next (plan 6a, D2): the places kept by the jumps, for the session. */
   navHistoryMax: number;
   // The local recording of consultations (plan 6a, D6)
-  /** The switch: 1 records them, 0 stops (no setting has two states: a number from 0 to 1 stands for it). */
-  consultationsRecord: number;
+  /**
+   * The switch: 'yes' records them, 'no' stops. It is read as `=== 'yes'` (consultationSettings): a privacy switch fails
+   * closed, so any other value — a corrupt one included — records nothing.
+   */
+  consultationsRecord: 'yes' | 'no';
   /** How long the interface keeps its events before it hands them to the main process, which writes them in one go. */
   consultationsFlushMs: number;
 }
@@ -530,7 +533,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   searchFlashMs: 1200,
   searchBuildSliceMs: 8,
   navHistoryMax: 100,
-  consultationsRecord: 1,
+  consultationsRecord: 'yes',
   consultationsFlushMs: 10_000,
 };
 
@@ -551,6 +554,12 @@ export interface ParamSpec {
   max?: number;
   step?: number;
   choices?: { value: string; label: string }[];
+  /**
+   * What a stored value of another kind reads as, where the default would be wrong: a privacy switch fails closed
+   * (`consultationsRecord`: a value that is neither 'yes' nor 'no' reads as 'no'). Applied by `withOverrides` only, to a key
+   * the settings file holds; a setting received from the server that is not valid is ignored, as every other.
+   */
+  invalid?: string;
 }
 
 const G = 'graphique', A = 'avancé';
@@ -758,7 +767,10 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('searchFlashMs', 'Durée du cercle autour d’un objet après un saut (ms)', A, 'Recherche', 0, 10_000, 100),
   num('searchBuildSliceMs', 'Temps pris par tranche pour construire l’index de la recherche (ms)', A, 'Recherche', 2, 50, 1),
   num('navHistoryMax', 'Endroits gardés par « précédent » et « suivant » (Alt+←, Alt+→)', A, 'Recherche', 10, 1000, 10),
-  num('consultationsRecord', 'Enregistrer mes consultations (1 : oui, 0 : non)', G, 'Consultations', 0, 1, 1),
+  {
+    key: 'consultationsRecord', label: 'Enregistrer mes consultations', section: G, group: 'Consultations', kind: 'choice',
+    choices: [{ value: 'yes', label: 'Oui' }, { value: 'no', label: 'Non' }], invalid: 'no',
+  },
   num('consultationsFlushMs', 'Délai entre deux enregistrements des consultations sur le disque (ms)', A, 'Consultations', 1000, 600_000, 1000),
 ];
 
@@ -833,6 +845,10 @@ export function withOverrides(overrides: unknown): RenderParams {
   for (const [key, v] of Object.entries(overrides)) {
     const value = settingValue(key, v);
     if (value !== undefined) out[key] = value;
+    else {
+      const invalid = SPEC_BY_KEY.get(key as keyof RenderParams)?.invalid;
+      if (invalid !== undefined) out[key] = invalid;
+    }
   }
   return out as unknown as RenderParams;
 }

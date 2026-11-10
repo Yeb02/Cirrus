@@ -900,9 +900,9 @@ const SCENARIOS = [
     },
   },
   {
-    // Plan 6a, D6: the switch « Enregistrer mes consultations » at 0: nothing is queued, nothing is written, not even the file.
+    // Plan 6a, D6: the switch « Enregistrer mes consultations » at « Non »: nothing is queued, nothing is written, not even the file.
     name: 'consultations : l’interrupteur éteint, rien n’est écrit, pas même le fichier',
-    settings: { consultationsRecord: 0, consultationsFlushMs: 1000 },
+    settings: { consultationsRecord: 'no', consultationsFlushMs: 1000 },
     async run(page, base, data, app) {
       await searchJump(page, 'motiv', 'Motivation');
       await onTab(page, 'Article MDL', 'après le saut');

@@ -77,21 +77,30 @@ function freeName(path: string): string {
 const RELAUNCH = 'Ferme ce qui la tient ouverte (l’antivirus, l’explorateur), puis relance Cirrus.';
 
 /**
- * This PC's consultations (plan 6a, D6) are its own, not the base's: the old base's file, closed with the app (its -wal
- * and -shm gone with the last connection), moves to the base that takes its place, unless that one has one already. At
- * best: a file that resists stays in the old base's folder, said.
+ * This PC's consultations (plan 6a, D6) are its own, not the base's: the old base's file moves to the base that takes its
+ * place, with its -wal and -shm, which may still be there — the file is closed only when the windows are, and a quit by
+ * `app.quit()` does not wait for that (index.ts) —: the three go together, the file first (a -wal alone, beside a file
+ * that is not its own, would be applied to it). Whether nothing of it stays behind: false when the new base has one
+ * already (it is kept, none of the old one is moved) or when a move failed (at best, said), the old folder then holding
+ * what is left, which the caller must not delete.
  */
-function keepConsultations(from: string, to: string, retry: SwapRetry): void {
+function keepConsultations(from: string, to: string, retry: SwapRetry): boolean {
+  if (!existsSync(join(from, CONSULTATIONS_FILE))) return true;
+  if (existsSync(join(to, CONSULTATIONS_FILE))) {
+    console.warn(`Consultations de ce PC non reprises (la nouvelle base en a déjà) : elles restent dans « ${from} ».`);
+    return false;
+  }
   for (const suffix of ['', '-wal', '-shm']) {
-    const file = join(from, CONSULTATIONS_FILE + suffix), target = join(to, CONSULTATIONS_FILE + suffix);
-    if (!existsSync(file) || existsSync(target)) continue;
+    const file = join(from, CONSULTATIONS_FILE + suffix);
+    if (!existsSync(file)) continue;
     try {
-      rename(file, target, retry);
+      rename(file, join(to, CONSULTATIONS_FILE + suffix), retry);
     } catch (e) {
       console.warn(`Consultations de ce PC non reprises (${messageOf(e)}) : elles restent dans « ${from} ».`);
-      return;
+      return false;
     }
   }
+  return true;
 }
 
 /**
@@ -135,8 +144,9 @@ export function swapStaged(dir: string, day = new Date(), retry: SwapRetry = SWA
     }
     throw new Error(`La base prise du serveur n’a pas pu prendre sa place (${messageOf(e)}) : elle attend dans « ${staged} ».`);
   }
-  if (archive) keepConsultations(archive, dir, retry);
-  if (archive && blank) {
+  // A vierge old base is deleted only if nothing of this PC's consultations stays in it.
+  const kept = archive ? keepConsultations(archive, dir, retry) : true;
+  if (archive && blank && kept) {
     // Nothing of the user's in it: deleted, retried as a rename is. At best: one that resists stays aside, as any.
     try {
       rmSync(archive, { recursive: true, force: true, maxRetries: retry.tries, retryDelay: retry.pauseMs });

@@ -58,8 +58,8 @@ export class Consultations {
   private readonly pc: string;
   private db: DatabaseSync | null = null;
   private insert: StatementSync | null = null;
-  /** A warning said since the last write that succeeded. */
-  private warned = false;
+  /** The warnings said since the last write that succeeded: a batch the page should not have sent, and a file that failed. */
+  private readonly warned = { batch: false, file: false };
   private constructor(dir: string, pc: string) {
     this.dir = dir;
     this.pc = pc;
@@ -69,11 +69,22 @@ export class Consultations {
     return new Consultations(dir, pc);
   }
 
-  /** The batch from the interface (checked, parseConsultations), written in one transaction. Never throws. */
+  /**
+   * The batch from the interface (checked, parseConsultations), written in one transaction. Never throws. A batch refused by
+   * the check says so; the file is fine and its connection stays. A file that fails (locked, damaged, full, its folder gone)
+   * says so, and its connection is let go: the next batch opens it again, mended perhaps. Each is said once until a write
+   * succeeds.
+   */
   write(batch: unknown): void {
+    let events: Consultation[];
     try {
-      const events = parseConsultations(batch);
-      if (events.length === 0) return;
+      events = parseConsultations(batch);
+    } catch (err) {
+      this.warn('batch', err);
+      return;
+    }
+    if (events.length === 0) return;
+    try {
       const db = this.handle(), insert = this.insert!;
       db.exec('BEGIN IMMEDIATE');
       try {
@@ -83,16 +94,21 @@ export class Consultations {
         try {
           db.exec('ROLLBACK');
         } catch {
-          // the connection is dropped below
+          // the connection is let go below
         }
         throw err;
       }
-      this.warned = false;
+      this.warned.batch = this.warned.file = false;
     } catch (err) {
-        this.release();
-      if (!this.warned) console.warn(`Consultations non enregistrées : ${err instanceof Error ? err.message : String(err)}`);
-      this.warned = true;
+      this.release();
+      this.warn('file', err);
     }
+  }
+
+  private warn(which: keyof Consultations['warned'], err: unknown): void {
+    if (this.warned[which]) return;
+    this.warned[which] = true;
+    console.warn(`Consultations non enregistrées : ${err instanceof Error ? err.message : String(err)}`);
   }
 
   /** Lets the file go (the app is quitting); a write after it opens the file again. */

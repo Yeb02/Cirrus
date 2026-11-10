@@ -197,8 +197,10 @@ export async function launch(data, profile, more = {}) {
     /** Resolves with the app's exit code once it has quit: by itself, or closed. */
     exited,
     /**
-     * Quits as the user does, by closing its window: the interface's last snapshot, the sync stopped, the base closed
-     * (src/main/window.ts, then src/main/index.ts). Killed if it is still there after `ms`. Whether it quit by itself.
+     * Quits by `window.close()` from the page, which destroys the window at once: the app exits by itself, but the window's
+     * « close » handler (src/main/window.ts) does not run — no last snapshot from the interface, no last consultations. To
+     * close as the user's click on the window's button does, with the app's own closing, send `Browser.close` (interface.mjs:
+     * closeAsUser). Killed if it is still there after `ms`. Whether it quit by itself.
      */
     async quit(ms = 20_000) {
       void evaluate('window.close()');
