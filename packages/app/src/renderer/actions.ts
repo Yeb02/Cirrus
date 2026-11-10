@@ -8,7 +8,7 @@ import {
   scaleMoves, type SceneIndex,
 } from '@cirrus/view';
 import { checkFileName, type Merge, mergeFiles, sameName } from './files/merge.ts';
-import { type EnumRename, sameDefinition, withRenames } from './tagRegistry.ts';
+import { type Draft, definitionOf, type EnumRename, freedNames, planRenames, sameDefinition, withRenames } from './tagRegistry.ts';
 
 /** An edit to run through the session: a pure command over the state, or null when there is nothing to do. */
 export type Build = ((s: State) => Action) | null;
@@ -412,16 +412,42 @@ export function renameEnumValueBuild(key: string, from: string, to: string): Bui
 
 /**
  * The form of an enumeration saved: its values renamed (`renames`, in an order planRenames made) and the definition as
- * the form has it, in one action — one Ctrl+Z gives all of it back. The definition is written only if the renames leave it
- * different from `def`; with no renames it is defineTagKey alone, which refuses a definition that changes nothing.
+ * the form has it, in one action — one Ctrl+Z gives all of it back. `freed`: values removed whose name a rename takes
+ * (freedNames), taken out of the definition first, the core refusing a rename to a name that exists. The definition is
+ * written (last) only if the renames leave it different from `def`; with no renames it is defineTagKey alone, which
+ * refuses a definition that changes nothing.
  */
-export function saveTagKeyBuild(def: TagKeyDef, renames: readonly EnumRename[]): Build {
+export function saveTagKeyBuild(def: TagKeyDef, renames: readonly EnumRename[], freed: readonly string[] = []): Build {
   if (renames.length === 0) return defineTagKeyBuild(def);
   return (st) => {
-    const old = st.tagKeys.get(def.key);
-    const steps = renames.map((r) => (x: State) => renameEnumValue(x, def.key, r.from, r.to));
-    if (!old || !sameDefinition(withRenames(old, renames), def)) steps.push((x) => defineTagKey(x, def));
+    let now = st.tagKeys.get(def.key);
+    const steps: ((x: State) => Action)[] = [];
+    if (now && freed.length > 0) {
+      const { defaultValue, ...rest } = now;
+      const less: TagKeyDef = { ...rest, enumValues: (now.enumValues ?? []).filter((e) => !freed.includes(e.name)) };
+      if (defaultValue !== undefined && !freed.includes(String(defaultValue))) less.defaultValue = defaultValue;
+      steps.push((x) => defineTagKey(x, less));
+      now = less;
+    }
+    for (const r of renames) steps.push((x) => renameEnumValue(x, def.key, r.from, r.to));
+    if (!now || !sameDefinition(withRenames(now, renames), def)) steps.push((x) => defineTagKey(x, def));
     return combine(st, `Modifier le tag « ${def.key} »`, steps);
+  };
+}
+
+/**
+ * The tag registry's form saved (plan 6a, D4): a key created — refused when the registry has that name already, which
+ * would overwrite its definition (« Créer » on a name taken) —, or a key's definition changed, its values renamed and
+ * removed with it in one action (saveTagKeyBuild). Everything is computed on the state at the time, so a rank that is no
+ * number, an exchange of names and a name taken are refusals of the session, shown in a toast.
+ */
+export function formSaveBuild(draft: Draft, creating: boolean): Build {
+  return (st) => {
+    const next = definitionOf(draft), now = st.tagKeys.get(next.key);
+    if (creating && now) throw new CommandError(`Le tag « ${next.key} » existe déjà dans le registre.`);
+    const both = now?.type === 'enum' && next.type === 'enum';
+    const renames = both ? planRenames(now, draft) : [];
+    return saveTagKeyBuild(next, renames, both ? freedNames(now, draft, renames) : [])!(st);
   };
 }
 

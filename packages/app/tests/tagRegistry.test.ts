@@ -4,13 +4,13 @@ import {
 } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import {
-  connectionTagsBuild, defineTagKeyBuild, deleteTagKeyBuild, renameEnumValueBuild, renameTagKeyBuild, saveTagKeyBuild, tagsBuild,
+  connectionTagsBuild, defineTagKeyBuild, deleteTagKeyBuild, formSaveBuild, renameEnumValueBuild, renameTagKeyBuild, saveTagKeyBuild, tagsBuild,
 } from '../src/renderer/actions.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { EditSession } from '../src/renderer/session.ts';
 import {
-  addValue, draftOf, type Draft, definitionOf, filterRows, inferDefinition, moveValue, newDraft, planRenames, registryRows, removeValue, renameValue, rowCount,
-  setRank, sortValues, TYPE_LABELS,
+  addValue, draftOf, type Draft, definitionOf, filterRows, formUpdate, freedNames, inferDefinition, moveValue, newDraft, planRenames, registryEscapeCloses,
+  registryRows, removeValue, renameValue, rowCount, setRank, setType, sortValues, TYPE_LABELS,
 } from '../src/renderer/tagRegistry.ts';
 
 // The tag registry's panel (plan 6a, task 3b, D4): the builds that call the core's commands, the list the panel shows,
@@ -64,19 +64,55 @@ test('defineTagKeyBuild : une clé créée puis modifiée, chaque fois une actio
   expect(s.tagKeys.has('niveau')).toBe(false);
 });
 
-test('les refus du cœur arrivent en message français, sans écriture : un nom vide, une clé protégée, une valeur que le changement invaliderait', async () => {
+const LABEL: TagKeyDef = { key: 'label', type: 'text', scope: 'node', multi: false, required: false };
+
+test('les refus du cœur arrivent en message français, sans écriture : un nom vide, une clé inconnue, une valeur que le changement invaliderait', async () => {
   const { s, mk, session } = world([NIVEAU]);
   mk('A', [{ key: 'niveau', value: 'bas' }]);
   const before = session.rev;
   expect(await refused(session, defineTagKeyBuild({ ...TEXTE, key: '  ' })!)).toBe('Le nom du tag est vide.');
-  expect(await refused(session, renameTagKeyBuild('label', 'étiquette')!)).toBe('Cirrus se sert du tag « label » : il ne se renomme pas.');
-  expect(await refused(session, deleteTagKeyBuild('label')!)).toBe('Le tag « label » n’est pas dans le registre.');
+  // A key Cirrus reads, not declared: out of the registry, as any other key is.
+  expect(await refused(session, deleteTagKeyBuild('auteur')!)).toBe('Le tag « auteur » n’est pas dans le registre.');
   expect(await refused(session, deleteTagKeyBuild('inconnu')!)).toBe('Le tag « inconnu » n’est pas dans le registre.');
   expect(await refused(session, defineTagKeyBuild({ ...NIVEAU, enumValues: [{ name: 'moyen', rank: 2 }, { name: 'haut', rank: 3 }] })!))
     .toBe('1 nœud porte une valeur que ce changement rendrait invalide : « A ».');
   expect(await refused(session, renameEnumValueBuild('niveau', 'absent', 'x')!)).toBe('Le tag « niveau » n’a pas de valeur « absent ».');
   expect(session.rev).toBe(before);
   expect(s.tagKeys.get('niveau')).toEqual(NIVEAU);
+});
+
+test('une clé protégée déclarée : ni renommée, ni retirée, ni d’une autre forme ; son caractère obligatoire et son défaut se changent', async () => {
+  const { s, session } = world([LABEL]);
+  const before = session.rev;
+  expect(await refused(session, renameTagKeyBuild('label', 'étiquette')!)).toBe('Cirrus se sert du tag « label » : il ne se renomme pas.');
+  expect(await refused(session, deleteTagKeyBuild('label')!)).toBe('Cirrus se sert du tag « label » : il ne se supprime pas.');
+  expect(await refused(session, defineTagKeyBuild({ ...LABEL, type: 'word' })!))
+    .toBe('Cirrus se sert du tag « label » : seuls son caractère obligatoire et sa valeur par défaut se changent.');
+  expect(await refused(session, defineTagKeyBuild({ ...LABEL, multi: true })!))
+    .toBe('Cirrus se sert du tag « label » : seuls son caractère obligatoire et sa valeur par défaut se changent.');
+  expect(session.rev).toBe(before);
+  expect(s.tagKeys.get('label')).toEqual(LABEL);
+  expect((await session.run(defineTagKeyBuild({ ...LABEL, required: true, defaultValue: 'sans nom' })!)).ok).toBe(true);
+  expect(s.tagKeys.get('label')).toEqual({ ...LABEL, required: true, defaultValue: 'sans nom' });
+});
+
+test('formSaveBuild : « Créer » sur un nom que le registre a déjà est refusé, la définition de cette clé intacte ; une clé neuve se crée', async () => {
+  const { s, session } = world([NIVEAU]);
+  const before = session.rev;
+  const over: Draft = { ...newDraft('niveau'), type: 'text' };
+  expect(await refused(session, formSaveBuild(over, true)!)).toBe('Le tag « niveau » existe déjà dans le registre.');
+  // The name is taken as the form trims it.
+  expect(await refused(session, formSaveBuild({ ...over, key: '  niveau ' }, true)!)).toBe('Le tag « niveau » existe déjà dans le registre.');
+  expect(session.rev).toBe(before);
+  expect(s.tagKeys.get('niveau')).toEqual(NIVEAU);
+  // Saved as a change of that key (not a creation), it is written.
+  const changed = draftOf(NIVEAU);
+  changed.required = false;
+  expect((await session.run(formSaveBuild(changed, false)!)).ok).toBe(true);
+  expect(s.tagKeys.get('niveau')?.required).toBe(false);
+  const made = await session.run(formSaveBuild({ ...newDraft(' neuf '), type: 'number' }, true)!);
+  expect(made.ok && made.action.label).toBe('Créer le tag « neuf »');
+  expect(s.tagKeys.get('neuf')).toEqual({ key: 'neuf', type: 'number', scope: 'node', multi: false, required: false });
 });
 
 test('renameTagKeyBuild : la définition, les nœuds et les connexions, la corbeille comprise, en une action qu’un Ctrl+Z rend entière', async () => {
@@ -354,6 +390,78 @@ test('planRenames : les valeurs dont le nom a changé, dans un ordre où aucune 
   expect(planRenames(NIVEAU, addValue(draftOf(NIVEAU)))).toEqual([]);
 });
 
+test('planRenames : une valeur retirée libère son nom, qu’une autre prend (freedNames) ; l’enregistrement la retire avant de renommer, en une action', async () => {
+  const { s, mk, session } = world([NIVEAU]);
+  const a = mk('A', [{ key: 'niveau', value: 'bas' }]), b = mk('B', [{ key: 'niveau', value: 'haut' }]);
+  // « moyen » removed, « bas » renamed « moyen »: no exchange.
+  let d = draftOf(NIVEAU);
+  d = removeValue(d, d.values[1].id);
+  d = renameValue(d, d.values[0].id, 'moyen');
+  expect(planRenames(NIVEAU, d)).toEqual([{ from: 'bas', to: 'moyen' }]);
+  expect(freedNames(NIVEAU, d, planRenames(NIVEAU, d))).toEqual(['moyen']);
+  // A value kept under its name still stops a rename to it, and nothing is freed.
+  let kept = draftOf(NIVEAU);
+  kept = renameValue(kept, kept.values[0].id, 'moyen');
+  expect(() => planRenames(NIVEAU, kept)).toThrow(new CommandError('Deux valeurs échangent leur nom : renomme-les une à une.'));
+  expect(freedNames(NIVEAU, draftOf(NIVEAU), [])).toEqual([]);
+  // Saved: the objects of « bas » follow, the default (« moyen », removed) is dropped, one action, one Ctrl+Z.
+  const r = await session.run(formSaveBuild(d, false)!);
+  expect(r.ok && r.action.label).toBe('Modifier le tag « niveau »');
+  expect(s.tagKeys.get('niveau')).toEqual({ ...NIVEAU, defaultValue: undefined, enumValues: [{ name: 'moyen', rank: 1 }, { name: 'haut', rank: 3 }] });
+  expect(tagsOf(s, a)).toEqual([{ key: 'niveau', value: 'moyen' }]);
+  expect(tagsOf(s, b)).toEqual([{ key: 'niveau', value: 'haut' }]);
+  expect((await session.undo()).ok).toBe(true);
+  expect(s.tagKeys.get('niveau')).toEqual(NIVEAU);
+  expect(tagsOf(s, a)).toEqual([{ key: 'niveau', value: 'bas' }]);
+  // The removed value carried by an object: the core's refusal, nothing written.
+  const c = mk('C', [{ key: 'niveau', value: 'moyen' }]);
+  const rev = session.rev;
+  expect(await refused(session, formSaveBuild(d, false)!)).toBe('1 nœud porte une valeur que ce changement rendrait invalide : « C ».');
+  expect(session.rev).toBe(rev);
+  expect(tagsOf(s, c)).toEqual([{ key: 'niveau', value: 'moyen' }]);
+});
+
+test('setType : un autre type remet le défaut à rien ; le même type le garde', () => {
+  const d = draftOf(NIVEAU);
+  expect(d.defaultValue).toBe('moyen');
+  expect(setType(d, 'enum')).toBe(d);
+  const text = setType(d, 'text');
+  expect(text).toMatchObject({ type: 'text', defaultValue: '' });
+  expect(text.values).toEqual(d.values);
+  expect(definitionOf(text).defaultValue).toBeUndefined();
+  expect(setType({ ...newDraft('p'), type: 'number', defaultValue: '2' }, 'date').defaultValue).toBe('');
+});
+
+test('formUpdate : ce que fait un formulaire quand la définition du registre n’est plus celle qu’il a — adopter, garder, prévenir', () => {
+  const draft = (def: TagKeyDef) => draftOf(def);
+  const other: TagKeyDef = { ...NIVEAU, required: false };
+  // Nothing moved: the same definition, or none and none (a key created, a key only carried).
+  expect(formUpdate({ base: NIVEAU, def: NIVEAU, draft: draft(NIVEAU), touched: true })).toEqual({ do: 'nothing' });
+  expect(formUpdate({ base: null, def: null, draft: newDraft(), touched: false })).toEqual({ do: 'nothing' });
+  expect(formUpdate({ base: null, def: null, draft: newDraft(), touched: true })).toEqual({ do: 'nothing' });
+  // Changed elsewhere (an undo, a sync): adopted if nothing was typed, said if something was.
+  expect(formUpdate({ base: NIVEAU, def: other, draft: draft(NIVEAU), touched: false })).toEqual({ do: 'adopt' });
+  expect(formUpdate({ base: NIVEAU, def: other, draft: { ...draft(NIVEAU), defaultValue: 'haut' }, touched: true })).toEqual({ do: 'stale' });
+  // What was typed is what the registry now has (this form's own save): adopted, however much was typed.
+  expect(formUpdate({ base: NIVEAU, def: other, draft: draft(other), touched: true })).toEqual({ do: 'adopt' });
+  // An untouched form of a key only carried, which something declares meanwhile (it was taken for touched, for it had no
+  // base, review of task 3b): it takes the definition; touched, it says so, unless it is what was typed.
+  expect(formUpdate({ base: null, def: NIVEAU, draft: { ...newDraft('niveau'), type: 'text' }, touched: false })).toEqual({ do: 'adopt' });
+  expect(formUpdate({ base: null, def: NIVEAU, draft: { ...draft(NIVEAU), required: false }, touched: true })).toEqual({ do: 'stale' });
+  expect(formUpdate({ base: null, def: NIVEAU, draft: draft(NIVEAU), touched: true })).toEqual({ do: 'adopt' });
+  // Taken out of the registry: untouched, it shows what the objects say; touched, it keeps what was typed, now a key to declare.
+  expect(formUpdate({ base: NIVEAU, def: null, draft: draft(NIVEAU), touched: false })).toEqual({ do: 'infer' });
+  expect(formUpdate({ base: NIVEAU, def: null, draft: draft(other), touched: true })).toEqual({ do: 'unbase' });
+});
+
+test('registryEscapeCloses : Échap ferme le panneau s’il n’a été pris par personne, et que rien ne passait avant lui à l’arrivée de la touche', () => {
+  expect(registryEscapeCloses({ key: 'Escape', defaultPrevented: false }, false)).toBe(true);
+  // A floating panel was there when the key came: its own Escape, which removes it before this listener runs, has the key.
+  expect(registryEscapeCloses({ key: 'Escape', defaultPrevented: false }, true)).toBe(false);
+  expect(registryEscapeCloses({ key: 'Escape', defaultPrevented: true }, false)).toBe(false);
+  expect(registryEscapeCloses({ key: 'a', defaultPrevented: false }, false)).toBe(false);
+});
+
 test('inferDefinition : ce que les objets portent dit le type, la portée et la multiplicité d’une clé à déclarer ; une clé de Cirrus, sa forme', () => {
   const { s, mk, link } = world();
   const a = mk('A', [{ key: 'lu' }, { key: 'poids', value: 3 }, { key: 'note', value: 'bien' }, { key: 'taille', value: '1,5' }]);
@@ -454,4 +562,13 @@ test('parseTag lit un nombre comme le cœur (readTagNumber) : à la française, 
   expect(parseTag('niveau:3', defs)).toEqual({ key: 'niveau', value: 'haut' });
   const digits: TagKeyDef = { ...NIVEAU, key: 'rang', enumValues: [{ name: '3', rank: 1 }, { name: 'trois', rank: 3 }] };
   expect(parseTag('rang:3', new Map([['rang', digits]]))).toEqual({ key: 'rang', value: '3' });
+  // A rank is a number as the core reads one: a decimal, a negative; a name that looks like one still wins.
+  const fine: TagKeyDef = { ...NIVEAU, key: 'degré', enumValues: [{ name: 'froid', rank: -1 }, { name: 'tiède', rank: 2.5 }, { name: '3,5', rank: 7 }], defaultValue: undefined };
+  const fines = new Map([['degré', fine]]);
+  expect(parseTag('degré:2,5', fines)).toEqual({ key: 'degré', value: 'tiède' });
+  expect(parseTag('degré:2.5', fines)).toEqual({ key: 'degré', value: 'tiède' });
+  expect(parseTag('degré:-1', fines)).toEqual({ key: 'degré', value: 'froid' });
+  expect(parseTag('degré:7', fines)).toEqual({ key: 'degré', value: '3,5' });
+  expect(parseTag('degré:3,5', fines)).toEqual({ key: 'degré', value: '3,5' });
+  expect(refusal('niveau:0,5')).toBe('Valeur « 0.5 » inconnue pour le tag « niveau ».');
 });

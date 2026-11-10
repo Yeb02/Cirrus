@@ -162,6 +162,9 @@ export function renameValue(d: Draft, id: number, name: string): Draft {
   return d.defaultValue !== '' && was.name === d.defaultValue ? { ...next, defaultValue: name } : next;
 }
 
+/** The type changed: its default goes (a text is no number, nor a value of an enumeration); the same type, the same draft. */
+export const setType = (d: Draft, type: TagType): Draft => (type === d.type ? d : { ...d, type, defaultValue: '' });
+
 /** A rank as typed. */
 export const setRank = (d: Draft, id: number, rank: string): Draft => withValues(d, d.values.map((v) => (v.id === id ? { ...v, rank } : v)));
 
@@ -184,14 +187,19 @@ export function moveValue(d: Draft, id: number, by: -1 | 1): Draft {
 /** A value renamed in the definition. */
 export interface EnumRename { from: string; to: string }
 
+/** The names of the values the draft keeps (a row found under that name), renamed or not. */
+const keptNames = (d: Draft): Set<string> => new Set(d.values.flatMap((v) => (v.was === null ? [] : [v.was])));
+
 /**
  * The renames a saved draft makes (its values whose name is no longer the one they were found with), in an order in
  * which none takes a name another still has (renameEnumValue refuses a name that exists): one that frees a name goes
- * first. Two values that exchange their names cannot be put in such an order: refused.
+ * first. A value the draft removes keeps no name (freedNames takes it out first). Two values that exchange their names
+ * cannot be put in such an order: refused.
  */
 export function planRenames(base: TagKeyDef, d: Draft): EnumRename[] {
   const pending = d.values.filter((v) => v.was !== null && v.was !== v.name).map((v) => ({ from: v.was!, to: v.name }));
-  const names = new Set((base.enumValues ?? []).map((e) => e.name));
+  const kept = keptNames(d);
+  const names = new Set((base.enumValues ?? []).map((e) => e.name).filter((n) => kept.has(n)));
   const out: EnumRename[] = [];
   while (pending.length > 0) {
     const i = pending.findIndex((r) => !names.has(r.to));
@@ -202,6 +210,15 @@ export function planRenames(base: TagKeyDef, d: Draft): EnumRename[] {
     out.push(r);
   }
   return out;
+}
+
+/**
+ * The values the draft removes whose name another value takes over (`renames`): they go before the rename, which the core
+ * refuses while the name exists. A removed value that objects carry is refused with the definition's change, as any is.
+ */
+export function freedNames(base: TagKeyDef, d: Draft, renames: readonly EnumRename[]): string[] {
+  const kept = keptNames(d), taken = new Set(renames.map((r) => r.to));
+  return (base.enumValues ?? []).map((e) => e.name).filter((n) => !kept.has(n) && taken.has(n));
 }
 
 /** A definition once `renames` are made, in their order: the values' names, and the default that follows its value. */
@@ -216,6 +233,40 @@ export function withRenames(def: TagKeyDef, renames: readonly EnumRename[]): Tag
   }
   return next;
 }
+
+/** What a form does when the registry's definition is not the one it was made on (`base`). */
+export type FormUpdate =
+  /** Nothing: the same definition, or none on both sides (a key to create, a key only carried). */
+  | { do: 'nothing' }
+  /** The definition is the form's: `base` and the draft become it, the notice goes. */
+  | { do: 'adopt' }
+  /** The definition is gone and the form untouched: `base` goes, the draft is what the objects that carry the key say. */
+  | { do: 'infer' }
+  /** The definition is gone, the form touched: `base` goes, the draft is kept (a key to declare). */
+  | { do: 'unbase' }
+  /** The definition changed under a touched form: the draft is kept, the form says so. */
+  | { do: 'stale' };
+
+/**
+ * The decision of a form whose registry definition (`def`, null if none) is not its `base` (null for a key only carried or
+ * being created). `touched`: something was typed in it, apart from whether it differs from `base` — a key only carried has
+ * no base to differ from, and an untouched form of one adopts the definition declared elsewhere (an undo, a sync). A form
+ * whose draft is the definition (its own save) adopts it, touched or not.
+ */
+export function formUpdate(f: { base: TagKeyDef | null; def: TagKeyDef | null; draft: Draft; touched: boolean }): FormUpdate {
+  if (!f.def) return f.base === null ? { do: 'nothing' } : f.touched ? { do: 'unbase' } : { do: 'infer' };
+  if (f.base && sameDefinition(f.base, f.def)) return { do: 'nothing' };
+  let mine = false;
+  try { mine = sameDefinition(definitionOf(f.draft), f.def); } catch { /* not a definition: not the registry's */ }
+  return mine || !f.touched ? { do: 'adopt' } : { do: 'stale' };
+}
+
+/**
+ * Whether an Escape closes the panel: it is Escape, nothing took it (the graph's gesture, a field, a menu prevented its
+ * default), and nothing that yields it first was on screen when the key arrived (`yielding`, read in the capture phase: a
+ * floating panel's own Escape removes it before the panel's listener runs, and one key must not close both).
+ */
+export const registryEscapeCloses = (e: { key: string; defaultPrevented: boolean }, yielding: boolean): boolean => e.key === 'Escape' && !e.defaultPrevented && !yielding;
 
 /**
  * What the objects that carry an undeclared key say of it, as the definition to declare: Cirrus's own shape for a key

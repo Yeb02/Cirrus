@@ -30,8 +30,9 @@ export function parseTag(input: string, defs: ReadonlyMap<string, TagKeyDef>): T
     return { key, value: n };
   }
   if (def?.type === 'enum') {
-    // A rank is written in digits; a name that is also digits is taken as a name.
-    const rank = /^\d+$/.test(value) && !def.enumValues?.some((e) => e.name === value) ? Number(value) : value;
+    // A rank is a number as the core reads one (a decimal, a negative, the French way too); a name that is also one is taken as a name.
+    const n = readTagNumber(value);
+    const rank = n !== null && !def.enumValues?.some((e) => e.name === value) ? n : value;
     return normalizeTag({ key, value: rank }, defs);
   }
   return { key, value };
