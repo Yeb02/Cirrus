@@ -1,6 +1,7 @@
 // The measures of plan 4c, task 7, in the app built: npm run mesures -w packages/app [-- bib|ouverture|defilement]
 // (`-- synchro …`: plan 5a's, mesures-synchro.mjs, in a process of its own with its collector exposed; `-- latex-fond`:
-// plan 5b's, mesures-latex-fond.mjs, the recompilation in the background.)
+// plan 5b's, mesures-latex-fond.mjs, the recompilation in the background; `-- recherche`: plan 6a's,
+// mesures-recherche.mjs, the search.)
 // Three passes each, on fresh artificial test bases (make-fixture.ts, then add-reading.ts: a PDF of 25 pages annotated
 // 50 times, and the same file in a node without annotations), in windows out of the user's way (cdp.mjs): never the
 // user's base nor profile, never the network.
@@ -19,8 +20,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { parseBibtex } from '@cirrus/core';
 import { appDir, launch, quantile, sleep } from './cdp.mjs';
 
-if (process.argv[2] === 'synchro' || process.argv[2] === 'latex-fond') {
-  const script = process.argv[2] === 'synchro' ? 'mesures-synchro.mjs' : 'mesures-latex-fond.mjs';
+const SCRIPTS = { synchro: 'mesures-synchro.mjs', 'latex-fond': 'mesures-latex-fond.mjs', recherche: 'mesures-recherche.mjs' };
+if (Object.hasOwn(SCRIPTS, process.argv[2] ?? '')) {
+  const script = SCRIPTS[process.argv[2]];
   const r = spawnSync(process.execPath, ['--expose-gc', join(appDir, 'scripts', script), ...process.argv.slice(3)], { stdio: 'inherit' });
   process.exit(r.status ?? 1);
 }
