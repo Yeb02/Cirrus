@@ -1,0 +1,32 @@
+# Caddy in front of Cirrus's server (plan 9, D1). deploy/installer-serveur.sh writes it to /etc/caddy/Caddyfile, the
+# site's placeholder below replaced by the domain. Caddy takes the HTTPS on 443 (a Let's Encrypt certificate, which it obtains and
+# renews alone; 80 for its challenge and the redirection to https) and passes each request as it is to the server,
+# which listens on this machine only. The Host header goes through unchanged: the server answers to its domain alone
+# (CIRRUS_NOM) and reads no X-Forwarded-* header.
+{
+	# HTTP/1.1 and HTTP/2 only, over TCP: no HTTP/3, so no UDP port to open (ufw lets 80 and 443 in, TCP).
+	servers {
+		protocols h1 h2
+	}
+}
+
+%DOMAINE% {
+	# No `encode`: compressing would hold back the frames of the event stream (text/event-stream), and the server's
+	# bodies are already compact (JSON lines, PDFs, the installer). No read_body timeout either: an upload of 1 GiB on a
+	# slow line must pass; the server bounds the size and the inactivity itself.
+	reverse_proxy 127.0.0.1:7310 {
+		# Each frame of the event stream, its pings included, passed on at once: a PC holds a stream silent for 40 s as
+		# cut, and opens it again.
+		flush_interval -1
+		transport http {
+			# The connections to the server kept idle 30 s at most, under its 65 s: Caddy never sends a request on a
+			# connection the server is closing (a rare 502 on a POST or a PUT, which Caddy does not replay).
+			keepalive 30s
+		}
+	}
+
+	# HSTS, which the server cannot set itself (it speaks HTTP to Caddy): a browser that opened /installer comes back in
+	# HTTPS only. The other headers are the server's own, the CSP of /installer included: Caddy neither adds nor
+	# replaces any.
+	header Strict-Transport-Security "max-age=31536000"
+}

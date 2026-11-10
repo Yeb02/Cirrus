@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# The administration of Cirrus's server on the rented machine (plan 9, D2), over SSH. deploy/installer-serveur.sh puts
+# it in /usr/local/bin:
+#   cirrus-serveur jumeler "<nom du PC>"    a pairing code, and the address of the download page
+#   cirrus-serveur pcs                      the paired PCs and the codes pending
+#   cirrus-serveur revoquer "<nom du PC>"   a PC removed: its token is worth nothing
+# The command runs as cirrus (sudo -u cirrus), never as root: root would take /var/lib/cirrus as well, and create files
+# there (serveur.db) that the service could not write. It is given --data /var/lib/cirrus — as cirrus, the default would
+# be another folder — and the domain of /etc/cirrus/serveur.env (CIRRUS_NOM), as the service is. The server itself is
+# the service's: `serve` is not taken here.
+set -euo pipefail
+
+DEPOT=/opt/cirrus
+DONNEES=/var/lib/cirrus
+ENVIRONNEMENT=/etc/cirrus/serveur.env
+UTILISATEUR=cirrus
+
+usage() {
+  cat >&2 <<'FIN'
+Usage :
+  cirrus-serveur jumeler "<nom du PC>"    affiche un code pour jumeler un PC, et l'adresse de la page de téléchargement
+  cirrus-serveur pcs                      liste les PC jumelés et les codes en attente
+  cirrus-serveur revoquer "<nom du PC>"   retire un PC : son jeton ne vaut plus rien
+FIN
+  exit 2
+}
+
+case ${1:-} in
+  jumeler | revoquer) [[ $# -eq 2 ]] || usage ;;
+  pcs) [[ $# -eq 1 ]] || usage ;;
+  *) usage ;;
+esac
+if ! id -u "$UTILISATEUR" >/dev/null 2>&1; then
+  echo "L'utilisateur $UTILISATEUR n'existe pas : installe d'abord le serveur (installer-serveur.sh)." >&2
+  exit 1
+fi
+
+# The domain, as the service reads it; none, and jumeler gives no address.
+nom=''
+if [[ -r $ENVIRONNEMENT ]]; then nom=$(sed -n 's/^CIRRUS_NOM=//p' "$ENVIRONNEMENT" | tail -n 1); fi
+# --data last: it wins over any the arguments would give.
+commande=(/usr/bin/env "CIRRUS_NOM=$nom" node "$DEPOT/packages/server/src/main.ts" "$@" --data "$DONNEES")
+# A folder every user may enter: the command may run from a home that cirrus cannot read.
+cd /
+if [[ $(id -un) == "$UTILISATEUR" ]]; then exec "${commande[@]}"; fi
+if ! command -v sudo >/dev/null 2>&1; then
+  echo "sudo est introuvable : la commande ne tourne jamais qu'en $UTILISATEUR, jamais en $(id -un)." >&2
+  exit 1
+fi
+exec sudo -u "$UTILISATEUR" -- "${commande[@]}"
