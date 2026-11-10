@@ -367,9 +367,11 @@ test('synchronisation : écritures par requête, téléchargements, reconnexion,
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
   }
-  // Plan 5b, task 7 and its review: four more of the group (the tests below).
-  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort())
-    .toEqual([...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb', 'serverStatusSamples', 'throughputMinMb'].sort());
+  // Plan 5b, task 7 and its review: four more of the group; plan 9, task 2: four more (the tests below).
+  expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual([
+    ...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb', 'serverStatusSamples', 'throughputMinMb',
+    'syncRequestTimeoutMs', 'syncStreamSilenceMs', 'syncReceiveMaxUnits', 'updateCheckMs',
+  ].sort());
   expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
   expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1, syncConnectTimeoutMs: 0, syncSuspendFlushMs: 1e9 }))
     .toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100, syncConnectTimeoutMs: 500, syncSuspendFlushMs: 10_000 });
@@ -401,6 +403,25 @@ test('la latence et le débit du serveur : la médiane de combien de mesures, et
   expect(withOverrides({ serverStatusSamples: 0, throughputMinMb: 0.25 })).toMatchObject({ serverStatusSamples: 1, throughputMinMb: 0.25 });
   expect(withOverrides({ serverStatusSamples: 1e9, throughputMinMb: 1e9 })).toMatchObject({ serverStatusSamples: 50, throughputMinMb: 100 });
   expect(withOverrides({ throughputMinMb: 0 })).toMatchObject({ throughputMinMb: 0.1 });
+});
+
+test('la synchro sur un réseau réel et les mises à jour : quatre réglages avancés du groupe « Synchronisation » (plan 9, tâche 2)', () => {
+  const specs: [keyof typeof DEFAULT_PARAMS, number, string, number, number, number][] = [
+    ['syncRequestTimeoutMs', 30_000, 'Attente maximale d’une réponse du serveur, ou d’un transfert de fichier immobile (ms)', 5000, 600_000, 1000],
+    ['syncStreamSilenceMs', 40_000, 'Silence du flux du serveur au-delà duquel la connexion est tenue pour coupée (ms)', 20_000, 600_000, 1000],
+    ['syncReceiveMaxUnits', 500, 'Écritures reçues appliquées au plus en un lot', 50, 10_000, 10],
+    ['updateCheckMs', 3_600_000, 'Intervalle entre deux recherches d’une mise à jour de Cirrus (ms)', 300_000, 86_400_000, 60_000],
+  ];
+  for (const [key, value, label, min, max, step] of specs) {
+    expect(DEFAULT_PARAMS[key], key).toBe(value);
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Synchronisation', kind: 'number', min, max, step });
+  }
+  // The silence held as a cut: two of the server's pings missed (15 s each), and a margin.
+  expect(DEFAULT_PARAMS.syncStreamSilenceMs).toBeGreaterThan(2 * 15_000);
+  expect(withOverrides({ syncRequestTimeoutMs: 1, syncStreamSilenceMs: 1, syncReceiveMaxUnits: 1, updateCheckMs: 1 }))
+    .toMatchObject({ syncRequestTimeoutMs: 5000, syncStreamSilenceMs: 20_000, syncReceiveMaxUnits: 50, updateCheckMs: 300_000 });
+  expect(withOverrides({ syncRequestTimeoutMs: 1e12, syncStreamSilenceMs: 1e12, syncReceiveMaxUnits: 1e12, updateCheckMs: 1e12 }))
+    .toMatchObject({ syncRequestTimeoutMs: 600_000, syncStreamSilenceMs: 600_000, syncReceiveMaxUnits: 10_000, updateCheckMs: 86_400_000 });
 });
 
 test('la recherche (Ctrl+K) : la couleur de son cercle, réglage principal de « Sélection et dépôt », distincte des autres cercles ; résultats et durée du cercle, groupe « Recherche » de « Navigation » (plan 6a, tâche 1)', () => {

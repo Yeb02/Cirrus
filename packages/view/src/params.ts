@@ -295,6 +295,18 @@ export interface RenderParams {
    */
   serverStatusSamples: number;
   throughputMinMb: number;
+  /**
+   * The sync on a real network (plan 9, D7): a request to the server is given up past this long, its answer read whole;
+   * a transfer of a file, a base or a journal past this long without a byte sent or received (an idle delay, never a
+   * total one). Either is the network failing: the connection ends, and is tried again (syncRetryMinMs).
+   */
+  syncRequestTimeoutMs: number;
+  /** The server's event stream held as cut once nothing came for this long (its pings come every 15 s); */
+  syncStreamSilenceMs: number;
+  /** the writes received applied this many at most at once, a batch each (one reconciliation, one transaction). */
+  syncReceiveMaxUnits: number;
+  /** The server asked this often whether a newer Cirrus is out (plan 9, D4). */
+  updateCheckMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -500,6 +512,10 @@ export const DEFAULT_PARAMS: RenderParams = {
   downloadAllReserveMb: 1024,
   serverStatusSamples: 5,
   throughputMinMb: 1,
+  syncRequestTimeoutMs: 30_000,
+  syncStreamSilenceMs: 40_000,
+  syncReceiveMaxUnits: 500,
+  updateCheckMs: 3_600_000,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -732,6 +748,11 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('downloadAllReserveMb', 'Espace à garder libre sur ce disque après « Télécharger tous les PDF… » (Mo)', A, 'Synchronisation', 0, 100_000, 64),
   num('serverStatusSamples', 'Mesures dont la latence et le débit du serveur sont la médiane', A, 'Synchronisation', 1, 50, 1),
   num('throughputMinMb', 'Taille minimale d’un transfert compté dans le débit du serveur (Mo)', A, 'Synchronisation', 0.1, 100, 0.1),
+  // Plan 9, task 2: the group is full with these (16 entries, the panel's limit): a setting more splits it.
+  num('syncRequestTimeoutMs', 'Attente maximale d’une réponse du serveur, ou d’un transfert de fichier immobile (ms)', A, 'Synchronisation', 5000, 600_000, 1000),
+  num('syncStreamSilenceMs', 'Silence du flux du serveur au-delà duquel la connexion est tenue pour coupée (ms)', A, 'Synchronisation', 20_000, 600_000, 1000),
+  num('syncReceiveMaxUnits', 'Écritures reçues appliquées au plus en un lot', A, 'Synchronisation', 50, 10_000, 10),
+  num('updateCheckMs', 'Intervalle entre deux recherches d’une mise à jour de Cirrus (ms)', A, 'Synchronisation', 300_000, 86_400_000, 60_000),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
