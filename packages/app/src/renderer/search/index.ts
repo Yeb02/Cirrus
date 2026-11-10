@@ -107,10 +107,12 @@ export function searchWords(text: string): string[] {
 }
 
 /**
- * A title as the results are ordered by it among equals (fix round 1, M1): its words, folded, one space between them —
- * the French order of a dictionary, which neither « ’ » nor « « » » change; the collator breaks its ties.
+ * A text as the search folds it, whole: its words (searchWords), one space between them. One for the app, wherever a
+ * name or a title is compared or ordered as the search does: the results among equals (fix round 1, M1: the French order
+ * of a dictionary, which neither « ’ » nor « « » » change; the collator breaks its ties), the trash's filter, the tag
+ * registry's list.
  */
-const titleKey = (title: string): string => searchWords(title).join(' ');
+export const foldedWords = (text: string): string => searchWords(text).join(' ');
 
 /**
  * Every distinct word the index has met, once each, by number: the query reads each word once, not each object's.
@@ -145,7 +147,7 @@ interface Entry {
   readonly id: Id;
   readonly kind: 'node' | 'connection';
   readonly title: string;
-  /** Its title's key (titleKey): the order of the results among equals, as a plain comparison. */
+  /** Its title's key (foldedWords): the order of the results among equals, as a plain comparison. */
   readonly key: string;
   /** The numbers of its words, field after field (FIELDS), each field's without repeats; field f ends at `ends[f]`. */
   readonly words: Int32Array;
@@ -241,7 +243,7 @@ class EntryReader {
   entry(id: Id, kind: 'node' | 'connection', title: string): Entry | null {
     while (this.field < 4) this.ends[this.field++] = this.b.field();
     const [t, g, m, c] = this.ends;
-    return c === 0 ? null : { id, kind, title, key: titleKey(title), words: this.b.take(), ends: [t, g, m, c] };
+    return c === 0 ? null : { id, kind, title, key: foldedWords(title), words: this.b.take(), ends: [t, g, m, c] };
   }
 }
 

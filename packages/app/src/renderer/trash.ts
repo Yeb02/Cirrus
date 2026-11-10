@@ -1,5 +1,5 @@
 import { type Action, connRow, type Id, memberCount, type State, trashedItems } from '@cirrus/core';
-import { searchWords } from './search/index.ts';
+import { foldedWords } from './search/index.ts';
 
 // The trash's panel, without its screen (plan 6a, D5, task 4): the rows it lists and their filter. Pure, so that the rules
 // are tested apart; the panel (ui/TrashPanel.tsx) only draws them.
@@ -23,9 +23,6 @@ const WHEN = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: '
 /** A moment as the panel says it: the French short date and time, in this PC's time — « 10/11/2026 10:05 ». */
 export const trashDate = (at: number): string => WHEN.format(at);
 
-/** A title as the filter reads it: its words without case or accents, one space between them (the search's folding). */
-const folded = (text: string): string => searchWords(text).join(' ');
-
 const NO_ROWS: ReadonlyMap<Id, TrashRow> = new Map();
 
 /**
@@ -41,7 +38,7 @@ export function trashRows(s: State, previous: ReadonlyMap<Id, TrashRow> = NO_ROW
     const old = previous.get(item.id);
     if (old !== undefined && old.kind === item.kind && old.at === item.at && old.title === title && old.restorable === restorable) return old;
     const label = item.kind === 'connection' ? 'connexion' : s.nodes.get(item.id)?.anchor !== undefined ? 'annotation' : 'nœud';
-    return { id: item.id, kind: item.kind, label, title, at: item.at, when: trashDate(item.at), folded: folded(title), restorable };
+    return { id: item.id, kind: item.kind, label, title, at: item.at, when: trashDate(item.at), folded: foldedWords(title), restorable };
   });
 }
 
@@ -50,7 +47,7 @@ export const trashCache = (rows: readonly TrashRow[]): Map<Id, TrashRow> => new 
 
 /** The rows whose title holds what is typed, without case or accents; nothing typed, the same list. */
 export function filterTrash(rows: TrashRow[], text: string): TrashRow[] {
-  const q = folded(text);
+  const q = foldedWords(text);
   return q === '' ? rows : rows.filter((r) => r.folded.includes(q));
 }
 

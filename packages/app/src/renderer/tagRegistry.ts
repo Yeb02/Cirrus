@@ -1,7 +1,7 @@
 import {
   canonical, CommandError, connRow, connTags, connTrashed, type Id, PROTECTED_TAG_KEYS, readTagNumber, type State, type TagKeyDef, taggedKeys, taggedWith,
 } from '@cirrus/core';
-import { searchWords } from './search/index.ts';
+import { foldedWords } from './search/index.ts';
 
 // The tag registry's panel, without its screen (plan 6a, D4, task 3b): the list of keys it shows, and the draft its form
 // edits. Pure, so that the rules are tested apart; the panel (ui/TagRegistryPanel.tsx) only draws them.
@@ -24,8 +24,6 @@ export const SCOPE_LABELS: Record<TagScope, string> = { node: 'nœud', connectio
 export interface RegistryRow { key: string; def: TagKeyDef | null; count: number; trashed: number; folded: string }
 
 const COLLATOR = new Intl.Collator('fr');
-/** A name as the search folds it: no case, no accents, its words (a « _ » or a space between) with one space. */
-const folded = (name: string): string => searchWords(name).join(' ');
 /** The French order of the names: folded first (as the search orders titles), then as written, then by code. */
 const byName = (a: RegistryRow, b: RegistryRow): number =>
   COLLATOR.compare(a.folded, b.folded) || COLLATOR.compare(a.key, b.key) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
@@ -52,7 +50,7 @@ function trashedAmong(s: State, ids: ReadonlySet<Id>): number {
 export function registryRows(s: State): RegistryRow[] {
   const row = (key: string, def: TagKeyDef | null): RegistryRow => {
     const ids = taggedWith(s, key);
-    return { key, def, count: ids.size, trashed: trashedAmong(s, ids), folded: folded(key) };
+    return { key, def, count: ids.size, trashed: trashedAmong(s, ids), folded: foldedWords(key) };
   };
   const declared = Array.from(s.tagKeys, ([key, def]) => row(key, def)).sort(byName);
   const undeclared = Array.from(taggedKeys(s)).filter((key) => !s.tagKeys.has(key)).map((key) => row(key, null)).sort(byName);
@@ -61,7 +59,7 @@ export function registryRows(s: State): RegistryRow[] {
 
 /** The rows whose name holds what is typed, without case or accents; nothing typed, the same list. */
 export function filterRows(rows: RegistryRow[], text: string): RegistryRow[] {
-  const q = folded(text);
+  const q = foldedWords(text);
   return q === '' ? rows : rows.filter((r) => r.folded.includes(q));
 }
 
