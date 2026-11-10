@@ -3,8 +3,9 @@
 // compare-captures.mjs then compares such a folder with a reference: after each task that touches the rendering, a new
 // suite (in a new folder) against docs/captures/reference-3c (the plan 3c scenes), docs/captures/plan4a,
 // docs/captures/plan4b, docs/captures/plan4c, docs/captures/plan5a, docs/captures/plan5b and docs/captures/plan6a (those
-// new in plans 4a, 4b, 4c, 5a, 5b and 6a, or changed by them; the last ones of plans 5a and 5b go through DevTools:
-// serverCaptures, plan5bCaptures; plan 6a changed two: a connection's pop-up gained its « Tags »), each compared on its own images. A
+// new in plans 4a, 4b, 4c, 5a, 5b and 6a, or changed by them; the last ones of plans 5a, 5b and 6a go through DevTools:
+// serverCaptures, plan5bCaptures, plan6aCaptures; plan 6a changed two more: a connection's pop-up gained its « Tags »),
+// each compared on its own images. A
 // folder that already holds files is refused, so a reference is never replaced by mistake; --replace removes its
 // captures first (to remake a reference on purpose). --only captures those scenes alone (while one is worked on; a
 // reference is checked against a whole suite). LaTeX is compiled by the bench's TinyTeX (CIRRUS_TINYTEX), which must be
@@ -431,6 +432,130 @@ async function plan5bCaptures(names, taken) {
   }
 }
 
+/**
+ * Plan 6a, task 6: its box, question and panels, through DevTools as plan5bCaptures (cdp.mjs: the window out of the user's
+ * way; each image once `.capture` is set, the focus taken, the pointer on the tabs' bar), in one session on a fresh test
+ * base whose trash holds, besides its note, the connection « Même mesure » and the annotation of page 2, thrown away
+ * beforehand by the core's commands as the app would (throwAway), every date of the trash its history's (fixTrashTimes):
+ * - recherche: Ctrl+K, « induction » typed: the results and their places, the ring around those of the lobby;
+ * - voir-ailleurs: MDL's menu, « Voir dans un autre plan »: the question naming « Article MDL » and « Thèse »;
+ * - registre-tags: « Registre des tags… » from the background's menu: the keys declared, then those only carried;
+ * - enumeration: « statut_epistémique » opened, a value added and named, not saved;
+ * - corbeille: « Corbeille… »: an annotation, a connection and a node, the most recent first, with their dates.
+ * A connection's tags, its pop-up's section, are already in plan6a/fenetre-connexion (task 3b). The names of the images
+ * taken go to `taken`.
+ */
+const PLAN6A_SCENES = ['recherche', 'voir-ailleurs', 'registre-tags', 'enumeration', 'corbeille'];
+async function plan6aCaptures(names, taken) {
+  const { launch } = await import('./cdp.mjs');
+  const data = mkdtempSync(join(tmpdir(), 'cirrus-captures-')), profile = mkdtempSync(join(tmpdir(), 'cirrus-captures-profil-'));
+  let app = null;
+  const shoot = shooter(names, taken, () => app);
+  try {
+    execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
+    await throwAway(data);
+    fixHistoryTimes(data);
+    fixTrashTimes(data);
+    app = await launch(data, profile, { CIRRUS_TINYTEX: tinyTex, CIRRUS_VIEW: '0,140,1' });
+    const { page } = app;
+    const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
+    const menuAt = async (x, y) => {
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(x, y, 'right');
+      if (!(await page.evaluate(`!!document.querySelector('.context-menu')`))) throw new Error(`pas de menu en (${x}, ${y})`);
+    };
+    const quiet = async () => {
+      if (!(await page.until(`!document.querySelector('.toast')`, 15_000))) throw new Error(`une notification reste : ${await page.evaluate(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`)}`);
+    };
+    const rows = (selector) => page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((e) => e.textContent)`);
+
+    // The search: the box, its results and their places; the lobby's ringed in the graph.
+    const field = `document.activeElement?.matches('.search-box .search-field') === true`;
+    for (let i = 0; i < 10 && !(await page.until(field, 1000)); i++) await page.press('k', 'KeyK', 75, 2);
+    if (!(await page.evaluate(field))) throw new Error('Ctrl+K n’ouvre pas la recherche');
+    await page.type('induction');
+    if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length >= 3 && !document.querySelector('.search-box .search-status')`, 10_000))) {
+      throw new Error(`la recherche de « induction » montre ${JSON.stringify(await rows('.search-box .search-results li'))}`);
+    }
+    await quiet();
+    await shoot('recherche');
+    await page.evaluate(`document.querySelector('.search-box .search-field').focus()`);
+    await page.press('Escape', 'Escape', 27);
+    if (!(await page.until(`!document.querySelector('.search-box')`))) throw new Error('Échap ne ferme pas la recherche');
+
+    // « Voir dans un autre plan » for MDL (175, 140 in the world: 967, 499 in the page), in two other plans: the question.
+    await menuAt(967, 499);
+    await click('.context-menu button', '^Voir dans un autre plan$');
+    if (!(await page.until(`!!document.querySelector('.ask')`))) throw new Error('pas de question pour les autres plans de MDL');
+    const choices = await rows('.ask .choices button');
+    if (JSON.stringify(choices) !== JSON.stringify(['Article MDL', 'Thèse', 'Annuler'])) throw new Error(`la question montre ${JSON.stringify(choices)}`);
+    await quiet();
+    await shoot('voir-ailleurs');
+    await click('.ask .choices button', '^Annuler$');
+    if (!(await page.until(`!document.querySelector('.ask')`))) throw new Error('la question reste ouverte');
+
+    // The tag registry, from the background's menu (the sky at the bottom left), then an enumeration being edited.
+    await menuAt(250, 850);
+    await click('.context-menu button', '^Registre des tags');
+    if (!(await page.until(`!!document.querySelector('aside.registry .key')`))) throw new Error('le registre des tags ne s’ouvre pas');
+    await quiet();
+    await shoot('registre-tags');
+    await click('.registry .key[data-key="statut_epistémique"]');
+    if (!(await page.until(`document.querySelector('.registry .key-title')?.textContent === 'statut_epistémique'`))) throw new Error('le formulaire de statut_epistémique ne s’ouvre pas');
+    await click('.registry button.add');
+    if (!(await page.until(`document.activeElement?.matches('.registry .value-name') === true`))) throw new Error('la valeur ajoutée n’a pas le focus');
+    await page.type('réfuté');
+    await quiet();
+    await shoot('enumeration');
+
+    // The trash, which takes the registry's place (its draft let go, as at its cross).
+    await menuAt(250, 850);
+    await click('.context-menu button', '^Corbeille…$');
+    if (!(await page.until(`document.querySelectorAll('aside.trash .item').length === 3`))) throw new Error(`la corbeille montre ${JSON.stringify(await rows('aside.trash .item'))}`);
+    await quiet();
+    await shoot('corbeille');
+  } finally {
+    await app?.close();
+    for (const d of [data, profile]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+}
+
+/**
+ * Plan 6a's captures: the connection « Même mesure » and the annotation of page 2 (« Un code est préfixe… », in no plan)
+ * thrown away in the test base in `dir`, by the core's commands (deleteConnection, deleteEverywhere), each one action of
+ * the journal as the app writes it; its lock is not taken: no Cirrus has the base open yet.
+ */
+async function throwAway(dir) {
+  const { LocalStore } = await import('@cirrus/store');
+  const { applyOps, deleteConnection, deleteEverywhere } = await import('@cirrus/core');
+  const store = LocalStore.open(dir, { pc: 'fixture' });
+  try {
+    const s = store.loadState();
+    const run = (a) => { store.commit(a); applyOps(s, a.ops); };
+    const measure = [...s.connections.values()].find((c) => c.title === 'Même mesure');
+    const annotation = [...s.nodes.values()].find((n) => n.anchor !== undefined && n.title.startsWith('Un code est préfixe'));
+    if (!measure || !annotation) throw new Error('la base de test n’a pas « Même mesure » ou l’annotation de la page 2');
+    run(deleteConnection(s, measure.id));
+    run(deleteEverywhere(s, annotation.id));
+  } finally {
+    store.close();
+  }
+}
+
+/**
+ * Every date of the trash its history's (after fixHistoryTimes): the moment each node or connection went there is its
+ * journal's, in its record and in the line that wrote it, so that the trash's panel reads the same at every capture.
+ */
+function fixTrashTimes(dir) {
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  try {
+    db.exec(`UPDATE changes SET op = json_set(op, '$.after.trashedAt', at) WHERE json_extract(op, '$.after.trashedAt') IS NOT NULL;
+      UPDATE nodes SET json = json_set(json, '$.trashedAt', (SELECT MAX(at) FROM changes WHERE subject = nodes.id AND json_extract(op, '$.after.trashedAt') IS NOT NULL)) WHERE trashed = 1;
+      UPDATE connections SET json = json_set(json, '$.trashedAt', (SELECT MAX(at) FROM changes WHERE subject = connections.id AND json_extract(op, '$.after.trashedAt') IS NOT NULL)) WHERE trashed = 1;`);
+  } finally {
+    db.close();
+  }
+}
+
 /** CIRRUS_CLICK for a file's full screen: the file in its node's pop-up (its preview), then the preview's ⤢. */
 function fileThenFull(name) {
   return `.file[data-name="${name}"],.file-preview .expand`;
@@ -455,8 +580,10 @@ function fixHistoryTimes(dir) {
 const chosen = only ? SCENES.filter((s) => only.includes(s.name)) : SCENES;
 const serverChosen = only ? SERVER_SCENES.filter((n) => only.includes(n)) : SERVER_SCENES;
 const plan5bChosen = only ? PLAN5B_SCENES.filter((n) => only.includes(n)) : PLAN5B_SCENES;
-if (only && chosen.length + serverChosen.length + plan5bChosen.length !== only.length) {
-  console.error(`Scènes inconnues : ${only.filter((n) => !SCENES.some((s) => s.name === n) && !SERVER_SCENES.includes(n) && !PLAN5B_SCENES.includes(n)).join(', ')}.`);
+const plan6aChosen = only ? PLAN6A_SCENES.filter((n) => only.includes(n)) : PLAN6A_SCENES;
+if (only && chosen.length + serverChosen.length + plan5bChosen.length + plan6aChosen.length !== only.length) {
+  const known = (n) => SCENES.some((s) => s.name === n) || SERVER_SCENES.includes(n) || PLAN5B_SCENES.includes(n) || PLAN6A_SCENES.includes(n);
+  console.error(`Scènes inconnues : ${only.filter((n) => !known(n)).join(', ')}.`);
   process.exit(2);
 }
 mkdirSync(out, { recursive: true });
@@ -512,6 +639,15 @@ if (plan5bChosen.length > 0) {
   }
   failed += plan5bChosen.length - taken.length;
 }
-const total = chosen.length + serverChosen.length + plan5bChosen.length;
+if (plan6aChosen.length > 0) {
+  const taken = [];
+  try {
+    await plan6aCaptures(plan6aChosen, taken);
+  } catch (e) {
+    console.error(`captures du plan 6a : échec après ${taken.length} image(s) (${e instanceof Error ? e.message : String(e)})`);
+  }
+  failed += plan6aChosen.length - taken.length;
+}
+const total = chosen.length + serverChosen.length + plan5bChosen.length + plan6aChosen.length;
 console.log(`${total - failed} captures sur ${total} dans ${out}`);
 process.exit(failed > 0 ? 1 : 0);
