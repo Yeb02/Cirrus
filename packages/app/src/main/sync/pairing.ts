@@ -224,7 +224,7 @@ export class Pairing {
     this.tell();
     try {
       try {
-        await seedBase({ fetch: deps.fetch, store: deps.store, dir: deps.dir, config, pairedAt: at, signal: abort.signal });
+        await seedBase({ fetch: deps.fetch, store: deps.store, dir: deps.dir, config, pairedAt: at, signal: abort.signal, timeoutMs: deps.params().syncRequestTimeoutMs });
       } catch (e) {
         if (!this.closed) await revoke();
         return no(`Base non envoyée : ${sentence(messageOf(e))} ${UNTOUCHED}`);
@@ -251,7 +251,9 @@ export class Pairing {
     this.tell();
     try {
       try {
-        await adoptBase({ fetch: deps.fetch, dir: deps.dir, pc: deps.pc, config, baseId, secrets: deps.secretsAt(stagedDir(deps.dir)), signal: abort.signal });
+        await adoptBase({
+          fetch: deps.fetch, dir: deps.dir, pc: deps.pc, config, baseId, secrets: deps.secretsAt(stagedDir(deps.dir)), signal: abort.signal, timeoutMs: deps.params().syncRequestTimeoutMs,
+        });
       } catch (e) {
         if (!this.closed) await revokeSelf(deps.fetch, config, deps.params().syncConnectTimeoutMs);
         return { ok: false, message: `Base du serveur non prise : ${sentence(messageOf(e))} ${UNTOUCHED}` };

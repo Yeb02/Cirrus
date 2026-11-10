@@ -5,7 +5,9 @@ import { type Connection, JSON_BODY, json, ok, reasonOf, Refusal } from './conne
 import { filesToSend, hasBlob, type TransferRates } from './downloads.ts';
 
 // The files this PC's writes add, sent to the server before them (plan 5a, D6), each once; those of the writes received
-// come down by downloads.ts. Each sent is measured for the throughput (plan 5b, D8: TransferRates).
+// come down by downloads.ts. Each sent is measured for the throughput (plan 5b, D8: TransferRates). Each is a transfer
+// (plan 9, D7): no total delay, but one of idleness — a sending that stops is given up, the connection with it, and the
+// file sent again, whole, at the next one.
 
 export class Uploads {
   /** Where the base keeps its files (files/<2 hex>/<hash>). */
@@ -37,7 +39,7 @@ export class Uploads {
           if (!hasBlob(this.storeDir, hash)) continue;
           const file = await openAsBlob(filePath(this.storeDir, { name: '', hash, size: 0 }));
           const since = this.rates.clock();
-          const res = await conn.request(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob });
+          const res = await conn.request(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob }, { transfer: true });
           if (res.status === 400 || res.status === 413) {
             console.warn(`Fichier ${hash} refusé par le serveur : ${await reasonOf(res)}`);
             continue;

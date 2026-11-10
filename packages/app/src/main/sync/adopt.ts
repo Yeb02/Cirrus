@@ -50,9 +50,9 @@ function shareBlob(from: string, to: string): void {
 /**
  * What an adopt needs: the network, this base's folder, this PC's identifier (the token's, R17), the server paired and
  * the identity of its base (its /hello's, R31), the configuration file of the staged base (its token encrypted as the
- * app keeps it), the abort of the app's quit.
+ * app keeps it), the abort of the app's quit, the requests' delay (syncRequestTimeoutMs, plan 9).
  */
-interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; baseId: string; secrets: SecretStore; signal: AbortSignal }
+interface AdoptDeps { fetch: typeof fetch; dir: string; pc: string; config: ServerConfig; baseId: string; secrets: SecretStore; signal: AbortSignal; timeoutMs: number }
 
 /**
  * Takes the server's base (D7, R17), staged in `<base>-nouvelle` beside this one, which nothing here touches: its
@@ -68,23 +68,26 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
   rmSync(staged, { recursive: true, force: true });
   mkdirSync(staged, { recursive: true });
   try {
-    const { send, json } = requests(o.fetch, o.config, o.signal);
-    const snap = await send('/snapshot');
+    // The snapshot, the journal's pages and the files are transfers (plan 9, D7): given up when idle, never for their length.
+    const { send, json } = requests(o.fetch, o.config, o.signal, o.timeoutMs);
+    const snap = await send('/snapshot', {}, { transfer: true });
     const last = Number(snap.headers.get('cirrus-seq') ?? Number.NaN), size = Number(snap.headers.get('content-length') ?? Number.NaN);
     if (!Number.isSafeInteger(last) || last < 0 || !Number.isSafeInteger(size) || size > MAX_SEED_BYTES) {
       await snap.body?.cancel();
       throw new Error('Réponse du serveur illisible à /snapshot : mets à jour Cirrus, ou le serveur.');
     }
+    // Read first: the network failing says so, not the snapshot.
+    const data = await snap.arrayBuffer();
     let state: State;
     try {
-      state = decodeState(await snap.arrayBuffer());
+      state = decodeState(data);
     } catch (e) {
       throw new Error(`Instantané du serveur illisible : ${messageOf(e)}`);
     }
     const store = LocalStore.open(staged, { pc: o.pc });
     try {
       for (let after = 0; after < last; ) {
-        const page = ((await json(`/journal?after=${after}&limit=${Math.min(MAX_JOURNAL_PAGE, last - after)}`)) as { rows?: unknown } | null)?.rows;
+        const page = ((await json(`/journal?after=${after}&limit=${Math.min(MAX_JOURNAL_PAGE, last - after)}`, undefined, true)) as { rows?: unknown } | null)?.rows;
         if (!Array.isArray(page)) throw new Error('Réponse du serveur illisible à /journal : mets à jour Cirrus, ou le serveur.');
         if (page.length === 0) throw new Error(`Le journal du serveur s’arrête à la ligne ${after}, avant la ${last}.`);
         const rows = page.slice(0, last - after).map((x, i) => adoptedRow(x, after + i + 1, o.pc));
@@ -103,7 +106,7 @@ export async function adoptBase(o: AdoptDeps): Promise<{ last: number }> {
         shareBlob(filePath(o.dir, { name: '', hash, size: 0 }), to);
         continue;
       }
-      const res = await send(`/files/${hash}`, {}, [404]);
+      const res = await send(`/files/${hash}`, {}, { answered: [404], transfer: true });
       // Absent from the server too: the node says so when the file is opened.
       if (res.status === 404) {
         await res.body?.cancel();

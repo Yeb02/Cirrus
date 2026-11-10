@@ -80,9 +80,9 @@ function prepareSeed(store: LocalStore): { data: ArrayBuffer; seq: number; last:
 
 /**
  * What a seed needs: the network, this PC's base and its folder, the server paired (its token), the pairing's time (its
- * /hello's: kept with the seed, B1), the abort of the app's quit.
+ * /hello's: kept with the seed, B1), the abort of the app's quit, the requests' delay (syncRequestTimeoutMs, plan 9).
  */
-interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal }
+interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config: ServerConfig; pairedAt: number; signal: AbortSignal; timeoutMs: number }
 
 /**
  * Sends this PC's base to the server, which holds none (D7, R16). First, before any request, what it sends is read
@@ -101,7 +101,8 @@ interface SeedDeps { fetch: typeof fetch; store: LocalStore; dir: string; config
 export async function seedBase(o: SeedDeps): Promise<number> {
   const { data, seq, last } = prepareSeed(o.store);
   if (data.byteLength > MAX_SEED_BYTES) throw new Error(`La base de ce PC est trop grosse pour le serveur : son instantané fait ${data.byteLength} octets, ${MAX_SEED_BYTES} au plus.`);
-  const { send, json } = requests(o.fetch, o.config, o.signal);
+  // The files, the snapshot and the journal's pages are transfers (plan 9, D7): given up when idle, never for their length.
+  const { send, json } = requests(o.fetch, o.config, o.signal, o.timeoutMs);
   const hashes = storedHashes(o.dir);
   for (let i = 0; i < hashes.length; i += MAX_HASHES_PER_REQUEST) {
     const chunk = hashes.slice(i, i + MAX_HASHES_PER_REQUEST);
@@ -111,11 +112,11 @@ export async function seedBase(o: SeedDeps): Promise<number> {
     for (const hash of missing) {
       if (typeof hash !== 'string' || !wanted.has(hash)) continue;
       const file = await openAsBlob(filePath(o.dir, { name: '', hash, size: 0 }));
-      const res = await send(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob });
+      const res = await send(`/files/${hash}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file as unknown as Blob }, { transfer: true });
       await res.body?.cancel();
     }
   }
-  const sent = await send('/seed', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'Cirrus-Seq': String(seq) }, body: new Uint8Array(data) });
+  const sent = await send('/seed', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'Cirrus-Seq': String(seq) }, body: new Uint8Array(data) }, { transfer: true });
   const seedId = ((await sent.json().catch(() => null)) as { baseId?: unknown } | null)?.baseId;
   if (!isBaseId(seedId)) throw new Error('Réponse du serveur illisible à /seed : mets à jour Cirrus, ou le serveur.');
   for (let after = 0; after < last; ) {
@@ -128,7 +129,7 @@ export async function seedBase(o: SeedDeps): Promise<number> {
       n = Math.ceil(n / 2);
       body = JSON.stringify({ rows: rows.slice(0, n) });
     }
-    await json('/seed/journal', body);
+    await json('/seed/journal', body, true);
     after = rows[n - 1].localSeq;
   }
   o.store.setPendingSeed({ id: seedId, last, at: o.pairedAt });

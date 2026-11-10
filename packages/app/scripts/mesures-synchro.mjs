@@ -96,7 +96,8 @@ async function envoyer(url, dataDir, pcDir) {
   const snapshotMb = snap ? mb(snap.data.byteLength) : null;
   const times = {}, sampler = peakSampler(), t1 = performance.now();
   // The pairing's time, kept with the seed (B1): the app takes it from /hello, of a server that runs here too.
-  await seedBase({ fetch: timedFetch(times), store, dir: pcDir, config, pairedAt: Date.now(), signal: new AbortController().signal });
+  // The requests' delay (plan 9, D7) at its longest: a measure is never cut by it.
+  await seedBase({ fetch: timedFetch(times), store, dir: pcDir, config, pairedAt: Date.now(), signal: new AbortController().signal, timeoutMs: 600_000 });
   const seedMs = performance.now() - t1;
   store.close();
   console.log(JSON.stringify({ nodes, lines, snapshotMb, openMs: Math.round(openMs), seedMs: Math.round(seedMs), requests: rounded(times), peakMb: mb(sampler.stop()) }));
@@ -115,7 +116,9 @@ async function prendre(url, dataDir, pcDir) {
   const { baseId } = await (await fetch(`${url}/hello`, { headers: { ...FORMAT, Authorization: `Bearer ${config.token}` } })).json();
   const plain = { encrypt: (t) => Buffer.from(t), decrypt: (b) => b.toString() };
   const times = {}, sampler = peakSampler(), t0 = performance.now();
-  const { last } = await adoptBase({ fetch: timedFetch(times), dir: pcDir, pc: 'pc-mesure-b', config, baseId, secrets: fileSecrets(stagedDir(pcDir), plain), signal: new AbortController().signal });
+  const { last } = await adoptBase({
+    fetch: timedFetch(times), dir: pcDir, pc: 'pc-mesure-b', config, baseId, secrets: fileSecrets(stagedDir(pcDir), plain), signal: new AbortController().signal, timeoutMs: 600_000,
+  });
   const adoptMs = performance.now() - t0, peakMb = mb(sampler.stop());
   const store = LocalStore.open(stagedDir(pcDir), { pc: 'pc-mesure-b' });
   const nodes = store.nodeCount();

@@ -34,6 +34,7 @@ export const TEST_PARAMS: SyncParams = {
   syncBatchUnits: DEFAULT_PARAMS.syncBatchUnits, syncDownloads: DEFAULT_PARAMS.syncDownloads, syncRetryMinMs: 10, syncRetryMaxMs: 40,
   syncClockSkewWarnMs: DEFAULT_PARAMS.syncClockSkewWarnMs, syncReceiveBatchMs: DEFAULT_PARAMS.syncReceiveBatchMs,
   downloadAllReserveMb: DEFAULT_PARAMS.downloadAllReserveMb, serverStatusSamples: DEFAULT_PARAMS.serverStatusSamples, throughputMinMb: DEFAULT_PARAMS.throughputMinMb,
+  syncRequestTimeoutMs: DEFAULT_PARAMS.syncRequestTimeoutMs, syncStreamSilenceMs: DEFAULT_PARAMS.syncStreamSilenceMs, syncReceiveMaxUnits: DEFAULT_PARAMS.syncReceiveMaxUnits,
 };
 
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
@@ -84,6 +85,12 @@ export class Net {
    * failing as `fetch` does, a TypeError). Short review after plan 5a, B1.
    */
   loses: ((method: string, path: string) => boolean) | null = null;
+  /**
+   * Whether a request's sending stops (plan 9, task 2): the first chunk of its body taken, then nothing more taken and no
+   * answer, until the request is aborted — told at its start (`onStall`), the abort's time and reason filled in then.
+   */
+  stalls: ((method: string, path: string) => boolean) | null = null;
+  onStall: ((s: { at: number; reason: unknown; abortedAt: number }) => void) | null = null;
   private gate: Deferred | null = null;
   /** Holds the downloads (GET /files/<hash>) until released, or until their request is aborted. */
   private filesGate: Deferred | null = null;
@@ -116,6 +123,18 @@ export class Net {
     const url = new URL(input instanceof Request ? input.url : String(input)), method = init?.method ?? 'GET';
     this.requests.push({ method, path: url.pathname });
     await this.before?.(method, url.pathname);
+    if (this.stalls?.(method, url.pathname)) {
+      const stall = { at: Date.now(), reason: null as unknown, abortedAt: 0 }, signal = init?.signal ?? undefined;
+      this.onStall?.(stall);
+      if (init?.body instanceof ReadableStream) await init.body.getReader().read();
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) resolve();
+        signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+      stall.reason = signal?.reason;
+      stall.abortedAt = Date.now();
+      throw signal?.reason ?? new TypeError('fetch failed');
+    }
     if (url.pathname === '/units' && method === 'POST') this.batches.push((JSON.parse(String(init?.body)) as { units: unknown[] }).units.length);
     if (url.pathname === '/publications' && method === 'POST') this.publications.push(JSON.parse(String(init?.body)));
     const instead = this.respond?.(method, url.pathname, init?.signal ?? undefined);

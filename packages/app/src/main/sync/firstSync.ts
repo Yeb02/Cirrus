@@ -3,7 +3,7 @@ import { MAX_ID_CHARS } from '@cirrus/core';
 import { type LocalStore, storedHashes } from '@cirrus/store';
 import { LOBBY_NAME } from '../base.ts';
 import type { ServerConfig } from './config.ts';
-import { messageOf, reasonOf } from './connection.ts';
+import { exchange, messageOf, reasonOf, type SyncInit } from './connection.ts';
 import type { FirstSyncOffer } from './protocol.ts';
 
 // The first pairing of a base (plan 5a, task 5, D7): what the PC and the server hold decides it — both empty, the sync
@@ -77,24 +77,26 @@ export function offerMessage(o: FirstSyncOffer): string {
 export const sentence = (text: string): string => (/[.!?…]$/.test(text) ? text : `${text}.`);
 
 /**
- * The server's requests for one first sync: its token on each, one abort for all; a refused one throws its reason, but
- * the statuses `answered` lets through.
+ * The server's requests for one first sync: its token on each, one abort for all, each within `timeoutMs`
+ * (syncRequestTimeoutMs, plan 9, D7: connection.ts's exchange) — a transfer's idleness for the files, the snapshot and
+ * the journal's pages (`transfer`), which a slow line may take long to carry; a refused one throws its reason, but the
+ * statuses `answered` lets through.
  */
-export function requests(fetchFn: typeof fetch, config: ServerConfig, signal: AbortSignal) {
-  const send = async (path: string, init: { method?: string; headers?: Record<string, string>; body?: BodyInit } = {}, answered: number[] = []): Promise<Response> => {
+export function requests(fetchFn: typeof fetch, config: ServerConfig, signal: AbortSignal, timeoutMs: number) {
+  const send = async (path: string, init: SyncInit = {}, o: { answered?: number[]; transfer?: boolean } = {}): Promise<Response> => {
     let res: Response;
     try {
-      res = await fetchFn(config.url + path, { ...init, headers: { Authorization: `Bearer ${config.token}`, ...init.headers }, signal });
+      res = await exchange(fetchFn, config.url + path, path, { ...init, headers: { Authorization: `Bearer ${config.token}`, ...init.headers } }, { signal, timeoutMs, transfer: o.transfer });
     } catch (e) {
       if (signal.aborted) throw new Error('Cirrus se ferme.');
       throw new Error(`Serveur injoignable (${config.url}) : ${sentence(messageOf(e))}`);
     }
-    if (res.ok || answered.includes(res.status)) return res;
+    if (res.ok || o.answered?.includes(res.status)) return res;
     throw new Error(await reasonOf(res, path));
   };
-  const json = async (path: string, body?: unknown): Promise<unknown> => {
-    const res = await send(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
-    return res.json();
+  const json = async (path: string, body?: unknown, transfer = false): Promise<unknown> => {
+    const init = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) };
+    return (await send(path, init, { transfer })).json();
   };
   return { send, json };
 }

@@ -2,8 +2,8 @@ import { type Id, isObject, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit,
 import type { PublicationRequest } from '@cirrus/sources';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
-import type { SecretStore } from './config.ts';
-import { Connection, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
+import { type SecretStore, SERVER_FILE, type ServerConfig } from './config.ts';
+import { Connection, exchange, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
 import { DownloadAll, Downloads, filesToFetch, freeBytes, isHash, LastMeasures, missingFiles, TransferRates } from './downloads.ts';
 import { readEvents } from './events.ts';
 import type { DownloadAllPlan, DownloadAllProgress, DownloadAllStart, ServerSpace, ServerStatus, SyncStatus } from './protocol.ts';
@@ -23,14 +23,25 @@ import { Uploads } from './uploads.ts';
 // settings, settingsSync.ts's; the files, uploads.ts's and downloads.ts's. The .tex open here (plan 5b, D6) go to the
 // server at each connection and at each change (presence). The server's state and « Tout télécharger » (plan 5b, D8):
 // the latency of GET /status measured here, the throughput by the transfers (TransferRates), the download of every PDF
-// by downloads.ts (DownloadAll).
+// by downloads.ts (DownloadAll). On a real network (plan 9, D7): every request within a delay, a transfer within one of
+// idleness (connection.ts: exchange); the stream held as cut once silent for syncStreamSilenceMs, and read only while
+// the writes received waiting for their reconciliation are fewer than syncReceiveMaxUnits, which each batch takes at
+// most; the clock's offset kept with the server (serveur.json), for the writes made before the next hello.
 
 /** The settings the client reads (group « Synchronisation »), at each use: a change applies at once. */
 export type SyncParams = Pick<
   RenderParams,
   'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs' | 'downloadAllReserveMb'
-  | 'serverStatusSamples' | 'throughputMinMb'
+  | 'serverStatusSamples' | 'throughputMinMb' | 'syncRequestTimeoutMs' | 'syncStreamSilenceMs' | 'syncReceiveMaxUnits'
 >;
+
+/**
+ * A publication's import by the server (POST /publications) waits for its metadata, which the server asks of several
+ * sources, and for its PDF (publicationPdfMaxMs, the request's pdfMaxMs): bounded by that delay plus this margin, not by
+ * syncRequestTimeoutMs (plan 9, D7: the PC's side had no delay, registry of plan 5b). Past it, this PC imports it itself
+ * (via.ts). A margin over the server's own bounds, not a setting: the PDF's delay is one.
+ */
+export const PUBLICATION_MARGIN_MS = 60_000;
 
 export interface SyncDeps {
   fetch: typeof fetch;
@@ -113,6 +124,7 @@ export class SyncClient {
   private retryDelay = 0;
   /** The reconciliations, one at a time whatever the connection: the tail of their chain (it never rejects). */
   private chain: Promise<void> = Promise.resolve();
+  /** The server's clock minus this PC's: kept in serveur.json at the last hello (D7), measured again at each. */
   private offset = 0;
   private clockWarning: string | undefined;
   private mode: Mode = 'off';
@@ -135,6 +147,9 @@ export class SyncClient {
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
+    // The offset the last hello measured (plan 9, D7): this PC's writes are dated by it until this run's first hello —
+    // started offline, they still bear the server's time.
+    this.offset = deps.secrets.read()?.clockOffsetMs ?? 0;
     this.rates = new TransferRates(deps.clock ?? (() => performance.now()), () => deps.params());
     this.downloads = new Downloads(deps.storeDir, (hash, signal) => this.blobRequest(hash, signal), () => deps.params().syncDownloads, this.rates);
     this.all = new DownloadAll(this.downloads, (p) => deps.downloadAll?.(p), deps.downloadAllEveryMs === undefined ? {} : { everyMs: deps.downloadAllEveryMs });
@@ -205,12 +220,13 @@ export class SyncClient {
   /**
    * A publication's import asked of the server (POST /publications, plan 5b, task 3), through the connection open, with
    * its token: the server's answer as it comes. Rejects when no connection is open, or the network fails; aborted with
-   * the connection.
+   * the connection; given up past PUBLICATION_MARGIN_MS and the PDF's delay, its answer read (plan 9, D7).
    */
   publication(request: PublicationRequest): Promise<Response> {
     const conn = this.conn;
     if (conn === null || conn.closed || !conn.open) return Promise.reject(new Error('aucune connexion au serveur'));
-    return conn.request('/publications', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(request) });
+    const pdfMs = Number.isFinite(request.pdfMaxMs) ? Math.max(0, request.pdfMaxMs) : 0;
+    return conn.request('/publications', { method: 'POST', headers: JSON_BODY, body: JSON.stringify(request) }, { timeoutMs: PUBLICATION_MARGIN_MS + pdfMs });
   }
 
   /**
@@ -315,7 +331,10 @@ export class SyncClient {
     return this.all.current();
   }
 
-  /** The server's clock minus this PC's, measured at the last hello (0 before): a write's time is now() + clockOffset(). */
+  /**
+   * The server's clock minus this PC's, measured at the last hello — this run's, or else the one serveur.json kept (0
+   * before any): a write's time is now() + clockOffset().
+   */
   clockOffset(): number {
     return this.offset;
   }
@@ -358,7 +377,9 @@ export class SyncClient {
   /**
    * The hello (formats, the server's time and last number), then the stream from the base's last server number: each
    * write checked (parseRemoteUnit) and to follow the last one, then queued for the reconciliation; the sender started
-   * once the stream is open.
+   * once the stream is open. The stream is a transfer whose delay is syncStreamSilenceMs (plan 9, D7): nothing received
+   * for that long, its pings included, and it is held as cut — but only while it is read: it is not while
+   * syncReceiveMaxUnits writes wait for their reconciliation, and the server keeps the rest in its journal.
    */
   private async session(conn: Connection, started: (sender: Promise<void>) => void): Promise<void> {
     const t0 = this.deps.now();
@@ -377,11 +398,14 @@ export class SyncClient {
     const known = this.deps.store.baseId();
     if (known === null) this.deps.store.setBaseId(baseId);
     else if (known !== baseId) throw new Refusal(BASE_REPLACED);
-    // The server's time against the middle of the exchange (D4).
+    // The server's time against the middle of the exchange (D4), kept for the next start (plan 9, D7).
     this.setClock(serverTime - (t0 + t1) / 2);
+    this.keepClock(conn.config);
     conn.target = lastSeq as number;
     const from = this.deps.store.lastServerSeq();
-    const res = await conn.request('/events', { headers: { 'Last-Event-ID': String(from), Accept: 'text/event-stream' } });
+    const res = await conn.request('/events', { headers: { 'Last-Event-ID': String(from), Accept: 'text/event-stream' } }, {
+      transfer: true, timeoutMs: this.deps.params().syncStreamSilenceMs,
+    });
     await ok(res);
     if (!res.body) throw new Error('Flux du serveur sans corps.');
     // The shared settings (task 6), read whole once the stream is open, and applied before anything it brings: a setting
@@ -420,44 +444,75 @@ export class SyncClient {
       conn.received = u.seq;
       conn.inbox.push(u);
       this.schedule(conn);
+      // Bounded memory (D7): the stream read no further while a batch waits whole — a reconciliation taking it makes room.
+      while (!conn.closed && conn.inbox.length >= this.receiveMax()) await conn.room();
     }
   }
 
-  /** The reconciliation of what arrived, once the window (syncReceiveBatchMs) since the first of it has passed. */
-  private schedule(conn: Connection): void {
-    if (conn.timer !== null || conn.closed) return;
-    conn.timer = setTimeout(() => {
-      conn.timer = null;
-      this.chain = this.chain.then(() => this.reconcileNow(conn));
-    }, Math.max(0, this.deps.params().syncReceiveBatchMs));
+  /** The most writes received a reconciliation takes (syncReceiveMaxUnits, one at least); without a number, no bound. */
+  private receiveMax(): number {
+    const n = Math.floor(this.deps.params().syncReceiveMaxUnits);
+    return Number.isFinite(n) ? Math.max(1, n) : Number.POSITIVE_INFINITY;
   }
 
   /**
-   * Hands what arrived to the reconciliation: the writes after the base's last server number (one a former connection
-   * brought may be written already), and the refusals. Once written: the acknowledged writes forgotten, the files
-   * brought downloaded, the sender woken. Never rejects.
+   * The reconciliation of what arrived: once the window (syncReceiveBatchMs) since the first of it has passed, or at
+   * once when a whole batch waits (syncReceiveMaxUnits, plan 9, D7); none more while one waits in the chain: it will
+   * take what arrives meanwhile.
+   */
+  private schedule(conn: Connection): void {
+    if (conn.closed || conn.queued) return;
+    if (conn.inbox.length >= this.receiveMax()) {
+      this.enqueue(conn);
+      return;
+    }
+    if (conn.timer !== null) return;
+    conn.timer = setTimeout(() => {
+      conn.timer = null;
+      this.enqueue(conn);
+    }, Math.max(0, this.deps.params().syncReceiveBatchMs));
+  }
+
+  /** A reconciliation of what arrived, after those under way; the window, if one runs, given up. */
+  private enqueue(conn: Connection): void {
+    if (conn.timer !== null) clearTimeout(conn.timer);
+    conn.timer = null;
+    if (conn.closed || conn.queued) return;
+    conn.queued = true;
+    this.chain = this.chain.then(() => this.reconcileNow(conn));
+  }
+
+  /**
+   * Hands what arrived to the reconciliation: syncReceiveMaxUnits writes at most (plan 9, D7: a large delay goes in
+   * several batches, each a reconciliation and a transaction), those after the base's last server number (one a former
+   * connection brought may be written already), and the refusals; the stream read on meanwhile. Once written: the
+   * acknowledged writes forgotten, the files brought downloaded, the sender woken, the rest scheduled. Never rejects.
    */
   private async reconcileNow(conn: Connection): Promise<void> {
+    conn.queued = false;
     if (conn.closed) return;
     try {
       const { store } = this.deps;
       const from = store.lastServerSeq();
-      const incoming = conn.inbox.splice(0).filter((u) => u.seq > from), refused = conn.refused.splice(0);
-      if (incoming.length === 0 && refused.length === 0) return;
-      const first = incoming[0];
-      if (first && first.seq - first.ops.length !== from) throw new Refusal(`Le flux du serveur reprend au numéro ${first.seq - first.ops.length + 1} ; ce PC attendait le ${from + 1}.`);
-      try {
-        await this.deps.reconcile(incoming, refused);
-      } catch (e) {
-        throw e instanceof SyncDivergedError ? new Refusal(e.message, true) : e;
+      const incoming = conn.inbox.splice(0, this.receiveMax()).filter((u) => u.seq > from), refused = conn.refused.splice(0);
+      conn.made();
+      if (incoming.length > 0 || refused.length > 0) {
+        const first = incoming[0];
+        if (first && first.seq - first.ops.length !== from) throw new Refusal(`Le flux du serveur reprend au numéro ${first.seq - first.ops.length + 1} ; ce PC attendait le ${from + 1}.`);
+        try {
+          await this.deps.reconcile(incoming, refused);
+        } catch (e) {
+          throw e instanceof SyncDivergedError ? new Refusal(e.message, true) : e;
+        }
+        // A reconciliation written: the connection has proven itself.
+        this.retryDelay = 0;
+        const at = store.lastServerSeq();
+        for (const [unit, seq] of conn.accepted) if (seq <= at) conn.accepted.delete(unit);
+        this.downloads.want(filesToFetch(incoming));
+        conn.poke();
+        this.progress(conn);
       }
-      // A reconciliation written: the connection has proven itself.
-      this.retryDelay = 0;
-      const at = store.lastServerSeq();
-      for (const [unit, seq] of conn.accepted) if (seq <= at) conn.accepted.delete(unit);
-      this.downloads.want(filesToFetch(incoming));
-      conn.poke();
-      this.progress(conn);
+      if (conn.inbox.length > 0 || conn.refused.length > 0) this.schedule(conn);
     } catch (e) {
       conn.fail(e);
     }
@@ -480,11 +535,33 @@ export class SyncClient {
     return this.deps.now() + this.offset + MAX_SETTING_AHEAD_MS - Math.max(0, this.deps.params().syncClockSkewWarnMs);
   }
 
-  /** GET /files/<hash> on the server of the connection under way, or else of the secrets now (none: null). */
+  /**
+   * GET /files/<hash> on the server of the connection under way, or else of the secrets now (none: null): a transfer,
+   * given up once nothing came for syncRequestTimeoutMs (plan 9, D7) — lost, tried again as any download the network
+   * broke.
+   */
   private blobRequest(hash: string, signal: AbortSignal): Promise<Response> | null {
     const config = this.conn?.config ?? this.deps.secrets.read();
     if (!config) return null;
-    return this.deps.fetch(`${config.url}/files/${hash}`, { headers: { Authorization: `Bearer ${config.token}` }, signal });
+    const path = `/files/${hash}`;
+    return exchange(this.deps.fetch, config.url + path, path, { headers: { Authorization: `Bearer ${config.token}` } }, {
+      signal, timeoutMs: this.deps.params().syncRequestTimeoutMs, transfer: true,
+    });
+  }
+
+  /**
+   * The offset just measured, kept in serveur.json when it changed (plan 9, D7): for the server of `config` only, still
+   * paired with the same token — an unpairing meanwhile writes nothing back. Read and written at once, nothing in
+   * between. A file that cannot be written is said, and the sync goes on.
+   */
+  private keepClock(config: ServerConfig): void {
+    try {
+      const now = this.deps.secrets.read();
+      if (!now || now.url !== config.url || now.token !== config.token || now.clockOffsetMs === this.offset) return;
+      this.deps.secrets.write({ ...now, clockOffsetMs: this.offset });
+    } catch (e) {
+      console.warn(`Écart d’horloge avec le serveur non gardé (${SERVER_FILE}) : ${messageOf(e)}`);
+    }
   }
 
   /** The server's time minus this PC's; the warning of D4 past syncClockSkewWarnMs. */

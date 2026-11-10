@@ -48,7 +48,9 @@ test('jumeler : refusé sans chiffrement de Windows, pour un http hors de cette 
   expect(await a.sync.pair(l.url, code, 'Portable')).toEqual({ ok: false, message: expect.stringMatching(/chiffrer/) });
   a.canEncrypt = true;
   expect(await a.sync.pair('http://192.168.1.20:7310', code, 'Portable')).toEqual({ ok: false, message: expect.stringMatching(/^Adresse refusée : sans HTTPS/) });
-  expect(await a.sync.pair('ftp://127.0.0.1', code, 'Portable')).toEqual({ ok: false, message: 'Adresse du serveur invalide : http://hôte:port attendu.' });
+  expect(await a.sync.pair('ftp://127.0.0.1', code, 'Portable')).toEqual({
+    ok: false, message: 'Adresse du serveur invalide : https://domaine (ou http://127.0.0.1:port pour un serveur de cette machine) attendu.',
+  });
   expect(await a.sync.pair(l.url, ' ', 'Portable')).toEqual({ ok: false, message: 'Donne le code de jumelage affiché par le serveur.' });
   expect(await a.sync.pair(l.url, code, '  ')).toEqual({ ok: false, message: 'Donne un nom à ce PC.' });
   expect(a.net.requests).toEqual([]);
