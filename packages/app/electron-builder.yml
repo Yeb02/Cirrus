@@ -4,13 +4,21 @@
 # main process imports only Node's modules and Electron. No node_modules goes into the archive.
 appId: io.github.yeb02.cirrus
 productName: Cirrus
+# The archive's package name: the app reads its variant there at each start (identity.ts: anything but « @cirrus/app-dev »
+# is the official app); the one-click installer names its folder after it, %LOCALAPPDATA%\Programs\cirrus, of which
+# « Cirrus Dev »'s (…\@cirrusapp-dev) is not a continuation; and the uninstaller's --delete-app-data, never passed, would
+# remove %APPDATA%\cirrus, never %APPDATA%\@cirrus\app, the user's base (fix round 1 of task 3, I1 and I2).
+extraMetadata:
+  name: cirrus
 directories:
   output: dist
   buildResources: build
+# The bench's chunks (benchMode.ts) stay out: a packaged app in bench mode says « Banc non branché » and quits.
 files:
   - out/**
   - package.json
   - "!node_modules{,/**}"
+  - "!out/main/bench-*.js"
 asar: true
 # No native module: node:sqlite is Node's own.
 npmRebuild: false
@@ -32,13 +40,14 @@ publish:
 win:
   target: nsis
   icon: build/icon.ico
-# Per user, without administrator rights (%LOCALAPPDATA%\Programs), the folder left to choose. The uninstaller never
-# removes the app's data: with --delete-app-data, or deleteAppDataOnUninstall, it would remove %APPDATA%\<package name>,
-# which is %APPDATA%\@cirrus\app — the user's base (identity.ts). Not turned on; not to be.
+# One click, per user, without administrator rights: %LOCALAPPDATA%\Programs\cirrus, no page, neither a folder nor « all
+# users » to choose (fix round 1 of task 3, I1). A chosen folder would be emptied by every update (RMDir /r $INSTDIR),
+# and electron-builder adds the app's name to it only if the folder does not contain it already: choosing
+# %LOCALAPPDATA%\Cirrus (TinyTeX) or %APPDATA%\@cirrus would have lost them. An installation for all users is not
+# supported. The uninstaller never removes the app's data (deleteAppDataOnUninstall, --delete-app-data).
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico

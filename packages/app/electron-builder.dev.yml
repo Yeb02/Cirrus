@@ -1,20 +1,21 @@
-# « Cirrus Dev » (plan 9, D3): `npm run paquet:dev` builds the app as that variant (`electron-vite build --mode dev`, which
-# gives it its data folder, %APPDATA%\@cirrus\app-dev) and then this, over electron-builder.yml: its name, its appId —
-# so its own installation, beside the official app's —, its icon marked « DEV ». It writes dist/Cirrus Dev Setup <version>.exe.
+# « Cirrus Dev » (plan 9, D3): `npm run paquet:dev` packages the same build as the official app with this, over
+# electron-builder.yml: its name, its appId — so its own installation, beside the official app's —, its icon marked
+# « DEV ». It writes dist/Cirrus Dev Setup <version>.exe.
 extends: ./electron-builder.yml
 appId: io.github.yeb02.cirrus.dev
 productName: Cirrus Dev
-# Its own package name: the uninstaller's --delete-app-data removes %APPDATA%\<package name>, which under the package's
-# own name, « @cirrus/app », is the official app's folder and the user's base. Under this one, it is « Cirrus Dev »'s.
+# Its package name, the one thing that makes it « Cirrus Dev » (identity.ts reads it at each start: its own data folder,
+# %APPDATA%\@cirrus\app-dev). The one-click installer names its folder after it, %LOCALAPPDATA%\Programs\@cirrusapp-dev,
+# which the official app's (…\cirrus) does not begin: neither installer stops the other's running app (fix round 1 of
+# task 3, I2). The uninstaller's --delete-app-data, never passed, would remove « Cirrus Dev »'s data only.
 extraMetadata:
   name: "@cirrus/app-dev"
 win:
   target: nsis
   icon: build/icon-dev.ico
 nsis:
-  oneClick: false
+  oneClick: true
   perMachine: false
-  allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
   installerIcon: build/icon-dev.ico
   uninstallerIcon: build/icon-dev.ico

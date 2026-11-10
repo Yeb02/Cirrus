@@ -1,6 +1,6 @@
 // The signed updates, end to end (plan 9, task 4): node scripts/maj-essai.mjs. Long (two installers built), and never
 // run against anything of the user's:
-// - « Cirrus Dev » 0.1.1 and 0.1.2 are built into a temporary folder (electron-vite --mode dev, then electron-builder with
+// - « Cirrus Dev » 0.1.1 and 0.1.2 are built into a temporary folder (electron-vite build, then electron-builder with
 //   electron-builder.dev.yml and the version given by -c.extraMetadata.version): their data folder is never the user's
 //   base, and the official app is never run;
 // - a test key pair is made here, in memory: 0.1.2's manifest signed with it (signer-version.mjs, the key passed by its
@@ -14,7 +14,8 @@
 // Three runs: the update found, verified, downloaded and armed (the chip says so); a signature of another key: refused;
 // an installer that is not the signed one (latest.yml rewritten to its hash): downloaded, then refused. Each app is ended
 // by a kill, never quit. All along, no installer nor uninstaller process may appear; afterwards, nothing is installed
-// (%LOCALAPPDATA%\Programs\Cirrus Dev, …\Cirrus: their existence only, nothing listed). Everything temporary removed.
+// (%LOCALAPPDATA%\Programs\@cirrusapp-dev, …\cirrus, and the former …\Cirrus Dev: their existence only, nothing listed).
+// Everything temporary removed.
 import { execFile, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -34,7 +35,7 @@ const sha512 = (path) => createHash('sha512').update(readFileSync(path)).digest(
 
 // ——— Nothing installed before, and an eye on the processes all along ———
 const programs = (name) => join(process.env.LOCALAPPDATA ?? '', 'Programs', name);
-const installedBefore = ['Cirrus', 'Cirrus Dev'].filter((n) => existsSync(programs(n)));
+const installedBefore = ['cirrus', '@cirrusapp-dev', 'Cirrus Dev'].filter((n) => existsSync(programs(n)));
 check(installedBefore.length === 0, `rien d’installé avant l’essai (%LOCALAPPDATA%\\Programs : ${installedBefore.join(', ') || 'ni Cirrus ni Cirrus Dev'})`);
 const seen = new Set();
 const watch = setInterval(() => {
@@ -61,7 +62,7 @@ try {
     const r = spawnSync(process.execPath, [file, ...args], { cwd: appDir, stdio: 'inherit', env: { ...process.env, ...env } });
     if (r.status !== 0) throw new Error(`${what} : code ${r.status}`);
   };
-  run('electron-vite build --mode dev', join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), ['build', '--mode', 'dev']);
+  run('electron-vite build', join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), ['build']);
   const built = {};
   for (const version of ['0.1.1', '0.1.2']) {
     const out = join(tmp, `v${version}`);
@@ -177,7 +178,7 @@ try {
   await sleep(1500);
   clearInterval(watch);
   check(seen.size === 0, `aucun processus d’installation ni de désinstallation vu pendant l’essai (${[...seen].join(', ') || 'aucun'})`);
-  const installedAfter = ['Cirrus', 'Cirrus Dev'].filter((n) => existsSync(programs(n)));
+  const installedAfter = ['cirrus', '@cirrusapp-dev', 'Cirrus Dev'].filter((n) => existsSync(programs(n)));
   check(installedAfter.length === installedBefore.length, `rien d’installé après l’essai (%LOCALAPPDATA%\\Programs : ${installedAfter.join(', ') || 'ni Cirrus ni Cirrus Dev'})`);
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5 });
 }

@@ -17,8 +17,10 @@ export const quantile = (xs, q) => { const s = [...xs].sort((a, b) => a - b); re
  * The page of an app launched on `data`, by DevTools: evaluate, mouse, keys. `more`: launch options (CIRRUS_VIEW…).
  * `exe`: a packaged app's executable (dist/win-unpacked, paquet-essai.mjs) instead of Electron on this folder's build.
  * `log`: a file descriptor that receives the main process's output (maj-essai.mjs: electron-updater's journal).
+ * `ownProfile`: no --user-data-dir, the app taking the profile its identity gives (identity.ts), which must then be
+ * `profile` — « Cirrus Dev »'s only, never the official app's (paquet-essai.mjs --sans-profil).
  */
-export async function launch(data, profile, more = {}, { exe, log } = {}) {
+export async function launch(data, profile, more = {}, { exe, log, ownProfile = false } = {}) {
   // CIRRUS_BACKGROUND: the window beyond the screens, without the focus (src/main/window.ts); the page is told it has it.
   const env = { ...process.env, CIRRUS_DATA: data, CIRRUS_SIZE: '1600,1000', CIRRUS_BACKGROUND: '1', ...more };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -26,7 +28,7 @@ export async function launch(data, profile, more = {}, { exe, log } = {}) {
   // the same profile left removed first, so that its port is never read.
   const portFile = join(profile, 'DevToolsActivePort');
   rmSync(portFile, { force: true });
-  const args = [`--user-data-dir=${profile}`, '--remote-debugging-port=0'];
+  const args = [...(ownProfile ? [] : [`--user-data-dir=${profile}`]), '--remote-debugging-port=0'];
   const child = spawn(exe ?? electron, exe ? args : [appDir, ...args], { env, stdio: log === undefined ? 'ignore' : ['ignore', log, log] });
   let target;
   for (let i = 0; i < 120 && !target; i++) {
