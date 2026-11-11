@@ -117,7 +117,6 @@ function Groups(props: { groups: RubricView['groups']; pick: 'main' | 'advanced'
   );
 }
 
-/** The rubrics open, and those whose advanced settings show: kept from one opening of the panel to the next. */
 /**
  * « Tout réinitialiser » asks first (2026-11-11): « Non », the answer Enter gives (it has the focus), or « Oui, tout
  * réinitialiser »; Escape gives up as « Non » does.
@@ -131,6 +130,7 @@ export function resetAllQuestion(reset: () => void): Question {
   };
 }
 
+/** The rubrics open, and those whose advanced settings show: kept from one opening of the panel to the next. */
 const opened = new Set<string>();
 const advancedShown = new Set<string>();
 
