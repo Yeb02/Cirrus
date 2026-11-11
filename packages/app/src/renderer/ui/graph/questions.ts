@@ -1,9 +1,10 @@
-import { type Id, phantomsOf } from '@cirrus/core';
+import type { Id } from '@cirrus/core';
 import { deleteSummary, type PlanScene } from '@cirrus/view';
 import { useRef, useState } from 'react';
 import { deleteBuild, deleteConnectionBuild, hideBuild, lastPlanNodes, removeMemberBuild } from '../../actions.ts';
 import type { Question } from '../Dialogs.tsx';
 import { type Graph, plural } from './core.ts';
+import { connectionElsewhere, connectionPlans, memberElsewhere, memberPlans, nodesElsewhere } from './where.ts';
 
 /**
  * The question the graph asks (AskDialog), and those it asks before an edit (spec 7, 11, 19): where a connection or a
@@ -35,11 +36,15 @@ export function useQuestions(graph: Graph) {
       answer: (v) => { if (v !== null) go(v); },
     });
   };
-  /** Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the last ones. */
+  /**
+   * Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the
+   * last ones; shown in no other plan, it leaves at once, « partout » (where.ts).
+   */
   const removeMember = (connection: Id, node: Id) => {
     const s = stateRef.current, plan = sceneRef.current?.plan.id, c = s.connections.get(connection);
     if (!c || !plan) return;
-    const shownIn = [...s.plans.keys()].filter((p) => s.branches.has({ plan: p, connection, node }));
+    if (!memberElsewhere(s, plan, connection, node)) { edit(removeMemberBuild(plan, connection, node, true)); return; }
+    const shownIn = memberPlans(s, connection, node);
     const last = c.members.length <= 2;
     const choices = [
       ...(shownIn.includes(plan) ? [{ value: 'here', label: 'Ici seulement' }] : []),
@@ -82,8 +87,9 @@ export function useQuestions(graph: Graph) {
     });
   };
   /**
-   * Deletion (spec 7): always « partout » or « ici seulement », with the instances counted and the last ones announced;
-   * « ici » for a group asks whether its content follows (I12 of the plan 3b review).
+   * Deletion (spec 7): « partout » or « ici seulement », with the instances counted and the last ones announced; « ici »
+   * for a group asks whether its content follows (I12 of the plan 3b review). Nodes in no other plan are deleted at once,
+   * « partout » (where.ts); a group among them still asks whether its content follows.
    */
   const askDelete = (sc: PlanScene, items: number[]) => {
     const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
@@ -91,6 +97,19 @@ export function useQuestions(graph: Graph) {
     const s = stateRef.current, { instances } = deleteSummary(s, ids);
     const groups = items.some((i) => sc.items[i].kind === 'group');
     const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
+    if (!nodesElsewhere(s, sc.plan.id, ids)) {
+      if (!groups) { edit(deleteBuild(sc, ids, true)); return; }
+      setQuestion({
+        text: `Supprimer ${titles(ids)} : le contenu suit-il ?`,
+        detail: `Avec le contenu, ${trashNote(all)}. Seul, ${trashNote(alone)}.`,
+        choices: [
+          { value: 'content', label: 'Avec le contenu' },
+          { value: 'everywhere', label: plural(items.filter((i) => sc.items[i].kind === 'group').length, 'Le groupe seul', 'Les groupes seuls') },
+        ],
+        answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere', v === 'content')); },
+      });
+      return;
+    }
     const here = groups
       ? [{ value: 'content', label: 'Ici, avec le contenu' }, { value: 'here', label: 'Ici, le groupe seul' }]
       : [{ value: 'here', label: 'Ici seulement' }];
@@ -103,19 +122,20 @@ export function useQuestions(graph: Graph) {
       answer: (v) => { if (v !== null) edit(deleteBuild(sc, ids, v === 'everywhere', v === 'content')); },
     });
   };
-  /** A connection's deletion (spec 7): « ici seulement » hides it here; when this is its last plan, it goes to the trash. */
+  /**
+   * A connection's deletion (spec 7): « ici seulement » hides it here, « partout » sends it to the trash; shown in no
+   * other plan, it goes to the trash at once (where.ts).
+   */
   const askDeleteConnection = (plan: Id, connection: Id) => {
     const s = stateRef.current, c = s.connections.get(connection);
     if (!c) return;
-    const phantoms = phantomsOf(s, connection).map((id) => s.phantoms.get(id));
-    const shownIn = [...s.plans.keys()].filter((pl) => c.members.some((m) => s.branches.has({ plan: pl, connection, node: m.node }))
-      || phantoms.some((ph) => ph?.plan === pl));
-    const n = shownIn.length;
-    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: n <= 1 ? 'Supprimer' : 'Partout' };
+    if (!connectionElsewhere(s, plan, connection)) { edit(deleteConnectionBuild(plan, connection, true)); return; }
+    const n = connectionPlans(s, connection).length;
+    const here = { value: 'here', label: 'Ici seulement' }, all = { value: 'everywhere', label: 'Partout' };
     setQuestion({
       text: `Supprimer la connexion${c.title ? ` « ${c.title} »` : ''} ?`,
-      detail: n <= 1 ? 'Elle n’est affichée dans aucun autre plan : elle ira à la corbeille.' : `Elle est affichée dans ${n} plans.`,
-      choices: n <= 1 ? [all] : paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
+      detail: `Elle est affichée dans ${n} plans.`,
+      choices: paramsRef.current.defaultAnswer === 'everywhere' ? [all, here] : [here, all],
       answer: (v) => { if (v !== null) edit(deleteConnectionBuild(plan, connection, v === 'everywhere')); },
     });
   };
