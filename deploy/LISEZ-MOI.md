@@ -6,7 +6,7 @@ Partout ci-dessous, remplace `cirrus.mondomaine.fr` par ton domaine.
 
 ## Ce qu'il te faut
 
-- une VM sous Ubuntu 24.04 LTS, avec une IPv4 publique : la spec a choisi Hetzner Cloud, CX23 (environ 4,50 € par mois) ;
+- une VM sous Ubuntu 24.04 LTS, avec une IPv4 publique : un VPS d'entrée de gamme suffit (1 à 2 vCPU, 2 Go de mémoire), chez OVHcloud (« VPS ») ou Hetzner Cloud (CX23). **Un hébergement web mutualisé ne convient pas**, même avec SSH : Cirrus a besoin d'un service qui tourne en permanence, de ses propres ports et des droits root ;
 - un nom de domaine, chez le registraire de ton choix (environ 10 € par an) ;
 - ton compte GitHub, avec les droits sur `Yeb02/Cirrus` ;
 - sur ton PC : le dépôt cloné, Node 26, et un terminal (PowerShell).
@@ -25,22 +25,26 @@ Accepte le chemin proposé ; une phrase de passe est conseillée. Ta clé publiq
 
 ## 2. Louer la VM
 
-Dans la console de Hetzner Cloud, « Add Server » :
+**Chez OVHcloud :** dans l'espace client, commande un **VPS** (pas un hébergement web) :
 
 - **Image :** Ubuntu 24.04.
-- **Type :** CX23.
-- **Réseau :** IPv4 et IPv6 publiques.
-- **SSH keys :** ajoute ta clé publique. Hetzner ne t'envoie alors aucun mot de passe : tu entres en root par ta clé.
-- **Backups :** à toi de voir, c'est payant (voir « Les limites »).
+- **Clé SSH :** colle ta clé publique quand la commande la propose. OVHcloud crée le compte `ubuntu`, qui entre par ta clé et passe root par `sudo`. Sans clé donnée, il t'envoie un mot de passe par e-mail : donne alors ta clé au script (étape 5).
+- **Sauvegardes :** en option payante (voir « Les limites »).
+
+Une fois le VPS livré, son IPv4 (et son IPv6) sont dans **Bare Metal Cloud › VPS**.
+
+**Chez Hetzner Cloud :** « Add Server », image Ubuntu 24.04, type CX23, IPv4 et IPv6 publiques, et ta clé dans **SSH keys** : tu entres alors en `root` par ta clé, et les commandes de l'étape 5 se passent de `sudo`.
 
 Note l'IPv4 et l'IPv6 de la VM.
 
 ## 3. Le domaine et le DNS
 
-Dans la zone DNS de ton domaine, chez ton registraire :
+Dans la zone DNS de ton domaine, chez ton registraire (chez OVHcloud : **Web Cloud › Noms de domaine › ton domaine › Zone DNS**) :
 
 - un enregistrement **A** : `cirrus` vers l'IPv4 de la VM ;
 - un enregistrement **AAAA** : `cirrus` vers son IPv6. Il est facultatif, mais s'il existe, il doit être juste : Let's Encrypt le préfère à l'IPv4.
+
+Il ne doit rester aucun autre A, AAAA ni CNAME pour `cirrus`. Si tu as ajouté le sous-domaine à ton hébergement web (OVHcloud : **Multisite**), retire-le de là : il a créé des enregistrements vers l'hébergement, qui enverraient une partie des visites et Let's Encrypt ailleurs que sur la VM.
 
 Depuis ton PC, `nslookup cirrus.mondomaine.fr` doit donner les adresses de la VM. Cela prend de quelques minutes à quelques heures.
 
@@ -75,15 +79,17 @@ Ne refais pas la clé (`--remplacer`) sans raison grave : les Cirrus installés 
 Une fois la première version publiée :
 
 ```
-ssh root@<IPv4 de la VM>
+ssh ubuntu@<IPv4 de la VM>
 curl -fsSLO https://raw.githubusercontent.com/Yeb02/Cirrus/main/deploy/installer-serveur.sh
-bash installer-serveur.sh cirrus.mondomaine.fr
+sudo bash installer-serveur.sh cirrus.mondomaine.fr
 ```
 
-Si tu n'as pas donné ta clé à Hetzner (tu es entré par un mot de passe), donne-la en second argument, entre guillemets :
+(Chez Hetzner : `ssh root@…`, et la commande sans `sudo`.)
+
+Si tu n'as pas donné ta clé à la commande du VPS (tu es entré par un mot de passe), donne-la en second argument, entre guillemets :
 
 ```
-bash installer-serveur.sh cirrus.mondomaine.fr "ssh-ed25519 AAAA… toi@ton-pc"
+sudo bash installer-serveur.sh cirrus.mondomaine.fr "ssh-ed25519 AAAA… toi@ton-pc"
 ```
 
 Le script refuse de couper les mots de passe tant qu'aucune clé n'est autorisée. Il ne vérifie pourtant que la forme de la clé, pas qu'elle t'ouvre une session : la vérification est à faire toi-même, à la fin (ci-dessous). Il installe :
@@ -100,17 +106,17 @@ Le script refuse de couper les mots de passe tant qu'aucune clé n'est autorisé
 **Avant de fermer ta session SSH**, ouvre un second terminal sur ton PC et vérifie que tu entres encore :
 
 ```
-ssh root@<IPv4 de la VM>
+ssh ubuntu@<IPv4 de la VM>
 ```
 
 Si ce second terminal est refusé, ne ferme pas le premier : depuis lui, rends les mots de passe à SSH, puis règle ta clé et relance le script.
 
 ```
-rm /etc/ssh/sshd_config.d/00-cirrus.conf
-systemctl reload ssh
+sudo rm /etc/ssh/sshd_config.d/00-cirrus.conf
+sudo systemctl reload ssh
 ```
 
-Le script finit par la liste de ce qui suit. Tu peux le relancer sans rien casser : `bash /opt/cirrus/deploy/installer-serveur.sh cirrus.mondomaine.fr`. C'est aussi ainsi que tu remets le serveur sur la dernière version, ou que tu changes de domaine.
+Le script finit par la liste de ce qui suit. Tu peux le relancer sans rien casser : `sudo bash /opt/cirrus/deploy/installer-serveur.sh cirrus.mondomaine.fr`. C'est aussi ainsi que tu remets le serveur sur la dernière version, ou que tu changes de domaine.
 
 ## 6. Vérifier
 
@@ -194,7 +200,7 @@ cirrus-serveur revoquer "Portable"
 
 ## Les limites
 
-- **Aucune sauvegarde hors du serveur** (spec 18). Le serveur et chaque PC jumelé ont la base entière, mais rien n'en garde l'historique ailleurs. Si tu en veux une, c'est payant chez Hetzner : les **Backups** automatiques de la VM (un supplément de 20 % de son prix, sept copies), ou des **Snapshots** à la demande (facturés au Go).
+- **Aucune sauvegarde hors du serveur** (spec 18). Le serveur et chaque PC jumelé ont la base entière, mais rien n'en garde l'historique ailleurs. Si tu en veux une, c'est une option payante de ton hébergeur : les sauvegardes automatiques du VPS, ou des instantanés à la demande.
 - **L'installation pour tous les utilisateurs de Windows n'est pas prise en charge.** L'installateur installe pour toi seul, sans droits d'administrateur, et ses mises à jour aussi.
 - **LaTeX dans les deux variantes à la fois** : Cirrus et « Cirrus Dev » partagent TinyTeX (`%LOCALAPPDATA%\Cirrus\TinyTeX`). Installer LaTeX, ou un paquet LaTeX, dans les deux en même temps peut se heurter. Si une installation échoue ainsi, relance-la une fois l'autre finie.
 - **SmartScreen** avertit à chaque installation par la page (étape 8) : l'installateur n'a pas de signature de Windows.
@@ -205,7 +211,7 @@ cirrus-serveur revoquer "Portable"
 
 ## Dépannage
 
-Sur la VM, en root :
+Sur la VM, en root (précède chaque commande de `sudo` si tu entres en `ubuntu`) :
 
 | Pour… | La commande |
 |---|---|
