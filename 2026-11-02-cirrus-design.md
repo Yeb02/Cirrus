@@ -445,6 +445,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
     - **Fixé le 2026-11-11 (retours de l'utilisateur).** Auparavant, ni le texte ni le cran des membres ne changeaient.
   - Changer un cran ne déplace aucun autre élément.
   - **Nouveau groupe :** il est créé un certain nombre de crans au-dessus de son plus grand membre. Ce décalage est un paramètre graphique avancé (section 19), réglé par défaut à deux crans [C], car l'utilisateur trouvait trop étroite la marge où le titre d'un groupe est visible sans ses membres.
+    - **Fixé le 2026-11-11 (retours de l'utilisateur).** Un nœud qui devient un groupe parce qu'on lâche des éléments dessus garde son cran, donc sa taille. Ce sont les éléments lâchés qui prennent des crans de moins, ensemble et avec leur contenu, jusqu'à ce que le plus grand soit ce même décalage sous lui : l'enveloppe tient à peu près où était sa boîte. Le contenu déjà assez petit garde ses crans, et l'entrée dans un groupe existant ne change toujours aucune échelle.
 - **Formule :** taille à l'écran d'un texte = taille de base × échelle de texte × f^k × zoom.
 - **Entrée dans un groupe :** elle ne touche pas à l'échelle, et l'ajustement reste à la charge de l'utilisateur.
 - **Sélection :** elle change d'échelle comme un seul élément, en dilatant ses distances autour de son barycentre sans changer la forme.

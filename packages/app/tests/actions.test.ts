@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  applyOp, applyOps, CommandError, deleteEverywhere, groupOf, invertAction, layoutKey, placementKey, setLayout, type State, type Vec2,
+  applyOp, applyOps, CommandError, deleteEverywhere, groupOf, invertAction, layoutKey, moveNodes, placementKey, setLayout, type State, type Vec2,
 } from '@cirrus/core';
 import { buildFixture, buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
@@ -196,6 +196,34 @@ test('répercussion : le dépôt et les plans automatiques en une action ; un pl
   expect(groupOf(s, plans.lobby, nodes.groupeInduction)).toBe(nodes.groupeTheorie);
 });
 
+test('un nœud lâché sur un nœud simple (2026-11-11) : celui-ci devient un groupe sans changer de cran ni de taille ; le nœud lâché prend groupOffsetSteps crans de moins, et tient dans sa boîte', () => {
+  const { plans } = ids;
+  const byTitle = (title: string) => sc.items.findIndex((it) => it.title === title);
+  const b = byTitle('Théorème d’invariance'), a = byTitle('Inégalité de Kraft');
+  const A = sc.items[a], B = sc.items[b];
+  run(dropBuild(sc, [b], A.x - B.x, A.y - B.y, target(sc, [b], { x: A.x, y: A.y }), false, P));
+  expect(groupOf(s, plans.lobby, B.id)).toBe(A.id);
+  expect(s.placements.get(placementKey(plans.lobby, A.id))!.k).toBe(A.k);
+  expect(s.placements.get(placementKey(plans.lobby, B.id))).toMatchObject({ x: A.x, y: A.y, k: B.k - P.groupOffsetSteps });
+  // The new group's envelope holds in what A's box was.
+  const after = buildScene(s, plans.lobby, measure, P), g = after.items[after.byId.get(A.id)!];
+  const env = offsetPolygon(g.hull!, g.pad!), xs = env.map((q) => q.x), ys = env.map((q) => q.y);
+  expect(Math.max(...xs) - Math.min(...xs)).toBeLessThanOrEqual(2 * A.halfW);
+  expect(Math.max(...ys) - Math.min(...ys)).toBeLessThanOrEqual(2 * A.halfH);
+});
+
+test('un nœud déjà assez petit, lâché sur un nœud simple, garde son cran ; le nœud devenu groupe aussi', () => {
+  const { plans } = ids;
+  const id = (title: string) => sc.items.find((it) => it.title === title)!.id;
+  const kraft = id('Inégalité de Kraft'), code = id('Code préfixe');
+  run((st: State) => moveNodes(st, plans.lobby, [{ node: code, k: -3 }]));
+  const scene = buildScene(s, plans.lobby, measure, P), c = scene.byId.get(code)!, A = scene.items[scene.byId.get(kraft)!];
+  run(dropBuild(scene, [c], A.x - scene.items[c].x, A.y - scene.items[c].y, target(scene, [c], { x: A.x, y: A.y }), false, P));
+  expect(groupOf(s, plans.lobby, code)).toBe(kraft);
+  expect(s.placements.get(placementKey(plans.lobby, code))!.k).toBe(-3);
+  expect(s.placements.get(placementKey(plans.lobby, kraft))!.k).toBe(A.k);
+});
+
 test('un groupe déplacé emporte aussi sa position propre : vidé ensuite, il reste où il était dessiné (I2 de la relecture 3b)', () => {
   const { nodes, plans } = ids;
   const g = sc.byId.get(nodes.groupeInduction)!;
@@ -328,9 +356,10 @@ test('placeDroppedBuild : sur le nœud simple du PDF, celui-ci devient un groupe
   const a = run(placeDroppedBuild(sc, nodes.annotationPage2, { x: pub.x, y: pub.y }, 1, P));
   expect(a.label).toBe(`Poser un nœud dans « ${LI} »`);
   expect(groupOf(s, plans.lobby, nodes.annotationPage2)).toBe(nodes.publication);
-  // groupOffsetSteps above its largest member, as a node dropped on a node (dropBuild).
-  expect(s.placements.get(placementKey(plans.lobby, nodes.annotationPage2))!.k).toBe(0);
-  expect(s.placements.get(placementKey(plans.lobby, nodes.publication))!.k).toBe(P.groupOffsetSteps);
+  // As a node dropped on a node (dropBuild, 2026-11-11): the PDF's node keeps its step, the annotation takes
+  // groupOffsetSteps fewer than it (here below the step readable at this zoom, 0).
+  expect(s.placements.get(placementKey(plans.lobby, nodes.annotationPage2))!.k).toBe(before.k - P.groupOffsetSteps);
+  expect(s.placements.get(placementKey(plans.lobby, nodes.publication))!.k).toBe(before.k);
   const after = buildScene(s, plans.lobby, measure, P);
   expect(after.items[after.byId.get(nodes.publication)!].kind).toBe('group');
   // Ctrl+Z: one step gives back the plan as it was.

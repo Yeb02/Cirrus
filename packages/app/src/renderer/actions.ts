@@ -45,45 +45,65 @@ function layoutsFollowing(s: State, scene: PlanScene, moved: Set<number>, map: (
 }
 
 /**
+ * The steps (≤ 0) by which items entering a simple node, which becomes their group, shrink (2026-11-11, the user: the
+ * node becoming a group keeps its size, what is put in it gets smaller): their largest step ends groupOffsetSteps below
+ * the node's (spec 8.1, « Nouveau groupe »), so that its envelope holds about where its box was; content smaller
+ * already keeps its steps.
+ */
+export const enteringSteps = (hostK: number, entering: number[], p: RenderParams): number =>
+  Math.min(0, hostK - p.groupOffsetSteps - Math.max(...entering));
+
+/**
  * Moving items by (dx, dy) and dropping them onto `target` (spec 10): one action for the moves, then the groups left
- * and entered (with Alt, leaving the group); a simple node receiving its first members becomes a group,
- * groupOffsetSteps above its largest member (spec 8.1). `target`: where the drop enters (dropTarget), found once by the
- * caller for this and dropMemberships (I2 of the final review).
+ * and entered (with Alt, leaving the group). A simple node receiving its first members becomes a group and keeps its
+ * step (2026-11-11): the entering items take enteringSteps, scaled as one selection would be (scaleMoves: their content
+ * and positions with them, around their barycentre), then moved. Entering a group changes no step (spec 10). `target`:
+ * where the drop enters (dropTarget), found once by the caller for this and dropMemberships (I2 of the final review).
  */
 export function dropBuild(base: PlanScene, items: number[], dx: number, dy: number, target: number | null, alt: boolean, p: RenderParams): Build {
   const effects = dropEffects(base, items, target, alt);
   if (dx === 0 && dy === 0 && effects.every((f) => !f.leave && f.enter === null)) return null;
   const effectOf = new Map(effects.map((f) => [f.item, f]));
-  const nodes: { node: Id; x: number; y: number }[] = [], phantoms: { id: Id; x: number; y: number; group?: Id | null }[] = [];
+  const nodes: { node: Id; x: number; y: number; k?: number }[] = [], phantoms: { id: Id; x: number; y: number; group?: Id | null; k?: number }[] = [];
   const memberships: ((s: State) => Action)[] = [];
   const plan = base.plan.id, targetId = target === null ? null : base.items[target].id;
+  // Into a simple node: the entering items shrink (enteringSteps), their places and steps as scaleMoves gives them.
+  const enteringItems = effects.filter((f) => f.enter !== null).map((f) => f.item);
+  const delta = target !== null && base.items[target].kind === 'node' && enteringItems.length > 0
+    ? enteringSteps(base.items[target].k, enteringItems.map((i) => base.items[i].k), p) : 0;
+  const scaled = delta < 0 ? scaleMoves(base, enteringItems, delta, p) : null;
+  const shrunk = new Map<Id, { x: number; y: number; k?: number }>();
+  for (const m of scaled?.nodes ?? []) shrunk.set(m.node, { x: m.x!, y: m.y!, k: m.k });
+  for (const m of scaled?.phantoms ?? []) shrunk.set(m.id, m);
   const collect = (i: number) => {
-    const it = base.items[i], f = effectOf.get(i);
+    const it = base.items[i], f = effectOf.get(i), sh = shrunk.get(it.id);
     const group = f?.enter != null ? targetId : f?.leave ? null : undefined;
-    if (it.kind === 'phantom') phantoms.push({ id: it.id, x: it.x + dx, y: it.y + dy, ...(group !== undefined ? { group } : {}) });
+    const at = { x: (sh?.x ?? it.x) + dx, y: (sh?.y ?? it.y) + dy, ...(sh?.k !== undefined ? { k: sh.k } : {}) };
+    if (it.kind === 'phantom') phantoms.push({ id: it.id, ...at, ...(group !== undefined ? { group } : {}) });
     else {
       // A group's own position follows where it is drawn: emptied later, it stays there (I2 of the plan 3b review).
-      nodes.push({ node: it.id, x: it.x + dx, y: it.y + dy });
+      nodes.push({ node: it.id, ...at });
       if (f?.enter != null) memberships.push((x) => include(x, plan, it.id, targetId!));
       else if (f?.leave) memberships.push((x) => exclude(x, plan, it.id));
     }
     for (const c of it.children) collect(c);
   };
   for (const i of items) collect(i);
-  const entering = effects.filter((f) => f.enter !== null).map((f) => base.items[f.item].k);
-  if (target !== null && base.items[target].kind === 'node' && entering.length > 0) {
-    const k = Math.max(...entering) + p.groupOffsetSteps;
-    if (base.items[target].k < k) memberships.push((x) => moveNodes(x, plan, [{ node: targetId!, k }]));
-  }
   const count = nodes.length + phantoms.length;
   const moved = subtree(base, items);
   const label = targetId !== null && effects.some((f) => f.enter !== null) ? `Mettre dans « ${base.items[target!].title} »`
     : effects.some((f) => f.leave) ? 'Sortir du groupe' : count === 1 ? 'Déplacer un élément' : `Déplacer ${count} éléments`;
+  // The connections all of whose ends move keep their shape: translated, and shrunk with the content when all of it
+  // shrinks (a drop where only some items enter only translates them).
+  const allShrink = scaled !== null && enteringItems.length === items.length;
+  const follow = (q: Vec2): Vec2 => (allShrink
+    ? { x: scaled.center.x + (q.x - scaled.center.x) * scaled.factor + dx, y: scaled.center.y + (q.y - scaled.center.y) * scaled.factor + dy }
+    : { x: q.x + dx, y: q.y + dy });
   return (st) => combine(st, label, [
     ...(nodes.length > 0 ? [(x: State) => moveNodes(x, plan, nodes)] : []),
-    ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group)),
+    ...phantoms.map((ph) => (x: State) => movePhantom(x, ph.id, ph.x, ph.y, ph.group, ph.k)),
     ...memberships,
-    ...(dx === 0 && dy === 0 ? [] : layoutsFollowing(st, base, moved, (q) => ({ x: q.x + dx, y: q.y + dy }), 1)),
+    ...(dx === 0 && dy === 0 && !allShrink ? [] : layoutsFollowing(st, base, moved, follow, allShrink ? scaled.factor : 1)),
   ]);
 }
 
@@ -331,23 +351,25 @@ export const ALREADY_HERE = 'Déjà dans ce plan.';
 /**
  * A node dragged out of a list of annotations and let go at `at` (plan 4c, D4): brought into this plan as importBuild
  * does — at the step readable at this zoom, entering the group whose envelope receives it — and, let go on a simple
- * node, entering that node, which becomes a group groupOffsetSteps above it, as a node dropped on a node does
- * (dropBuild; spec 8.1, 10). One action. Refused « Déjà dans ce plan. » when the node is placed here by the time it is
- * computed; a node in the trash, by placeNode. `index`: the scene's visibility index, if at hand (dropTarget).
+ * node, entering that node, which becomes a group and keeps its step, the annotation taking enteringSteps fewer, as a
+ * node dropped on a node does (dropBuild, 2026-11-11; spec 8.1, 10). One action. Refused « Déjà dans ce plan. » when the
+ * node is placed here by the time it is computed; a node in the trash, by placeNode. `index`: the scene's visibility
+ * index, if at hand (dropTarget).
  */
 export function placeDroppedBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
   const plan = scene.plan.id, t = dropTarget(scene, at, [], zoom, p, index);
   const host = t === null ? null : scene.items[t];
   const label = host === null ? 'Poser un nœud dans ce plan' : `Poser un nœud dans « ${host.title} »`;
   const imported = importBuild(scene, node, at, zoom, p, label, index)!;
-  const simple = host !== null && host.kind === 'node' ? host : null, k = readableStep(zoom, p) + p.groupOffsetSteps;
+  const simple = host !== null && host.kind === 'node' ? host : null, readable = readableStep(zoom, p);
+  const k = simple === null ? readable : readable + enteringSteps(simple.k, [readable], p);
   return (st) => {
     if (st.placements.has(placementKey(plan, node))) throw new CommandError(ALREADY_HERE);
     if (simple === null) return imported(st);
     return combine(st, label, [
       imported,
       (x) => include(x, plan, node, simple.id),
-      ...(simple.k < k ? [(x: State) => moveNodes(x, plan, [{ node: simple.id, k }])] : []),
+      ...(k !== readable ? [(x: State) => moveNodes(x, plan, [{ node, k }])] : []),
     ]);
   };
 }
