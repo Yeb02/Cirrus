@@ -1,6 +1,8 @@
 import { PARAM_SPECS } from '@cirrus/view';
 import { expect, test } from 'vitest';
 import { settingsTree } from '../src/renderer/ui/settingsTree.ts';
+import { focusedChoice } from '../src/renderer/ui/Dialogs.tsx';
+import { resetAllQuestion } from '../src/renderer/ui/SettingsPanel.tsx';
 
 const keysOf = (tree: ReturnType<typeof settingsTree>) => tree.flatMap((r) => r.groups.flatMap((g) => [...g.main, ...g.advanced].map((s) => s.key)));
 
@@ -36,4 +38,17 @@ test('une recherche sans réponse ne laisse ni rubrique ni groupe vide', () => {
     expect(r.groups.length).toBeGreaterThan(0);
     for (const g of r.groups) expect(g.main.length + g.advanced.length).toBeGreaterThan(0);
   }
+});
+
+test('« Tout réinitialiser » demande confirmation : « Non » par défaut (focus, Entrée), Échap annule aussi, sans « Annuler » en plus', () => {
+  let resets = 0;
+  const q = resetAllQuestion(() => { resets++; });
+  expect(q.choices).toEqual([{ value: 'no', label: 'Non' }, { value: 'yes', label: 'Oui, tout réinitialiser' }]);
+  expect(focusedChoice(q)).toBe(0);
+  expect(q.noCancel).toBe(true);
+  q.answer('no');
+  q.answer(null);
+  expect(resets).toBe(0);
+  q.answer('yes');
+  expect(resets).toBe(1);
 });

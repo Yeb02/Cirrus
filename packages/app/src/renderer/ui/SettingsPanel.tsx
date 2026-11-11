@@ -2,6 +2,7 @@ import type { LatexStatus } from '@cirrus/core';
 import { DEFAULT_PARAMS, hexToRgb, type ParamSpec, type RenderParams, rgbToHex, type Rgb, sameSetting, WORD } from '@cirrus/view';
 import { useEffect, useState } from 'react';
 import { latexStateText } from '../latex/install.ts';
+import { AskDialog, type Question } from './Dialogs.tsx';
 import { ServerBlock, type ServerBlockProps } from './settings/ServerBlock.tsx';
 import { type RubricView, settingsTree } from './settingsTree.ts';
 
@@ -117,6 +118,19 @@ function Groups(props: { groups: RubricView['groups']; pick: 'main' | 'advanced'
 }
 
 /** The rubrics open, and those whose advanced settings show: kept from one opening of the panel to the next. */
+/**
+ * « Tout réinitialiser » asks first (2026-11-11): « Non », the answer Enter gives (it has the focus), or « Oui, tout
+ * réinitialiser »; Escape gives up as « Non » does.
+ */
+export function resetAllQuestion(reset: () => void): Question {
+  return {
+    text: 'Remettre tous les réglages à leur valeur par défaut ?',
+    choices: [{ value: 'no', label: 'Non' }, { value: 'yes', label: 'Oui, tout réinitialiser' }],
+    noCancel: true,
+    answer: (v) => { if (v === 'yes') reset(); },
+  };
+}
+
 const opened = new Set<string>();
 const advancedShown = new Set<string>();
 
@@ -139,6 +153,7 @@ export function SettingsPanel(props: {
 }) {
   const [query, setQuery] = useState('');
   const [, refresh] = useState(0);
+  const [asking, setAsking] = useState(false);
   const toggle = (set: Set<string>, title: string) => { if (!set.delete(title)) set.add(title); refresh((n) => n + 1); };
   const set = props.onChange;
   const state = props.latex?.state;
@@ -182,7 +197,8 @@ export function SettingsPanel(props: {
             </section>
           );
         })}
-      <button className="reset-all" onClick={props.onResetAll}>Tout réinitialiser</button>
+      <button className="reset-all" onClick={() => setAsking(true)}>Tout réinitialiser</button>
+      {asking && <AskDialog q={resetAllQuestion(props.onResetAll)} onClose={() => setAsking(false)} />}
     </aside>
   );
 }

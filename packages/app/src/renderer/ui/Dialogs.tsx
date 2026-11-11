@@ -7,6 +7,8 @@ export interface Question {
   choices: { value: string; label: string }[];
   /** unless « Annuler » has the focus: a question whose choices lose what is typed (Enter never does). */
   focusCancel?: boolean;
+  /** No « Annuler »: a question whose choices include giving up (« Non »); Escape still does. */
+  noCancel?: boolean;
   answer(value: string | null): void;
 }
 
@@ -35,7 +37,7 @@ export function AskDialog(props: { q: Question; onClose(): void }) {
       {props.q.detail && <p className="detail">{props.q.detail}</p>}
       <div className="choices">
         {props.q.choices.map((c, i) => <button key={c.value} autoFocus={i === focused} onClick={() => answer(c.value)}>{c.label}</button>)}
-        <button className="cancel" autoFocus={focused === -1} onClick={() => answer(null)}>Annuler</button>
+        {!props.q.noCancel && <button className="cancel" autoFocus={focused === -1} onClick={() => answer(null)}>Annuler</button>}
       </div>
     </div>
   );
