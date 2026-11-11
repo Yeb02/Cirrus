@@ -39,6 +39,7 @@ import { TagRegistryPanel } from './ui/TagRegistryPanel.tsx';
 import { TrashPanel } from './ui/TrashPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
 import { SyncVeil } from './ui/SyncVeil.tsx';
+import { UpdateScreen } from './ui/UpdateScreen.tsx';
 import { Tabs } from './ui/Tabs.tsx';
 import { Toasts, useToasts } from './ui/Toasts.tsx';
 import { EditSession, openState, type Result, SnapshotSaver } from './session.ts';
@@ -135,6 +136,12 @@ export function App() {
   } = useScreens();
   /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
   const sync = useSync(toast, paramsRef);
+  /**
+   * The forced update's screen is up (2026-11-11: UpdateScreen): it holds the keys and the pointer itself; what reaches
+   * the app another way — the system's app commands, a side button's release, heard first — is held here.
+   */
+  const updating = useRef(false);
+  updating.current = sync.view.update !== null;
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Maj+Z) for the whole app; inside a text field, or a LaTeX field being edited, they
   // belong to the text (spec 6.4: textOwnsKeys). Not under the preamble's full screen; under a file's, only for the
@@ -179,7 +186,7 @@ export function App() {
   // code editor has the keys (historyKeyFor, historyButtonFor, historyCommandFor), nor over a full screen, which is modal.
   // The graph does not take a side button for a left press.
   useEffect(() => {
-    const go = (dir: HistoryMove) => { if (session.current && !fullRef.current && !preambleRef.current) graph.current?.[dir](); };
+    const go = (dir: HistoryMove) => { if (session.current && !fullRef.current && !preambleRef.current && !updating.current) graph.current?.[dir](); };
     const onKey = (e: KeyboardEvent) => {
       const dir = historyKeyFor(e, e.target instanceof Element ? (e.target as HTMLElement) : null);
       if (dir === null) return;
@@ -664,7 +671,8 @@ export function App() {
           </Suspense>
         </PanelBoundary>
       )}
-      {sync.view.veil && <SyncVeil />}
+      {sync.view.veil && !sync.view.update && <SyncVeil />}
+      {sync.view.update && <UpdateScreen screen={sync.view.update} onContinue={sync.dismissUpdate} />}
     </div>
   );
 }

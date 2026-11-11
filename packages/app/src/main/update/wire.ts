@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import type { RenderParams } from '@cirrus/view';
 import type { SyncHost } from '../sync/host.ts';
 import { updateModeOf } from './key.ts';
@@ -6,8 +6,9 @@ import { type FeedUpdater, Updater } from './updater.ts';
 
 // The signed updates' wires to Electron (plan 9, D4): the app's version and variant, the key, the sync host (its
 // network, its token, its chip), electron-updater — loaded the first time an update is to be downloaded, in a chunk of
-// its own, never at the start — and the app's quit, at which an armed update is installed. Everything else is
-// updater.ts's and key.ts's, which the tests run without Electron.
+// its own, never at the start — the window's closing once an update is armed (the forced update), and the app's quit,
+// at which an armed update is installed. Everything else is updater.ts's and key.ts's, which the tests run without
+// Electron.
 
 /**
  * The updater of this app, its sync host given: started, its periodic check running. Its mode is key.ts's
@@ -32,6 +33,13 @@ export function wireUpdater(o: { host: SyncHost; dev: boolean; params: () => Ren
       return autoUpdater;
     },
     tell: (word) => host.updateWord(word),
+    // The forced update armed: the window closed as the user would close it (window.ts: cirrus:quit, the interface's
+    // last saves), then the app quits (index.ts: window-all-closed) and its « quit » runs the installer.
+    restart: () => {
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length === 0) app.quit();
+      for (const w of windows) w.close();
+    },
   });
   // Electron's « quit », with the exit code: the moment electron-updater itself installs at (ElectronAppAdapter.onQuit).
   app.on('quit', (_e, exitCode) => updater.quit(exitCode));

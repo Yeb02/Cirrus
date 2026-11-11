@@ -148,8 +148,8 @@ export class SyncHost {
   }
 
   /**
-   * The updater's word (plan 9, D4: update/updater.ts): an update armed for the quit, an update refused; the window told
-   * at once, the client's status with it.
+   * The updater's word (plan 9, D4: update/updater.ts), whole each time: the forced update under way, an update refused;
+   * the window told at once, the client's status with it.
    */
   updateWord(word: UpdateWord): void {
     this.update = { ...word };

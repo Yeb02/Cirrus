@@ -1,6 +1,7 @@
 import { SyncDivergedError, type Unit } from '@cirrus/core';
 import type { FirstSyncChoice, PairResult, ReconcileOutcome, ServerInfo, SyncIncoming, SyncStatus } from '../../main/sync/protocol.ts';
 import { type EditSession, messageOf, type Opened } from '../session.ts';
+import { type UpdateScreen, updateChipLine, updateScreenOf } from './updateScreen.ts';
 
 // The synchronisation in the interface (plan 5a, task 4, D8): the writes received reconciled by the session and written
 // by the main process; the veil « Synchronisation… », which holds the actions at startup and on waking until this PC
@@ -26,25 +27,25 @@ export interface SyncBridge {
 /** The chip in the tabs' bar: its text, its tooltip, whether a click tries again. */
 export interface Chip { text: string; title: string; retry: boolean; tone: 'ok' | 'busy' | 'off' | 'refused' }
 
-/** What the interface shows of the synchronisation. */
-export interface SyncView { veil: boolean; status: SyncStatus; chip: Chip | null }
-
-/** What the chip says once an update is checked and armed for the app's quit (plan 9, D4). */
-export const UPDATE_READY = 'Mise à jour prête : elle s’installera à la fermeture.';
+/** What the interface shows of the synchronisation, and the forced update's screen over everything (none: `null`). */
+export interface SyncView { veil: boolean; status: SyncStatus; chip: Chip | null; update: UpdateScreen | null }
 
 /**
  * The chip (D8): none without a server; « À jour »; « Envoi de n actions… »; « Hors ligne », a click trying again — so
  * too a first connection still under way once the veil gave up (`gaveUp`); « Serveur : <raison> ». The clock's
- * warning in its tooltip. An update armed (plan 9, D4) takes the place of « À jour » and of a refusal — the server's
- * other format among them, which the update resolves —, the refusal kept in the tooltip; the other states keep their
- * text, the update in their tooltip.
+ * warning in its tooltip. The forced update under way (plan 9, D4: downloading, restarting, or the end-to-end check's
+ * trial) takes the place of « À jour » and of a refusal — the server's other format among them, which the update
+ * resolves —, the refusal kept in the tooltip; the other states keep their text, the update in their tooltip, as does
+ * every state after a failed or refused update.
  */
 export function chipOf(status: SyncStatus, gaveUp: boolean): Chip | null {
-  const clock = `${status.clockWarning ? `\n${status.clockWarning}` : ''}${status.updateReady ? `\n${UPDATE_READY}` : ''}`;
+  const flow = status.updateFlow, line = flow ? updateChipLine(flow) : null;
+  const clock = `${status.clockWarning ? `\n${status.clockWarning}` : ''}${line ? `\n${line}` : ''}`;
   const chip = (text: string, tone: Chip['tone'], retry = false): Chip => ({ text, title: `${retry ? 'Réessayer' : text}${clock}`, retry, tone });
-  if (status.updateReady && ((status.state === 'live' && status.pending === 0) || status.state === 'refused')) {
+  const going = flow?.step === 'downloading' || flow?.step === 'restarting' || flow?.step === 'trial';
+  if (going && line && ((status.state === 'live' && status.pending === 0) || status.state === 'refused')) {
     const why = status.state === 'refused' ? `\nServeur : ${status.message}` : '';
-    return { text: UPDATE_READY, title: `${UPDATE_READY}${why}${status.clockWarning ? `\n${status.clockWarning}` : ''}`, retry: false, tone: 'ok' };
+    return { text: line, title: `${line}${why}${status.clockWarning ? `\n${status.clockWarning}` : ''}`, retry: false, tone: flow?.step === 'trial' ? 'ok' : 'busy' };
   }
   switch (status.state) {
     case 'off': return null;
@@ -79,6 +80,8 @@ export class SyncSession {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private clockTold: string | undefined;
   private updateTold: string | undefined;
+  /** The forced update's last attempt whose failure, refusal or trial the user dismissed (« Continuer… »). */
+  private dismissed = 0;
   /** This PC's identifier, which signs its writes (from the load). */
   private pc = '';
   /** The statuses the main process sent: one sent after a call began is newer than that call's answer. */
@@ -243,6 +246,17 @@ export class SyncSession {
     this.deps.bridge.syncRetry();
   }
 
+  /**
+   * « Continuer sans mettre à jour » (or « Continuer » after the end-to-end check): the update screen of this attempt
+   * goes, until the next attempt; a download or a restart under way is never dismissed (updateScreenOf).
+   */
+  dismissUpdate(): void {
+    const flow = this.status.updateFlow;
+    if (!flow || flow.step === 'downloading' || flow.step === 'restarting') return;
+    this.dismissed = Math.max(this.dismissed, flow.attempt);
+    this.show();
+  }
+
   dispose(): void {
     for (const off of this.off.splice(0)) off();
     if (this.timer !== null) clearTimeout(this.timer);
@@ -334,7 +348,7 @@ export class SyncSession {
 
   /** The view, given only when it changed: a status that changes nothing renders nothing (review of task 4, Minor 5). */
   private show(): void {
-    const v: SyncView = { veil: this.veil, status: this.status, chip: chipOf(this.status, this.gaveUp) };
+    const v: SyncView = { veil: this.veil, status: this.status, chip: chipOf(this.status, this.gaveUp), update: updateScreenOf(this.status.updateFlow, this.dismissed) };
     const key = JSON.stringify(v);
     if (key === this.shown) return;
     this.shown = key;

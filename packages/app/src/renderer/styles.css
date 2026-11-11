@@ -626,6 +626,26 @@ button, input, select { font: inherit; color: var(--ink); }
   padding: 10px 22px; border-radius: 10px; font-size: 14px; color: var(--ink);
   background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); box-shadow: 0 10px 30px rgba(2, 6, 16, 0.6);
 }
+/* The forced update's screen (plan 9, D4; 2026-11-11): over everything, the veil included; it blocks the app. */
+.update-screen {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 17, 32, 0.78); cursor: default; outline: none;
+}
+.update-screen .update-box {
+  width: min(520px, calc(100vw - 48px)); padding: 18px 22px; border-radius: 10px; color: var(--ink);
+  background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); box-shadow: 0 10px 30px rgba(2, 6, 16, 0.6);
+}
+.update-screen h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.update-screen p { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.update-screen .update-progress {
+  position: relative; height: 18px; margin-top: 12px; border-radius: 9px; overflow: hidden; background: var(--sky2);
+}
+.update-screen .update-progress > div { height: 100%; background: var(--accent); opacity: 0.55; }
+.update-screen .update-progress > span { position: absolute; inset: 0; text-align: center; font-size: 12px; line-height: 18px; }
+.update-screen button {
+  display: block; margin: 14px 0 0 auto; padding: 5px 12px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge);
+}
+.update-screen button:hover, .update-screen button:focus-visible { border-color: var(--accent); }
 /* The block « Serveur » of the settings (plan 5a, D3). */
 .settings .server-block { margin-top: 4px; }
 .settings .server-block .param input { width: 100%; box-sizing: border-box; }

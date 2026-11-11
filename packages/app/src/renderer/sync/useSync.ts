@@ -6,8 +6,8 @@ import { type EditSession, type Opened, openState } from '../session.ts';
 import { referencedPdfs } from './downloadAll.ts';
 import { SyncSession, type SyncView } from './syncSession.ts';
 
-/** Without a server paired (plan 5a, D8): no veil, no chip. */
-const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null };
+/** Without a server paired (plan 5a, D8): no veil, no chip, no update screen. */
+const NO_SYNC: SyncView = { veil: false, status: { state: 'off' }, chip: null, update: null };
 
 /**
  * The synchronisation in App (plan 5a): what it shows (the veil, the chip: `view`), the server paired (`server`), and
@@ -88,5 +88,7 @@ export function useSync(toast: (text: string) => void, params: { readonly curren
   };
   /** The chip's click: offline or refused, try again now. */
   const retry = () => sync.current?.retry();
-  return { view, serverBlock, retry, starting, received };
+  /** The update screen's « Continuer… »: dismissed for its attempt (SyncSession.dismissUpdate). */
+  const dismissUpdate = () => sync.current?.dismissUpdate();
+  return { view, serverBlock, retry, dismissUpdate, starting, received };
 }

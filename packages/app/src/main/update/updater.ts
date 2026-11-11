@@ -1,5 +1,5 @@
 import type { OutgoingHttpHeaders } from 'node:http';
-import type { UpdateWord } from '../sync/protocol.ts';
+import type { UpdateFlow, UpdateWord } from '../sync/protocol.ts';
 import { checkInstaller, compareVersions, type Manifest, parseVersion, usableKey, verifyManifest } from './manifest.ts';
 
 // The signed updates in the app (plan 9, D4; Review Focus 2): a compromised server must never install code on a PC.
@@ -14,11 +14,17 @@ import { checkInstaller, compareVersions, type Manifest, parseVersion, usableKey
 //    rights nor a web installer's packages — before anything is downloaded (review of task 4, M2); then it downloads
 //    the whole file (its own sha512 check stays a second layer), never installing by itself.
 // 4. The file downloaded checked against the signed manifest's sha512 and size; only then is the install armed, for the
-//    app's quit, silently (`--updated /S`), the app not started again: the chip says so.
+//    app's quit, silently and the app started again after it (`--updated /S --force-run`).
+// The update is forced (2026-11-11): from the moment a signed manifest of a newer version is in hand — never before its
+// signature is checked: a false announcement must not block the app — the interface shows a screen that blocks it
+// (UpdateFlow: the download and its progress); once armed, the window closes by its normal path (`restart`: the
+// interface's last saves, cirrus:quit), and the app's quit runs the installer. A download that fails (the network) is
+// said on the screen, which the user may dismiss; the next check runs it all again. The end-to-end check's key
+// (neverInstall) stops at the armed installer: never closed, never installed.
 // A refusal — a signature that does not match, a latest.yml or an installer that is not the one signed, a newer version
-// announced but not served — installs nothing, and is said once a session: one console warning, one notification. A
-// disarm (the app starting again on a base taken from the server) is final for the session (M1). Nothing of Electron
-// here: the tests drive it (wire.ts binds it).
+// announced but not served — installs nothing, and is said once a session: one console warning, one notification; the
+// screen says it too once it is up. A disarm (the app starting again on a base taken from the server) is final for the
+// session (M1): nothing armed, nothing closed. Nothing of Electron here: the tests drive it (wire.ts binds it).
 
 /** The notification of a refused update (D4), once a session. */
 export const REFUSED = 'Mise à jour refusée : sa signature ne correspond pas.';
@@ -30,6 +36,9 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 
 /** The shortest pause between two periodic checks, whatever updateCheckMs says (its own floor is 300 000). */
 const MIN_CHECK_MS = 60_000;
+
+/** The most characters of a failure's message the screen is told (electron-updater's may carry a whole response). */
+const MAX_MESSAGE_CHARS = 300;
 
 /** What electron-updater says once it has downloaded an update: the version latest.yml gave, the file it kept. */
 export interface Downloaded { version: string; downloadedFile: string }
@@ -52,6 +61,8 @@ export interface FeedUpdater {
   downloadUpdate(): Promise<unknown>;
   install(isSilent?: boolean, isForceRunAfter?: boolean): boolean;
   on(event: 'update-downloaded', listener: (e: Downloaded) => void): unknown;
+  /** Its progress while it downloads (said only to a listener already there when the download starts). */
+  on(event: 'download-progress', listener: (p: { percent: number }) => void): unknown;
 }
 
 /**
@@ -87,8 +98,13 @@ export interface UpdaterDeps {
   params(): { updateCheckMs: number; syncRetryMaxMs: number };
   /** electron-updater's autoUpdater, loaded the first time an update is to be downloaded. */
   updater(): FeedUpdater | Promise<FeedUpdater>;
-  /** The chip and the notification (SyncHost.updateWord). */
+  /** The screen, the chip and the notification (SyncHost.updateWord): the whole word each time. */
   tell(word: UpdateWord): void;
+  /**
+   * The installer armed: the app's window closed by its normal path (its last saves, cirrus:quit), the app's quit then
+   * running the installer (quit). Never called in the end-to-end check (neverInstall), nor once disarmed.
+   */
+  restart(): void;
   /** The console's warnings: console.warn by default. */
   warn?(text: string): void;
   /** The installer's check against the manifest: checkInstaller by default. */
@@ -149,6 +165,12 @@ export class Updater {
    * longer connects. Looked for again every syncRetryMaxMs, connected or not.
    */
   private formatPending = false;
+  /** The forced update as the screen shows it; null before any signed manifest of a newer version. */
+  private flow: UpdateFlow | null = null;
+  /** The runs of the forced update so far: each its attempt. */
+  private attempts = 0;
+  /** The refusal's notification, once said: kept in every word after. */
+  private notice: string | null = null;
 
   constructor(deps: UpdaterDeps) {
     this.deps = deps;
@@ -182,7 +204,10 @@ export class Updater {
     return this.running;
   }
 
-  /** The app quits (Electron's « quit », its exit code): armed, and quitting without error, the installer runs, silently. */
+  /**
+   * The app quits (Electron's « quit », its exit code): armed, and quitting without error, the installer runs, silently,
+   * and starts the app again once done (D4) — whether restart closed the window or the user did.
+   */
   quit(exitCode: number): void {
     const feed = this.feed;
     if (!this.armed || exitCode !== 0 || !feed?.autoInstallOnAppQuit) return;
@@ -190,7 +215,7 @@ export class Updater {
       this.warn('Mise à jour : essai de bout en bout, l’installateur n’est pas lancé.');
       return;
     }
-    feed.install(true, false);
+    feed.install(true, true);
   }
 
   /**
@@ -257,6 +282,20 @@ export class Updater {
       return;
     }
     if (text === this.refusedText) return;
+    // Signed and newer: the forced update begins, the screen up. A failure from here on is said on it.
+    this.begin(m.version);
+    try {
+      await this.fetchInstaller(m, text, server);
+    } catch (e) {
+      this.fail(messageOf(e));
+      throw e;
+    }
+    // electron-updater said nothing more (no download heard): never a screen left waiting.
+    this.fail('electron-updater n’a rien téléchargé');
+  }
+
+  /** electron-updater set to the server, latest.yml checked against the signed manifest, then the installer downloaded. */
+  private async fetchInstaller(m: Manifest, text: string, server: { url: string; token: string }): Promise<void> {
     const feed = await this.feedOf();
     if (this.ended) return;
     this.manifest = { m, text };
@@ -269,14 +308,15 @@ export class Updater {
     feed.requestHeaders = { Authorization: `Bearer ${server.token}` };
     feed.setFeedURL({ provider: 'generic', url: `${server.url}/versions/` });
     const found = await feed.checkForUpdates();
+    if (this.ended) return;
     // Null: electron-updater inactive (an app run unpackaged).
-    if (!found || this.ended) return;
+    if (!found) return this.fail('cette app n’est pas installée : electron-updater est inactif');
     const mismatch = latestMismatch(found.updateInfo, m);
     if (mismatch !== null) {
       this.refusedText = text;
       return this.refuse(mismatch);
     }
-    if (!found.isUpdateAvailable) return;
+    if (!found.isUpdateAvailable) return this.fail('electron-updater ne voit pas de version plus récente');
     try {
       await feed.downloadUpdate();
     } catch (e) {
@@ -308,8 +348,40 @@ export class Updater {
     const feed = await this.deps.updater();
     if (this.feed) return this.feed;
     feed.on('update-downloaded', (e) => this.downloaded(feed, e));
+    feed.on('download-progress', (p) => this.progress(p.percent));
     this.feed = feed;
     return feed;
+  }
+
+  /** A run of the forced update begins (a signed manifest of `version`, newer): the screen says its download. */
+  private begin(version: string): void {
+    this.attempts++;
+    this.verifying = null;
+    this.flow = { version, attempt: this.attempts, step: 'downloading' };
+    this.say();
+  }
+
+  /** The download's progress, each whole percent said once. */
+  private progress(percent: number): void {
+    const f = this.flow;
+    if (f?.step !== 'downloading' || !Number.isFinite(percent)) return;
+    const whole = Math.max(0, Math.min(100, Math.floor(percent)));
+    if (whole === f.percent) return;
+    this.flow = { ...f, percent: whole };
+    this.say();
+  }
+
+  /** The download under way failed (the network, electron-updater): said on the screen; the next check runs it again. */
+  private fail(message: string): void {
+    const f = this.flow;
+    if (f?.step !== 'downloading' || this.ended) return;
+    this.flow = { version: f.version, attempt: f.attempt, step: 'failed', message: message.slice(0, MAX_MESSAGE_CHARS) };
+    this.say();
+  }
+
+  /** The whole word: the screen's step, and the refusal's notification once said. */
+  private say(): void {
+    this.deps.tell({ ...(this.flow ? { updateFlow: this.flow } : {}), ...(this.notice !== null ? { updateRefused: this.notice } : {}) });
   }
 
   /**
@@ -328,19 +400,39 @@ export class Updater {
         this.refuse(`l’installateur téléchargé (${e.version}) n’a pas l’empreinte ni la taille du manifeste signé (${signed.m.version})`);
         return;
       }
-      // Disarmed meanwhile (M1): final.
+      // Disarmed meanwhile (M1): final — nothing armed, nothing closed.
       if (this.ended) return;
       this.armed = true;
       feed.autoInstallOnAppQuit = true;
-      this.deps.tell({ updateReady: true });
-    })().catch((err: unknown) => this.warn(`Mise à jour : installateur non vérifié (${messageOf(err)}) ; rien n’est installé.`));
+      const { version, attempt } = this.flow ?? { version: signed.m.version, attempt: this.attempts };
+      // The end-to-end check stops here: said, never closed nor installed.
+      if (this.deps.neverInstall) {
+        this.flow = { version, attempt, step: 'trial' };
+        this.say();
+        return;
+      }
+      this.flow = { version, attempt, step: 'restarting' };
+      this.say();
+      this.deps.restart();
+    })().catch((err: unknown) => {
+      this.warn(`Mise à jour : installateur non vérifié (${messageOf(err)}) ; rien n’est installé.`);
+      this.fail(`installateur non vérifié (${messageOf(err)})`);
+    });
   }
 
-  /** Nothing installed; said once a session, in the console and by a notification (`notice`). */
+  /**
+   * Nothing installed; said once a session, in the console and by a notification (`notice`). The forced update under
+   * way, its screen says the refusal, every time.
+   */
   private refuse(why: string, notice = REFUSED): void {
-    if (this.refusalSaid) return;
-    this.refusalSaid = true;
-    this.warn(`Mise à jour refusée : ${why}. Rien n’est installé.`);
-    this.deps.tell({ updateRefused: notice });
+    const f = this.flow;
+    const shown = f?.step === 'downloading' && !this.ended;
+    if (shown) this.flow = { version: f.version, attempt: f.attempt, step: 'refused', message: why.slice(0, MAX_MESSAGE_CHARS) };
+    if (!this.refusalSaid) {
+      this.refusalSaid = true;
+      this.notice = notice;
+      this.warn(`Mise à jour refusée : ${why}. Rien n’est installé.`);
+    } else if (!shown) return;
+    this.say();
   }
 }

@@ -9,15 +9,17 @@ import { afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { devUpdatesOf, KEY_PLACEHOLDER, UPDATE_PUBLIC_KEY, updateKeyOf, updateModeOf } from '../src/main/update/key.ts';
 import { checkInstaller, compareVersions, type Manifest, usableKey, verifyManifest } from '../src/main/update/manifest.ts';
 import { type FeedUpdater, type LatestInfo, NOT_SERVED, REFUSED, Updater, type UpdaterDeps } from '../src/main/update/updater.ts';
-import type { UpdateWord } from '../src/main/sync/protocol.ts';
-import { chipOf, UPDATE_READY as READY } from '../src/renderer/sync/syncSession.ts';
+import type { UpdateFlow, UpdateWord } from '../src/main/sync/protocol.ts';
+import { chipOf } from '../src/renderer/sync/syncSession.ts';
+import { passesKey, updateScreenOf } from '../src/renderer/sync/updateScreen.ts';
 import { AppPc } from './support/appPc.ts';
 import { Lab, until } from './support/virtualPc.ts';
 
 // The signed updates (plan 9, task 4, D4; Review Focus 2): the manifest of the official version, version.json, signed
 // by the CI (ed25519) with the key kept in GitHub's secrets, checked with the public key the app carries; the installer
-// electron-updater downloads, checked against the manifest's sha512; the install armed for the app's close only then.
-// Never a downgrade, never « Cirrus Dev », never with the placeholder key. A test key is made here, never in the
+// electron-updater downloads, checked against the manifest's sha512; the install armed only then. Forced (2026-11-11):
+// from the manifest checked on, a screen blocks the app; the installer armed, the window closes by its normal path and
+// the installer runs at the quit, the app started again after it. Never a downgrade, never « Cirrus Dev », never with the placeholder key. A test key is made here, never in the
 // repository.
 
 const run = promisify(execFile);
@@ -192,6 +194,8 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
   fails: Error | null = null;
   /** A download that fails (electron-updater's own sha512 check of latest.yml: ERR_CHECKSUM_MISMATCH). */
   downloadFails: Error | null = null;
+  /** The percentages a download says ('download-progress'), before it ends. */
+  progress: number[] = [];
 
   setFeedURL(options: unknown): void {
     this.feeds.push(options);
@@ -215,6 +219,7 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
     const d = this.download;
     if (!d) return [];
     await new Promise((r) => setTimeout(r, 1));
+    for (const percent of this.progress) this.emit('download-progress', { percent });
     this.emit('update-downloaded', { version: d.version, downloadedFile: d.file });
     this.armedByItself.push(this.autoInstallOnAppQuit);
     return [d.file];
@@ -232,7 +237,9 @@ const SERVER = { url: 'https://cirrus.exemple.fr', token: 'J'.repeat(43) };
 function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | number | Error> } = {}) {
   const feed = new FakeFeed();
   const told: UpdateWord[] = [], warned: string[] = [], asked: string[] = [];
-  let made = 0;
+  /** The files asked of the server when each word was told: the screen never before the manifest's signature. */
+  const toldAfter: number[] = [];
+  let made = 0, restarts = 0;
   const files = o.files ?? {};
   const u = new Updater({
     version: '0.1.1', dev: false, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000 }), server: () => SERVER,
@@ -243,13 +250,19 @@ function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | num
       return typeof f === 'string' ? new Response(f) : new Response('{"error":"absent"}', { status: typeof f === 'number' ? f : 404 });
     },
     updater: () => { made++; return feed; },
-    tell: (w) => told.push(w),
+    tell: (w) => { told.push(w); toldAfter.push(asked.length); },
     warn: (t) => warned.push(t),
+    restart: () => { restarts++; },
     ...o,
   });
   feed.latest = latestYml();
-  return { u, feed, told, warned, asked, made: () => made };
+  return { u, feed, told, toldAfter, warned, asked, made: () => made, restarts: () => restarts };
 }
+
+/** The steps of the screen the words said, in order (null: a word without one). */
+const stepsOf = (told: UpdateWord[]) => told.map((w) => w.updateFlow?.step ?? null);
+/** The screen's word for 0.1.2 at `step` (its `attempt`: the first by default). */
+const flow = (step: UpdateFlow['step'], more: Record<string, unknown> = {}): UpdateFlow => ({ version: '0.1.2', attempt: 1, step, ...more }) as UpdateFlow;
 
 /** The server's versions/ for a manifest of 0.1.2 signed with the test key (or `sig`). */
 function published(o: { text?: string; sig?: string } = {}): Record<string, string> {
@@ -257,10 +270,12 @@ function published(o: { text?: string; sig?: string } = {}): Record<string, stri
   return { 'version.json': text, 'version.json.sig': o.sig ?? signed(text, key.priv) };
 }
 
-test('Updater (D4) : un /hello qui annonce une version plus récente ; le manifeste vérifié, electron-updater téléchargé avec le jeton, l’installateur vérifié, l’installation armée pour la fermeture ; la pastille le dit', async () => {
+test('Updater (D4, mise à jour forcée) : un /hello qui annonce une version plus récente ; le manifeste vérifié, l’écran le dit, electron-updater téléchargé avec le jeton, sa progression dite, l’installateur vérifié et armé ; puis la fenêtre fermée par son chemin normal, et l’installateur lancé à la fermeture, avec relance', async () => {
   setUp();
-  const { u, feed, told, asked } = updater({ files: published() });
+  const { u, feed, told, toldAfter, asked, restarts } = updater({ files: published() });
   feed.download = { version: '0.1.2', file: installer.path };
+  // Each whole percent said once; a fraction more says nothing new.
+  feed.progress = [12.5, 12.9, 57.3, 100];
   await u.heard('0.1.2');
   expect(asked).toEqual(['version.json', 'version.json.sig']);
   // electron-updater: the server's versions/, the token in a header; a full download, never differential nor a web
@@ -271,26 +286,50 @@ test('Updater (D4) : un /hello qui annonce une version plus récente ; le manife
   expect(feed.downloads).toBe(1);
   // Right after the download, unchecked: electron-updater does not arm itself.
   expect(feed.armedByItself).toEqual([false]);
-  // Checked: armed — autoInstallOnAppQuit, and the app's quit installs it, silently.
+  // The screen: from the manifest checked on — never before its signature —, the download and its progress, then the
+  // restart once armed.
+  expect(told).toEqual([
+    { updateFlow: flow('downloading') }, { updateFlow: flow('downloading', { percent: 12 }) }, { updateFlow: flow('downloading', { percent: 57 }) },
+    { updateFlow: flow('downloading', { percent: 100 }) }, { updateFlow: flow('restarting') },
+  ]);
+  expect(toldAfter[0]).toBe(2);
+  // Checked: armed — autoInstallOnAppQuit —, the window asked to close, once; the app's quit installs it, silently,
+  // and the app starts again after (D4).
   expect(feed.autoInstallOnAppQuit).toBe(true);
-  expect(told.at(-1)).toEqual({ updateReady: true });
-  expect(READY).toBe('Mise à jour prête : elle s’installera à la fermeture.');
+  expect(restarts()).toBe(1);
+  expect(feed.installs).toEqual([]);
   u.quit(0);
-  expect(feed.installs).toEqual([[true, false]]);
+  expect(feed.installs).toEqual([[true, true]]);
+  u.dispose();
+});
+
+test('Updater : electron-updater inactif (une app non installée) — l’écran dit l’échec ; rien d’armé ni de fermé', async () => {
+  setUp();
+  const { u, feed, told, restarts } = updater({ files: published() });
+  feed.latest = null;
+  await u.heard('0.1.2');
+  expect(stepsOf(told)).toEqual(['downloading', 'failed']);
+  expect(told.at(-1)?.updateFlow).toMatchObject({ version: '0.1.2', attempt: 1, message: expect.stringContaining('installée') });
+  expect(told.at(-1)?.updateRefused).toBeUndefined();
+  expect(restarts()).toBe(0);
+  u.quit(0);
+  expect(feed.installs).toEqual([]);
   u.dispose();
 });
 
 test('Updater (Review Focus 2) : une signature fausse — rien n’est téléchargé ni installé ; un avertissement et une notification, une seule fois par session', async () => {
   setUp();
   const other = keyPair();
-  const { u, feed, told, warned, made } = updater({ files: published({ sig: signed(manifestText(), other.priv) }) });
+  const { u, feed, told, warned, made, restarts } = updater({ files: published({ sig: signed(manifestText(), other.priv) }) });
   feed.download = { version: '0.1.2', file: installer.path };
   await u.heard('0.1.2');
   await u.heard('0.1.2');
   await u.formatRefused();
   expect(made()).toBe(0);
   expect(feed.checks).toEqual([]);
+  // A false announcement never blocks the app: no screen, the notification only.
   expect(told).toEqual([{ updateRefused: REFUSED }]);
+  expect(restarts()).toBe(0);
   expect(REFUSED).toBe('Mise à jour refusée : sa signature ne correspond pas.');
   expect(warned.filter((w) => w.includes('signature'))).toHaveLength(1);
   u.quit(0);
@@ -308,23 +347,40 @@ test('Updater (Review Focus 2) : le manifeste modifié après sa signature est r
   u.dispose();
 });
 
-test('Updater (Review Focus 2) : un installateur dont l’empreinte diffère du manifeste signé n’est pas armé ; la fermeture n’installe rien ; il n’est pas retéléchargé pour ce manifeste', async () => {
+test('Updater (Review Focus 2) : un installateur dont l’empreinte diffère du manifeste signé n’est pas armé ; l’écran dit le refus, la notification aussi ; ni fermeture ni installation ; il n’est pas retéléchargé pour ce manifeste', async () => {
   setUp();
   const other = join(dir, 'autre.exe');
   writeFileSync(other, randomBytes(installer.bytes.length));
-  const { u, feed, told, warned } = updater({ files: published() });
+  const { u, feed, told, warned, restarts } = updater({ files: published() });
   feed.download = { version: '0.1.2', file: other };
   await u.heard('0.1.2');
   expect(feed.checks).toHaveLength(1);
   expect(feed.autoInstallOnAppQuit).toBe(false);
   expect(feed.armedByItself).toEqual([false]);
-  expect(told).toEqual([{ updateRefused: REFUSED }]);
+  expect(stepsOf(told)).toEqual(['downloading', 'refused']);
+  expect(told.at(-1)).toEqual({ updateFlow: flow('refused', { message: expect.stringContaining('empreinte') }), updateRefused: REFUSED });
+  expect(restarts()).toBe(0);
   expect(warned.some((w) => w.includes('empreinte'))).toBe(true);
   u.quit(0);
   expect(feed.installs).toEqual([]);
-  // The same manifest again: not downloaded again.
+  // The same manifest again: not downloaded again, nor shown again.
   await u.heard('0.1.2');
   expect(feed.checks).toHaveLength(1);
+  expect(told).toHaveLength(2);
+  u.dispose();
+});
+
+test('Updater : un second refus dans la session — un autre manifeste — l’écran le dit encore ; la notification et l’avertissement restent uniques', async () => {
+  setUp();
+  const files = published();
+  const { u, feed, told, warned } = updater({ files });
+  feed.latest = latestYml({ isAdminRightsRequired: true });
+  await u.heard('0.1.2');
+  Object.assign(files, published({ text: manifestText({ version: '0.1.3' }) }));
+  await u.heard('0.1.3');
+  expect(stepsOf(told)).toEqual(['downloading', 'refused', 'downloading', 'refused']);
+  expect(told.at(-1)).toEqual({ updateFlow: { version: '0.1.3', attempt: 2, step: 'refused', message: expect.stringContaining('latest.yml') }, updateRefused: REFUSED });
+  expect(warned.filter((w) => w.startsWith('Mise à jour refusée'))).toHaveLength(1);
   u.dispose();
 });
 
@@ -334,7 +390,7 @@ test('Updater : electron-updater dit avoir téléchargé une autre version que c
   feed.download = { version: '0.1.3', file: installer.path };
   await u.heard('0.1.2');
   expect(feed.autoInstallOnAppQuit).toBe(false);
-  expect(told).toEqual([{ updateRefused: REFUSED }]);
+  expect(told.at(-1)).toEqual({ updateFlow: flow('refused', { message: expect.any(String) }), updateRefused: REFUSED });
   u.quit(0);
   expect(feed.installs).toEqual([]);
   u.dispose();
@@ -358,7 +414,8 @@ test('Updater (revue, M2) : un latest.yml hostile — autre version, deux fichie
     await u.heard('0.1.2');
     expect(feed.checks, JSON.stringify(fields)).toHaveLength(1);
     expect(feed.downloads, JSON.stringify(fields)).toBe(0);
-    expect(told, JSON.stringify(fields)).toEqual([{ updateRefused: REFUSED }]);
+    expect(stepsOf(told), JSON.stringify(fields)).toEqual(['downloading', 'refused']);
+    expect(told.at(-1), JSON.stringify(fields)).toEqual({ updateFlow: flow('refused', { message: expect.stringMatching(/latest\.yml/) }), updateRefused: REFUSED });
     expect(warned.at(-1)).toMatch(/latest\.yml/);
     // The same manifest is not tried again this session.
     await u.heard('0.1.2');
@@ -369,25 +426,40 @@ test('Updater (revue, M2) : un latest.yml hostile — autre version, deux fichie
   }
 });
 
-test('Updater (revue, M2) : latest.yml celui du manifeste, mais d’autres octets servis — la vérification d’electron-updater échoue : refusé, non retéléchargé ; une autre panne du téléchargement : réessayée, sans refus', async () => {
+test('Updater (revue, M2) : latest.yml celui du manifeste, mais d’autres octets servis — la vérification d’electron-updater échoue : refusé, non retéléchargé ; une panne du réseau : l’écran dit l’échec, sans refus, et la vérification suivante reprend le déroulement', async () => {
   setUp();
-  const { u, feed, told } = updater({ files: published() });
+  const { u, feed, told, restarts } = updater({ files: published() });
   feed.downloadFails = Object.assign(new Error('sha512 checksum mismatch'), { code: 'ERR_CHECKSUM_MISMATCH' });
   await u.heard('0.1.2');
-  expect(told).toEqual([{ updateRefused: REFUSED }]);
+  expect(told.at(-1)).toEqual({ updateFlow: flow('refused', { message: expect.stringContaining('empreinte') }), updateRefused: REFUSED });
   await u.heard('0.1.2');
   expect(feed.downloads).toBe(1);
+  expect(restarts()).toBe(0);
   u.dispose();
   const net = updater({ files: published() });
   net.feed.downloadFails = Object.assign(new Error('net::ERR_CONNECTION_RESET'), { code: 'ERR_CONNECTION_RESET' });
   await net.u.heard('0.1.2');
-  expect(net.told).toEqual([]);
+  expect(net.told).toEqual([{ updateFlow: flow('downloading') }, { updateFlow: flow('failed', { message: 'net::ERR_CONNECTION_RESET' }) }]);
+  expect(net.restarts()).toBe(0);
   net.feed.downloadFails = null;
   net.feed.download = { version: '0.1.2', file: installer.path };
   await net.u.heard('0.1.2');
   expect(net.feed.downloads).toBe(2);
-  expect(net.told).toEqual([{ updateReady: true }]);
+  // A new attempt: the screen comes back, even if the failure was dismissed.
+  expect(net.told.slice(2)).toEqual([{ updateFlow: flow('downloading', { attempt: 2 }) }, { updateFlow: flow('restarting', { attempt: 2 }) }]);
+  expect(net.restarts()).toBe(1);
   net.u.dispose();
+});
+
+test('Updater : un message d’échec démesuré est borné', async () => {
+  setUp();
+  const { u, feed, told } = updater({ files: published() });
+  feed.fails = new Error('x'.repeat(10_000));
+  await u.heard('0.1.2');
+  const last = told.at(-1)?.updateFlow;
+  expect(last?.step).toBe('failed');
+  expect(last && 'message' in last ? last.message.length : 0).toBeLessThanOrEqual(300);
+  u.dispose();
 });
 
 test('Updater (Review Focus 2 ; revue, M3) : un serveur qui ment sur sa version — /hello annonce 0.1.9, le manifeste signé est plus ancien ou égal : rien de téléchargé, refusé une fois ; la recherche périodique reste muette', async () => {
@@ -453,7 +525,7 @@ test('Updater (D4) : le format refusé par le serveur (409) fait chercher la mis
   feed.download = { version: '0.1.2', file: installer.path };
   await u.formatRefused();
   expect(feed.checks).toHaveLength(1);
-  expect(told.at(-1)).toEqual({ updateReady: true });
+  expect(stepsOf(told)).toEqual(['downloading', 'restarting']);
   u.dispose();
 });
 
@@ -474,7 +546,7 @@ test('Updater (revue finale du plan 9, I1) : un format refusé pendant que le se
   await vi.advanceTimersByTimeAsync(100);
   expect(asked).toHaveLength(4);
   expect(feed.downloads).toBe(1);
-  expect(told.at(-1)).toEqual({ updateReady: true });
+  expect(stepsOf(told)).toEqual(['downloading', 'restarting']);
   u.dispose();
 });
 
@@ -512,7 +584,7 @@ test('Updater : toutes les updateCheckMs tant que la connexion est ouverte ; rie
   expect(asked).toHaveLength(4);
 });
 
-test('Updater (revue, M1 et M5) : une fermeture pendant la vérification n’installe rien ; une relance qui désarme pendant la vérification est définitive — rien d’armé ensuite, ni cherché', async () => {
+test('Updater (revue, M1 et M5) : une fermeture pendant la vérification n’installe rien ; une relance qui désarme pendant la vérification est définitive — rien d’armé ensuite, ni fermé, ni cherché', async () => {
   setUp();
   let release!: (ok: boolean) => void;
   const pending = () => new Promise<boolean>((r) => { release = r; });
@@ -525,7 +597,7 @@ test('Updater (revue, M1 et M5) : une fermeture pendant la vérification n’ins
   expect(first.feed.installs).toEqual([]);
   release(true);
   await looking;
-  expect(first.told.at(-1)).toEqual({ updateReady: true });
+  expect(stepsOf(first.told)).toEqual(['downloading', 'restarting']);
   first.u.dispose();
   // Disarmed (the app starting again, D7) while the installer is checked: the check ends, nothing is armed, quit(0)
   // installs nothing, and nothing more is looked for.
@@ -537,7 +609,9 @@ test('Updater (revue, M1 et M5) : une fermeture pendant la vérification n’ins
   release(true);
   await again;
   expect(second.feed.autoInstallOnAppQuit).toBe(false);
-  expect(second.told).toEqual([]);
+  // The screen said the download (the app quits anyway, D7); never the restart, and nothing closed by the updater.
+  expect(stepsOf(second.told)).toEqual(['downloading']);
+  expect(second.restarts()).toBe(0);
   second.u.quit(0);
   expect(second.feed.installs).toEqual([]);
   await second.u.heard('0.1.3');
@@ -563,13 +637,14 @@ test('updateModeOf (revue, I1) : une clé d’essai n’installe jamais, quelle 
   expect(updateModeOf({ ...testBase, ...testKey, CIRRUS_UPDATE_DEV: '1' }, false, true)).toEqual({ publicKey: key.pub, dev: false, neverInstall: true });
 });
 
-test('updateModeOf → Updater (revue, I1) : l’app officielle avec une clé d’essai arme une mise à jour signée par elle, et sa fermeture n’installe rien', async () => {
+test('updateModeOf → Updater (revue, I1) : l’app officielle avec une clé d’essai arme une mise à jour signée par elle ; l’écran dit l’essai, rien n’est fermé, et sa fermeture n’installe rien', async () => {
   setUp();
   const mode = updateModeOf({ CIRRUS_DATA: 'C:\\essai', CIRRUS_BACKGROUND: '1', CIRRUS_UPDATE_PUBLIC_KEY: key.pub }, false, false);
-  const { u, feed, told } = updater({ files: published(), ...mode });
+  const { u, feed, told, restarts } = updater({ files: published(), ...mode });
   feed.download = { version: '0.1.2', file: installer.path };
   await u.heard('0.1.2');
-  expect(told.at(-1)).toEqual({ updateReady: true });
+  expect(told.at(-1)).toEqual({ updateFlow: flow('trial') });
+  expect(restarts()).toBe(0);
   u.quit(0);
   expect(feed.installs).toEqual([]);
   u.dispose();
@@ -594,19 +669,20 @@ test('Updater : armée, plus rien n’est cherché ni téléchargé ; une relanc
   u.dispose();
 });
 
-test('Updater : l’essai de bout en bout (neverInstall) arme la mise à jour mais ne lance jamais l’installateur, même à une fermeture sans erreur', async () => {
+test('Updater : l’essai de bout en bout (neverInstall) arme la mise à jour, l’écran le dit, mais ne ferme rien et ne lance jamais l’installateur, même à une fermeture sans erreur', async () => {
   setUp();
-  const { u, feed, told, warned } = updater({ files: published(), neverInstall: true });
+  const { u, feed, told, warned, restarts } = updater({ files: published(), neverInstall: true });
   feed.download = { version: '0.1.2', file: installer.path };
   await u.heard('0.1.2');
-  expect(told.at(-1)).toEqual({ updateReady: true });
+  expect(stepsOf(told)).toEqual(['downloading', 'trial']);
+  expect(restarts()).toBe(0);
   u.quit(0);
   expect(feed.installs).toEqual([]);
   expect(warned.at(-1)).toMatch(/essai/);
   u.dispose();
 });
 
-test('Updater : un réseau qui échoue, un manifeste absent, electron-updater en erreur — rien d’installé, ni refus ; le prochain essai repart', async () => {
+test('Updater : un réseau qui échoue, un manifeste absent — rien de dit ; electron-updater en erreur après la signature — l’écran dit l’échec, sans refus ; le prochain essai repart', async () => {
   setUp();
   const files: Record<string, string | number | Error> = { 'version.json': new TypeError('fetch failed') };
   const { u, feed, told } = updater({ files });
@@ -614,14 +690,15 @@ test('Updater : un réseau qui échoue, un manifeste absent, electron-updater en
   await u.heard('0.1.2');
   files['version.json'] = 404;
   await u.heard('0.1.2');
+  expect(told).toEqual([]);
   Object.assign(files, published());
   feed.fails = new Error('net::ERR_CONNECTION_RESET');
   await u.heard('0.1.2');
-  expect(told).toEqual([]);
+  expect(told).toEqual([{ updateFlow: flow('downloading') }, { updateFlow: flow('failed', { message: 'net::ERR_CONNECTION_RESET' }) }]);
   expect(feed.autoInstallOnAppQuit).toBe(false);
   feed.fails = null;
   await u.heard('0.1.2');
-  expect(told).toEqual([{ updateReady: true }]);
+  expect(told.slice(2)).toEqual([{ updateFlow: flow('downloading', { attempt: 2 }) }, { updateFlow: flow('restarting', { attempt: 2 }) }]);
   u.dispose();
 });
 
@@ -660,30 +737,80 @@ test('le client (D4) : la version officielle de chaque /hello passée au cherche
   expect(a.formatRefusals).toBe(1);
 });
 
-test('la pastille (D4) : « Mise à jour prête : elle s’installera à la fermeture. » une fois armée ; le refus, une notification, une fois', async () => {
+test('l’écran et la pastille (D4, mise à jour forcée) : le mot du chercheur montre l’écran ; un échec écarté par « Continuer » ne revient qu’à l’essai suivant ; le refus, une notification, une fois', async () => {
   const l = (lab = await Lab.start());
   const a = new AppPc(l, 'pc-a');
   apps.push(a);
   await a.open();
   expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toEqual({ ok: true });
   await until(() => a.view?.chip?.text === 'À jour', 5000, () => JSON.stringify(a.views.at(-1)));
+  expect(a.view?.update).toBeNull();
   a.host.updateWord({ updateRefused: REFUSED });
   await until(() => a.toasts.includes(REFUSED));
   a.host.updateWord({ updateRefused: REFUSED });
-  a.host.updateWord({ updateReady: true });
-  await until(() => a.view?.chip?.text === READY, 5000, () => JSON.stringify(a.views.at(-1)));
+  a.host.updateWord({ updateFlow: flow('downloading', { percent: 30 }), updateRefused: REFUSED });
+  await until(() => a.view?.update?.percent === 30, 5000, () => JSON.stringify(a.views.at(-1)));
+  expect(a.view?.update).toMatchObject({ title: 'Mise à jour de Cirrus vers 0.1.2', line: 'Téléchargement…', action: null });
+  expect(a.view?.chip).toMatchObject({ text: 'Mise à jour vers 0.1.2 : téléchargement…', retry: false, tone: 'busy' });
+  // Nothing to dismiss while all goes well.
+  a.sync.dismissUpdate();
+  expect(a.view?.update?.line).toBe('Téléchargement…');
+  a.host.updateWord({ updateFlow: flow('failed', { message: 'net::ERR_CONNECTION_RESET' }), updateRefused: REFUSED });
+  await until(() => a.view?.update?.action === 'Continuer sans mettre à jour', 5000, () => JSON.stringify(a.views.at(-1)));
+  a.sync.dismissUpdate();
+  expect(a.view?.update).toBeNull();
+  // The same word told again (a status of the sync carries it): still dismissed.
+  const seen = a.views.length;
+  a.host.updateWord({ updateFlow: flow('failed', { message: 'net::ERR_CONNECTION_RESET' }), updateRefused: REFUSED });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(a.views.slice(seen).every((v) => v.update === null)).toBe(true);
+  expect(a.view?.chip?.text).toBe('À jour');
+  expect(a.view?.chip?.title).toContain('Mise à jour vers 0.1.2 : téléchargement échoué');
+  // The next check: the screen comes back.
+  a.host.updateWord({ updateFlow: flow('downloading', { attempt: 2 }), updateRefused: REFUSED });
+  await until(() => a.view?.update?.line === 'Téléchargement…', 5000, () => JSON.stringify(a.views.at(-1)));
+  a.host.updateWord({ updateFlow: flow('restarting', { attempt: 2 }), updateRefused: REFUSED });
+  await until(() => a.view?.update?.line === 'Enregistrement, puis redémarrage…', 5000, () => JSON.stringify(a.views.at(-1)));
   expect(a.toasts.filter((t) => t === REFUSED)).toHaveLength(1);
-  expect(a.view?.chip).toMatchObject({ text: READY, retry: false, tone: 'ok' });
 });
 
-test('chipOf : prête, la mise à jour prend la place de « À jour » et d’un refus du serveur ; les autres états gardent leur texte, l’infobulle la dit', () => {
-  expect(chipOf({ state: 'live', pending: 0, updateReady: true }, false)).toMatchObject({ text: READY, tone: 'ok', retry: false });
-  const refused = chipOf({ state: 'refused', message: 'Ce serveur garde ses données dans un autre format (schéma 4, ici 5) : mets à jour Cirrus.', updateReady: true }, false);
-  expect(refused).toMatchObject({ text: READY, tone: 'ok', retry: false });
+test('chipOf : la mise à jour en cours (téléchargement, redémarrage, essai) prend la place de « À jour » et d’un refus du serveur ; les autres états gardent leur texte, l’infobulle la dit ; un échec ou un refus, dans l’infobulle seulement', () => {
+  const DL = 'Mise à jour vers 0.1.2 : téléchargement…';
+  expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('downloading', { percent: 40 }) }, false)).toMatchObject({ text: DL, tone: 'busy', retry: false });
+  const refused = chipOf({ state: 'refused', message: 'Ce serveur garde ses données dans un autre format (schéma 4, ici 5) : mets à jour Cirrus.', updateFlow: flow('restarting') }, false);
+  expect(refused).toMatchObject({ text: 'Mise à jour vers 0.1.2 : redémarrage…', tone: 'busy', retry: false });
   expect(refused?.title).toContain('autre format');
-  expect(chipOf({ state: 'offline', pending: 0, updateReady: true }, false)).toMatchObject({ text: 'Hors ligne', retry: true, title: expect.stringContaining(READY) });
-  expect(chipOf({ state: 'live', pending: 2, updateReady: true }, false)).toMatchObject({ text: 'Envoi de 2 actions…', title: expect.stringContaining(READY) });
-  expect(chipOf({ state: 'off', updateReady: true }, false)).toBeNull();
+  expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('trial') }, false)).toMatchObject({ text: 'Mise à jour vers 0.1.2 : essai, non installée', tone: 'ok' });
+  expect(chipOf({ state: 'offline', pending: 0, updateFlow: flow('downloading') }, false)).toMatchObject({ text: 'Hors ligne', retry: true, title: expect.stringContaining(DL) });
+  expect(chipOf({ state: 'live', pending: 2, updateFlow: flow('downloading') }, false)).toMatchObject({ text: 'Envoi de 2 actions…', title: expect.stringContaining(DL) });
+  expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('failed', { message: 'x' }) }, false))
+    .toMatchObject({ text: 'À jour', tone: 'ok', title: expect.stringContaining('Mise à jour vers 0.1.2 : téléchargement échoué') });
+  expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('refused', { message: 'x' }) }, false))
+    .toMatchObject({ text: 'À jour', title: expect.stringContaining('Mise à jour vers 0.1.2 refusée') });
+  expect(chipOf({ state: 'off', updateFlow: flow('downloading') }, false)).toBeNull();
+});
+
+test('l’écran de mise à jour : son texte à chaque étape ; aucun bouton tant que tout va bien ; « Continuer sans mettre à jour » après un échec ou un refus, « Continuer » après un essai, écartés pour leur essai seulement ; seuls Entrée et Espace sur son bouton passent', () => {
+  const T = 'Mise à jour de Cirrus vers 0.1.2';
+  expect(updateScreenOf(undefined, 0)).toBeNull();
+  expect(updateScreenOf(flow('downloading'), 0)).toEqual({ title: T, line: 'Téléchargement…', percent: null, action: null, attempt: 1 });
+  expect(updateScreenOf(flow('downloading', { percent: 42 }), 0)).toMatchObject({ percent: 42 });
+  // Neither the download nor the restart can be dismissed, whatever was dismissed before.
+  expect(updateScreenOf(flow('downloading'), 1)).not.toBeNull();
+  expect(updateScreenOf(flow('restarting'), 1)).toEqual({ title: T, line: 'Enregistrement, puis redémarrage…', percent: null, action: null, attempt: 1 });
+  const failed = updateScreenOf(flow('failed', { message: 'net::ERR_CONNECTION_RESET' }), 0);
+  expect(failed).toMatchObject({ title: T, action: 'Continuer sans mettre à jour' });
+  expect(failed?.line).toBe('Le téléchargement a échoué (net::ERR_CONNECTION_RESET). Cirrus réessaiera à la prochaine vérification.');
+  expect(updateScreenOf(flow('failed', { message: 'x' }), 1)).toBeNull();
+  expect(updateScreenOf(flow('failed', { message: 'x', attempt: 2 }), 1)).not.toBeNull();
+  expect(updateScreenOf(flow('refused', { message: 'latest.yml demande les droits d’administrateur' }), 0))
+    .toMatchObject({ line: 'Mise à jour refusée : latest.yml demande les droits d’administrateur. Rien n’est installé.', action: 'Continuer sans mettre à jour' });
+  expect(updateScreenOf(flow('refused', { message: 'x' }), 1)).toBeNull();
+  expect(updateScreenOf(flow('trial'), 0)).toMatchObject({ action: 'Continuer', line: expect.stringContaining('Essai de bout en bout') });
+  expect(updateScreenOf(flow('trial'), 1)).toBeNull();
+  for (const key of ['Enter', ' ']) expect(passesKey(key, true), key).toBe(true);
+  for (const key of ['Enter', ' ', 'Tab', 'z', 'Escape', 'Delete', 'F2']) expect(passesKey(key, false), key).toBe(false);
+  for (const key of ['Tab', 'z', 'Escape']) expect(passesKey(key, true), key).toBe(false);
 });
 
 // ——— The CI's signing, and the key's making ———

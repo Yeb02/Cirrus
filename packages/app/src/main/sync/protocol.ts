@@ -26,11 +26,30 @@ export type SyncStatus = (
 ) & { clockWarning?: string } & UpdateWord;
 
 /**
- * The signed updates' word (plan 9, D4: update/updater.ts), carried by the sync's status to the chip: `updateReady`, an
- * update checked and armed, installed at the app's quit; `updateRefused`, the notification of an update refused, said
- * once.
+ * The signed updates' word (plan 9, D4: update/updater.ts), carried by the sync's status to the interface: `updateFlow`,
+ * the forced update under way, which the update screen and the chip show; `updateRefused`, the notification of an
+ * update refused, said once.
  */
-export interface UpdateWord { updateReady?: true; updateRefused?: string }
+export interface UpdateWord { updateFlow?: UpdateFlow; updateRefused?: string }
+
+/**
+ * The forced update (2026-11-11), from a signed manifest of a newer version on — never before its signature is checked:
+ * its version, and its attempt (a number the updater gives each run of it: a failure dismissed is dismissed for its
+ * attempt only). Its step:
+ * - downloading: electron-updater downloads the installer (`percent`, whole, once it says its progress);
+ * - restarting: the installer checked and armed, the window closes by its normal path, then the installer runs and
+ *   starts the app again;
+ * - trial: the end-to-end check's key (neverInstall): checked and armed, never installed;
+ * - failed: the download failed (the network): the next check runs it again (`message`, electron-updater's);
+ * - refused: latest.yml or the installer is not the signed manifest's (`message`, why): not tried again this session.
+ */
+export type UpdateFlow = { version: string; attempt: number } & (
+  | { step: 'downloading'; percent?: number }
+  | { step: 'restarting' }
+  | { step: 'trial' }
+  | { step: 'failed'; message: string }
+  | { step: 'refused'; message: string }
+);
 
 /** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */
 export interface SyncIncoming { id: number; units: RemoteUnit[]; refused: { unit: Id; message: string }[] }
