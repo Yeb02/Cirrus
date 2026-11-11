@@ -16,9 +16,11 @@ interface Moves {
 }
 
 /**
- * One scale step up or down (spec 8.1). A simple node changes its step; a group changes its title's step and dilates
- * its members around its centre, recursively, their own steps unchanged; several items scale as one around their
- * barycentre (spec 8.1, « Sélection »). Nothing else moves. An item whose ancestor is selected goes with it.
+ * One scale step up or down (spec 8.1). A simple node changes its step; a group changes its step and those of all its
+ * descendants, nodes, subgroups and phantoms, by as many steps (the user's choice of 2026-11-11, over spec 8.1's
+ * members whose steps stay), and dilates their positions around its centre by factor^delta, so that its content keeps
+ * from overlapping. Several items scale as one around their barycentre (spec 8.1, « Sélection »). Nothing else moves.
+ * An item whose ancestor is selected goes with it, once.
  */
 export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: RenderParams): Moves {
   const selected = new Set(items);
@@ -31,14 +33,14 @@ export function scaleMoves(scene: PlanScene, items: number[], delta: number, p: 
   const c = { x: top.reduce((s, i) => s + scene.items[i].x, 0) / top.length, y: top.reduce((s, i) => s + scene.items[i].y, 0) / top.length };
   const out: Moves = { nodes: [], phantoms: [], center: c, factor: f };
   const at = (x: number, y: number) => ({ x: c.x + (x - c.x) * f, y: c.y + (y - c.y) * f });
-  const visit = (i: number, own: boolean) => {
+  const visit = (i: number) => {
     const it = scene.items[i];
-    if (it.kind === 'phantom') out.phantoms.push({ id: it.id, ...at(it.x, it.y), ...(own ? { k: it.k + delta } : {}) });
+    if (it.kind === 'phantom') out.phantoms.push({ id: it.id, ...at(it.x, it.y), k: it.k + delta });
     // A group is drawn where its members are; its own position follows, for the day it is emptied (I2 of the review).
-    else out.nodes.push({ node: it.id, ...at(it.x, it.y), ...(own ? { k: it.k + delta } : {}) });
-    for (const child of it.children) visit(child, false);
+    else out.nodes.push({ node: it.id, ...at(it.x, it.y), k: it.k + delta });
+    for (const child of it.children) visit(child);
   };
-  for (const i of top) visit(i, true);
+  for (const i of top) visit(i);
   return out;
 }
 

@@ -24,7 +24,7 @@ test('nœud seul : son cran change, sa position non', () => {
   expect(m.nodes[0]).toEqual({ node: ids.nodes.monde, x: pl.x, y: pl.y, k: pl.k + 1 });
 });
 
-test('groupe : titre +1, membres dilatés autour du centre, crans des membres inchangés ; − puis + rend tout (Review Focus 5)', () => {
+test('groupe : lui et tous ses descendants +1 cran, membres dilatés autour du centre ; − puis + rend tout (Review Focus 5)', () => {
   const st = copyOf(s);
   const plan = ids.plans.lobby;
   const before = positions(st, plan);
@@ -36,7 +36,11 @@ test('groupe : titre +1, membres dilatés autour du centre, crans des membres in
   const mdl = m.nodes.find((n) => n.node === ids.nodes.mdl)!;
   const mdlBefore = st.placements.get(`${plan}|${ids.nodes.mdl}`)!;
   expect(mdl.x! - center.x).toBeCloseTo((mdlBefore.x - center.x) * P.factor, 9);
-  expect(mdl.k).toBeUndefined(); // a member keeps its step
+  expect(mdl.k).toBe(mdlBefore.k + 1); // every descendant changes by the same steps (2026-11-11)
+  const induction = m.nodes.find((n) => n.node === ids.nodes.groupeInduction)!, solomonoff = m.nodes.find((n) => n.node === ids.nodes.solomonoff)!;
+  expect(induction.k).toBe(st.placements.get(`${plan}|${ids.nodes.groupeInduction}`)!.k + 1); // a subgroup
+  expect(solomonoff.k).toBe(st.placements.get(`${plan}|${ids.nodes.solomonoff}`)!.k + 1); // and its members
+  expect(m.phantoms.find((ph) => ph.id === ids.phantoms.node)!.k).toBe(phantomBefore.k + 1);
   expect(m.nodes.find((n) => n.node === ids.nodes.groupeComplexite)!.k).toBe(st.placements.get(`${plan}|${ids.nodes.groupeComplexite}`)!.k + 1);
   expect(m.nodes.some((n) => n.node === ids.nodes.monde)).toBe(false); // outside the group: untouched
   expect(m.phantoms.map((ph) => ph.id)).toContain(ids.phantoms.node); // the split arm's phantom sits in the group
@@ -64,7 +68,7 @@ test('sélection : dilatée autour de son barycentre comme un seul élément ; u
   expect(monde.k).toBe(sc.items[a].k - 1);
   const biais = m.nodes.filter((n) => n.node === ids.nodes.biais);
   expect(biais).toHaveLength(1);
-  expect(biais[0].k).toBeUndefined(); // a member keeps its step
+  expect(biais[0].k).toBe(sc.items[inside].k - 1); // a selected group's member: once, with its group's steps
 });
 
 test('échelle : un sous-groupe dilaté écrit aussi sa position propre, celle où il est dessiné (I2 de la relecture 3b)', () => {
