@@ -1,4 +1,4 @@
-import type { Action, Id, State } from '@cirrus/core';
+import type { Action, Id, State, Vec2 } from '@cirrus/core';
 import {
   type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
@@ -176,13 +176,24 @@ export function GraphView(props: {
   };
   /**
    * The preview of the drag at this offset (plan 3c task 9): its scene at the cost of what moves (the previous
-   * preview's storage taken again), its split made once for the visible set drawn.
+   * preview's storage taken again), its split made once for the visible set drawn. `leaving`: the dragged items the
+   * drop would take out of their group (Alt), which it does not follow (dropAt).
    */
-  const previewDrag = (r: PlanRenderer, d: NonNullable<typeof dragging.current>, dx: number, dy: number) => {
+  const previewDrag = (r: PlanRenderer, d: NonNullable<typeof dragging.current>, dx: number, dy: number, leaving: number[]) => {
     const visible = r.visible ?? NOTHING_SHOWN;
     if (d.split?.visible !== visible) d.split = previewSplit(d.base, visible, d.items);
-    d.preview = withOffsets(d.base, new Map(d.items.map((i) => [i, { x: dx, y: dy }])), paramsRef.current, d.preview);
+    d.preview = withOffsets(d.base, new Map(d.items.map((i) => [i, { x: dx, y: dy }])), paramsRef.current, d.preview, leaving);
     r.preview(d.preview, d.split);
+  };
+  /**
+   * What a drop of the drag at world point `at` would do (spec 10): the group it enters, lit while dragging, and the
+   * dragged items it takes out of their group (Alt). Found by the state's index when it is the drag's scene's (what is
+   * under the point only, not the plan: plan 3c task 9).
+   */
+  const dropAt = (d: NonNullable<typeof dragging.current>, at: Vec2, zoom: number): { entered: number | null; leaving: number[] } => {
+    const t = dropTarget(d.base, at, d.items, zoom, paramsRef.current, indexOf(d.base));
+    const effects = dropEffects(d.base, d.items, t, d.alt);
+    return { entered: t !== null && effects.some((f) => f.enter === t) ? t : null, leaving: effects.filter((f) => f.leave).map((f) => f.item) };
   };
   /**
    * The visibility index of this scene when it is the state's scene the engine holds, by which what lies under a point
@@ -426,12 +437,11 @@ export function GraphView(props: {
           const preview = d !== null && d.dirty;
           if (d && d.dirty) {
             d.dirty = false;
-            previewDrag(e.renderer, d, d.dx, d.dy);
-            // The group that would receive the drop lights up (spec 10), only if the drop would enter it; found by the
-            // state's index when it is the drag's scene's (what is under the point only, not the plan: plan 3c task 9).
-            const at = screenToWorld(e.renderer.camera, d.sx, d.sy);
-            const t = dropTarget(d.base, at, d.items, e.renderer.camera.zoom, paramsRef.current, indexOf(d.base));
-            e.renderer.setDropTarget(t !== null && dropEffects(d.base, d.items, t, d.alt).some((f) => f.enter === t) ? t : null);
+            // The group that would receive the drop lights up (spec 10), only if the drop would enter it; an item Alt
+            // takes out of its group is drawn without it, which stays where it is (2026-11-11).
+            const drop = dropAt(d, screenToWorld(e.renderer.camera, d.sx, d.sy), e.renderer.camera.zoom);
+            previewDrag(e.renderer, d, d.dx, d.dy, drop.leaving);
+            e.renderer.setDropTarget(drop.entered);
             dirty.current = true;
           }
           if (dirty.current) {
@@ -679,7 +689,7 @@ export function GraphView(props: {
         if (!d) break;
         e.renderer.setDropTarget(null);
         // The preview stays exactly where it was dropped while a question may be asked.
-        previewDrag(e.renderer, d, intent.dx, intent.dy);
+        previewDrag(e.renderer, d, intent.dx, intent.dy, dropAt(d, intent.at, e.renderer.camera.zoom).leaving);
         // One action for the whole drop (spec 6.4): the moves, then the groups left and entered; refused or given up,
         // back to where it was; written, the scene follows the state.
         repercussion.dropAsking(d.base, d.items, intent.dx, intent.dy, intent.at, intent.alt, restoreScene);

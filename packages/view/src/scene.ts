@@ -894,10 +894,11 @@ function previewOf(scene: PlanScene, items: SceneItem[], touched: number[]): Pla
 /**
  * The scene with some items moved (and their descendants), for the preview of a drag: moved items and the groups
  * above them are copied and derived again, everything else is shared — at the cost of what moves (plan 3c task 9).
- * `reuse`: the drag's previous preview, whose storage this one takes (it is then no longer valid). The original scene
- * is left unchanged.
+ * `reuse`: the drag's previous preview, whose storage this one takes (it is then no longer valid). `detached`: moved
+ * items leaving their group (Alt, spec 10: dropEffects' `leave`), which their group and its ancestors are derived
+ * without, so that they do not follow; a group they empty stays as it was drawn. The original scene is left unchanged.
  */
-export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: RenderParams, reuse?: PlanScene): PlanScene {
+export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: RenderParams, reuse?: PlanScene, detached: readonly number[] = NONE_DETACHED): PlanScene {
   const items = previewItems(scene, reuse), touched: number[] = [];
   const shift = (i: number, d: Vec2) => {
     const it = items[i];
@@ -909,13 +910,20 @@ export function withOffsets(scene: PlanScene, offsets: Map<number, Vec2>, p: Ren
   // Every group above a moved item, deepest first.
   const above = new Set<number>();
   for (const i of offsets.keys()) for (let a = items[i].parent; a >= 0; a = items[a].parent) above.add(a);
+  const leaving = new Set(detached);
   for (const g of [...above].sort((a, b) => items[b].depth - items[a].depth)) {
-    items[g] = { ...items[g] };
+    const children = items[g].children, kept = leaving.size === 0 ? children : children.filter((c) => !leaving.has(c));
+    if (kept.length === 0) continue;
+    // Derived from the members that stay; the group keeps all its children for drawing.
+    items[g] = { ...items[g], children: kept };
     deriveGroup(items, g, p);
+    items[g].children = children;
     touched.push(g);
   }
   return previewOf(scene, items, touched);
 }
+
+const NONE_DETACHED: readonly number[] = [];
 
 /**
  * The scene with some placements changed (positions, steps), for the preview of a scale gesture (I15 of the plan 3b

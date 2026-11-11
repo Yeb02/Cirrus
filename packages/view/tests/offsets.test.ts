@@ -1,8 +1,8 @@
-import type { State } from '@cirrus/core';
+import { createNode, createPlan, emptyState, include, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { buildScene, type PlanScene, previewBase, withMoves, withOffsets } from '../src/scene.ts';
-import { fixture, measure, P } from './helpers.ts';
+import { created, fixture, measure, P, run } from './helpers.ts';
 
 let s: State, ids: FixtureIds, sc: PlanScene;
 beforeAll(() => {
@@ -51,4 +51,31 @@ test('aperçu suivant : il reprend le stockage du précédent, ne réécrit que 
   expect(withOffsets(sc, new Map([[sol, { x: 1, y: 1 }]]), P, first).items).not.toBe(first.items);
   expect(withMoves(sc, { nodes: [{ node: ids.nodes.mdl, k: 1 }], phantoms: [] }, P, second).items).toBe(second.items);
   expect(previewBase(sc)).toBe(sc);
+});
+
+const maxX = (hull: { x: number }[]) => Math.max(...hull.map((q) => q.x));
+
+test('Alt : un membre qui sort de son groupe ne l’emporte pas ; son groupe et ses ancêtres se dérivent sans lui', () => {
+  const sol = sc.byId.get(ids.nodes.solomonoff)!;
+  const moved = withOffsets(sc, new Map([[sol, { x: 3000, y: 0 }]]), P, undefined, [sol]);
+  expect(at(moved, ids.nodes.solomonoff).x).toBe(at(sc, ids.nodes.solomonoff).x + 3000);
+  const g = at(moved, ids.nodes.groupeInduction), priore = at(sc, at(sc, ids.nodes.groupeInduction).children.map((c) => sc.items[c].id).find((id) => id !== ids.nodes.solomonoff)!);
+  // Derived from its other member alone: its centre is that member's, its hull holds nothing of the moved one.
+  expect(g.x).toBeCloseTo(priore.x, 9);
+  expect(maxX(g.hull!)).toBeCloseTo(priore.x + priore.halfW, 9);
+  expect(maxX(at(moved, ids.nodes.groupeComplexite).hull!)).toBeLessThanOrEqual(maxX(at(sc, ids.nodes.groupeComplexite).hull!));
+  // Without Alt, the same move stretches them to it.
+  expect(maxX(at(withOffsets(sc, new Map([[sol, { x: 3000, y: 0 }]]), P), ids.nodes.groupeInduction).hull!)).toBeGreaterThan(at(sc, ids.nodes.solomonoff).x + 3000);
+});
+
+test('Alt : le seul membre d’un groupe le laisse tel qu’il était dessiné', () => {
+  const st = emptyState();
+  const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const g = created(run(st, createNode(st, { plan, title: 'B', x: 0, y: 0, k: 0 })), 'node');
+  const a = created(run(st, createNode(st, { plan, title: 'A', x: 0, y: 0, k: 0 })), 'node');
+  run(st, include(st, plan, a, g));
+  const scene = buildScene(st, plan, measure, P), ai = scene.byId.get(a)!;
+  const moved = withOffsets(scene, new Map([[ai, { x: 500, y: 200 }]]), P, undefined, [ai]);
+  expect(at(moved, a).x).toBe(500);
+  expect(at(moved, g)).toBe(at(scene, g));
 });
