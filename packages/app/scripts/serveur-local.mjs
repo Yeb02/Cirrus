@@ -21,6 +21,8 @@ export async function localServer() {
   const url = server.url, port = Number(new URL(url).port);
   return {
     url,
+    /** Its data folder (temporary): its versions/, which a scenario fills with a manifest of its own (plan 9, D4). */
+    dir,
     code: (name) => pairingCode(dir, name),
     /** The server's journal, its operations in order (read from its base, running or stopped). */
     journal() {

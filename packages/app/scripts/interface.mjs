@@ -4,8 +4,8 @@
 // the browser's own default actions — the focus a press gives, a click after a press — happen as for the user, which
 // the pointer replays of the captures (CIRRUS_POINTER) skip. Then it reads what the page shows and what the base kept.
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,6 +13,13 @@ import { bibFileName, editNode } from '@cirrus/core';
 import { storeBytes } from '@cirrus/store';
 import { appDir, launch, sleep } from './cdp.mjs';
 import { chipSays, closeSettings, localServer, pairThrough, serverField, TITLE_PROBE, virtualPc } from './serveur-local.mjs';
+
+// The forced update's scenario (plan 9, D4): a key pair of this run, its public key given to the app under test (a test
+// base, in the background: key.ts takes it there only), its private one signing the local server's manifest. Never kept.
+const UPDATE_KEY = (() => {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  return { pub: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), priv: privateKey };
+})();
 
 // Plan 4c, task 2: the test base's publication (−420, −300 in the world) at the view's centre, its chapter's preview
 // wide enough to read it at about its real size beside its margin.
@@ -2501,6 +2508,53 @@ const SCENARIOS = [
       await page.press('Escape', 'Escape', 27);
       if (!(await page.until(`!document.querySelector('aside.trash')`))) throw new Error('Échap ne ferme pas le panneau avec un pop-up épinglé à l’écran');
       if (!(await page.evaluate(`!!document.querySelector('.panels .panel.pinned')`))) throw new Error('Échap a fermé le pop-up épinglé');
+    },
+  },
+  {
+    // The forced update (2026-11-11; plan 9, D4): the server serves a manifest of a newer version, signed by this run's
+    // key, which the app is given (a test base, in the background: updater.ts never installs under it). Paired, the app
+    // checks it and puts up its screen; run unpackaged, electron-updater is inactive, so the screen says the failure and
+    // offers to go on — no installer anywhere. Meanwhile the keys are held (Ctrl+K opens nothing, Échap closes nothing)
+    // and the pointer stops on the screen; Entrée on « Continuer sans mettre à jour » takes it away, and the keys work again.
+    name: 'mise à jour forcée : l’écran bloque l’app dès le manifeste signé ; un échec offre « Continuer sans mettre à jour »',
+    empty: true,
+    env: { CIRRUS_UPDATE_PUBLIC_KEY: UPDATE_KEY.pub },
+    async run(page) {
+      const server = await localServer();
+      try {
+        const versions = join(server.dir, 'versions'), bytes = Buffer.from('pas un installateur');
+        mkdirSync(versions, { recursive: true });
+        const manifest = `${JSON.stringify({
+          version: '0.1.1', file: 'Cirrus Setup 0.1.1.exe', sha512: createHash('sha512').update(bytes).digest('base64'), size: bytes.length, date: '2026-11-11T09:00:00.000Z',
+        }, null, 2)}\n`;
+        writeFileSync(join(versions, 'version.json'), manifest);
+        writeFileSync(join(versions, 'version.json.sig'), sign(null, Buffer.from(manifest), UPDATE_KEY.priv).toString('base64'));
+        await pairThrough(page, server.url, server.code('Interface'));
+        const SCREEN = `document.querySelector('.update-screen')`, said = () => page.evaluate(`${SCREEN}?.textContent ?? '(aucun écran)'`);
+        if (!(await page.until(`${SCREEN}?.querySelector('h2')?.textContent === 'Mise à jour de Cirrus vers 0.1.1'`, 20_000))) {
+          throw new Error(`aucun écran de mise à jour : ${await said()} ; la pastille dit « ${await page.evaluate(`document.querySelector('.tabs .sync-chip')?.textContent ?? ''`)} »`);
+        }
+        if (!(await page.until(`${SCREEN}?.querySelector('button')?.textContent === 'Continuer sans mettre à jour'`, 20_000))) throw new Error(`l’écran n’offre pas de continuer : ${await said()}`);
+        if (!(await said()).includes('electron-updater est inactif')) throw new Error(`l’écran ne dit pas l’échec : ${await said()}`);
+        if (!(await page.evaluate(`document.activeElement?.textContent === 'Continuer sans mettre à jour'`))) throw new Error('le bouton de l’écran n’a pas le focus');
+        // Held: Ctrl+K and Échap reach nothing under it (the settings stay open); the pointer stops on it.
+        await page.press('k', 'KeyK', 75, 2);
+        await page.press('Escape', 'Escape', 27);
+        await sleep(400);
+        if (await page.evaluate(`!!document.querySelector('.search-box')`)) throw new Error('Ctrl+K ouvre la recherche sous l’écran');
+        if (!(await page.evaluate(`!!${SCREEN} && !!document.querySelector('.settings')`))) throw new Error('Échap ferme l’écran ou les réglages sous lui');
+        const covered = await page.evaluate(`(() => { const r = document.querySelector('.tabs .gear').getBoundingClientRect(); return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.update-screen'); })()`);
+        if (!covered) throw new Error('le pointeur atteint la page sous l’écran');
+        // Entrée with its character, as a keyboard sends it: the button's own activation.
+        for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) });
+        if (!(await page.until(`!${SCREEN}`))) throw new Error('Entrée sur « Continuer sans mettre à jour » ne retire pas l’écran');
+        const title = await page.evaluate(`document.querySelector('.tabs .sync-chip')?.title ?? ''`);
+        if (!title.includes('Mise à jour vers 0.1.1 : téléchargement échoué')) throw new Error(`l’infobulle de la pastille : ${JSON.stringify(title)}`);
+        await page.press('k', 'KeyK', 75, 2);
+        if (!(await page.until(`!!document.querySelector('.search-box')`))) throw new Error('Ctrl+K n’ouvre plus la recherche, l’écran écarté');
+      } finally {
+        await server.close();
+      }
     },
   },
   TWO_PCS,

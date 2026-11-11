@@ -11,7 +11,8 @@
 //   LOCALAPPDATA of its own (electron-updater's cache), paired with the server through the block « Serveur »;
 //   CIRRUS_NO_RELAUNCH=1, so that it never starts again out of the script's hands, and any instance of it left after a
 //   run is stopped and counted as a failure.
-// Four runs: the update found, verified, downloaded and armed (the chip says so); a signature of another key: refused;
+// Four runs: the update found, verified, downloaded and armed (the update screen says it is a trial: never closed nor
+// installed); a signature of another key: refused, and no screen at all;
 // an installer that is not the signed one, latest.yml rewritten to its hash: refused before any download (review of
 // task 4, M2); the same installer, latest.yml the manifest's: electron-updater's own check fails, refused. Each app is ended
 // by a kill, never quit. All along, no installer nor uninstaller process may appear; afterwards, nothing is installed
@@ -25,9 +26,11 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { startServer } from '@cirrus/server';
 import { appDir, launch, sleep } from './cdp.mjs';
-import { chipSays, pairingCode, pairThrough } from './serveur-local.mjs';
+import { pairingCode, pairThrough } from './serveur-local.mjs';
 
-const READY = 'Mise à jour prête : elle s’installera à la fermeture.';
+/** The update screen's line once armed under the test key (renderer/sync/updateScreen.ts): never closed nor installed. */
+const TRIAL = 'Essai de bout en bout';
+const SCREEN = `document.querySelector('.update-screen')?.textContent ?? null`;
 const REFUSED = 'Mise à jour refusée : sa signature ne correspond pas.';
 const root = join(appDir, '..', '..');
 const failures = [];
@@ -118,6 +121,7 @@ try {
       await pairThrough(app.page, server.url, pairingCode(data, `Essai ${name}`));
       const result = await until(app.page);
       const chip = await app.page.evaluate(`document.querySelector('.tabs .sync-chip')?.textContent ?? null`);
+      const screen = await app.page.evaluate(SCREEN);
       // Ended by a kill: never quit, whatever is armed.
       await app.close();
       app = null;
@@ -125,7 +129,7 @@ try {
       const pending = [];
       const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (/\.exe$/i.test(f)) pending.push([p.slice(local.length + 1), sha512(p)]); } };
       walk(local);
-      return { result, chip, pending, log: readFileSync(logFile, 'utf8') };
+      return { result, chip, screen, pending, log: readFileSync(logFile, 'utf8') };
     } finally {
       closeSync(log);
       await server?.close();
@@ -140,9 +144,9 @@ try {
   const updaterLines = (log) => log.split(/\r?\n/).filter((l) => /update|version|Mise à jour|Executing|Install/i.test(l)).slice(0, 30).join('\n    ');
 
   // ——— 1. Found, verified, downloaded, armed ———
-  const a = await once('acceptee', (page) => chipSays(page, READY, 240_000));
+  const a = await once('acceptee', (page) => page.until(`(${SCREEN})?.includes(${JSON.stringify(TRIAL)}) ?? false`, 240_000));
   console.log(`  journal :\n    ${updaterLines(a.log)}`);
-  check(a.result && a.chip === READY, `0.1.1 trouve 0.1.2, la vérifie, la télécharge et l’arme : la pastille dit « ${a.chip} »`);
+  check(a.result && a.screen?.includes(TRIAL), `0.1.1 trouve 0.1.2, la vérifie, la télécharge et l’arme ; l’écran le dit, sans fermer l’app : « ${a.screen} » (pastille « ${a.chip} »)`);
   check(a.pending.some(([, h]) => h === signedSha), `l’installateur téléchargé par electron-updater est celui que le manifeste signe (${a.pending.map(([p]) => p).join(', ') || 'aucun'})`);
   check(/New version 0\.1\.2 has been downloaded/.test(a.log), 'electron-updater dit l’avoir téléchargé');
   check(!/Executing:|Install: isSilent|Auto install update on quit/.test(a.log), 'aucun installateur lancé (ni « Executing: », ni « Install: »)');
@@ -155,7 +159,7 @@ try {
   });
   console.log(`  journal :\n    ${updaterLines(b.log)}`);
   check(b.result, `une signature d’une autre clé : la notification « ${REFUSED} »`);
-  check(b.chip !== READY && b.pending.length === 0, `rien d’armé ni de téléchargé (pastille « ${b.chip} », ${b.pending.length} fichier(s))`);
+  check(b.screen === null && b.pending.length === 0, `rien d’armé ni de téléchargé, et aucun écran (« ${b.screen} », pastille « ${b.chip} », ${b.pending.length} fichier(s))`);
 
   // ——— 3. Another installer, latest.yml rewritten to its hash: refused before any download (review of task 4, M2) ———
   const forge = (versions) => {
@@ -171,14 +175,14 @@ try {
   console.log(`  journal :\n    ${updaterLines(c.log)}`);
   check(c.result, `un latest.yml qui ne nomme pas l’installateur du manifeste signé : la notification « ${REFUSED} »`);
   check(!/has been downloaded/.test(c.log) && c.pending.length === 0, `rien de téléchargé (${c.pending.length} fichier(s))`);
-  check(c.chip !== READY && !/Executing:|Install: isSilent/.test(c.log), `rien d’armé ni lancé (pastille « ${c.chip} »)`);
+  check(!!c.screen?.includes('Mise à jour refusée') && !/Executing:|Install: isSilent/.test(c.log), `rien d’armé ni lancé ; l’écran dit le refus (« ${c.screen} »)`);
 
   // ——— 4. Another installer, latest.yml the manifest's: electron-updater's own check fails, refused ———
   const d = await once('octets', (page) => refusal(page, 240_000), (versions) => { forge(versions); });
   console.log(`  journal :\n    ${updaterLines(d.log)}`);
   check(d.result, `d’autres octets que ceux du manifeste signé servis : la notification « ${REFUSED} »`);
   check(!/has been downloaded/.test(d.log) && !d.pending.some(([, h]) => h !== signedSha), `rien de gardé que le manifeste ne signe pas (${d.pending.length} fichier(s))`);
-  check(d.chip !== READY && !/Executing:|Install: isSilent/.test(d.log), `rien d’armé ni lancé (pastille « ${d.chip} »)`);
+  check(!!d.screen?.includes('Mise à jour refusée') && !/Executing:|Install: isSilent/.test(d.log), `rien d’armé ni lancé ; l’écran dit le refus (« ${d.screen} »)`);
 } catch (e) {
   check(false, e instanceof Error ? e.stack ?? e.message : String(e));
 } finally {
