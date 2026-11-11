@@ -777,7 +777,8 @@ const SCENARIOS = [
         if (!(await page.evaluate(`document.activeElement?.textContent === 'Non'`))) throw new Error('« Non » n’a pas le focus');
       };
       await ask();
-      await page.press('Enter', 'Enter', 13);
+      // Entrée with its character, as a keyboard sends it: the focused button's own activation answers.
+      for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) });
       if (!(await page.until(`!document.querySelector('.ask')`))) throw new Error('Entrée ne ferme pas la question');
       if (written().factor !== 3) throw new Error(`Entrée a réinitialisé : ${JSON.stringify(written())}`);
       await ask();
