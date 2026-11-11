@@ -9,7 +9,7 @@ import { testPickOf } from '../pick.ts';
 export const KEY_PLACEHOLDER = 'PLACEHOLDER: run node deploy/cle-de-signature.mjs';
 
 /** Written by deploy/cle-de-signature.mjs: keep this line as it is. */
-export const UPDATE_PUBLIC_KEY: string = 'PLACEHOLDER: run node deploy/cle-de-signature.mjs';
+export const UPDATE_PUBLIC_KEY: string = 'MCowBQYDK2VwAyEAOl80zoWGJ8rrb0joYa9vVWPsCoR7v1VjlUe5dWb5LAI=';
 
 /**
  * The key the updates are checked with: UPDATE_PUBLIC_KEY; for the end-to-end check of task 4 only, a test pair's
