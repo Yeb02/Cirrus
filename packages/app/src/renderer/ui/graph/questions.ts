@@ -89,7 +89,8 @@ export function useQuestions(graph: Graph) {
   /**
    * Deletion (spec 7): « partout » or « ici seulement », with the instances counted and the last ones announced; « ici »
    * for a group asks whether its content follows (I12 of the plan 3b review). Nodes in no other plan are deleted at once,
-   * « partout » (where.ts); a group among them still asks whether its content follows.
+   * « partout » (where.ts: nor shown there as a stub or a phantom, nor an annotation, which lives under its PDF); a group
+   * among them still asks whether its content follows.
    */
   const askDelete = (sc: PlanScene, items: number[]) => {
     const ids = items.filter((i) => sc.items[i].kind !== 'phantom').map((i) => sc.items[i].id);
@@ -99,9 +100,11 @@ export function useQuestions(graph: Graph) {
     const alone = lastPlanNodes(s, sc, ids, false), all = lastPlanNodes(s, sc, ids, true);
     if (!nodesElsewhere(s, sc.plan.id, ids)) {
       if (!groups) { edit(deleteBuild(sc, ids, true)); return; }
+      // « Le groupe seul » deletes everywhere: every one of them goes to the trash (none is an annotation, which would
+      // figure elsewhere, under its PDF); with the content, each leaves this plan (lastPlanNodes: annotations stay).
       setQuestion({
         text: `Supprimer ${titles(ids)} : le contenu suit-il ?`,
-        detail: `Avec le contenu, ${trashNote(all)}. Seul, ${trashNote(alone)}.`,
+        detail: `Avec le contenu, ${trashNote(all)}. Seul, ${trashNote(ids)}.`,
         choices: [
           { value: 'content', label: 'Avec le contenu' },
           { value: 'everywhere', label: plural(items.filter((i) => sc.items[i].kind === 'group').length, 'Le groupe seul', 'Les groupes seuls') },

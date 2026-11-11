@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyOp, placeNode, setBranches, type Action, type State } from '@cirrus/core';
+import { applyOp, placeNode, removeFromPlan, setBranches, type Action, type State } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
 import { beforeEach, expect, test } from 'vitest';
@@ -26,6 +26,19 @@ test('des nœuds : ailleurs dès que l’un d’eux est placé dans un autre pla
   expect(nodesElsewhere(s, plans.these, [nodes.theseOnly])).toBe(false);
   run(placeNode(s, plans.lecture, nodes.monde, 0, 0, 0));
   expect(nodesElsewhere(s, plans.lobby, [nodes.monde])).toBe(true);
+});
+
+test('des nœuds : ailleurs aussi en amorce dans un autre plan, ou en annotation, qui vit sous son PDF (ronde 1 de la relecture)', () => {
+  const { nodes, plans } = ids;
+  // Entropie is placed in the lobby only, but « Source hors plan » shows it as a stub in « Thèse ».
+  expect(nodesElsewhere(s, plans.lobby, [nodes.entropie])).toBe(true);
+  // Kolmogorov hidden in « Thèse »: its branches stay there, drawn as stubs.
+  run(removeFromPlan(s, plans.these, nodes.kolmogorov));
+  expect(nodesElsewhere(s, plans.lobby, [nodes.kolmogorov])).toBe(true);
+  // Universality's phantoms are in the lobby, where it is: nothing elsewhere.
+  expect(nodesElsewhere(s, plans.lobby, [nodes.universalite])).toBe(false);
+  // An annotation placed in « Lecture » only lives under its PDF all the same.
+  expect(nodesElsewhere(s, plans.lecture, [nodes.annotationPage1])).toBe(true);
 });
 
 test('un membre d’une connexion : ailleurs s’il y est montré dans un autre plan', () => {
