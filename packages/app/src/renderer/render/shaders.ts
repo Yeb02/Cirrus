@@ -146,7 +146,7 @@ const vec4 NOWHERE = vec4(2.0, 2.0, 2.0, 1.0);
 type Values = Record<string, number | ArrayLike<number>>;
 const setAll = (pr: Program, values: Values) => { for (const [k, v] of Object.entries(values)) pr.set(k, v); };
 
-const lod = (p: RenderParams): Values => ({ uBaseFont: p.baseFontPx, uTextScale: p.textScale, uFactor: p.factor, uFold0: p.groupFold[0], uFold1: p.groupFold[1] });
+const lod = (p: RenderParams): Values => ({ uBaseFont: p.baseFontPx, uTextScale: p.textScale, uFactor: p.factor, uFold0: p.textFade[0], uFold1: p.textFade[1] });
 
 // Connection lines and glyphs share their width and fade logic (spec 8.5).
 const CONNECTION = /* glsl */ `

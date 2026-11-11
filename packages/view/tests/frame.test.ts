@@ -20,7 +20,7 @@ beforeAll(() => {
 test('instances complètes sans NaN sur les trois plans de la base de test, à cinq zooms (Review Focus 4, 5)', () => {
   for (const plan of Object.values(ids.plans)) {
     const scene = buildScene(s, plan, measure, P);
-    for (const px of [0.5, 3, 5.5, 16, 200]) {
+    for (const px of [0.5, 3, 7, 16, 200]) {
       const { inst } = frameAt(scene, 0, px);
       for (const list of [inst.curves, ...Object.values(inst.glyphs), ...Object.values(inst.envelopes)]) expect([...list.view()].every(Number.isFinite)).toBe(true);
     }

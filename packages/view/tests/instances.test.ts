@@ -59,7 +59,7 @@ test('chaque connexion visible est simple ou en branches complexes, jamais les d
   let simpleSeen = 0, complexSeen = 0;
   for (const plan of Object.values(ids.plans)) {
     const scene = buildScene(s, plan, measure, P);
-    for (const px of [0.5, 3, 5.5, 16, 200]) {
+    for (const px of [0.5, 3, 7, 16, 200]) {
       const cam = camAtTextPx(scene, 0, px), { visible, inst } = build(scene, cam);
       expect(inst.pending).toBe(false);
       const { simple, complex } = drawn(inst);

@@ -60,6 +60,8 @@ test('les réglages corrompus sont ignorés clé par clé', () => {
   expect(p.trunkLength).toBe(DEFAULT_PARAMS.trunkLength);
   // A setting removed since it was written (envelopeResolution, plan 3c task 7) is ignored like an unknown one.
   expect(withOverrides({ envelopeResolution: 0.5 })).toEqual(DEFAULT_PARAMS);
+  // groupFold, gone since the fold follows textFade (2026-11-11): a file that still has it loads, the key ignored.
+  expect(withOverrides({ groupFold: [3, 5], factor: 3 })).toEqual({ ...DEFAULT_PARAMS, factor: 3 });
   expect(withOverrides(null)).toEqual(DEFAULT_PARAMS);
   expect(withOverrides('pas un objet')).toEqual(DEFAULT_PARAMS);
 });

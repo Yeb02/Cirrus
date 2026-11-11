@@ -17,8 +17,11 @@ export function textPx(k: number, zoom: number, p: RenderParams): number {
   return p.baseFontPx * stepScale(k, p) * zoom;
 }
 
-/** 1 when a group is closed, 0 when open; driven by the text size of its largest member (spec 8.2). */
+/**
+ * 1 when a group is closed, 0 when open; driven by the text size of its largest member (spec 8.2), over the same range
+ * as a node's text (textFade): that member's text and the group's opacity go together, its smaller members fade first.
+ */
 export function foldT(maxChildK: number, zoom: number, p: RenderParams): number {
   if (maxChildK === -Infinity) return 1;
-  return 1 - smooth(p.groupFold[0], p.groupFold[1], textPx(maxChildK, zoom, p));
+  return 1 - smooth(p.textFade[0], p.textFade[1], textPx(maxChildK, zoom, p));
 }

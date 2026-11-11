@@ -137,7 +137,7 @@ function bruteIntruders(scene: PlanScene, v: VisibleSet): Map<number, number> {
 test('intrus du visible : ceux d’intruders parmi ce qui est dessiné, avec le groupe dessiné le plus profond qui les recouvre', () => {
   const all = intruders(sc), index = buildIndex(sc, P);
   let found = 0;
-  for (const cam of [camAtTextPx(sc, 0, 16), camAtTextPx(sc, 0, 5.5), ...randomCameras(sc, 60, rng(5), 0.05, 4)]) {
+  for (const cam of [camAtTextPx(sc, 0, 16), camAtTextPx(sc, 0, 7), ...randomCameras(sc, 60, rng(5), 0.05, 4)]) {
     const v = computeVisible(sc, index, cam, P), got = visibleIntruders(sc, v);
     expect(got).toEqual(bruteIntruders(sc, v));
     for (const [i, g] of got) {

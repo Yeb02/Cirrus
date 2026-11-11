@@ -14,8 +14,8 @@ export interface RenderParams {
   textScale: number;
   baseFontPx: number;
   // Levels of detail (spec 8.2)
+  /** The fade of a node's text, and the fold of a group by its largest member's text (lod.ts, foldT). */
   textFade: Range;
-  groupFold: Range;
   titleFade: Range;
   minNodePx: number;
   zoomMin: number;
@@ -360,7 +360,6 @@ export const DEFAULT_PARAMS: RenderParams = {
   textScale: 1,
   baseFontPx: 16,
   textFade: [6, 8],
-  groupFold: [4.5, 6.5],
   titleFade: [6.5, 9],
   minNodePx: 4,
   zoomMin: 1e-3,
@@ -590,8 +589,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('factor', 'Facteur entre deux crans d’échelle', G, 'Échelles', 1.2, 4, 0.05),
   num('textScale', 'Échelle de texte', G, 'Échelles', 0.5, 3, 0.05),
   num('baseFontPx', 'Taille de base du texte (px)', A, 'Échelles', 8, 32, 1),
-  range('textFade', 'Disparition du texte des nœuds (px)', G, 'Niveaux de détail', 1, 20, 0.5),
-  range('groupFold', 'Transition d’un groupe vers son contenu (px)', G, 'Niveaux de détail', 1, 20, 0.5),
+  range('textFade', 'Disparition du texte des nœuds et repli des groupes (px)', G, 'Niveaux de détail', 1, 20, 0.5),
   range('titleFade', 'Disparition des titres de connexion (px)', G, 'Niveaux de détail', 1, 20, 0.5),
   num('minNodePx', 'Taille minimale des nœuds à l’écran (px)', A, 'Niveaux de détail', 0, 20, 0.5),
   num('zoomMin', 'Zoom minimal', A, 'Zoom et déplacement', 1e-5, 1, 1e-5),

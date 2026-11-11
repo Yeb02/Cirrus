@@ -47,7 +47,7 @@ test('dézoom : le groupe Induction se replie et ses connexions sortantes parten
 });
 
 test('en transition, les bouts glissent vers le bord, et un seul cran est en transition', () => {
-  const v = computeVisible(sc, idx, camAtTextPx(sc, 0, 5.5), P);
+  const v = computeVisible(sc, idx, camAtTextPx(sc, 0, 7), P);
   const c = conn(v.connections, ids.nodes.solomonoff, ids.nodes.universalite)!;
   expect(c.fade).toBe('slide');
   expect(c.foldK).toBe(0);
@@ -58,7 +58,7 @@ test('en transition, les bouts glissent vers le bord, et un seul cran est en tra
 
 test('connexion interne à un groupe qui se replie : en place, puis effacée', () => {
   const priore = sc.items.find((i) => i.title === 'Priore universelle')!.id;
-  const fading = conn(computeVisible(sc, idx, camAtTextPx(sc, 0, 5.5), P).connections, priore, ids.nodes.solomonoff)!;
+  const fading = conn(computeVisible(sc, idx, camAtTextPx(sc, 0, 7), P).connections, priore, ids.nodes.solomonoff)!;
   expect(fading.fade).toBe('out');
   expect(fading.ends.map((e) => e.item).sort()).toEqual([at(priore), at(ids.nodes.solomonoff)].sort());
   expect(new Set(fading.ends.map((e) => e.item2))).toEqual(new Set([at(ids.nodes.groupeInduction)]));
@@ -119,7 +119,7 @@ test('la partie lointaine d’un bras scindé est visible près d’Universalit�
 test('signature de repli : change seulement quand un niveau change d’état', () => {
   const a = foldSignature(idx, camAtTextPx(sc, 0, 16).zoom, P);
   expect(foldSignature(idx, camAtTextPx(sc, 0, 15).zoom, P)).toBe(a);
-  expect(foldSignature(idx, camAtTextPx(sc, 0, 5.5).zoom, P)).not.toBe(a);
+  expect(foldSignature(idx, camAtTextPx(sc, 0, 7).zoom, P)).not.toBe(a);
   expect(computeVisible(sc, idx, camAtTextPx(sc, 0, 16), P).signature).toBe(a);
 });
 
@@ -154,7 +154,7 @@ test('une connexion interne vue seulement par son groupe en fondu, ses deux bout
   run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }] }));
   const scene = buildScene(st, plan, measure, P), index = buildIndex(scene, P), p = { ...P, viewMarginPx: 0 };
   // Between A and B, in G's envelope, on a narrow screen, at a zoom where G fades.
-  const cam = { ...camAtTextPx(scene, 0, 5.5, p), x: 0, y: 0, widthPx: 200, heightPx: 200 };
+  const cam = { ...camAtTextPx(scene, 0, 7, p), x: 0, y: 0, widthPx: 200, heightPx: 200 };
   const v = computeVisible(scene, index, cam, p);
   expect(v.groups).toEqual([scene.byId.get(g)]);
   expect(v.connections).toEqual([]);
@@ -168,7 +168,7 @@ test('une connexion interne vue seulement par son groupe en fondu, ses deux bout
 /** Cameras that look at a scene as a whole, at the fold of its first groups, and up close; around the origin when it is empty. */
 const camerasOf = (scene: PlanScene): ReturnType<typeof camAtTextPx>[] => {
   if (!scene.bounds) return [{ x: 0, y: 0, zoom: 1, widthPx: 2560, heightPx: 1600 }];
-  return [fitBounds(scene.bounds, 2560, 1600, P), camAtTextPx(scene, 0, 5.5), camAtTextPx(scene, 0, 16), camAtTextPx(scene, 1, 5)];
+  return [fitBounds(scene.bounds, 2560, 1600, P), camAtTextPx(scene, 0, 7), camAtTextPx(scene, 0, 16), camAtTextPx(scene, 1, 5)];
 };
 
 describe.each([
