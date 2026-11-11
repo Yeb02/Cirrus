@@ -83,6 +83,7 @@ Une décision non prévue ici se consigne au registre (`docs/superpowers/plans/2
 
     Une app plus récente, ou de développement, n'est jamais ramenée en arrière (spec 18.1).
   - **Ce qui est dit à l'utilisateur :** la pastille dit « Mise à jour prête : elle s'installera à la fermeture. ». Un format refusé dit déjà « mets à jour Cirrus » ; la mise à jour s'y fait seule.
+  - **Tranché le 2026-11-11 : la mise à jour est forcée, avec relance** (`install(true, true)`). Dès le manifeste signé vérifié et plus récent, un écran bloque l'app (le téléchargement, sa progression) ; l'installateur armé, l'écran dit « Enregistrement, puis redémarrage… », la fenêtre se ferme par son chemin normal (`cirrus:quit`, `quitInOrder`), et la fermeture lance l'installateur, qui relance l'app. Un échec du réseau ou un refus se dit sur l'écran, qui offre « Continuer sans mettre à jour » ; la vérification suivante reprend. La pastille suit le déroulement ; « Mise à jour prête » n'existe plus. Chaque version publiée redémarre ainsi les PC ouverts, au plus une fois par heure, au rythme du minuteur du serveur (spec 18.1).
   - **Option écartée :** la signature de code Windows (Authenticode), un certificat payant. Sans elle, Windows SmartScreen avertit à la première installation. Le guide le dit.
 - **D5, la page de téléchargement.**
   - `GET /installer` rend une page HTML minimale :

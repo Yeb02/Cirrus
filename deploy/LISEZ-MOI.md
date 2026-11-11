@@ -178,9 +178,14 @@ Tu n'as rien à faire :
 2. **Dans l'heure, le serveur** la prend. Il vérifie la signature avec la clé du code qu'il fait tourner, puis l'empreinte de l'installateur. Il passe son code au tag de la version, copie ses bases et redémarre, puis sert le nouvel installateur. Il ne revient jamais en arrière.
    - Un échec avant le redémarrage (un téléchargement, une vérification, `npm ci`) laisse la version d'avant en place, et l'heure suivante réessaie.
    - Si le nouveau serveur ne répond pas dans la minute, ses bases d'avant et le code d'avant sont remis et relancés. Cette version n'est plus essayée ; la suivante le sera.
-3. **Chaque PC**, à sa connexion suivante, la télécharge et la vérifie, puis sa pastille dit « Mise à jour prête : elle s'installera à la fermeture. ». Elle s'installe quand tu fermes Cirrus ; rouvre-le ensuite.
+3. **Chaque PC ouvert**, à sa connexion suivante ou dans l'heure, vérifie la signature de la nouvelle version, puis la met à jour d'office :
+   - un écran bloque Cirrus : « Mise à jour de Cirrus vers 0.1.<n> », « Téléchargement… », avec la progression ;
+   - l'installateur téléchargé et vérifié, l'écran dit « Enregistrement, puis redémarrage… » : Cirrus enregistre tout, comme quand tu le fermes, puis se ferme, s'installe et se relance seul. Tu n'as rien à cliquer ;
+   - si le téléchargement échoue (le réseau), l'écran le dit et propose « Continuer sans mettre à jour » ; la vérification suivante recommence, et l'écran revient.
 
-Une version refusée, signature fausse ou installateur différent, ne s'installe nulle part : le PC le dit par une notification, et le serveur dans son journal. « Cirrus Dev » ne se met jamais à jour.
+**Chaque version publiée redémarre donc les PC ouverts**, au plus une fois par heure, au rythme de la mise à jour du serveur (`cirrus-maj.timer`). Pour ne pas être interrompu, pousse sur `main` quand tu ne travailles pas.
+
+Une version refusée, signature fausse ou installateur différent, ne s'installe nulle part : le PC le dit par une notification, et le serveur dans son journal. Une fausse annonce ne bloque jamais Cirrus : l'écran n'apparaît qu'une fois la signature vérifiée. « Cirrus Dev » ne se met jamais à jour.
 
 Pour voir la dernière mise à jour du serveur, ou la lancer tout de suite :
 
