@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { devUpdatesOf, KEY_PLACEHOLDER, UPDATE_PUBLIC_KEY, updateKeyOf, updateModeOf } from '../src/main/update/key.ts';
-import { checkInstaller, compareVersions, type Manifest, verifyManifest } from '../src/main/update/manifest.ts';
+import { checkInstaller, compareVersions, type Manifest, usableKey, verifyManifest } from '../src/main/update/manifest.ts';
 import { type FeedUpdater, type LatestInfo, NOT_SERVED, REFUSED, Updater, type UpdaterDeps } from '../src/main/update/updater.ts';
 import type { UpdateWord } from '../src/main/sync/protocol.ts';
 import { chipOf, UPDATE_READY as READY } from '../src/renderer/sync/syncSession.ts';
@@ -87,10 +87,12 @@ test('verifyManifest (Review Focus 2) : une signature fausse — une autre clé,
   }
 });
 
-test('verifyManifest : la clé provisoire de key.ts, une clé illisible ou d’un autre type refusent tout', () => {
+test('verifyManifest : la clé provisoire, une clé illisible ou d’un autre type refusent tout ; la clé de key.ts est utilisable', () => {
   setUp();
   const text = manifestText(), sig = signed(text, key.priv);
-  expect(UPDATE_PUBLIC_KEY).toBe(KEY_PLACEHOLDER);
+  // The key the user made (2ca1817): a real ed25519 key, never the placeholder again.
+  expect(UPDATE_PUBLIC_KEY).not.toBe(KEY_PLACEHOLDER);
+  expect(usableKey(UPDATE_PUBLIC_KEY)).toBe(true);
   expect(verifyManifest(text, sig, KEY_PLACEHOLDER)).toBeNull();
   expect(verifyManifest(text, sig, '')).toBeNull();
   expect(verifyManifest(text, sig, 'AAAA')).toBeNull();
@@ -694,7 +696,14 @@ test('signer-version.mjs (D6) : version.json et sa signature écrits depuis l’
   const latest = (sha: string) => `version: 0.1.2\nfiles:\n  - url: Cirrus Setup 0.1.2.exe\n    sha512: ${sha}\n    size: ${installer.bytes.length}\npath: Cirrus Setup 0.1.2.exe\nsha512: ${sha}\nreleaseDate: '2026-11-10T09:00:00.000Z'\n`;
   writeFileSync(join(dist, 'latest.yml'), latest(installer.sha512));
   const pem = key.priv.export({ type: 'pkcs8', format: 'pem' }).toString();
-  const script = join(import.meta.dirname, '..', 'scripts', 'signer-version.mjs');
+  // The signer as the CI runs it, beside a key.ts that carries the test pair's public key (the repository's carries the
+  // user's key since 2ca1817): it finds key.ts by its own place, ../src/main/update/key.ts.
+  const app = join(dir, 'app');
+  mkdirSync(join(app, 'scripts'), { recursive: true });
+  mkdirSync(join(app, 'src', 'main', 'update'), { recursive: true });
+  const script = join(app, 'scripts', 'signer-version.mjs');
+  copyFileSync(join(import.meta.dirname, '..', 'scripts', 'signer-version.mjs'), script);
+  writeFileSync(join(app, 'src', 'main', 'update', 'key.ts'), `export const UPDATE_PUBLIC_KEY: string = '${key.pub}';\n`);
   await run(process.execPath, [script, dist], { env: { ...process.env, CIRRUS_SIGNING_KEY: pem } });
   const text = readFileSync(join(dist, 'version.json'), 'utf8'), sig = readFileSync(join(dist, 'version.json.sig'), 'utf8');
   expect(verifyManifest(text, sig, key.pub)).toMatchObject({ version: '0.1.2', file: 'Cirrus Setup 0.1.2.exe', sha512: installer.sha512, size: installer.bytes.length });
@@ -713,14 +722,17 @@ test('signer-version.mjs (D6) : version.json et sa signature écrits depuis l’
 test('cle-de-signature.mjs (D4 ; revue, M4) : la clé publique écrite dans key.ts ; la privée jamais sur une sortie qui n’est pas un terminal, mais dans le fichier neuf que nomme --fichier ; une clé déjà là n’est remplacée qu’à la demande', async () => {
   setUp();
   const copy = join(dir, 'key.ts'), original = join(import.meta.dirname, '..', 'src', 'main', 'update', 'key.ts');
-  copyFileSync(original, copy);
+  // A key.ts as before the pair is made: the repository's own carries the user's key since 2ca1817.
+  const before = readFileSync(original, 'utf8');
+  writeFileSync(copy, before.replace(/(UPDATE_PUBLIC_KEY: string = ')[^']*'/, (_, head: string) => `${head}${KEY_PLACEHOLDER}'`));
+  expect(readFileSync(copy, 'utf8')).toContain(`= '${KEY_PLACEHOLDER}'`);
   const script = join(ROOT, 'deploy', 'cle-de-signature.mjs');
   // Its output a pipe (not a terminal), no --fichier: refused before anything is made; key.ts untouched.
   const refused = await run(process.execPath, [script, '--source', copy]).then(() => null, (e: { stdout: string; stderr: string }) => e);
   expect(refused).not.toBeNull();
   expect(refused!.stderr).toMatch(/terminal/);
   expect(`${refused!.stdout}${refused!.stderr}`).not.toMatch(/PRIVATE KEY/);
-  expect(readFileSync(copy, 'utf8')).toBe(readFileSync(original, 'utf8'));
+  expect(readFileSync(copy, 'utf8')).toContain(`= '${KEY_PLACEHOLDER}'`);
   // --fichier: the private key in that new file, never on the output.
   const pemFile = join(dir, 'cle-privee.pem');
   const { stdout } = await run(process.execPath, [script, '--source', copy, '--fichier', pemFile]);
@@ -748,5 +760,5 @@ test('cle-de-signature.mjs (D4 ; revue, M4) : la clé publique écrite dans key.
   await run(process.execPath, [script, '--source', copy, '--fichier', join(dir, 'autre.pem'), '--remplacer']);
   expect(readFileSync(copy, 'utf8')).not.toContain(pub!);
   // The repository's key.ts never touched by these runs.
-  expect(readFileSync(original, 'utf8')).toContain(KEY_PLACEHOLDER);
+  expect(readFileSync(original, 'utf8')).toBe(before);
 });
