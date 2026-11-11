@@ -441,7 +441,8 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 - **Échelle de texte :** une valeur globale et continue. Elle change la taille du texte de tous les éléments, et celle des boîtes des nœuds simples.
 - **Échelle de taille :** un **cran entier k par élément et par plan**, valant f^k, avec un facteur f global de 2 par défaut. Le choix de 2 se justifie ainsi : à 1,5 ou φ, le parent commence à s'effacer avant que ses membres aient disparu ; à 3, il faut parcourir plus de zoom.
   - **Nœud simple :** son cran change la taille de son texte et de sa boîte [C, non contesté].
-  - **Groupe :** son cran change la taille de son titre et dilate les distances entre ses membres autour de leur barycentre, récursivement dans les sous-groupes. La forme est conservée, et ni le texte ni le cran des membres ne changent.
+  - **Groupe :** son cran change la taille de son titre, et le cran de tous ses descendants, nœuds, sous-groupes et fantômes, du même nombre de crans. Les distances entre ses membres se dilatent d'autant autour de son centre, récursivement dans les sous-groupes, pour que le contenu ne se chevauche pas. La forme est conservée, et le tout est une seule action (un seul Ctrl+Z).
+    - **Fixé le 2026-11-11 (retours de l'utilisateur).** Auparavant, ni le texte ni le cran des membres ne changeaient.
   - Changer un cran ne déplace aucun autre élément.
   - **Nouveau groupe :** il est créé un certain nombre de crans au-dessus de son plus grand membre. Ce décalage est un paramètre graphique avancé (section 19), réglé par défaut à deux crans [C], car l'utilisateur trouvait trop étroite la marge où le titre d'un groupe est visible sans ses membres.
 - **Formule :** taille à l'écran d'un texte = taille de base × échelle de texte × f^k × zoom.
@@ -458,6 +459,8 @@ Tout dépend de la taille du texte à l'écran. En dézoomant, disparaissent dan
 3. puis les groupes se referment.
 
 Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [C]. Tous les seuils sont réglables. Les défauts de la maquette sont : texte des nœuds de 6 à 8 px, repli des groupes de 4,5 à 6,5 px, titres de connexion de 6,5 à 9 px. Un groupe s'ouvre selon son plus grand membre.
+
+**Fixé le 2026-11-11 (retours de l'utilisateur).** Le repli d'un groupe suit la même plage que le texte des nœuds (`textFade`, 6 à 8 px par défaut), selon son plus grand membre : le texte de ce membre et l'opacité du groupe vont ensemble, et les membres plus petits s'effacent plus tôt. Le réglage du repli (`groupFold`) n'existe plus.
 
 ### 8.3 Nœuds
 
@@ -532,7 +535,9 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
 
 ### 9.1 Souris et clavier
 
-- **Clic gauche :** sur un nœud ou une connexion, il ouvre son pop-up.
+- **Clic gauche :** sur un nœud ou une connexion, il le sélectionne.
+- **Double clic :** sur un nœud, une connexion, une amorce ou un fantôme, il ouvre son pop-up (celui du nœud représenté pour une amorce ou un fantôme). Le délai et la distance sont ceux du système.
+  - **Fixé le 2026-11-11 (retours de l'utilisateur).** Auparavant, le simple clic ouvrait le pop-up.
 - **Clic droit :** sur un nœud ou une connexion, il ouvre le menu contextuel. Sur le fond, il ouvre le menu du groupe le plus bas sous le curseur, ou celui du plan.
 - **Clic gauche enfoncé :**
   - sur un élément, il le déplace, avec toute la sélection s'il en fait partie ;
