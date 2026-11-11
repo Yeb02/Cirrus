@@ -11,7 +11,8 @@ export const ignored = (ev: { isTrusted: boolean }) => ev.isTrusted && measuring
 
 /**
  * One phase of the pointer events a visual check replays (CIRRUS_POINTER, GraphView's drawing loop): « down 700 370
- * ctrl », « move », « up », « key », « wheel », and « click <selector> » or « press ctrl+c » for what is not the pointer.
+ * ctrl », « move », « up », « key », « wheel », « dbl » (a double click), and « click <selector> » or « press ctrl+c » for
+ * what is not the pointer.
  */
 export function replayPointer(graph: Graph, script: string): void {
   const { root, gestures, handles, feed, hitAt } = graph;
@@ -37,6 +38,8 @@ export function replayPointer(graph: Graph, script: string): void {
       else feed({ t: 'up', button, sx, sy });
     }
     else if (t === 'key') feed({ t: 'key', key: xs });
+    // The browser's dblclick after a « down; up » that was a click: the pop-up it opens (2026-11-11).
+    else if (t === 'dbl') root.current?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }));
     else if (t === 'wheel') {
       const r = root.current!.getBoundingClientRect();
       root.current!.dispatchEvent(new WheelEvent('wheel', { clientX: sx + r.left, clientY: sy + r.top, deltaY: Number(mods[0] ?? -120), ctrlKey: mods.includes('ctrl'), cancelable: true }));

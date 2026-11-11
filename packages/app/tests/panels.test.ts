@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { applyOps, CommandError, deleteEverywhere, invertAction, MAX_ID_CHARS, type State, TagError, type TagValue } from '@cirrus/core';
 import { buildFixture, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
+import type { Hit } from '@cirrus/view';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/renderer/actions.ts';
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
 import {
-  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutReveal,
+  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, popupOf, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutReveal,
   withoutTopLoose,
 } from '../src/renderer/ui/panels/Panels.tsx';
 
@@ -149,6 +150,22 @@ test('clic dans le graphe : un nœud, un groupe ou le fantôme d’un nœud loin
   // Ctrl+click builds a selection; the background, a connection or a stub designate no item.
   expect(nodeOpenedBy(node, true)).toBeNull();
   expect(nodeOpenedBy(undefined, false)).toBeNull();
+});
+
+test('double clic dans le graphe (2026-11-11) : le pop-up d’un nœud, d’un groupe, du nœud d’un fantôme lointain, d’une connexion ou du cœur d’un bras scindé ; rien avec Ctrl, sur le fond, une amorce ou un fantôme absent', () => {
+  const node = { kind: 'node', id: 'n', node: 'n' } as const, group = { kind: 'group', id: 'g', node: 'g' } as const;
+  const on = (id: string) => ({ kind: 'item', item: 0, id }) as const;
+  const line: Hit = { kind: 'connection', conn: 0, key: null, ids: ['c1', 'c2'], part: 'main' };
+  expect(popupOf(on('n'), node, false)).toEqual({ kind: 'node', node: 'n' });
+  expect(popupOf(on('g'), group, false)).toEqual({ kind: 'node', node: 'g' });
+  expect(popupOf(on('ph1'), { kind: 'phantom', id: 'ph1', node: 'loin', phantom: 'node' }, false)).toEqual({ kind: 'node', node: 'loin' });
+  expect(popupOf(line, undefined, false)).toEqual({ kind: 'connection', ids: ['c1', 'c2'] });
+  expect(popupOf(on('ph3'), { kind: 'phantom', id: 'ph3', node: 'loin', phantom: 'center', connection: 'c' }, false)).toEqual({ kind: 'connection', ids: ['c'] });
+  expect(popupOf(on('n'), node, true)).toBeNull();
+  expect(popupOf(line, undefined, true)).toBeNull();
+  expect(popupOf({ kind: 'background' }, undefined, false)).toBeNull();
+  expect(popupOf({ kind: 'stub', conn: 0, stub: 0, connection: 'c', node: 'x', title: 'X' }, undefined, false)).toBeNull();
+  expect(popupOf(on('ph2'), { kind: 'phantom', id: 'ph2', node: 'loin', phantom: 'absent' }, false)).toBeNull();
 });
 
 test('lien vers un nœud (plan 4b, tâche 6) : son pop-up s’ouvre non épinglé, devant, sans rien fermer ; déjà ouvert, il passe devant', () => {

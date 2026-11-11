@@ -21,7 +21,7 @@ import { absentBuild, addMemberBuild, type Build } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog } from './Dialogs.tsx';
-import { nodeOpenedBy } from './panels/Panels.tsx';
+import { nodeOpenedBy, popupOf } from './panels/Panels.tsx';
 import type { Rect } from './panels/geometry.ts';
 import type { Refusal } from '../files/nodeFiles.ts';
 import type { LatexRegistry } from '../latex/registry.ts';
@@ -93,11 +93,11 @@ export function GraphView(props: {
   /** Opens the trash's panel, from the background's menu (plan 6a, D5: App's). */
   onTrash(): void;
   /**
-   * A click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up there, in
-   * window coordinates (plan 4a, D7).
+   * A double click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up
+   * there, in window coordinates (plan 4a, D7; a double click since 2026-11-11, a single click only selects).
    */
   onOpenNode(node: Id, client: { x: number; y: number }): void;
-  /** Any other click (background, connection, stub, absent or centre phantom, Ctrl+click) closes the loose pop-ups. */
+  /** A click on anything else (background, connection, stub, absent or centre phantom, Ctrl+click) closes the loose pop-ups. */
   onClickAway(): void;
   /** Files dropped on a node or a group (plan 4a, task 4): their paths, and those refused already (App's importInto). */
   onDropFiles(node: Id, paths: string[], refused?: Refusal[]): Promise<void>;
@@ -144,6 +144,11 @@ export function GraphView(props: {
     items: number[]; base: PlanScene; dx: number; dy: number; sx: number; sy: number; alt: boolean; dirty: boolean; preview?: PlanScene; split?: PreviewSplit;
   } | null>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  /**
+   * The last intent, when it was a click: what a double click opens (the browser's dblclick follows the second click's
+   * release, its intent handled already). Any other intent forgets it.
+   */
+  const lastClick = useRef<{ hit: Hit; ctrl: boolean; sx: number; sy: number } | null>(null);
   /**
    * A press the graph took (no pop-up or field over it stopped its pointerdown), until its mousedown: the graph gives
    * itself the focus on the pointerdown, so the browser's own focus move on the mousedown that follows is cancelled —
@@ -348,6 +353,22 @@ export function GraphView(props: {
     for (const draft of connectionDrafts(connections)) consultations.record(draft);
     const r = root.current!.getBoundingClientRect();
     setPopup({ connections, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
+  };
+  /**
+   * A double click on the graph (2026-11-11): the pop-up of what its second click designated (popupOf), a node's or a
+   * connection's, at that click. By ids, not indices: a frame may have been rebuilt since (I9 of the review).
+   */
+  const doubleClick = () => {
+    const c = lastClick.current, sc = sceneRef.current;
+    lastClick.current = null;
+    if (!c || !sc) return;
+    const i = c.hit.kind === 'item' ? sc.byId.get(c.hit.id) : undefined;
+    const opened = popupOf(c.hit, i === undefined ? undefined : sc.items[i], c.ctrl);
+    if (opened?.kind === 'connection') openPopup(opened.ids, c.sx, c.sy);
+    else if (opened) {
+      const r = root.current!.getBoundingClientRect();
+      panelsRef.current.open(opened.node, { x: r.left + c.sx, y: r.top + c.sy });
+    }
   };
 
   // One WebGL context for the window's lifetime; the font is read before the first scene (its boxes are measured with it).
@@ -592,6 +613,7 @@ export function GraphView(props: {
   const handle = (intent: Intent) => {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
+    lastClick.current = intent.t === 'click' ? { hit: intent.hit, ctrl: intent.ctrl, sx: intent.sx, sy: intent.sy } : null;
     switch (intent.t) {
       case 'pan':
         nav({ t: 'drag', dxPx: intent.dxPx, dyPx: intent.dyPx });
@@ -601,21 +623,15 @@ export function GraphView(props: {
         // By ids, not indices: a frame may have been rebuilt between the press and the release (I9 of the review).
         const target = targetOf(intent.hit);
         const i = intent.hit.kind === 'item' ? sc.byId.get(intent.hit.id) : undefined, it = i === undefined ? undefined : sc.items[i];
-        // A node's pop-up opens (plan 4a, spec 8.5: a far node's phantom opens that node's), or the loose ones close.
-        const opened = nodeOpenedBy(it, intent.ctrl);
-        if (opened === null) panelsRef.current.away();
+        // A click opens no pop-up (2026-11-11: a double click does, doubleClick); the loose ones close, unless it is on
+        // what would open a node's (plan 4a, spec 8.5: a far node's phantom stands for that node).
+        if (nodeOpenedBy(it, intent.ctrl) === null) panelsRef.current.away();
         if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
         setSelection(target ? toggle(emptySelection(), target) : emptySelection());
-        // A stub or an absent phantom brings its node in (spec 11.3); a connection or a centre phantom opens its pop-up (spec 8.5).
+        // A stub or an absent phantom brings its node in (spec 11.3).
         const here = { x: intent.sx, y: intent.sy };
         if (intent.hit.kind === 'stub') placement.startPlacing({ kind: 'import', node: intent.hit.node }, intent.hit.title, here);
-        else if (intent.hit.kind === 'connection') openPopup(intent.hit.ids, intent.sx, intent.sy);
         else if (it?.phantom === 'absent') placement.startPlacing({ kind: 'import', node: it.node }, it.title, here);
-        else if (it?.phantom === 'center') openPopup([it.connection!], intent.sx, intent.sy);
-        else if (opened !== null) {
-          const r = root.current!.getBoundingClientRect();
-          panelsRef.current.open(opened, { x: r.left + intent.sx, y: r.top + intent.sy });
-        }
         break;
       }
       case 'context': {
@@ -818,6 +834,8 @@ export function GraphView(props: {
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
       onPointerLeave={(ev) => { if (ignored(ev)) return; lastPointer.current = null; if (!gestures.current.busy) clearHover(); }}
+      // A double click on the graph itself, not in what floats over it (a pop-up's field, a question, the menu).
+      onDoubleClick={(ev) => { if (!ignored(ev) && (ev.target === root.current || host.current?.contains(ev.target as Node))) doubleClick(); }}
       onKeyDown={(ev) => {
         if (ignored(ev)) return;
         if (ev.key === 'Escape') {

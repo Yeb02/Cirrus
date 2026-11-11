@@ -83,7 +83,7 @@ const isPdf = (name: string) => fileKind(pathName(name)) === 'pdf';
 /**
  * The route of what is let go on `zone` (dropZone). Files (`what`, by default), `node` being the node that zone gives
  * them to: a pop-up's own (null once it is gone: its pop-up then takes none); on the graph, the node or group under the
- * point, the one a click there would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent
+ * point, the one a double click there would open (nodeOpenedBy: a far node's phantom gives its node; the background, an absent
  * or a centre phantom, none) — where one .bib alone (`names`, the files' paths) is imported (plan 4c, task 6), one PDF
  * alone opens the import dialog on it (plan 5b, D5), on a node a file of it as any other. A node dragged out of a list
  * (plan 4c, task 3): placed on the graph, whatever lies under the point (the group it enters is read in the plan, by

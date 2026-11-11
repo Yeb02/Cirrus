@@ -1,5 +1,5 @@
 import type { Action, Anchor, FileRef, Id, NodeRec, State } from '@cirrus/core';
-import type { RenderParams, SceneItem } from '@cirrus/view';
+import type { Hit, RenderParams, SceneItem } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Build } from '../../actions.ts';
 import { type ConsultationDraft, consultations } from '../../consultations.ts';
@@ -134,15 +134,31 @@ export function openedPanels(before: Panel[], after: Panel[]): ConsultationDraft
 }
 
 /**
- * The node whose pop-up a click in the graph opens (spec 8.5, 9.1): a node or a group clicked without Ctrl, or the far
- * node a phantom of a split arm stands for, as the original would. An absent phantom (it brings its node in), a centre
- * phantom (its connection's pop-up), a Ctrl+click, and whatever is no item (background, connection, stub) open none:
- * those clicks close the loose panels instead.
+ * The node whose pop-up a double click in the graph opens (spec 8.5, 9.1; a double click since 2026-11-11): a node or
+ * a group without Ctrl, or the far node a phantom of a split arm stands for, as the original would. An absent phantom
+ * (it brings its node in), a centre phantom (its connection's pop-up), Ctrl, and whatever is no item (background,
+ * connection, stub) open none: a click there closes the loose panels instead. What files dropped there go into too.
  */
 export function nodeOpenedBy(item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'phantom'> | undefined, ctrl: boolean): Id | null {
   if (ctrl || !item) return null;
   if (item.kind !== 'phantom') return item.id;
   return item.phantom === 'node' ? item.node : null;
+}
+
+/** The pop-up a double click in the graph opens: a node's, or a connection's (of the connections a line stands for). */
+export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; ids: Id[] };
+
+/**
+ * What a double click on `hit` opens (2026-11-11: a single click only selects): a node's pop-up (nodeOpenedBy), or the
+ * pop-up of a connection, of a line or of a split arm's centre phantom (spec 8.5); nothing with Ctrl, on the background,
+ * a stub or an absent phantom. `item`: the scene item hit, if any.
+ */
+export function popupOf(hit: Hit, item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'phantom' | 'connection'> | undefined, ctrl: boolean): GraphPopup | null {
+  if (ctrl) return null;
+  if (hit.kind === 'connection') return { kind: 'connection', ids: hit.ids };
+  if (item?.phantom === 'center' && item.connection !== undefined) return { kind: 'connection', ids: [item.connection] };
+  const node = nodeOpenedBy(item, false);
+  return node === null ? null : { kind: 'node', node };
 }
 
 /** Where a node's pop-up opens (placeAt): at its settings' size, never under panelMinPx, kept usable in `bounds`. */

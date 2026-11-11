@@ -17,7 +17,7 @@ export function useGraphDrop(graph: Graph, onDropFiles: (node: Id, paths: string
   const { root, engine, sceneRef, paramsRef, redraw, notify, edit, indexOf, hitAt, local, moveCamera, dragging, busy, busyReason } = graph;
   /**
    * Files dropped at (sx, sy) (plan 4a, task 4): the node or the group under the point receives them — the node whose
-   * pop-up a click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
+   * pop-up a double click there would open (nodeOpenedBy: a far node's phantom stands for it); a .bib alone on the background
    * is imported (plan 4c, D9), a PDF alone opens the import dialog at the point, with it (plan 5b, D5); elsewhere, a
    * notice (dropRoute).
    */
