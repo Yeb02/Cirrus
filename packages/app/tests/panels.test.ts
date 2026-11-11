@@ -152,7 +152,7 @@ test('clic dans le graphe : un nœud, un groupe ou le fantôme d’un nœud loin
   expect(nodeOpenedBy(undefined, false)).toBeNull();
 });
 
-test('double clic dans le graphe (2026-11-11) : le pop-up d’un nœud, d’un groupe, du nœud d’un fantôme lointain, d’une connexion ou du cœur d’un bras scindé ; rien avec Ctrl, sur le fond, une amorce ou un fantôme absent', () => {
+test('double clic dans le graphe (2026-11-11) : le pop-up d’un nœud, d’un groupe, du nœud d’une amorce ou d’un fantôme lointain ou absent, d’une connexion ou du cœur d’un bras scindé ; rien avec Ctrl ni sur le fond', () => {
   const node = { kind: 'node', id: 'n', node: 'n' } as const, group = { kind: 'group', id: 'g', node: 'g' } as const;
   const on = (id: string) => ({ kind: 'item', item: 0, id }) as const;
   const line: Hit = { kind: 'connection', conn: 0, key: null, ids: ['c1', 'c2'], part: 'main' };
@@ -164,8 +164,11 @@ test('double clic dans le graphe (2026-11-11) : le pop-up d’un nœud, d’un g
   expect(popupOf(on('n'), node, true)).toBeNull();
   expect(popupOf(line, undefined, true)).toBeNull();
   expect(popupOf({ kind: 'background' }, undefined, false)).toBeNull();
-  expect(popupOf({ kind: 'stub', conn: 0, stub: 0, connection: 'c', node: 'x', title: 'X' }, undefined, false)).toBeNull();
-  expect(popupOf(on('ph2'), { kind: 'phantom', id: 'ph2', node: 'loin', phantom: 'absent' }, false)).toBeNull();
+  // Ronde 1 of the review: a stub or an absent phantom opens its absent node's pop-up, as a node does; its first click's
+  // import is given up (GraphView).
+  expect(popupOf({ kind: 'stub', conn: 0, stub: 0, connection: 'c', node: 'x', title: 'X' }, undefined, false)).toEqual({ kind: 'node', node: 'x' });
+  expect(popupOf(on('ph2'), { kind: 'phantom', id: 'ph2', node: 'loin', phantom: 'absent' }, false)).toEqual({ kind: 'node', node: 'loin' });
+  expect(popupOf({ kind: 'stub', conn: 0, stub: 0, connection: 'c', node: 'x', title: 'X' }, undefined, true)).toBeNull();
 });
 
 test('lien vers un nœud (plan 4b, tâche 6) : son pop-up s’ouvre non épinglé, devant, sans rien fermer ; déjà ouvert, il passe devant', () => {

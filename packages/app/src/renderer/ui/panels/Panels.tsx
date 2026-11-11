@@ -149,13 +149,16 @@ export function nodeOpenedBy(item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'pha
 export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; ids: Id[] };
 
 /**
- * What a double click on `hit` opens (2026-11-11: a single click only selects): a node's pop-up (nodeOpenedBy), or the
- * pop-up of a connection, of a line or of a split arm's centre phantom (spec 8.5); nothing with Ctrl, on the background,
- * a stub or an absent phantom. `item`: the scene item hit, if any.
+ * What a double click on `hit` opens (2026-11-11: a single click only selects): a node's pop-up (nodeOpenedBy), that of
+ * the absent node a stub or an absent phantom stands for (ronde 1 of the review: its first click's import is given up),
+ * or the pop-up of a connection, of a line or of a split arm's centre phantom (spec 8.5); nothing with Ctrl or on the
+ * background. `item`: the scene item hit, if any.
  */
 export function popupOf(hit: Hit, item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'phantom' | 'connection'> | undefined, ctrl: boolean): GraphPopup | null {
   if (ctrl) return null;
   if (hit.kind === 'connection') return { kind: 'connection', ids: hit.ids };
+  if (hit.kind === 'stub') return { kind: 'node', node: hit.node };
+  if (item?.phantom === 'absent') return { kind: 'node', node: item.node };
   if (item?.phantom === 'center' && item.connection !== undefined) return { kind: 'connection', ids: [item.connection] };
   const node = nodeOpenedBy(item, false);
   return node === null ? null : { kind: 'node', node };

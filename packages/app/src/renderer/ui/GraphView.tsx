@@ -150,6 +150,14 @@ export function GraphView(props: {
    */
   const lastClick = useRef<{ hit: Hit; ctrl: boolean; sx: number; sy: number } | null>(null);
   /**
+   * The click on a stub or an absent phantom that began the import under way, until another intent than the ghost's
+   * moves (ronde 1 of the review); and a left press made meanwhile, held until its mousedown says whether it is the
+   * second press of a double click (its `detail`, by the system's delay and distance): then the import is given up and
+   * the double click opens the node's pop-up, else the press goes on, putting the node down.
+   */
+  const importClick = useRef<{ hit: Hit; ctrl: boolean; sx: number; sy: number } | null>(null);
+  const heldPress = useRef<Input | null>(null);
+  /**
    * A press the graph took (no pop-up or field over it stopped its pointerdown), until its mousedown: the graph gives
    * itself the focus on the pointerdown, so the browser's own focus move on the mousedown that follows is cancelled —
    * it would take the focus from what the press opened, the title editor of a node put down (spec 12), which closed.
@@ -614,6 +622,7 @@ export function GraphView(props: {
     const e = engine.current, sc = sceneRef.current;
     if (!e || !sc) return;
     lastClick.current = intent.t === 'click' ? { hit: intent.hit, ctrl: intent.ctrl, sx: intent.sx, sy: intent.sy } : null;
+    if (intent.t !== 'placeMove') importClick.current = null;
     switch (intent.t) {
       case 'pan':
         nav({ t: 'drag', dxPx: intent.dxPx, dyPx: intent.dyPx });
@@ -628,10 +637,11 @@ export function GraphView(props: {
         if (nodeOpenedBy(it, intent.ctrl) === null) panelsRef.current.away();
         if (intent.ctrl) { if (target) setSelection((sel) => toggle(sel, target)); break; }
         setSelection(target ? toggle(emptySelection(), target) : emptySelection());
-        // A stub or an absent phantom brings its node in (spec 11.3).
+        // A stub or an absent phantom brings its node in (spec 11.3), unless this click begins a double click (heldPress).
         const here = { x: intent.sx, y: intent.sy };
         if (intent.hit.kind === 'stub') placement.startPlacing({ kind: 'import', node: intent.hit.node }, intent.hit.title, here);
         else if (it?.phantom === 'absent') placement.startPlacing({ kind: 'import', node: it.node }, it.title, here);
+        if (intent.hit.kind === 'stub' || it?.phantom === 'absent') importClick.current = lastClick.current;
         break;
       }
       case 'context': {
@@ -804,11 +814,23 @@ export function GraphView(props: {
         const { sx, sy } = local(ev);
         root.current!.setPointerCapture(ev.pointerId);
         if (ev.button === 0 && !ev.ctrlKey && !gestures.current.busy && handles.grabHandle(sx, sy)) return;
-        feed({ t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) });
+        const down: Input = { t: 'down', button: buttonOf(ev.button), sx, sy, ctrl: ev.ctrlKey, alt: ev.altKey, shift: ev.shiftKey, hit: hitAt(sx, sy) };
+        // A left press while a stub's import, begun by a click, waits: its mousedown, which follows, tells a double click.
+        if (ev.button === 0 && importClick.current && placement.placing.current?.kind === 'import') { heldPress.current = down; return; }
+        feed(down);
       }}
       onMouseDown={(ev) => {
         if (graphPress.current) ev.preventDefault();
         graphPress.current = false;
+        const held = heldPress.current;
+        heldPress.current = null;
+        if (!held) return;
+        if (ev.detail < 2) { feed(held); return; }
+        // The second press of a double click on a stub or an absent phantom (ronde 1 of the review): the import its first
+        // click began is given up, and the dblclick that follows opens the node's pop-up (popupOf) instead.
+        const first = importClick.current;
+        feed({ t: 'cancel' });
+        lastClick.current = first;
       }}
       onPointerMove={(ev) => {
         if (ignored(ev)) return;
@@ -830,6 +852,8 @@ export function GraphView(props: {
         buttons.current = ev.buttons;
         const { sx, sy } = local(ev);
         if (root.current!.hasPointerCapture(ev.pointerId)) root.current!.releasePointerCapture(ev.pointerId);
+        // A held press whose mousedown never came: it goes on as it was.
+        if (heldPress.current) { feed(heldPress.current); heldPress.current = null; }
         if (handles.held()) { handles.dropHandle(true); return; }
         feed({ t: 'up', button: buttonOf(ev.button), sx, sy });
       }}
