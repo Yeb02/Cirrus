@@ -19,9 +19,9 @@ import { chipSays, closeSettings, localServer, pairThrough, serverField, TITLE_P
 const CHAPTER = 'Li_Vitányi_chapitre_1.pdf';
 const PUBLICATION = { env: { CIRRUS_VIEW: '-420,-300,1' }, settings: { previewWidthPx: 1000, previewHeightPx: 820 } };
 const PAGE_1 = '.file-preview .pdf-page[data-page="1"] .textLayer';
-/** The publication's pop-up, by a click on it, then its chapter's preview, by a click on the file, read to its text. */
+/** The publication's pop-up, by a double click on it, then its chapter's preview, by a click on the file, read to its text. */
 async function openChapter(page) {
-  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup')`, 1000)); i++) await page.click(792, 461);
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup')`, 1000)); i++) await page.dblclick(792, 461);
   await page.evaluate(`document.querySelector('.node-popup .file[data-name="${CHAPTER}"]')?.scrollIntoView({ block: 'center' })`);
   const file = await page.centre(`.node-popup .file[data-name="${CHAPTER}"]`, '');
   await page.click(file.x, file.y);
@@ -91,9 +91,9 @@ async function worldAt(page, at) {
 const ON_PUBLICATION = { x: 720, y: 500 };
 /** The sky at the top right of the view, over no node nor envelope (the test base's lobby). */
 const SKY = { x: 1530, y: 110 };
-/** The publication's pop-up, by a click on it, its list of annotations in view; the centre of its row « p. `n` ». */
+/** The publication's pop-up, by a double click on it, its list of annotations in view; the centre of its row « p. `n` ». */
 async function popupRow(page, n) {
-  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup .annotation-list li')`, 1000)); i++) await page.click(792, 461);
+  for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup .annotation-list li')`, 1000)); i++) await page.dblclick(792, 461);
   await page.evaluate(`document.querySelector('.node-popup .annotation-list')?.scrollIntoView({ block: 'center' })`);
   await sleep(200);
   return page.centre('.node-popup .annotation-list li', `p\\. ${n}`);
@@ -197,13 +197,13 @@ const EDITOR_TEXT = `[...document.querySelectorAll('.full-screen .tex-source .cm
 const TEX_BANNER = `document.querySelector('.full-screen .tex-workbench .viewer-banner')?.textContent ?? ''`;
 /** Whether a notification says `text` within `ms`. */
 const toastSays = (page, text, ms = 5000) => page.until(`[...document.querySelectorAll('.toast')].some((t) => ${text instanceof RegExp ? `${text}.test(t.textContent)` : `t.textContent === ${JSON.stringify(text)}`})`, ms);
-/** The node's pop-up, by a click on it, showing `title`. */
+/** The node's pop-up, by a double click on it (a single click only selects, since 2026-11-11), showing `title`. */
 async function openPopup(page, at, title) {
   for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`, 1000)); i++) {
-    await page.click(at.x, at.y);
+    await page.dblclick(at.x, at.y);
   }
   if (!(await page.evaluate(`document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`))) {
-    throw new Error(`pas de pop-up « ${title} » au clic sur le nœud`);
+    throw new Error(`pas de pop-up « ${title} » au double clic sur le nœud`);
   }
 }
 // Plan 6a, task 2: previous and next. The window's pixels say where the view is: one plan at one camera is one image.
@@ -707,9 +707,94 @@ const SCENARIOS = [
     },
   },
   {
+    // The user's interface feedback of 2026-11-11, point 1: a single click on a node or a connection selects it and opens
+    // nothing; a double click opens its pop-up. MDL is 175 px right of the view's centre, « Analogue bayésien » at it.
+    name: 'pop-up au double clic : un simple clic n’ouvre rien ; un double clic ouvre le pop-up d’un nœud, puis d’une connexion',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page) {
+      const centre = await graphCentre(page), mdl = { x: centre.x + 175, y: centre.y };
+      const MDL = 'Minimum Description Length Principle (MDL)', LINE = `document.querySelector('.popup input.title')?.value === 'Analogue bayésien'`;
+      // The double clicks are repeated until the engine is up; then Échap, and the single clicks open nothing.
+      await openPopup(page, mdl, MDL);
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.node-popup')`))) throw new Error('Échap ne ferme pas le pop-up du nœud');
+      await page.click(mdl.x, mdl.y);
+      await sleep(700);
+      if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('un simple clic sur un nœud ouvre son pop-up');
+      await page.click(centre.x, centre.y);
+      await sleep(700);
+      if (await page.evaluate(`!!document.querySelector('.popup')`)) throw new Error('un simple clic sur une connexion ouvre son pop-up');
+      await page.dblclick(centre.x, centre.y);
+      if (!(await page.until(LINE))) throw new Error('un double clic sur la connexion n’ouvre pas son pop-up');
+    },
+  },
+  {
+    // Point 2 of 2026-11-11: Alt + drag on a member moves that member alone and takes it out of its group, the group's other
+    // members where they were; one Ctrl+Z puts it back. MDL (in « Complexité et induction ») is let go below and right of it,
+    // out of every envelope.
+    name: 'Alt + glisser un membre le sort de son groupe, seul ; Ctrl+Z',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page, base) {
+      const { lobby } = idsOf(base);
+      const id = (title) => base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = ${sql(title)}`)[0].id;
+      const mdl = id('Minimum Description Length Principle (MDL)'), kolmogorov = id('Complexité de Kolmogorov'), complexite = id('Complexité et induction');
+      const centre = await graphCentre(page), from = { x: centre.x + 175, y: centre.y };
+      // The engine up: MDL's pop-up opens (then closes) before the drag.
+      await openPopup(page, from, 'Minimum Description Length Principle (MDL)');
+      await page.press('Escape', 'Escape', 27);
+      const before = placementOf(base, lobby, mdl), other = placementOf(base, lobby, kolmogorov);
+      if (groupIn(base, lobby, mdl) !== complexite) throw new Error('MDL n’est pas dans « Complexité et induction » au départ');
+      await page.drag(from, { x: from.x + 433, y: from.y + 339 }, 16, 1);
+      for (let i = 0; i < 3 && (await page.evaluate(`!!document.querySelector('.ask')`)); i++) {
+        const here = await page.centre('.ask button', '^Ici seulement$');
+        await page.click(here.x, here.y);
+      }
+      if (!(await until(() => groupIn(base, lobby, mdl) === null))) throw new Error(`MDL est encore dans un groupe : ${groupIn(base, lobby, mdl)}`);
+      const after = placementOf(base, lobby, mdl);
+      if (Math.abs(after.x - before.x - 433) > 1 || Math.abs(after.y - before.y - 339) > 1) throw new Error(`MDL n’est pas où il a été lâché : ${JSON.stringify([before, after])}`);
+      if (JSON.stringify(placementOf(base, lobby, kolmogorov)) !== JSON.stringify(other)) throw new Error('un autre membre du groupe a bougé');
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => groupIn(base, lobby, mdl) === complexite))) throw new Error('Ctrl+Z ne remet pas MDL dans son groupe');
+      if (JSON.stringify(placementOf(base, lobby, mdl)) !== JSON.stringify(before)) throw new Error('Ctrl+Z ne remet pas MDL à sa place');
+    },
+  },
+  {
+    // Point 8 of 2026-11-11: « Tout réinitialiser » asks first. « Non » has the focus, Entrée gives it; Échap gives up too;
+    // « Oui, tout réinitialiser » brings every default back (the factor, 3 in the test's settings, is no longer written).
+    name: 'réglages : « Tout réinitialiser » demande confirmation ; Entrée et Échap disent non ; « Oui » réinitialise',
+    settings: { factor: 3 },
+    async run(page, base, data) {
+      const written = () => JSON.parse(readFileSync(join(data, 'settings.json'), 'utf8'));
+      const gear = await page.centre('.tabs .gear', '⚙');
+      await page.click(gear.x, gear.y);
+      const ask = async () => {
+        const reset = await page.centre('.settings .reset-all', 'Tout réinitialiser');
+        await page.click(reset.x, reset.y);
+        if (!(await page.until(`!!document.querySelector('.ask')`))) throw new Error('« Tout réinitialiser » ne demande rien');
+        const choices = await page.evaluate(`[...document.querySelectorAll('.ask button')].map((b) => b.textContent)`);
+        if (JSON.stringify(choices) !== JSON.stringify(['Non', 'Oui, tout réinitialiser'])) throw new Error(`les choix : ${JSON.stringify(choices)}`);
+        if (!(await page.evaluate(`document.activeElement?.textContent === 'Non'`))) throw new Error('« Non » n’a pas le focus');
+      };
+      await ask();
+      await page.press('Enter', 'Enter', 13);
+      if (!(await page.until(`!document.querySelector('.ask')`))) throw new Error('Entrée ne ferme pas la question');
+      if (written().factor !== 3) throw new Error(`Entrée a réinitialisé : ${JSON.stringify(written())}`);
+      await ask();
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.ask')`))) throw new Error('Échap ne ferme pas la question');
+      if (written().factor !== 3) throw new Error(`Échap a réinitialisé : ${JSON.stringify(written())}`);
+      if (!(await page.evaluate(`!!document.querySelector('.settings')`))) throw new Error('Échap a fermé les réglages avec la question');
+      await ask();
+      const yes = await page.centre('.ask button', '^Oui, tout réinitialiser$');
+      await page.click(yes.x, yes.y);
+      if (!(await until(() => written().factor === undefined))) throw new Error(`« Oui » ne réinitialise pas : ${JSON.stringify(written())}`);
+    },
+  },
+  {
     // Plan 6a, D1 and D2: Ctrl+K opens the search, its field focused; Échap closes it, the focus back to the graph. Opened
     // again, a word typed lists « Motivation », in the article's plan only; Entrée jumps there: its tab opens, the node
-    // framed at the view's centre (a click there opens its pop-up), the box closed and the graph focused.
+    // framed at the view's centre (a double click there opens its pop-up), the box closed and the graph focused.
     name: 'recherche : Ctrl+K, une frappe, Entrée saute vers un nœud d’un autre plan',
     async run(page) {
       const FIELD = `document.activeElement?.matches('.search-box .search-field') === true`;
@@ -737,8 +822,9 @@ const SCENARIOS = [
       await openPopup(page, centre, 'Motivation');
 
       // Final review of plan 6a: a question asked while the box is open closes it, and is seen — it stood under the list, hidden
-      // but live, and a blind Entrée answered it. The pop-up closed (Échap), the box opened with one row, the node clicked (the
-      // box stays, M4), then Suppr: the question is over the graph and the box is gone.
+      // but live, and a blind Entrée answered it. The pop-up closed (Échap), MDL framed (shown in other plans: its deletion
+      // asks, Motivation's would not since 2026-11-11), the box opened with one row, the node clicked (it is selected, no
+      // pop-up opens, the box stays, M4), then Suppr: the question is over the graph and the box is gone.
       const topmost = (selector) => page.evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return 'absent';
@@ -747,12 +833,14 @@ const SCENARIOS = [
       })()`);
       await page.press('Escape', 'Escape', 27);
       if (!(await page.until(`!document.querySelector('.node-popup')`))) throw new Error('Échap ne ferme pas le pop-up du nœud');
+      await searchJump(page, 'minimum descr', 'Minimum Description Length Principle (MDL)');
       await page.press('k', 'KeyK', 75, 2);
       if (!(await page.until(FIELD))) throw new Error('Ctrl+K ne rouvre pas la recherche pour la question');
       await page.type('motiv');
       if (!(await page.until(`document.querySelectorAll('.search-box .search-results li').length === 1`))) throw new Error('la recherche de « motiv » ne montre pas une ligne');
       await page.click(centre.x, centre.y);
-      if (!(await page.until(`!!document.querySelector('.node-popup')`))) throw new Error('un clic sur le nœud n’ouvre pas son pop-up');
+      await sleep(500);
+      if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('un simple clic sur le nœud ouvre son pop-up');
       if (!(await page.evaluate(`!!document.querySelector('.search-box')`))) throw new Error('un clic sur le nœud ferme la recherche (elle reste ouverte)');
       await page.evaluate(`document.querySelector('.graph').focus()`);
       await page.press('Delete', 'Delete', 46);
@@ -805,7 +893,7 @@ const SCENARIOS = [
       // The connection at the view's centre (the captures' « fenetre-connexion », whose point is the graph's): its pop-up,
       // its title field focused.
       const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup input.title')`, 1000)); i++) await page.click(centre.x, centre.y);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup input.title')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
       const title = await page.centre('.popup input.title', '');
       await page.click(title.x, title.y);
       if (!(await page.evaluate(`document.activeElement?.matches('.popup input.title') === true`))) throw new Error('le titre du pop-up de la connexion n’a pas le focus');
@@ -1251,10 +1339,10 @@ const SCENARIOS = [
       const { lobby, page2 } = idsOf(base);
       await page.dragDrop(await popupRow(page, 2), SKY);
       if (!(await until(() => placementOf(base, lobby, page2) !== null))) throw new Error('l’annotation n’est pas posée dans le lobby');
-      // Its own pop-up: its PDF and its page, a click opening it there.
+      // Its own pop-up: its PDF and its page, a double click opening it there.
       const line = `Annotation de « ${LI} », p. 2`;
       for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.node-popup .annotation-of button')?.textContent === ${JSON.stringify(line)}`, 1000)); i++) {
-        await page.click(SKY.x, SKY.y);
+        await page.dblclick(SKY.x, SKY.y);
       }
       const pin = (panel) => page.evaluate(`document.querySelector('${panel} .pin:not(.on)')?.click()`);
       await pin('.node-popup');
@@ -1268,8 +1356,8 @@ const SCENARIOS = [
       await pin('.file-preview');
       const header = await page.centre('.file-preview > header .title', '');
       await page.drag(header, { x: 200, y: 600 });
-      // The PDF's pop-up (its list) by a click on its node, which selects it; Suppr, « Partout ».
-      await page.click(ON_PUBLICATION.x, ON_PUBLICATION.y);
+      // The PDF's pop-up (its list) by a double click on its node, which selects it; Suppr, « Partout ».
+      await page.dblclick(ON_PUBLICATION.x, ON_PUBLICATION.y);
       if (!(await page.until(`document.querySelectorAll('.node-popup .annotation-list li').length === 3`))) throw new Error('le pop-up du PDF ne liste pas ses annotations');
       await page.press('Delete', 'Delete', 46);
       const everywhere = await page.centre('.ask button', '^Partout$');
@@ -1570,7 +1658,7 @@ const SCENARIOS = [
       await page.type('10.1234/jamais-enregistre');
       await page.press('Enter', 'Enter', 13);
       if (!(await page.until(`document.querySelector('.publication-dialog .status')?.textContent === 'Pas de connexion.'`, 8000))) throw new Error(`le dialogue dit « ${await statusOf(page)} »`);
-      await page.click(792, 461);
+      await page.dblclick(792, 461);
       if (!(await page.until(`!!document.querySelector('.node-popup') && !!document.querySelector('.publication-dialog')`))) throw new Error('le graphe ne répond pas pendant que le dialogue est ouvert');
       const input = await page.centre('.publication-dialog input', '');
       await page.click(input.x, input.y);
@@ -2262,7 +2350,7 @@ const SCENARIOS = [
     async run(page, base) {
       const tagged = (key) => base(`SELECT json FROM connections WHERE trashed = 0`).map((r) => JSON.parse(r.json)).filter((c) => c.tags.some((t) => t.key === key));
       const centre = await graphCentre(page);
-      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup .tag-field')`, 1000)); i++) await page.click(centre.x, centre.y);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup .tag-field')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
       const field = await page.centre('.popup .tag-field', '');
       await page.click(field.x, field.y);
       // Focused and empty: the keys of scope connection (or both), none of a node's.
@@ -2313,10 +2401,10 @@ const SCENARIOS = [
         await page.press('Escape', 'Escape', 27);
         await page.click(centre.x, centre.y, 'right');
       }
+      // In no other plan: deleted at once, as « Partout » would (2026-11-11), without « Ici seulement / Partout ».
       await click('.context-menu button', '^Supprimer…$');
-      if (!(await page.until(`document.querySelector('.ask p')?.textContent === ${JSON.stringify(`Supprimer « ${TITLE} » ?`)}`))) throw new Error('pas de question avant la suppression');
-      await click('.ask .choices button', '^Partout$');
       if (!(await until(trashed))) throw new Error(`le nœud n’est pas à la corbeille ; ${await toastsText(page)}`);
+      if (await page.evaluate(`!!document.querySelector('.ask')`)) throw new Error('une question pour un nœud qu’aucun autre plan ne montre');
 
       // The trash, from the background's menu where the node was: « Corbeille… » before « Registre des tags… ».
       for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(centre.x, centre.y, 'right');

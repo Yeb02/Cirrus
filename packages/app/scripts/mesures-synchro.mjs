@@ -277,7 +277,7 @@ async function latence() {
       const id = made.ops.find((o) => o.t === 'node' && o.before === null).after.id;
       const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
       const opened = `document.querySelector('.node-popup input.title')?.value === 'Mesure 0'`;
-      for (let i = 0; i < 20 && !(await page.until(opened, 1000)); i++) await page.click(centre.x, centre.y);
+      for (let i = 0; i < 20 && !(await page.until(opened, 1000)); i++) await page.dblclick(centre.x, centre.y);
       if (!(await page.evaluate(opened))) throw new Error('pas de pop-up du nœud du PC virtuel dans B');
       const clock = await clockOffset(page);
       const samples = [];

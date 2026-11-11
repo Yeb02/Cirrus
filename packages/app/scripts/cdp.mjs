@@ -91,6 +91,17 @@ export async function launch(data, profile, more = {}, { exe, log, ownProfile = 
       await mouse('mouseReleased', x, y, button);
       await sleep(300);
     },
+    /** A double click of the left button: two presses, the second counted as such (the browser's dblclick follows it). */
+    async dblclick(x, y) {
+      await mouse('mouseMoved', x, y);
+      for (const clickCount of [1, 2]) {
+        await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount });
+        await sleep(30);
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount });
+        await sleep(30);
+      }
+      await sleep(300);
+    },
     async move(x, y) { await mouse('mouseMoved', x, y); await sleep(200); },
     /** A left click with Ctrl held: an element selected without its pop-up (spec 9.1). */
     async ctrlClick(x, y) {
@@ -118,16 +129,19 @@ export async function launch(data, profile, more = {}, { exe, log, ownProfile = 
       for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: keyCode, modifiers });
       await sleep(600);
     },
-    /** The left button pressed at `from`, moved in `steps` to `to`, and let go there: a selection made by the mouse. */
-    async drag(from, to, steps = 12) {
+    /**
+     * The left button pressed at `from`, moved in `steps` to `to`, and let go there: a selection made by the mouse.
+     * `modifiers` held all along, as `press` counts them (Alt 1: a member taken out of its group).
+     */
+    async drag(from, to, steps = 12, modifiers = 0) {
       await mouse('mouseMoved', from.x, from.y);
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1, modifiers });
       for (let i = 1; i <= steps; i++) {
         const x = from.x + ((to.x - from.x) * i) / steps, y = from.y + ((to.y - from.y) * i) / steps;
-        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1, modifiers });
         await sleep(20);
       }
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1, modifiers });
       await sleep(400);
     },
     /**

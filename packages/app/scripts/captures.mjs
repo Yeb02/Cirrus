@@ -58,49 +58,49 @@ const SCENES = [
   // MDL, then Solomonoff with Ctrl.
   { name: 'selection', view: '0,140,1', pointer: 'down 967 461; up 967 461; down 617 461 ctrl; up 617 461 ctrl' },
   { name: 'apercu-glissement', view: '0,140,1', pointer: 'down 967 461; move 990 470 | move 1060 520' },
-  // A click on « Analogue bayésien », between MDL and Solomonoff.
-  { name: 'fenetre-connexion', view: '0,140,1', pointer: 'down 792 461; up 792 461' },
+  // A double click on « Analogue bayésien », between MDL and Solomonoff (a single click only selects, since 2026-11-11).
+  { name: 'fenetre-connexion', view: '0,140,1', pointer: 'down 792 461; up 792 461; dbl' },
   { name: 'survol-connexion', view: '0,140,1', hover: '792,461' },
   // The fixture's stubs are in « Thèse » (Entropie's branch), its phantoms in the lobby (Universality's split arm).
   { name: 'amorces-these', plan: 'Thèse' },
   { name: 'fantomes-lobby', view: '480,420,1' },
   { name: 'fond-grille', settings: { background: 'grid' } },
   { name: 'plan-document', plan: 'Article MDL' },
-  // Plan 4a: a click on MDL opens its pop-up, to the right of and below the click.
-  { name: 'popup-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461' },
+  // Plan 4a: a double click on MDL opens its pop-up, to the right of and below the click.
+  { name: 'popup-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461; dbl' },
   // A file written in a temporary folder, dropped on MDL (CIRRUS_IMPORT, by the graph's drop); its pop-up, opened by the
   // click, is tall enough to show its files: the new one last, the notice above.
   {
-    name: 'import-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 },
+    name: 'import-noeud', view: '0,140,1', pointer: 'down 967 461; up 967 461; dbl', settings: { popupHeightPx: 720 },
     import: { at: '967,461', name: 'données_importées.txt', text: 'Longueur de description : 42 bits.\n' },
   },
   // Plan 4a, task 5: a click on a file of the pop-up (CIRRUS_CLICK) opens its preview beside it, its ⤢ the full screen.
   // MDL's script, coloured as Python; its CSV, in Windows-1252 with semicolons; the image of « Compression sans perte »
   // (175, −140 in the world: 967, 181 on screen).
-  { name: 'plein-ecran-code', view: '0,140,1', pointer: 'down 967 461; up 967 461', click: fileThenFull('calcul_mdl_séquence_aléatoire.py') },
-  { name: 'plein-ecran-tableau', view: '0,140,1', pointer: 'down 967 461; up 967 461', click: fileThenFull('mesures_compression.csv') },
-  { name: 'plein-ecran-image', view: '0,140,1', pointer: 'down 967 181; up 967 181', click: fileThenFull('schéma_compression.png') },
+  { name: 'plein-ecran-code', view: '0,140,1', pointer: 'down 967 461; up 967 461; dbl', click: fileThenFull('calcul_mdl_séquence_aléatoire.py') },
+  { name: 'plein-ecran-tableau', view: '0,140,1', pointer: 'down 967 461; up 967 461; dbl', click: fileThenFull('mesures_compression.csv') },
+  { name: 'plein-ecran-image', view: '0,140,1', pointer: 'down 967 181; up 967 181; dbl', click: fileThenFull('schéma_compression.png') },
   // The pop-up tall enough to show its files, the preview of the Markdown notes beside it (on its left: no room on its right).
-  { name: 'apercu-fichier', view: '0,140,1', pointer: 'down 967 461; up 967 461', settings: { popupHeightPx: 720 }, click: '.file[data-name="notes_lecture.md"]' },
+  { name: 'apercu-fichier', view: '0,140,1', pointer: 'down 967 461; up 967 461; dbl', settings: { popupHeightPx: 720 }, click: '.file[data-name="notes_lecture.md"]' },
   // Plan 4a, task 6: the publication (−420, −300 in the world, at the view's centre) carries the two PDFs. Its
   // three-page chapter in full screen, zoomed out by nine steps of « − » from the fit (165 % to 47 % since plan 4c,
   // task 2: the margin of its annotations beside it, their highlights on pages 1 and 2), so that its first page and
   // the top of the second show; then its pop-up, tall enough to show both PDFs' first-page thumbnails.
   {
-    name: 'plein-ecran-pdf', view: '-420,-300,1', pointer: 'down 792 461; up 792 461',
+    name: 'plein-ecran-pdf', view: '-420,-300,1', pointer: 'down 792 461; up 792 461; dbl',
     click: [fileThenFull('Li_Vitányi_chapitre_1.pdf'), ...Array(9).fill('.full-screen .pdf-tools .zoom-out')].join(','),
   },
-  { name: 'popup-vignettes', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { popupHeightPx: 720 } },
+  { name: 'popup-vignettes', view: '-420,-300,1', pointer: 'down 792 461; up 792 461; dbl', settings: { popupHeightPx: 720 } },
   // Plan 4b: Entropie's pop-up (−420, −140 in the world: 372, 181 on screen), its summary compiled; the window of
   // « Déduction jointe », by a click on its marker, its relation compiled.
-  { name: 'popup-resume-compile', view: '0,140,1', pointer: 'down 372 181; up 372 181' },
-  { name: 'relation-compilee', view: '0,140,1', pointer: 'down 1122 399; up 1122 399' },
+  { name: 'popup-resume-compile', view: '0,140,1', pointer: 'down 372 181; up 372 181; dbl' },
+  { name: 'relation-compilee', view: '0,140,1', pointer: 'down 1122 399; up 1122 399; dbl' },
   // Kolmogorov's complexité.tex (Kolmogorov: −175, −140, at 617, 181) in its workbench: the broken \ref{absent:label} in
   // red in the editor and in the preview. Then a keystroke at the start of the text that breaks the compilation: the
   // last good PDF stays, the error line in the banner and on its line, the log open.
-  { name: 'plein-ecran-tex', view: '0,140,1', pointer: 'down 617 181; up 617 181', click: fileThenFull('complexité.tex') },
+  { name: 'plein-ecran-tex', view: '0,140,1', pointer: 'down 617 181; up 617 181; dbl', click: fileThenFull('complexité.tex') },
   {
-    name: 'tex-erreur', view: '0,140,1', pointer: 'down 617 181; up 617 181',
+    name: 'tex-erreur', view: '0,140,1', pointer: 'down 617 181; up 617 181; dbl',
     click: [fileThenFull('complexité.tex'), 'type:\\oups ', '.full-screen .tex-status .log'].join(','),
   },
   // The preamble's editor, from « Modifier le préambule… » in the settings' LaTeX rubric (opened first), its sample compiled.
@@ -109,11 +109,11 @@ const SCENES = [
   // margin: page 1's passage highlighted, the margin's three annotations (one in « Lecture », one in no plan, one on
   // the version before the re-import).
   {
-    name: 'pdf-surlignages', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { previewWidthPx: 1000, previewHeightPx: 820 },
+    name: 'pdf-surlignages', view: '-420,-300,1', pointer: 'down 792 461; up 792 461; dbl', settings: { previewWidthPx: 1000, previewHeightPx: 820 },
     click: '.file[data-name="Li_Vitányi_chapitre_1.pdf"],.node-popup .close',
   },
   // The publication's pop-up, tall enough to show its section « Annotations » under its files.
-  { name: 'popup-annotations', view: '-420,-300,1', pointer: 'down 792 461; up 792 461', settings: { popupHeightPx: 940 } },
+  { name: 'popup-annotations', view: '-420,-300,1', pointer: 'down 792 461; up 792 461; dbl', settings: { popupHeightPx: 940 } },
   // « Lecture »: the publication's node a group there, its page 1 annotation its member.
   { name: 'plan-lecture', plan: 'Lecture', view: '0,-20,1.6' },
   // « Importer une publication… » from the menu of the sky's background (1530, 72 under the tabs), an arXiv identifier
@@ -363,7 +363,7 @@ async function plan5bCaptures(names, taken) {
       write(COPY, texLines('Le meilleur modèle minimise la somme des deux longueurs.'));
       // MDL's pop-up (175, 140 in the world: 967, 499 in the page), the copy's row, « Comparer ».
       const shown = `document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(MDL)}`;
-      for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.click(967, 499);
+      for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.dblclick(967, 499);
       const copyRow = `.node-popup .file[data-name="${COPY}"]`;
       if (!(await page.until(`!!document.querySelector('${copyRow} .compare')`, 15_000))) throw new Error('le pop-up de MDL ne propose pas « Comparer » sur la copie');
       await page.evaluate(`document.querySelector('${copyRow}').scrollIntoView({ block: 'center' })`);

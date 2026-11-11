@@ -282,7 +282,7 @@ async function buildOf(page) {
 /** Clicks at `at` until the node's pop-up shows `title`. */
 async function openNodePopup(page, at, title) {
   const shown = `document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(title)}`;
-  for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.click(at.x, at.y);
+  for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.dblclick(at.x, at.y);
   if (!(await page.evaluate(shown))) throw new Error(`le pop-up de « ${title} » ne s’ouvre pas`);
 }
 

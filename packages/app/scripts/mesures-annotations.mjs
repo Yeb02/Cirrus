@@ -262,7 +262,7 @@ async function measureReading(kind, scroll) {
       const node = t.base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Lecture de mesure (50 annotations)'`)[0].id;
       const rects = t.base(`SELECT json_extract(json, '$.anchor.page') AS p, json_array_length(json, '$.anchor.rects') AS n FROM nodes WHERE json_extract(json, '$.anchor.pdf') = '${node}'`);
       const marks = kind === 'annotated' ? rects.filter((x) => x.p === 1).reduce((s, x) => s + x.n, 0) : 0, margin = kind === 'annotated' ? rects.length : 0;
-      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup .file[data-name="${READING}"]')`, 1000)); i++) await page.click(CENTRE.x, CENTRE.y);
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.node-popup .file[data-name="${READING}"]')`, 1000)); i++) await page.dblclick(CENTRE.x, CENTRE.y);
       const cold = await openReading(page, marks, margin);
       const close = await page.centre('.file-preview .close', '×');
       await page.click(close.x, close.y);

@@ -149,10 +149,10 @@ async function keystroke(page, ch) {
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 
-/** The node titled `name`'s pop-up, by clicks at `at` until it shows it. */
+/** The node titled `name`'s pop-up, by double clicks at `at` until it shows it. */
 async function openPopup(page, at, name) {
   const shown = `document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(name)}`;
-  for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.click(at.x, at.y);
+  for (let i = 0; i < 10 && !(await page.until(shown, 1000)); i++) await page.dblclick(at.x, at.y);
   if (!(await page.evaluate(shown))) throw new Error(`pas de pop-up « ${name} »`);
 }
 
