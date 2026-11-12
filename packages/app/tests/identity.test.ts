@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { dataDir } from '../src/main/base.ts';
-import { type AppIdentity, appIdentity, applyIdentity, copiesDir, packageVariant, variantOf } from '../src/main/identity.ts';
+import { type AppIdentity, appIdentity, applyIdentity, copiesDir, packageVariant, runVariant, variantOf } from '../src/main/identity.ts';
 
 // The app's identity (plan 9, D3). The official app keeps the folder the user's base already lives in: the one Electron
 // gave the app while it was named « @cirrus/app » (appData joined with that name). « Cirrus Dev » has its own, beside it.
@@ -28,6 +28,13 @@ test('« Cirrus Dev » a son nom, son appId et son dossier, à côté de celui d
 test('la variante vient du nom du paquet, et de lui seul : « @cirrus/app-dev » fait « Cirrus Dev », tout autre l’app officielle', () => {
   expect(variantOf('@cirrus/app-dev')).toBe('dev');
   for (const name of ['@cirrus/app', 'cirrus', '@cirrus/app-dev ', '@CIRRUS/APP-DEV', '', undefined, null, 42]) expect(variantOf(name)).toBe('official');
+});
+
+test('une app non empaquetée (npm run dev, npm run start) est toujours « Cirrus Dev » : jamais la base de l’utilisateur ; empaquetée, la variante de son paquet', () => {
+  expect(runVariant('official', false)).toBe('dev');
+  expect(runVariant('dev', false)).toBe('dev');
+  expect(runVariant('official', true)).toBe('official');
+  expect(runVariant('dev', true)).toBe('dev');
 });
 
 test('le nom lu dans le package.json de l’app (l’archive empaquetée, ou packages/app) ; illisible, une erreur plutôt qu’une variante devinée', () => {

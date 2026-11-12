@@ -212,7 +212,7 @@ cirrus-serveur revoquer "Portable"
 - **SmartScreen** avertit à chaque installation par la page (étape 8) : l'installateur n'a pas de signature de Windows.
 - **Le code du serveur vient de GitHub.** La signature couvre le manifeste et l'installateur. Le code, lui, est pris au tag de la version par git, en HTTPS, et seulement si son manifeste signé est bon. Qui tient ton compte GitHub tient donc ton serveur et tes versions : protège-le (double authentification).
 - **Changer de clé de signature** (`--remplacer`) bloque tout : les PC refusent les nouvelles versions, et le serveur aussi tant que tu n'as pas relancé `installer-serveur.sh`. Il faut ensuite réinstaller chaque PC par la page.
-- **Essayer une version en développement :** pas par `npm run dev`, qui ouvre ta vraie base et, jumelée, parle au vrai serveur. Construis plutôt « Cirrus Dev » (`npm run paquet:dev -w packages/app`, l'installateur dans `packages/app/dist`) : il a ses propres dossiers, et ne se met jamais à jour.
+- **Essayer une version en développement :** `npm run dev -w packages/app`, depuis le dossier du dépôt. Lancée depuis le dépôt, l'app est toujours « Cirrus Dev » : sa propre base (`%APPDATA%@cirrusapp-dev`), jamais la tienne, et aucune mise à jour. Ne la jumelle pas à ton serveur. L'installateur de « Cirrus Dev » (`npm run paquet:dev -w packages/app`) partage cette base.
 - **Un redémarrage la nuit**, à 4 h 30, quand une mise à jour du noyau l'attend. Les services repartent seuls, et les PC se reconnectent seuls.
 
 ## Dépannage

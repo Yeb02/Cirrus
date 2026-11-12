@@ -30,6 +30,16 @@ export function packageVariant(appPath: string): Variant {
   return variantOf(JSON.parse(readFileSync(join(appPath, 'package.json'), 'utf8')).name);
 }
 
+/**
+ * The variant this run takes: its package's when packaged (the installed app, « Cirrus » or « Cirrus Dev »); « Cirrus
+ * Dev » for any run from the repository (npm run dev, npm run start, the checks), whatever packages/app's name says, so
+ * that code being worked on never opens the user's base, nor talks to the server it is paired with (2026-11-12: the user
+ * tries his changes with npm run dev). Its data folder is %APPDATA%@cirrusapp-dev, the installed « Cirrus Dev »'s.
+ */
+export function runVariant(pkg: Variant, packaged: boolean): Variant {
+  return packaged ? pkg : 'dev';
+}
+
 export interface AppIdentity {
   /** The app's name (app.setName), its installer's and its executable's. */
   name: 'Cirrus' | 'Cirrus Dev';

@@ -8,7 +8,7 @@ import { dataDir, openBase, pcId } from './base.ts';
 import { markNow, wireBenchMode } from './benchMode.ts';
 import { Consultations } from './consultations.ts';
 import { cleanCopies, FILE_SCHEME, fileResponse } from './files.ts';
-import { appIdentity, applyIdentity, copiesDir, packageVariant, type Variant } from './identity.ts';
+import { appIdentity, applyIdentity, copiesDir, packageVariant, runVariant, type Variant } from './identity.ts';
 import { wireBase } from './ipc/base.ts';
 import { wireConsultations } from './ipc/consultations.ts';
 import { wireFiles } from './ipc/files.ts';
@@ -55,13 +55,14 @@ import { createWindow } from './window.ts';
  * The app's identity (plan 9, D3), before anything reads userData (the single-instance lock, Chromium's profile, the
  * base): its name, its data folder — %APPDATA%\@cirrus\app for the official app, where the user's base is, its own for
  * « Cirrus Dev » —, its AppUserModelId. The variant is the package's: its name in the archive (« @cirrus/app-dev », from
- * electron-builder.dev.yml, makes « Cirrus Dev »), or packages/app's for `npm run dev` and the checks (the official app).
- * The build is the same for both. A package that cannot be read stops the start rather than guess. A profile given by
+ * electron-builder.dev.yml, makes « Cirrus Dev »). A run from the repository (`npm run dev`, `npm run start`, the checks)
+ * is always « Cirrus Dev » (runVariant): never the user's base. The build is the same for both. A package that cannot
+ * be read stops the start rather than guess. A profile given by
  * --user-data-dir (the checks, the captures) is kept; bench and captures then take their own (below).
  */
 let variant: Variant;
 try {
-  variant = packageVariant(app.getAppPath());
+  variant = runVariant(packageVariant(app.getAppPath()), app.isPackaged);
 } catch (e) {
   dialog.showErrorBox('Cirrus', `Le paquet de l’app ne se lit pas : Cirrus ne sait pas quelle variante il est, et s’arrête.\n\n${e instanceof Error ? e.message : String(e)}`);
   process.exit(1);
