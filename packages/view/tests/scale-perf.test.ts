@@ -84,6 +84,7 @@ test('grande base : scène, index, visibilité, cadre et survol rapides (10 000 
       buildHitIndex(scene, visible, buildInstances(scene, visible, cam, { x, y }, P, undefined, font), P);
       return visible;
     });
+    show(`grande base, cadre et survol au zoom ${zoom} (${frame.out.connections.length} connexions visibles)`, frame.ms);
     expect(frame.ms, `zoom ${zoom}: ${frame.out.connections.length} connexions visibles`).toBeLessThan(400);
   }
   expect(built.ms).toBeLessThan(1500);
