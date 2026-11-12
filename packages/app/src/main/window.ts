@@ -6,6 +6,7 @@ import { devShortcut } from './devKeys.ts';
 import type { LatexSetup } from './latex/setup.ts';
 import { devServerUrl, navigationAllowed } from './navigation.ts';
 import { type SyncHost, watchWindow } from './sync/host.ts';
+import { closeStep } from './windowClose.ts';
 
 /** What the window takes of the process (index.ts). */
 interface WindowDeps {
@@ -73,11 +74,14 @@ export function createWindow(deps: WindowDeps): void {
     if (command === 'browser-backward' || command === 'browser-forward') win.webContents.send('cirrus:app-command', command);
   });
   // Closing: the interface sends its snapshot (if anything changed) and says so; past snapshotQuitMs, the window closes
-  // anyway (the journal has every action). Bench and captures quit by app.exit, without this.
+  // anyway (the journal has every action). Bench and captures quit by app.exit, without this. A close during that
+  // sequence waits for its end (closeStep); the window's destroy() at the end emits no « close ».
   let closing = false;
   win.on('close', (e) => {
-    if (closing || !deps.baseOpen()) return;
+    const step = closeStep({ closing, baseOpen: deps.baseOpen() });
+    if (step === 'close') return;
     e.preventDefault();
+    if (step === 'wait') return;
     closing = true;
     const done = () => {
       clearTimeout(timer);

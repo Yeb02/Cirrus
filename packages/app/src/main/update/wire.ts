@@ -1,13 +1,35 @@
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { app, BrowserWindow } from 'electron';
 import type { RenderParams } from '@cirrus/view';
 import type { SyncHost } from '../sync/host.ts';
 import { updateModeOf } from './key.ts';
-import { type FeedUpdater, Updater } from './updater.ts';
+import { type FeedUpdater, type TriedStore, Updater } from './updater.ts';
+
+/** The file of the app's folder (userData) that keeps the version whose install was started (updater.ts: TriedStore). */
+const TRIED_FILE = 'mise-a-jour-tentee.txt';
+
+/** The version whose install was started, in `dir` (the app's userData; a temporary profile in the scripts' runs). */
+function triedIn(dir: string): TriedStore {
+  const file = join(dir, TRIED_FILE);
+  return {
+    read: () => {
+      try {
+        return readFileSync(file, 'utf8');
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw e;
+      }
+    },
+    write: (version) => writeFileSync(file, version, 'utf8'),
+    clear: () => rmSync(file, { force: true }),
+  };
+}
 
 // The signed updates' wires to Electron (plan 9, D4): the app's version and variant, the key, the sync host (its
 // network, its token, its chip), electron-updater — loaded the first time an update is to be downloaded, in a chunk of
-// its own, never at the start — the window's closing once an update is armed (the forced update), and the app's quit,
-// at which an armed update is installed. Everything else is updater.ts's and key.ts's, which the tests run without
+// its own, never at the start — the window's closing once an update is armed (the forced update), the app's quit, at
+// which an armed update is installed, and the file of the app's folder that keeps the version whose install started. Everything else is updater.ts's and key.ts's, which the tests run without
 // Electron.
 
 /**
@@ -15,11 +37,18 @@ import { type FeedUpdater, Updater } from './updater.ts';
  * (updateModeOf): « Cirrus Dev » (`dev`, identity.ts) never updates but for the end-to-end check, and a test key, on
  * any variant, never installs.
  */
-export function wireUpdater(o: { host: SyncHost; dev: boolean; params: () => RenderParams; env: Record<string, string | undefined>; capture: boolean }): Updater {
+export function wireUpdater(o: {
+  host: SyncHost; dev: boolean; params: () => RenderParams; env: Record<string, string | undefined>; capture: boolean;
+  /** The app's folder (userData, read by index.ts once its identity is given), where the version tried is kept. */
+  appDir: string;
+}): Updater {
   const { host } = o, mode = updateModeOf(o.env, o.capture, o.dev);
   const updater = new Updater({
     version: app.getVersion(),
     dev: mode.dev,
+    // npm run dev never updates (review of the forced update, I3).
+    packaged: app.isPackaged,
+    tried: triedIn(o.appDir),
     neverInstall: mode.neverInstall,
     publicKey: mode.publicKey,
     fetchFile: (name) => host.versionFile(name),

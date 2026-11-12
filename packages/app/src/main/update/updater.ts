@@ -83,10 +83,24 @@ export function latestMismatch(info: unknown, m: Manifest): string | null {
   return null;
 }
 
+/** The file that keeps the version whose install was started (wire.ts: in the app's folder, userData). */
+export interface TriedStore { read(): string | null; write(version: string): void; clear(): void }
+
 export interface UpdaterDeps {
   /** This app's version (app.getVersion()), and whether it is « Cirrus Dev » (identity.ts): such a build never updates. */
   version: string;
   dev: boolean;
+  /**
+   * Whether the app is installed (app.isPackaged): one run unpackaged — `npm run dev` — never updates, as « Cirrus
+   * Dev » (review of the forced update, I3), but under the end-to-end check's key (neverInstall), which never installs.
+   */
+  packaged: boolean;
+  /**
+   * The version whose install the app started (a file of the app's folder, kept from one session to the next: review of
+   * the forced update, I2): written just before the installer runs; read at the start, cleared once the app is at that
+   * version or past it. None: nothing kept.
+   */
+  tried?: TriedStore;
   /** The key the manifests are checked with (key.ts: updateKeyOf). */
   publicKey: string;
   /** A file of the server's versions/ (version.json, version.json.sig), asked with this PC's token; null without a server. */
@@ -171,10 +185,33 @@ export class Updater {
   private attempts = 0;
   /** The refusal's notification, once said: kept in every word after. */
   private notice: string | null = null;
+  /** The version a former session started to install, this app still older (I2): never closed again for it. */
+  private tried: string | null = null;
+  /** Its unfinished install said this session: once. */
+  private triedSaid = false;
 
   constructor(deps: UpdaterDeps) {
     this.deps = deps;
+    this.tried = this.readTried();
     this.schedule();
+  }
+
+  /**
+   * The version a former session started to install, if this app is still older than it; the file cleared otherwise —
+   * the app at that version or past it, or a file that does not hold a version.
+   */
+  private readTried(): string | null {
+    const store = this.deps.tried;
+    if (!store || !this.allowed()) return null;
+    try {
+      const v = store.read()?.trim() ?? null;
+      if (v === null) return null;
+      if (parseVersion(v) !== null && compareVersions(v, this.deps.version) > 0) return v;
+      store.clear();
+    } catch (e) {
+      this.warn(`Mise à jour : version tentée illisible (${messageOf(e)}).`);
+    }
+    return null;
   }
 
   /** A hello's official version (null: the server publishes none): looked for when newer than this app's. */
@@ -215,13 +252,24 @@ export class Updater {
       this.warn('Mise à jour : essai de bout en bout, l’installateur n’est pas lancé.');
       return;
     }
+    // Kept for the next session (I2): an install that does not complete leaves this app older than it, and is never
+    // forced again for that version. Not written, the installer still runs: the update matters more.
+    const version = this.manifest?.m.version;
+    if (version) {
+      try {
+        this.deps.tried?.write(version);
+      } catch (e) {
+        this.warn(`Mise à jour : version tentée non gardée (${messageOf(e)}).`);
+      }
+    }
     feed.install(true, true);
   }
 
   /**
    * Not installed at this quit (the app starts again on a base taken from the server, D7: an installer running then would
    * close the app it starts), and final (M1): a check or an installer's verification under way arms nothing afterwards.
-   * The next session finds it again, its download kept by electron-updater.
+   * The next session finds it again, its download kept by electron-updater. Its only caller (index.ts: relaunch) quits
+   * at once: a screen of a download under way stays as it is until then, without a button (review, M2).
    */
   disarm(): void {
     this.ended = true;
@@ -235,9 +283,12 @@ export class Updater {
     this.timer = null;
   }
 
-  /** Whether this build may update at all: neither « Cirrus Dev » nor a pre-release (spec 18.1). */
+  /**
+   * Whether this build may update at all: neither « Cirrus Dev » nor a pre-release (spec 18.1), nor an app run
+   * unpackaged but under the end-to-end check's key (I3).
+   */
   private allowed(): boolean {
-    return !this.deps.dev && parseVersion(this.deps.version) !== null;
+    return !this.deps.dev && parseVersion(this.deps.version) !== null && (this.deps.packaged || this.deps.neverInstall === true);
   }
 
   private warn(text: string): void {
@@ -282,6 +333,16 @@ export class Updater {
       return;
     }
     if (text === this.refusedText) return;
+    // The version a former session started to install, this app still older (I2): its install did not complete — said
+    // once, neither downloaded nor closed again; a newer version goes on as usual.
+    if (m.version === this.tried) {
+      if (this.triedSaid) return;
+      this.triedSaid = true;
+      this.warn(`Mise à jour : l’installation de la ${m.version}, lancée à une session précédente, n’a pas abouti ; elle n’est pas reprise.`);
+      this.flow = { version: m.version, attempt: ++this.attempts, step: 'unfinished' };
+      this.say();
+      return;
+    }
     // Signed and newer: the forced update begins, the screen up. A failure from here on is said on it.
     this.begin(m.version);
     try {

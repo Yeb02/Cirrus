@@ -12,6 +12,7 @@ import { type FeedUpdater, type LatestInfo, NOT_SERVED, REFUSED, Updater, type U
 import type { UpdateFlow, UpdateWord } from '../src/main/sync/protocol.ts';
 import { chipOf } from '../src/renderer/sync/syncSession.ts';
 import { passesKey, updateScreenOf } from '../src/renderer/sync/updateScreen.ts';
+import { closeStep } from '../src/main/windowClose.ts';
 import { AppPc } from './support/appPc.ts';
 import { Lab, until } from './support/virtualPc.ts';
 
@@ -19,8 +20,8 @@ import { Lab, until } from './support/virtualPc.ts';
 // by the CI (ed25519) with the key kept in GitHub's secrets, checked with the public key the app carries; the installer
 // electron-updater downloads, checked against the manifest's sha512; the install armed only then. Forced (2026-11-11):
 // from the manifest checked on, a screen blocks the app; the installer armed, the window closes by its normal path and
-// the installer runs at the quit, the app started again after it. Never a downgrade, never « Cirrus Dev », never with the placeholder key. A test key is made here, never in the
-// repository.
+// the installer runs at the quit, the app started again after it. Never a downgrade, never « Cirrus Dev », never an app
+// run unpackaged, never with the placeholder key. A test key is made here, never in the repository.
 
 const run = promisify(execFile);
 const ROOT = join(import.meta.dirname, '..', '..', '..');
@@ -233,16 +234,26 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
 
 const SERVER = { url: 'https://cirrus.exemple.fr', token: 'J'.repeat(43) };
 
-/** An updater as the app makes it, at version `version`, its server answering `files` (a text, a status, or 404). */
-function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | number | Error> } = {}) {
+/**
+ * An updater as the app makes it, installed (`packaged`), at version `version`, its server answering `files` (a text, a
+ * status, or 404); the version whose install a former session started, `triedBefore` (the app's folder: `tried`).
+ */
+function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | number | Error>; triedBefore?: string } = {}) {
   const feed = new FakeFeed();
   const told: UpdateWord[] = [], warned: string[] = [], asked: string[] = [];
   /** The files asked of the server when each word was told: the screen never before the manifest's signature. */
   const toldAfter: number[] = [];
   let made = 0, restarts = 0;
   const files = o.files ?? {};
+  /** The file of the app's folder that keeps the version whose install was started; and when it was written, the installs made. */
+  const tried = { value: o.triedBefore ?? null as string | null, writtenAtInstalls: [] as number[] };
   const u = new Updater({
-    version: '0.1.1', dev: false, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000 }), server: () => SERVER,
+    version: '0.1.1', dev: false, packaged: true, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000 }), server: () => SERVER,
+    tried: {
+      read: () => tried.value,
+      write: (v) => { tried.value = v; tried.writtenAtInstalls.push(feed.installs.length); },
+      clear: () => { tried.value = null; },
+    },
     fetchFile: async (name) => {
       asked.push(name);
       const f = files[name];
@@ -256,7 +267,7 @@ function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | num
     ...o,
   });
   feed.latest = latestYml();
-  return { u, feed, told, toldAfter, warned, asked, made: () => made, restarts: () => restarts };
+  return { u, feed, told, toldAfter, warned, asked, made: () => made, restarts: () => restarts, tried };
 }
 
 /** The steps of the screen the words said, in order (null: a word without one). */
@@ -272,7 +283,7 @@ function published(o: { text?: string; sig?: string } = {}): Record<string, stri
 
 test('Updater (D4, mise à jour forcée) : un /hello qui annonce une version plus récente ; le manifeste vérifié, l’écran le dit, electron-updater téléchargé avec le jeton, sa progression dite, l’installateur vérifié et armé ; puis la fenêtre fermée par son chemin normal, et l’installateur lancé à la fermeture, avec relance', async () => {
   setUp();
-  const { u, feed, told, toldAfter, asked, restarts } = updater({ files: published() });
+  const { u, feed, told, toldAfter, asked, restarts, tried } = updater({ files: published() });
   feed.download = { version: '0.1.2', file: installer.path };
   // Each whole percent said once; a fraction more says nothing new.
   feed.progress = [12.5, 12.9, 57.3, 100];
@@ -298,8 +309,80 @@ test('Updater (D4, mise à jour forcée) : un /hello qui annonce une version plu
   expect(feed.autoInstallOnAppQuit).toBe(true);
   expect(restarts()).toBe(1);
   expect(feed.installs).toEqual([]);
+  expect(tried.value).toBeNull();
   u.quit(0);
   expect(feed.installs).toEqual([[true, true]]);
+  // The version whose install starts, kept in the app's folder just before (ronde 1, I2).
+  expect(tried).toMatchObject({ value: '0.1.2', writtenAtInstalls: [0] });
+  u.dispose();
+});
+
+test('Updater (ronde 1, I3) : une app non empaquetée (npm run dev) ne déclenche jamais rien, comme « Cirrus Dev » ; sauf sous la clé d’essai, qui n’installe ni ne ferme jamais', async () => {
+  setUp();
+  const { u, asked, made, told } = updater({ packaged: false, files: published() });
+  await u.heard('0.1.2');
+  await u.formatRefused();
+  await u.check();
+  expect(asked).toEqual([]);
+  expect(made()).toBe(0);
+  expect(told).toEqual([]);
+  u.dispose();
+  // The interface's scenario: the test key, on a test base in the background (neverInstall); electron-updater inactive.
+  const trial = updater({ packaged: false, neverInstall: true, files: published() });
+  trial.feed.latest = null;
+  await trial.u.heard('0.1.2');
+  expect(stepsOf(trial.told)).toEqual(['downloading', 'failed']);
+  expect(trial.restarts()).toBe(0);
+  trial.u.dispose();
+});
+
+test('Updater (ronde 1, I2) : l’installation lancée par une session précédente n’a pas abouti — l’app encore ancienne, le même manifeste : ni téléchargement ni fermeture, l’écran le dit une fois ; une version plus récente reprend le déroulement', async () => {
+  setUp();
+  const { u, feed, told, restarts, tried } = updater({ files: published(), triedBefore: '0.1.2' });
+  feed.download = { version: '0.1.2', file: installer.path };
+  await u.heard('0.1.2');
+  expect(feed.checks).toEqual([]);
+  expect(restarts()).toBe(0);
+  expect(told).toEqual([{ updateFlow: flow('unfinished') }]);
+  // Said once a session: the next checks are silent.
+  await u.heard('0.1.2');
+  await u.check();
+  expect(told).toHaveLength(1);
+  expect(tried.value).toBe('0.1.2');
+  u.quit(0);
+  expect(feed.installs).toEqual([]);
+  u.dispose();
+  // A newer version than the one tried: the forced update as usual.
+  const files = published({ text: manifestText({ version: '0.1.3' }) });
+  const next = updater({ files, triedBefore: '0.1.2', checkInstaller: async () => true });
+  next.feed.latest = latestYml({ version: '0.1.3' });
+  next.feed.download = { version: '0.1.3', file: installer.path };
+  await next.u.heard('0.1.3');
+  expect(stepsOf(next.told)).toEqual(['downloading', 'restarting']);
+  expect(next.restarts()).toBe(1);
+  next.u.quit(0);
+  expect(next.tried.value).toBe('0.1.3');
+  next.u.dispose();
+});
+
+test('Updater (ronde 1, I2) : le fichier de la version tentée est effacé une fois l’app à cette version ou au-delà, ou s’il est illisible ; gardé sinon ; jamais écrit par l’essai de bout en bout', () => {
+  for (const [version, before, kept] of [
+    ['0.1.2', '0.1.2', null], ['0.1.3', '0.1.2', null], ['0.1.10', '0.1.9', null], ['0.1.1', '0.1.2', '0.1.2'], ['0.1.1', 'n’importe quoi', null], ['0.1.1', '', null],
+  ] as const) {
+    const { u, tried } = updater({ version, triedBefore: before });
+    expect(tried.value, `${version} ${before}`).toBe(kept);
+    u.dispose();
+  }
+});
+
+test('Updater (ronde 1, I2) : l’essai de bout en bout n’écrit jamais la version tentée', async () => {
+  setUp();
+  const { u, feed, tried } = updater({ files: published(), neverInstall: true });
+  feed.download = { version: '0.1.2', file: installer.path };
+  await u.heard('0.1.2');
+  u.quit(0);
+  expect(tried.value).toBeNull();
+  expect(feed.installs).toEqual([]);
   u.dispose();
 });
 
@@ -787,6 +870,8 @@ test('chipOf : la mise à jour en cours (téléchargement, redémarrage, essai) 
     .toMatchObject({ text: 'À jour', tone: 'ok', title: expect.stringContaining('Mise à jour vers 0.1.2 : téléchargement échoué') });
   expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('refused', { message: 'x' }) }, false))
     .toMatchObject({ text: 'À jour', title: expect.stringContaining('Mise à jour vers 0.1.2 refusée') });
+  expect(chipOf({ state: 'live', pending: 0, updateFlow: flow('unfinished') }, false))
+    .toMatchObject({ text: 'À jour', title: expect.stringContaining('Mise à jour vers 0.1.2 : installation non aboutie') });
   expect(chipOf({ state: 'off', updateFlow: flow('downloading') }, false)).toBeNull();
 });
 
@@ -808,9 +893,24 @@ test('l’écran de mise à jour : son texte à chaque étape ; aucun bouton tan
   expect(updateScreenOf(flow('refused', { message: 'x' }), 1)).toBeNull();
   expect(updateScreenOf(flow('trial'), 0)).toMatchObject({ action: 'Continuer', line: expect.stringContaining('Essai de bout en bout') });
   expect(updateScreenOf(flow('trial'), 1)).toBeNull();
+  // Ronde 1, I2: an install a former session started, not done.
+  expect(updateScreenOf(flow('unfinished'), 0)).toEqual({
+    title: T, line: 'L’installation de la mise à jour 0.1.2 n’a pas abouti. Cirrus la retentera à la version suivante.', percent: null, action: 'Continuer sans mettre à jour', attempt: 1,
+  });
+  expect(updateScreenOf(flow('unfinished'), 1)).toBeNull();
   for (const key of ['Enter', ' ']) expect(passesKey(key, true), key).toBe(true);
-  for (const key of ['Enter', ' ', 'Tab', 'z', 'Escape', 'Delete', 'F2']) expect(passesKey(key, false), key).toBe(false);
+  for (const key of ['Enter', ' ', 'Tab', 'z', 'Escape', 'Delete', 'F2', 'F4']) expect(passesKey(key, false), key).toBe(false);
   for (const key of ['Tab', 'z', 'Escape']) expect(passesKey(key, true), key).toBe(false);
+  // Alt+F4 always passes: the window can still be closed by the keyboard (review, M5).
+  expect(passesKey('F4', false, true)).toBe(true);
+  expect(passesKey('z', false, true)).toBe(false);
+});
+
+test('closeStep (ronde 1, I1) : une fermeture pendant la séquence de fermeture attend la fin de celle-ci ; sans base, la fenêtre se ferme ; sinon la séquence commence', () => {
+  expect(closeStep({ closing: true, baseOpen: true })).toBe('wait');
+  expect(closeStep({ closing: true, baseOpen: false })).toBe('wait');
+  expect(closeStep({ closing: false, baseOpen: false })).toBe('close');
+  expect(closeStep({ closing: false, baseOpen: true })).toBe('save');
 });
 
 // ——— The CI's signing, and the key's making ———

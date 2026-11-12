@@ -182,6 +182,7 @@ Tu n'as rien à faire :
    - un écran bloque Cirrus : « Mise à jour de Cirrus vers 0.1.<n> », « Téléchargement… », avec la progression ;
    - l'installateur téléchargé et vérifié, l'écran dit « Enregistrement, puis redémarrage… » : Cirrus enregistre tout, comme quand tu le fermes, puis se ferme, s'installe et se relance seul. Tu n'as rien à cliquer ;
    - si le téléchargement échoue (le réseau), l'écran le dit et propose « Continuer sans mettre à jour » ; la vérification suivante recommence, et l'écran revient.
+   - si l'installation n'aboutit pas (Cirrus rouvert encore à l'ancienne version), Cirrus ne la reprend pas : l'écran le dit, propose « Continuer sans mettre à jour », et la version suivante réessaie. Pour l'installer tout de suite, réinstalle Cirrus par la page de téléchargement.
 
 **Chaque version publiée redémarre donc les PC ouverts**, au plus une fois par heure, au rythme de la mise à jour du serveur (`cirrus-maj.timer`). Pour ne pas être interrompu, pousse sur `main` quand tu ne travailles pas.
 

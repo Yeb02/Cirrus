@@ -25,12 +25,16 @@ export function updateScreenOf(flow: UpdateFlow | undefined, dismissed: number):
     case 'failed': return shown(`Le téléchargement a échoué (${flow.message}). Cirrus réessaiera à la prochaine vérification.`, GO_ON);
     case 'refused': return shown(`Mise à jour refusée : ${flow.message}. Rien n’est installé.`, GO_ON);
     case 'trial': return shown('Essai de bout en bout : la mise à jour est vérifiée et prête, mais son installation n’est pas lancée.', 'Continuer');
+    case 'unfinished': return shown(`L’installation de la mise à jour ${flow.version} n’a pas abouti. Cirrus la retentera à la version suivante.`, GO_ON);
   }
 }
 
-/** Whether a key reaches the page while the screen is up: Enter or Space on its own button, which they press; none else. */
-export function passesKey(key: string, onButton: boolean): boolean {
-  return onButton && (key === 'Enter' || key === ' ');
+/**
+ * Whether a key goes on while the screen is up: Enter or Space on its own button, which they press; Alt+F4 (`alt`),
+ * which closes the window; none else.
+ */
+export function passesKey(key: string, onButton: boolean, alt = false): boolean {
+  return (alt && key === 'F4') || (onButton && (key === 'Enter' || key === ' '));
 }
 
 /** The chip's line for the update under way (syncSession.ts: chipOf). */
@@ -42,5 +46,6 @@ export function updateChipLine(flow: UpdateFlow): string {
     case 'trial': return `${to} : essai, non installée`;
     case 'failed': return `${to} : téléchargement échoué`;
     case 'refused': return `${to} refusée`;
+    case 'unfinished': return `${to} : installation non aboutie`;
   }
 }

@@ -41,7 +41,9 @@ export interface UpdateWord { updateFlow?: UpdateFlow; updateRefused?: string }
  *   starts the app again;
  * - trial: the end-to-end check's key (neverInstall): checked and armed, never installed;
  * - failed: the download failed (the network): the next check runs it again (`message`, electron-updater's);
- * - refused: latest.yml or the installer is not the signed manifest's (`message`, why): not tried again this session.
+ * - refused: latest.yml or the installer is not the signed manifest's (`message`, why): not tried again this session;
+ * - unfinished: a former session started this version's install, and the app is still older: the install did not
+ *   complete — neither downloaded nor closed again until a newer version (review of the forced update, I2).
  */
 export type UpdateFlow = { version: string; attempt: number } & (
   | { step: 'downloading'; percent?: number }
@@ -49,6 +51,7 @@ export type UpdateFlow = { version: string; attempt: number } & (
   | { step: 'trial' }
   | { step: 'failed'; message: string }
   | { step: 'refused'; message: string }
+  | { step: 'unfinished' }
 );
 
 /** The writes received, sent to the interface to reconcile (cirrus:sync:incoming); `id` names its answer. */

@@ -333,7 +333,7 @@ void app.whenReady().then(() => {
     update: { hello: (version) => { void updater?.heard(version); }, refused: () => { void updater?.formatRefused(); } },
   });
   wireSync(sync);
-  if (!capture && !bench) updater = wireUpdater({ host: sync, dev: identity.dev, params: currentParams, env: process.env, capture: false });
+  if (!capture && !bench) updater = wireUpdater({ host: sync, dev: identity.dev, params: currentParams, env: process.env, capture: false, appDir: app.getPath('userData') });
   // A blob absent from the store is asked of the server, with one paired (D6); a thumbnail's never.
   protocol.handle(FILE_SCHEME, (request) => fileResponse(dir, latexCache, request, sync?.blobFetcher() ?? null));
   createWindow({

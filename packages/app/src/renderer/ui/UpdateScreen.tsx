@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { passesKey, type UpdateScreen as Screen } from '../sync/updateScreen.ts';
 
-/** The keys the screen holds: none reaches the page under it but Enter and Space on its button (passesKey). */
+/** The keys the screen holds: none reaches the page under it; Enter and Space on its button, and Alt+F4, act (passesKey). */
 const HELD = ['keydown', 'keyup', 'keypress'] as const;
 
 /** The screen up: its button, if it has one. */
@@ -14,7 +14,7 @@ for (const type of HELD) {
   window.addEventListener(type, (e: KeyboardEvent) => {
     if (!shown) return;
     e.stopImmediatePropagation();
-    if (!passesKey(e.key, shown.button !== null && e.target === shown.button)) e.preventDefault();
+    if (!passesKey(e.key, shown.button !== null && e.target === shown.button, e.altKey)) e.preventDefault();
   }, { capture: true });
 }
 
