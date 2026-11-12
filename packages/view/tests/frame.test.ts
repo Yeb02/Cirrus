@@ -49,14 +49,10 @@ test('les groupes de premier niveau prennent les teintes dans leur ordre de cré
   expect(hueOf(at(ids.nodes.groupeInduction))).toEqual(expected(2, 0));
 });
 
-test('« n connexions » pour une agrégation', () => {
-  // Universalité receives MDL (split, far part) and Solomonoff → Universalité; with Complexité et induction closed only
-  // the second one reaches it from the group. Aggregation is covered in visibility tests; here: the label text.
+test('repliés, les titres restent ceux de chaque connexion : plus de « n connexions » (point 7)', () => {
   const { inst, visible } = frameAt(sc, 1, 3);
-  for (const t of inst.titles) {
-    const vc = visible.connections[t.conn];
-    if (vc.conns.length > 1) expect(t.text).toBe(`${vc.conns.length} connexions`);
-  }
+  for (const t of inst.titles) expect(t.text).toBe(sc.titles[visible.connections[t.conn].part]);
+  expect(inst.titles.some((t) => /connexions$/.test(t.text))).toBe(false);
 });
 
 test('survol : nœud, connexion, groupe replié, fond d’un groupe ouvert', () => {

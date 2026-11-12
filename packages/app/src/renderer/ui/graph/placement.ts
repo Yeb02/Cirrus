@@ -71,7 +71,7 @@ export function usePlacement(graph: Graph) {
     const cam = e.renderer.camera, w = screenToWorld(cam, sx, sy);
     const m = e.renderer.hitIndex?.markerAt(w.x, w.y, cam.zoom) ?? null;
     const vc = m === null ? undefined : e.renderer.visible?.connections[m];
-    const t = from === undefined ? null : connectTarget(stateRef.current, sc, from, hitAt(sx, sy), vc && vc.conns.length === 1 ? vc.conns[0] : null);
+    const t = from === undefined ? null : connectTarget(stateRef.current, sc, from, hitAt(sx, sy), vc ? vc.part : null);
     e.renderer.setDropTarget(t?.kind === 'node' ? t.item : null);
     e.renderer.setHover(t?.kind === 'connection' ? m : null);
     redraw();

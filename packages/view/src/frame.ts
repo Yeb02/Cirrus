@@ -25,14 +25,14 @@ export function groupColors(scene: PlanScene, g: number, p: RenderParams): { ope
 }
 
 /**
- * An item as a bundle's end, relative to `origin`: its box, or a closed group's padded envelope. `hulls`: the groups'
+ * An item as a bundle's end, relative to `origin`: its box, or a group node's padded envelope. `hulls`: the groups'
  * hulls relative to `origin`, made once for the bundles of one pass (never changed).
  */
 export function bundleEnd(
-  scene: PlanScene, i: number, role: BundleEnd['role'], hollow: boolean, dashed: boolean, key: Id, origin: Vec2, hulls?: Map<number, Vec2[]>,
+  scene: PlanScene, i: number, role: BundleEnd['role'], dashed: boolean, key: Id, origin: Vec2, hulls?: Map<number, Vec2[]>,
 ): BundleEnd {
   const it = scene.items[i];
-  const e: BundleEnd = { pos: { x: it.x - origin.x, y: it.y - origin.y }, halfW: it.halfW, halfH: it.halfH, role, k: it.k, hollow, dashed, key };
+  const e: BundleEnd = { pos: { x: it.x - origin.x, y: it.y - origin.y }, halfW: it.halfW, halfH: it.halfH, role, k: it.k, dashed, key };
   if (it.kind === 'group') {
     let poly = hulls?.get(i);
     if (!poly) { poly = it.hull!.map((q) => ({ x: q.x - origin.x, y: q.y - origin.y })); hulls?.set(i, poly); }
@@ -43,16 +43,16 @@ export function bundleEnd(
 
 /**
  * The bundle of a visible connection (spec 8.5), relative to `origin`. `layout` stands in for the plan's own (a handle
- * being dragged, spec 8.5); `closed` draws it with its fading level closed; `hulls`: as for bundleEnd.
+ * being dragged, spec 8.5); `hulls`: as for bundleEnd.
  */
 export function bundleFor(
   scene: PlanScene, vc: VisibleConnection, p: RenderParams, origin: Vec2 = { x: 0, y: 0 },
-  layout?: Omit<ConnectionLayout, 'plan' | 'connection'>, closed = false, hulls?: Map<number, Vec2[]>,
+  layout?: Omit<ConnectionLayout, 'plan' | 'connection'>, hulls?: Map<number, Vec2[]>,
 ): BundleGeometry {
   const rel = (q: Vec2): Vec2 => ({ x: q.x - origin.x, y: q.y - origin.y });
-  const own = layout ?? (vc.conns.length === 1 ? scene.layout[vc.conns[0]] : undefined);
+  const own = layout ?? scene.layout[vc.part];
   return bundleGeometry({
-    ends: vc.ends.map((e) => bundleEnd(scene, closed ? e.item2 : e.item, e.role, closed ? e.hollow2 : e.hollow, e.dashed, e.key, origin, hulls)),
+    ends: vc.ends.map((e) => bundleEnd(scene, e.item, e.role, e.dashed, e.key, origin, hulls)),
     stubs: vc.stubs.map((s) => ({ role: s.role, key: s.node })),
     ...(vc.center !== undefined ? { centre: rel(scene.items[vc.center]) } : {}),
     ...(own ? { layout: { ...own, marker: own.marker ? rel(own.marker) : undefined } } : {}),
@@ -115,7 +115,7 @@ export function openTitleY(scene: PlanScene, g: number, padded: Vec2[], p: Rende
 /** The zoom from which a connection's title, its largest step kMax, is readable at the deepest zoom a rebuild serves. */
 export const titleReadableFrom = (kMax: number, p: RenderParams): number => p.titleFade[0] / (p.titleFontPx * stepScale(kMax, p) * p.curveZoomHeadroom);
 
-/** A connection title placed: by its visible connection, its id (the parts' ids joined), its box relative to the origin. */
+/** A connection title placed: by its visible connection, its id, its box relative to the origin. */
 export interface PlacedTitle { conn: number; id: Id; text: string; box: Rect; kMax: number; side: TitleSide }
 
 /** A connection title's box size and its gap to the core, at its largest step kMax. */
@@ -163,7 +163,7 @@ export function placeConnectionTitles(
   const placed: Rect[] = [];
   for (const m of cores) {
     const vc = visible.connections[m.conn];
-    const text = vc.conns.length > 1 ? `${vc.conns.length} connexions` : scene.titles[vc.conns[0]];
+    const text = scene.titles[vc.part];
     if (!text) continue;
     // Unreadable even at the deepest zoom a rebuild serves: left out until that zoom (spec 8.2).
     const from = titleReadableFrom(m.kMax, p);
@@ -171,7 +171,7 @@ export function placeConnectionTitles(
     const { w, h, gap } = titleSize(text, m.kMax, p);
     const reach = w + gap * 4 + h;
     const [qx0, qy0, qx1, qy1] = [m.pos.x - reach, m.pos.y - reach, m.pos.x + reach, m.pos.y + reach];
-    const id = vc.conns.map((i) => scene.ids[i]).join('+');
+    const id = scene.ids[vc.part];
     const { side, rect } = placeTitle(m.pos, w, h, gap, samplesIn(qx0, qy0, qx1, qy1), [...obstaclesIn(qx0, qy0, qx1, qy1), ...placed], prevSides?.get(id));
     placed.push(rect);
     out.push({ conn: m.conn, id, text, box: rect, kMax: m.kMax, side });
@@ -183,11 +183,13 @@ export function placeConnectionTitles(
  * The glyphs of the connection titles placed, after the items' (TITLE_CONNECTION, anchored relative to the origin);
  * `spans`: for each title, its first glyph and their count (a title that follows its core moves its anchor).
  */
-export function appendConnectionTitles(out: FloatList, visible: VisibleSet, titles: PlacedTitle[], p: RenderParams, font: FontData, spans?: IntList): void {
+export function appendConnectionTitles(
+  out: FloatList, scene: PlanScene, visible: VisibleSet, titles: PlacedTitle[], p: RenderParams, font: FontData, spans?: IntList,
+): void {
   for (const t of titles) {
     const size = p.titleFontPx * stepScale(t.kMax, p), vc = visible.connections[t.conn], start = out.length / GLYPH_FLOATS;
     appendTitle(out, font, t.text, size, 0, size * p.lineHeight, t.box.x + t.box.w / 2, t.box.y + t.box.h / 2,
-      TITLE_CONNECTION, t.conn, 1, vc.fade === 'out' ? vc.foldK : NO_PARENT, NO_PARENT, -1);
+      TITLE_CONNECTION, t.conn, 1, vc.fade >= 0 ? scene.items[vc.fade].maxChildK! : NO_PARENT, NO_PARENT, -1);
     spans?.push2(start, out.length / GLYPH_FLOATS - start);
   }
 }

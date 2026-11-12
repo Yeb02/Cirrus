@@ -30,10 +30,10 @@ export function useLayoutHandles(graph: Graph) {
     const e = engine.current, sc = sceneRef.current, sel = selectionRef.current, vis = e?.renderer.visible;
     if (!e || !sc || !vis || sel.items.size > 0 || sel.connections.size !== 1) return null;
     const id = [...sel.connections][0];
-    const vc = vis.connections.find((x) => x.conns.length === 1 && x.fade === 'none' && sc.ids[x.conns[0]] === id && sc.part[x.conns[0]] === PART_MAIN);
+    const vc = vis.connections.find((x) => x.fade < 0 && sc.ids[x.part] === id && sc.part[x.part] === PART_MAIN);
     if (!vc) return null;
     const g = bundleFor(sc, vc, paramsRef.current, { x: 0, y: 0 }, handleDrag.current?.layout);
-    return { spots: layoutHandles(g, e.renderer.camera.zoom, paramsRef.current), g, conn: vc.conns[0] };
+    return { spots: layoutHandles(g, e.renderer.camera.zoom, paramsRef.current), g, conn: vc.part };
   };
   const drawHandles = () => {
     const svg = handlesSvg.current, e = engine.current;

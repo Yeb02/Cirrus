@@ -41,20 +41,19 @@ export function ribbonAlpha(kTop: number, pxPerUnit: number, p: RenderParams): n
 }
 
 type Lists<K extends string> = Record<K, FloatList> & { index: IndexList };
-type GlyphKey = 'position' | 'position2' | 'offset' | 'offset2' | 'scale' | 'fill' | 'end0' | 'end1' | 'fold' | 'conn';
+type GlyphKey = 'position' | 'offset' | 'scale' | 'fill' | 'end0' | 'end1' | 'fold' | 'conn' | 'masks';
 
 /**
- * Per-vertex attributes of the glyphs of complex bundles (arrows, dots, hollow insides), built on the CPU: their
- * curves are GPU instances (instances.ts). position2/offset2 hold the same vertex once the fading group level is
- * closed: the shader slides from one to the other (spec 8.5, "glisse en continu du membre vers le bord"). fold =
- * (mode, foldK), mode 0 none, 1 slide, 2 out. Fill: 1 connection colour, 2 absent colour, 0 sky (hollow inside), 3 sky
- * only once the level is more than half folded.
+ * Per-vertex attributes of the glyphs of complex bundles (arrows, dots), built on the CPU: their curves are GPU
+ * instances (instances.ts). fold = (mode, foldK), mode 2 when the bundle fades out with a folding group, 0 otherwise.
+ * Fill: 1 connection colour, 2 absent colour. masks: the groups whose fill is laid over the glyph (masksOf, −1 for none).
  */
 export type GlyphMeshes = Lists<GlyphKey>;
 
+const GLYPH_KEYS = ['position', 'offset', 'scale', 'fill', 'end0', 'end1', 'fold', 'conn', 'masks'] as const;
+
 export function newGlyphMeshes(): GlyphMeshes {
-  const keys = ['position', 'position2', 'offset', 'offset2', 'scale', 'fill', 'end0', 'end1', 'fold', 'conn'] as const;
-  return Object.assign(Object.fromEntries(keys.map((k) => [k, new FloatList()])) as Record<GlyphKey, FloatList>, { index: new IndexList() });
+  return Object.assign(Object.fromEntries(GLYPH_KEYS.map((k) => [k, new FloatList()])) as Record<GlyphKey, FloatList>, { index: new IndexList() });
 }
 
 export function clearGlyphMeshes(m: GlyphMeshes): void {
@@ -65,60 +64,60 @@ interface GlyphOptions {
   /** Two endpoints (x, y, half extent) for the off-screen fade (spec 8.5). */
   end0: [number, number, number];
   end1: [number, number, number];
-  fade: 'none' | 'slide' | 'out';
+  /** 2: fades out with the folding group of step foldK; 0: does not. */
+  fade: number;
   foldK: number;
   /** Visible connection index (hover). */
   conn: number;
+  /** Writes into out[0..4) the groups masking a branch's glyphs (masksOf); none without it. */
+  masks?: (b: Branch, out: number[]) => void;
 }
 
-const FADE_MODE = { none: 0, slide: 1, out: 2 } as const;
-
 /** The glyph vertices of one bundle, in the order appendBundleGlyphs writes them (what an in-place rewrite checks). */
-export function bundleGlyphCount(open: BundleGeometry, closed: BundleGeometry | null): number {
+export function bundleGlyphCount(g: BundleGeometry): number {
   let n = 0;
-  open.branches.forEach((a, i) => {
-    const b = closed?.branches[i] ?? a, shape = a.role === 'associate' ? 1 + DOT_SIDES : 4;
-    n += shape;
-    if (a.hollow || b.hollow) n += shape;
+  for (const a of g.branches) {
+    n += a.role === 'associate' ? 1 + DOT_SIDES : 4;
     if (a.stub && a.role !== 'associate') n += 1 + DOT_SIDES;
-  });
+  }
   return n;
 }
 
 /** The glyph mesh's vertex attributes, with their floats per vertex. */
 const glyphLists = (g: GlyphMeshes): [FloatList, number][] =>
-  [[g.position, 2], [g.position2, 2], [g.offset, 2], [g.offset2, 2], [g.scale, 1], [g.fill, 1], [g.end0, 3], [g.end1, 3], [g.fold, 2], [g.conn, 1]];
+  [[g.position, 2], [g.offset, 2], [g.scale, 1], [g.fill, 1], [g.end0, 3], [g.end1, 3], [g.fold, 2], [g.conn, 1], [g.masks, 4]];
+
+const NO_MASKS = [-1, -1, -1, -1];
 
 /**
- * Appends one bundle's glyphs at its branches' node ends, with the local width there: an arrow or a dot, a hollow
- * inside, an absent member's dot. `closed` is the same bundle with the fading level closed: same branches in the same
- * order, so glyph i of one matches glyph i of the other. `at`: written again from vertex `at` in place instead (plan 3c
- * task 9: the same count, bundleGlyphCount, and the same indices as before).
+ * Appends one bundle's glyphs at its branches' node ends, with the local width there: an arrow or a dot, an absent
+ * member's dot. `at`: written again from vertex `at` in place instead (plan 3c task 9: the same count,
+ * bundleGlyphCount, and the same indices as before).
  */
-export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, closed: BundleGeometry | null, o: GlyphOptions, p: RenderParams, at?: number): void {
-  const mode = FADE_MODE[o.fade], foldK = Number.isFinite(o.foldK) ? o.foldK : 0;
+export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, o: GlyphOptions, p: RenderParams, at?: number): void {
+  const mode = o.fade, foldK = Number.isFinite(o.foldK) ? o.foldK : 0;
   let v = at ?? g.scale.length;
   if (at === undefined) {
-    const n = bundleGlyphCount(open, closed);
+    const n = bundleGlyphCount(open);
     for (const [l, size] of glyphLists(g)) l.extend(n * size);
   }
   // Each attribute written in place, vertex by vertex, in the storage once extended.
-  const pos = g.position.storage, pos2 = g.position2.storage, off = g.offset.storage, off2 = g.offset2.storage, sc = g.scale.storage, fi = g.fill.storage;
-  const e0 = g.end0.storage, e1 = g.end1.storage, fo = g.fold.storage, cn = g.conn.storage;
+  const pos = g.position.storage, off = g.offset.storage, sc = g.scale.storage, fi = g.fill.storage;
+  const e0 = g.end0.storage, e1 = g.end1.storage, fo = g.fold.storage, cn = g.conn.storage, ms = g.masks.storage;
+  let masks = NO_MASKS;
   /** A fan of glyph vertices around the node end: vertex 0 first, triangles given as offsets into the list. */
-  const glyph = (p0: Vec2, p1: Vec2, offs: Vec2[], offs2: Vec2[], tris: number[], scale: number, fill: number) => {
+  const glyph = (p0: Vec2, offs: Vec2[], tris: number[], scale: number, fill: number) => {
     if (at === undefined) for (const t of tris) g.index.push(v + t);
     for (let i = 0; i < offs.length; i++, v++) {
       pos[2 * v] = p0.x; pos[2 * v + 1] = p0.y;
-      pos2[2 * v] = p1.x; pos2[2 * v + 1] = p1.y;
       off[2 * v] = offs[i].x; off[2 * v + 1] = offs[i].y;
-      off2[2 * v] = offs2[i].x; off2[2 * v + 1] = offs2[i].y;
       sc[v] = scale;
       fi[v] = fill;
       e0[3 * v] = o.end0[0]; e0[3 * v + 1] = o.end0[1]; e0[3 * v + 2] = o.end0[2];
       e1[3 * v] = o.end1[0]; e1[3 * v + 1] = o.end1[1]; e1[3 * v + 2] = o.end1[2];
       fo[2 * v] = mode; fo[2 * v + 1] = foldK;
       cn[v] = o.conn;
+      ms[4 * v] = masks[0]; ms[4 * v + 1] = masks[1]; ms[4 * v + 2] = masks[2]; ms[4 * v + 3] = masks[3];
     }
   };
   /** Notched arrow in line-width units, around the node end; points away from the node for a source. */
@@ -136,23 +135,13 @@ export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, closed:
     const d = tangent(b.p3, b.b2), n = perp(d);
     return [{ x: 0, y: 0 }, sub(mul(n, H), mul(d, L)), mul(d, -L * p.arrowNotch), sub(mul(n, -H), mul(d, L))];
   };
-  const inset = (offs: Vec2[]): Vec2[] => {
-    const c = { x: offs.reduce((s, q) => s + q.x, 0) / offs.length, y: offs.reduce((s, q) => s + q.y, 0) / offs.length };
-    return offs.map((q) => ({ x: c.x + (q.x - c.x) * p.hollowInset, y: c.y + (q.y - c.y) * p.hollowInset }));
-  };
-  const nodePoint = (b: Branch) => (b.nodeEnd === 'p0' ? b.p0 : b.p3);
-
-  open.branches.forEach((a, i) => {
-    const b = closed?.branches[i] ?? a;
-    const sNode = p.factor ** a.kNode;
-    const fill = a.dashed ? 2 : 1;
-    const shape = a.role === 'associate' ? dot(p.dotRadius) : arrow(a);
-    const shape2 = a.role === 'associate' || b === a ? shape : arrow(b);
-    const tris = a.role === 'associate' ? DOT_TRIS : ARROW_TRIS;
-    glyph(nodePoint(a), nodePoint(b), shape, shape2, tris, sNode, fill);
-    if (a.hollow || b.hollow) glyph(nodePoint(a), nodePoint(b), inset(shape), inset(shape2), tris, sNode, a.hollow ? 0 : 3);
-    if (a.stub && a.role !== 'associate') glyph(nodePoint(a), nodePoint(b), dot(p.dotRadius), dot(p.dotRadius), DOT_TRIS, sNode, 2);
-  });
+  const own: number[] = [];
+  for (const a of open.branches) {
+    if (o.masks) { o.masks(a, own); masks = own; }
+    const sNode = p.factor ** a.kNode, node = a.nodeEnd === 'p0' ? a.p0 : a.p3;
+    glyph(node, a.role === 'associate' ? dot(p.dotRadius) : arrow(a), a.role === 'associate' ? DOT_TRIS : ARROW_TRIS, sNode, a.dashed ? 2 : 1);
+    if (a.stub && a.role !== 'associate') glyph(node, dot(p.dotRadius), DOT_TRIS, sNode, 2);
+  }
 }
 
 /** The sides of a dot (an associate's end, an absent member's): the shaders draw the same (render/shaders.ts). */

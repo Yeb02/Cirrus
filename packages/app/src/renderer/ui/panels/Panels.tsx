@@ -146,7 +146,7 @@ export function nodeOpenedBy(item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'pha
 }
 
 /** The pop-up a double click in the graph opens: a node's, or a connection's (of the connections a line stands for). */
-export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; ids: Id[] };
+export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; id: Id };
 
 /**
  * What a double click on `hit` opens (2026-11-11: a single click only selects): a node's pop-up (nodeOpenedBy), that of
@@ -156,10 +156,10 @@ export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; ids:
  */
 export function popupOf(hit: Hit, item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'phantom' | 'connection'> | undefined, ctrl: boolean): GraphPopup | null {
   if (ctrl) return null;
-  if (hit.kind === 'connection') return { kind: 'connection', ids: hit.ids };
+  if (hit.kind === 'connection') return { kind: 'connection', id: hit.id };
   if (hit.kind === 'stub') return { kind: 'node', node: hit.node };
   if (item?.phantom === 'absent') return { kind: 'node', node: item.node };
-  if (item?.phantom === 'center' && item.connection !== undefined) return { kind: 'connection', ids: [item.connection] };
+  if (item?.phantom === 'center' && item.connection !== undefined) return { kind: 'connection', id: item.connection };
   const node = nodeOpenedBy(item, false);
   return node === null ? null : { kind: 'node', node };
 }

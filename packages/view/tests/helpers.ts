@@ -314,7 +314,7 @@ function factsOf(sc: PlanScene): { box: Float64Array; lca: Int32Array } {
  * above it is drawn and not closed. A part is seen when its common group (the lowest group above all its ends and its
  * centre) is the top level or a drawn group not closed, and an end lifted under that group — to its highest closed
  * ancestor, or to its highest closed or fading ancestor below that group — or its centre is in the view; a centre
- * folded away leaves it out, and so do fewer than two distinct drawn ends (its stubs and centre counted). Items in
+ * folded away leaves it out, and so do fewer than two distinct ends (its stubs and centre counted). Items in
  * pre-order of the scene's tree; parts by their common group's rank among the open groups drawn (the top level first),
  * then by slot.
  */
@@ -353,9 +353,9 @@ export function bruteVisible(sc: PlanScene, cam: Camera, p: RenderParams = P): {
     let seen = false;
     const drawnEnds = new Set<number>();
     for (let k = sc.endStart[c]; k < sc.endStart[c] + sc.endCount[c]; k++) {
-      const m = sc.ends.item[k], o = highest(m, ROOT, true);
-      drawnEnds.add(o);
-      if (inView(o) || inView(highest(m, L, false))) seen = true;
+      const m = sc.ends.item[k];
+      drawnEnds.add(m);
+      if (inView(highest(m, ROOT, true)) || inView(highest(m, L, false))) seen = true;
     }
     const center = sc.center[c];
     if (center >= 0) {
@@ -370,20 +370,19 @@ export function bruteVisible(sc: PlanScene, cam: Camera, p: RenderParams = P): {
 }
 
 /**
- * A visible set against bruteVisible: the same items and groups in the same order, the same parts, in the same order
- * (each line's parts follow it, each line comes at its first part). Returns the first difference, or null.
+ * A visible set against bruteVisible: the same items and groups in the same order, the same parts in the same order.
+ * Returns the first difference, or null.
  */
 export function visibleDifference(v: VisibleSet, b: ReturnType<typeof bruteVisible>): string | null {
   if (canonical(v.items) !== canonical(b.items)) return `éléments ${canonical(v.items)} au lieu de ${canonical(b.items)}`;
   if (canonical(v.groups) !== canonical(b.groups)) return `groupes ${canonical(v.groups)} au lieu de ${canonical(b.groups)}`;
-  const got = v.connections.flatMap((vc) => vc.conns), num = (x: number, y: number) => x - y;
+  const got = v.connections.map((vc) => vc.part), num = (x: number, y: number) => x - y;
   if (canonical([...got].sort(num)) !== canonical([...b.parts].sort(num))) return `parties ${canonical([...got].sort(num))} au lieu de ${canonical([...b.parts].sort(num))}`;
   const at = new Map(b.parts.map((c, k) => [c, k]));
   let last = -1;
   for (const vc of v.connections) {
-    if (at.get(vc.conns[0])! < last) return `ligne de la partie ${vc.conns[0]} hors de l’ordre`;
-    last = at.get(vc.conns[0])!;
-    for (let k = 1; k < vc.conns.length; k++) if (at.get(vc.conns[k])! < at.get(vc.conns[k - 1])!) return `parties de la ligne ${vc.conns[0]} hors de l’ordre`;
+    if (at.get(vc.part)! < last) return `partie ${vc.part} hors de l’ordre`;
+    last = at.get(vc.part)!;
   }
   return null;
 }

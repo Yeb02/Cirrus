@@ -31,7 +31,7 @@ const curvesOf = (inst: ReturnType<typeof frameAt>['inst'], vi: number) => {
 
 test('chaque tronçon de ligne nomme son membre ; le tronc n’en nomme aucun', () => {
   const { inst, visible } = frameAt(sc, 0, 16);
-  const vi = visible.connections.findIndex((vc) => sc.connections[vc.conns[0]].title === 'Déduction jointe');
+  const vi = visible.connections.findIndex((vc) => sc.connections[vc.part].title === 'Déduction jointe');
   const lines = curvesOf(inst, vi);
   expect(lines.filter((c) => c.key === null)).toHaveLength(1);
   const n = ids.nodes;
@@ -40,18 +40,18 @@ test('chaque tronçon de ligne nomme son membre ; le tronc n’en nomme aucun', 
 
 test('le survol d’une branche dit de quel membre elle part ; le menu propose alors de la scinder (spec 8.5)', () => {
   const { inst, visible, origin, hits, cam } = frameAt(sc, 0, 16);
-  const vi = visible.connections.findIndex((vc) => sc.connections[vc.conns[0]].title === 'Déduction jointe');
+  const vi = visible.connections.findIndex((vc) => sc.connections[vc.part].title === 'Déduction jointe');
   const line = curvesOf(inst, vi).find((c) => c.key === ids.nodes.occam)!;
   const q = line.points[Math.floor(line.points.length / 2)];
   const h = hits.hit(q.x + origin.x, q.y + origin.y, cam.zoom);
   // Stable ids: the line is known by its connection, not by indices that change at the next rebuild (I9 of the review).
-  const deduction = sc.connections[visible.connections[vi].conns[0]].id;
-  expect(h).toEqual({ kind: 'connection', conn: vi, key: ids.nodes.occam, ids: [deduction], part: 'main' });
+  const deduction = sc.connections[visible.connections[vi].part].id;
+  expect(h).toEqual({ kind: 'connection', conn: vi, key: ids.nodes.occam, id: deduction, part: 'main' });
   const actions = (hit: typeof h) => menuFor(s, sc, hit, emptySelection(), false).map((m) => m.action);
   expect(actions(h)).toEqual(['splitArm', 'layout', 'deleteConnection']);
-  expect(actions({ kind: 'connection', conn: -1, key: null, ids: [deduction], part: 'main' })).toEqual(['layout', 'deleteConnection']);
+  expect(actions({ kind: 'connection', conn: -1, key: null, id: deduction, part: 'main' })).toEqual(['layout', 'deleteConnection']);
   // The far side of a split arm: join it back.
-  expect(actions({ kind: 'connection', conn: -1, key: ids.nodes.universalite, ids: [ids.connections.split], part: 'far' })).toEqual(['joinArm', 'deleteConnection']);
+  expect(actions({ kind: 'connection', conn: -1, key: ids.nodes.universalite, id: ids.connections.split, part: 'far' })).toEqual(['joinArm', 'deleteConnection']);
 });
 
 test('le cœur d’une connexion se touche, celui d’une connexion 1 vers 1 aussi (spec 11.1)', () => {

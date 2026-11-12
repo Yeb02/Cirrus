@@ -10,7 +10,6 @@ import type { SceneChanges } from './sceneUpdate.ts';
 const ROOT = -1;
 /** The common group of a free part slot. */
 export const NO_PART = -2;
-const ROLE_CODE: Record<Role, number> = { source: 0, target: 1, associate: 2 };
 const NO_STUBS: SceneStub[] = [];
 // Bound once: under vitest an imported binding is a getter at each use (T2 of the plan 3c registry).
 const foldOf = foldT, ROLE_NAMES = ROLES, GONE = GONE_ITEM, DASHED = END_DASHED, NO_SLOT = PART_GONE;
@@ -602,19 +601,21 @@ export function foldSignature(index: SceneIndex, zoom: number, p: RenderParams):
   return index.levels.map((k) => stateOf(foldT(k, zoom, p))[0]).join('');
 }
 
-/** item: drawn endpoint with the fading level open; item2: with it closed (equal outside a fold transition). */
-interface VisibleEnd { item: number; item2: number; role: Role; key: Id; hollow: boolean; hollow2: boolean; dashed: boolean }
+/**
+ * A connection's end: always its own item, drawn to it whatever the folds (spec 8.5, point 7 of 2026-11-12). `mask`: the
+ * highest group above it, below the connection's common group, that folds or is closed (−1 for none): its fill is laid
+ * over the connection where it crosses it; `mask2`: when that group folds, the highest closed one under it (−1 otherwise).
+ */
+export interface VisibleEnd { item: number; role: Role; key: Id; dashed: boolean; mask: number; mask2: number }
 
 export interface VisibleConnection {
-  /** Scene connection indices merged into this line (length ≥ 1, spec 8.5 « 2 connexions »). */
-  conns: number[];
+  /** The scene part drawn (one line per part: spec 8.5, point 7). */
+  part: number;
   ends: VisibleEnd[];
   stubs: SceneStub[];
   center?: number;
-  /** none: static; slide: endpoints glide from item to item2 as the level folds; out: internal to the folding group. */
-  fade: 'none' | 'slide' | 'out';
-  /** maxChildK of the fading level; NaN when fade is 'none'. */
-  foldK: number;
+  /** The folding group the connection is internal to, which it fades out with (−1 for none). */
+  fade: number;
 }
 
 export interface VisibleSet {
@@ -626,14 +627,14 @@ export interface VisibleSet {
   signature: string;
 }
 
-/** Distinct drawn items among the ends: with the fading level open (item) or closed (item2). */
-function distinctEnds(ends: VisibleEnd[], closed: boolean): number {
-  if (ends.length > 16) return new Set(ends.map((e) => (closed ? e.item2 : e.item))).size;
+/** Distinct items among the ends. */
+function distinctEnds(ends: VisibleEnd[]): number {
+  if (ends.length > 16) return new Set(ends.map((e) => e.item)).size;
   let n = 0;
   for (let a = 0; a < ends.length; a++) {
-    const x = closed ? ends[a].item2 : ends[a].item;
+    const x = ends[a].item;
     let b = 0;
-    while (b < a && (closed ? ends[b].item2 : ends[b].item) !== x) b++;
+    while (b < a && ends[b].item !== x) b++;
     if (b === a) n++;
   }
   return n;
@@ -641,8 +642,8 @@ function distinctEnds(ends: VisibleEnd[], closed: boolean): number {
 
 /**
  * What a camera shows (spec 8.2, 8.5): items in the view (widened by viewMarginPx) down to closed groups, and the
- * connections seen there, their ends lifted to the highest closed ancestor (hollow arrows). While a level folds, ends
- * glide toward its border; a connection internal to the folding group fades with it.
+ * connections seen there, each drawn to its own ends, the groups that fold over them named (VisibleEnd.mask): their fill
+ * hides what is inside them (point 7 of 2026-11-12). A connection internal to a folding group fades with it.
  *
  * Rule (plan 3c, task 6): a part is seen when an end lifted under its common group — to its highest closed ancestor,
  * or to its highest closed or fading ancestor below that group — or its centre, is in the view; its common group being
@@ -768,55 +769,32 @@ export function computeVisible(scene: PlanScene, index: SceneIndex, cam: Camera,
     order = keys;
   }
 
-  const aggregated = new Map<string, VisibleConnection>();
-  const nodes = ix.node, endMeta = scene.ends.meta, layout = scene.layout, noStubs = scene.stubs.size === 0;
-  let sliding = false, foldK = -Infinity;
-  /** The end at pool entry k, lifted. */
-  const endAt = (k: number): VisibleEnd => {
+  const nodes = ix.node, endMeta = scene.ends.meta, noStubs = scene.stubs.size === 0;
+  /** The end at pool entry k, with the groups folding over it below the common group L (`capped`: L or above folds). */
+  const endAt = (k: number, L: number, capped: boolean): VisibleEnd => {
     const item = endItem[k], meta = endMeta[k];
     if (liftAt[item] !== g) lift(item);
-    const o = liftO[item], c = liftC[item];
-    if (o !== c) { sliding = true; if (maxChildK[c] > foldK) foldK = maxChildK[c]; }
-    return { item: o, item2: c, role: ROLE_NAMES[meta & 3], key: nodes[item], hollow: o !== item, hollow2: c !== item, dashed: (meta & DASHED) !== 0 };
+    const o = liftO[item], c = capped ? under(item, L) : liftC[item];
+    return { item, role: ROLE_NAMES[meta & 3], key: nodes[item], dashed: (meta & DASHED) !== 0, mask: c === item ? -1 : c, mask2: o === item || o === c ? -1 : o };
   };
   for (let q = 0; q < order.length; q++) {
-    const pi = order[q], s0 = endStart[pi], ne = endCount[pi];
-    sliding = false;
-    foldK = -Infinity;
+    const pi = order[q], s0 = endStart[pi], ne = endCount[pi], L = lca[pi], capped = L !== ROOT && fading[L] === 1;
     let ends: VisibleEnd[];
-    if (ne === 2) ends = [endAt(s0), endAt(s0 + 1)];
+    if (ne === 2) ends = [endAt(s0, L, capped), endAt(s0 + 1, L, capped)];
     else {
       ends = [];
-      for (let k = 0; k < ne; k++) ends.push(endAt(s0 + k));
+      for (let k = 0; k < ne; k++) ends.push(endAt(s0 + k, L, capped));
     }
     const ctr = center[pi];
     const stubs = noStubs ? NO_STUBS : scene.stubs.get(pi) ?? NO_STUBS;
     const extra = stubs.length + (ctr >= 0 ? 1 : 0);
-    const two = ne === 2 && ends[0].item !== ends[1].item;
-    if (!two && distinctEnds(ends, false) + extra < 2) continue;
-    const fade: VisibleConnection['fade'] = !sliding ? 'none' : distinctEnds(ends, true) + extra < 2 ? 'out' : 'slide';
-    if (fade !== 'none') {
-      const vc: VisibleConnection = { conns: [pi], ends, stubs, fade, foldK };
-      if (ctr >= 0) vc.center = ctr;
-      out.connections.push(vc);
-      continue;
-    }
-    // Static: merge ends that land on the same (item, role), then merge whole connections between the same ends.
-    let merged = ends;
-    for (let a = 1; a < ne && merged === ends && !two; a++) {
-      for (let b = 0; b < a; b++) if (ends[b].item === ends[a].item && ends[b].role === ends[a].role) { merged = []; break; }
-    }
-    if (merged !== ends) for (const e of ends) if (!merged.some((m) => m.item === e.item && m.role === e.role)) merged.push(e);
-    const vc: VisibleConnection = { conns: [pi], ends: merged, stubs, fade, foldK: Number.NaN };
+    if (!(ne === 2 && ends[0].item !== ends[1].item) && distinctEnds(ends) + extra < 2) continue;
+    // Internal to a folding group (its common group or one above it): it fades out with that group.
+    let fade = -1;
+    if (capped) for (let a = L; a !== ROOT; a = parent[a]) if (st(a) === 2) { fade = a; break; }
+    const vc: VisibleConnection = { part: pi, ends, stubs, fade };
     if (ctr >= 0) vc.center = ctr;
-    let hollow = false, dashed = false;
-    for (const e of merged) { if (e.hollow) hollow = true; if (e.dashed) dashed = true; }
-    // Only ends lifted onto a closed group merge (spec 8.5, « Groupe replié »): open parallel connections stay apart.
-    if (layout[pi] || stubs.length > 0 || ctr >= 0 || dashed || !hollow) { out.connections.push(vc); continue; }
-    const key = merged.map((e) => e.item * 3 + ROLE_CODE[e.role]).sort((a, b) => a - b).join(',');
-    const existing = aggregated.get(key);
-    if (existing) existing.conns.push(pi);
-    else { aggregated.set(key, vc); out.connections.push(vc); }
+    out.connections.push(vc);
   }
   return out;
 }

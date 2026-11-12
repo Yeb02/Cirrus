@@ -16,8 +16,8 @@ import type { VisibleSet } from './visibility.ts';
  */
 export type Hit =
   | { kind: 'item'; item: number; id: Id }
-  /** conn: visible connection index; key: the member whose branch is under the point (null: the trunk); ids: the scene connections it stands for. */
-  | { kind: 'connection'; conn: number; key: Id | null; ids: Id[]; part: 'main' | 'far' }
+  /** conn: visible connection index; key: the member whose branch is under the point (null: the trunk); id: the scene connection. */
+  | { kind: 'connection'; conn: number; key: Id | null; id: Id; part: 'main' | 'far' }
   /** connection, node: the absent member's; title: its node's. */
   | { kind: 'stub'; conn: number; stub: number; connection: Id; node: Id; title: string }
   | { kind: 'background' };
@@ -115,7 +115,7 @@ export function buildHitIndex(
     groupTree ? groupTree.search(wx, wy, wx, wy).filter((j) => insidePolygon(groups[j].poly, wx, wy)).map((j) => groups[j].g) : [];
   const connectionHit = (conn: number, key: Id | null): Hit => {
     const vc = visible.connections[conn];
-    return { kind: 'connection', conn, key, ids: vc.conns.map((x) => scene.ids[x]), part: scene.part[vc.conns[0]] === PART_FAR ? 'far' : 'main' };
+    return { kind: 'connection', conn, key, id: scene.ids[vc.part], part: scene.part[vc.part] === PART_FAR ? 'far' : 'main' };
   };
 
   return {
@@ -133,7 +133,7 @@ export function buildHitIndex(
       stubs.forEach((s, j) => { const d = Math.hypot(s.pos.x - wx, s.pos.y - wy); if (d <= bestStubD) { bestStubD = d; bestStub = j; } });
       if (bestStub >= 0) {
         const st = stubs[bestStub], vc = visible.connections[st.conn];
-        return { kind: 'stub', conn: st.conn, stub: st.stub, connection: scene.ids[vc.conns[0]], node: vc.stubs[st.stub].node, title: vc.stubs[st.stub].title };
+        return { kind: 'stub', conn: st.conn, stub: st.stub, connection: scene.ids[vc.part], node: vc.stubs[st.stub].node, title: vc.stubs[st.stub].title };
       }
       let best: { conn: number; key: Id | null } | null = null, bestD = tol;
       if (segTree) {

@@ -5,22 +5,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyOps, combine, createNode, invertAction, moveNodes, type State } from '@cirrus/core';
 import {
-  buildIndex, buildScene, computeVisible, DEFAULT_PARAMS, ITEM_TEXTURE_WIDTH, itemTexels, type PlanScene, previewSlots, previewSplit, rowRuns, SLOT_FLOATS, texelSlots,
-  textureRows, updateScene, withOffsets,
+  buildIndex, buildScene, computeVisible, DEFAULT_PARAMS, EDGE_FLOATS, envelopeDistance, groupEdges, ITEM_TEXTURE_WIDTH, itemTexels, type PlanScene, previewSlots,
+  previewSplit, rowRuns, SLOT_FLOATS, texelSlots, textureRows, updateScene, withOffsets,
 } from '@cirrus/view';
 import { expect, test } from 'vitest';
 import { type TextureGl, Texture2D } from '../src/renderer/gl/texture.ts';
 import { ItemTexture } from '../src/renderer/render/itemTexture.ts';
 
-/** The calls a Texture2D makes, recorded with the data they would send (no WebGL under Node). */
+/** The calls a Texture2D makes, recorded with the data they would send and the texture bound (no WebGL under Node). */
 function recorder() {
-  const calls: { fn: string; args: unknown[] }[] = [];
-  const rec = (fn: string) => (...args: unknown[]) => { calls.push({ fn, args }); };
+  const calls: { fn: string; args: unknown[]; tex?: unknown }[] = [];
+  let bound: unknown = null;
+  const rec = (fn: string) => (...args: unknown[]) => { if (fn === 'bindTexture') bound = args[1]; calls.push({ fn, args, tex: bound }); };
   // WebGL raises INVALID_OPERATION when the rows asked for run past the data from srcOffset (4 floats per texel).
   const subImage = (...args: unknown[]) => {
     const [, , , , w, h, , , data, offset] = args as [number, number, number, number, number, number, number, number, Float32Array, number];
     if (offset + w * h * 4 > data.length) throw new Error(`texSubImage2D : ${w} × ${h} texels depuis ${offset}, au-delà des ${data.length} flottants`);
-    calls.push({ fn: 'texSubImage2D', args });
+    calls.push({ fn: 'texSubImage2D', args, tex: bound });
   };
   const constants = {
     TEXTURE_2D: 0x0de1, TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800, TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803, CLAMP_TO_EDGE: 0x812f,
@@ -28,7 +29,7 @@ function recorder() {
     RGBA32F: 0x8814, FLOAT: 0x1406, TEXTURE0: 0x84c0,
   };
   const gl = {
-    ...constants, createTexture: () => ({}) as WebGLTexture, bindTexture: rec('bindTexture'), texParameteri: rec('texParameteri'), pixelStorei: rec('pixelStorei'),
+    ...constants, createTexture: () => ({ texture: calls.length }) as unknown as WebGLTexture, bindTexture: rec('bindTexture'), texParameteri: rec('texParameteri'), pixelStorei: rec('pixelStorei'),
     texImage2D: rec('texImage2D'), texSubImage2D: subImage, activeTexture: rec('activeTexture'), deleteTexture: rec('deleteTexture'),
   } as unknown as TextureGl;
   return { gl, calls, constants };
@@ -100,6 +101,18 @@ const measure = (x: string) => Math.max(1, Math.ceil(x.length / 23));
 /** The texture's rows as bytes (equal to the bit, NaN and −0 included). */
 const bytes = (t: Float32Array) => new Uint8Array(t.buffer.slice(0));
 const whole = (scene: PlanScene, origin: { x: number; y: number }, length: number) => { const out = new Float32Array(length); itemTexels(scene, origin, out); return out; };
+/** The item texture's own calls (its envelopes have their textures: EnvelopeTexture). */
+const own = <C extends { fn: string; tex?: unknown }>(tex: ItemTexture, calls: C[], fn: string) => calls.filter((c) => c.fn === fn && c.tex === tex.texture.texture);
+/** Every group's envelope edges as the texture holds them, against the scene's (relative to the origin): the first slot that differs, or null. */
+function envelopeDifference(tex: ItemTexture, scene: PlanScene, origin: { x: number; y: number }): string | null {
+  for (let i = 0; i < scene.items.length; i++) {
+    const want: number[] = [];
+    if (scene.items[i].kind === 'group') groupEdges(scene, i, origin, want);
+    const got = tex.envelopes.edgesOf(i);
+    if (got.length !== want.length || got.some((v, k) => v !== Math.fround(want[k]))) return `emplacement ${i} : ${got.length / EDGE_FLOATS} arêtes au lieu de ${want.length / EDGE_FLOATS}`;
+  }
+  return null;
+}
 
 test('ItemTexture : un aperçu réécrit ses emplacements, rangée par rangée ; sa fin rend la texture à l’octet près, décalage nul ou non (Review Focus 5)', () => {
   const { s, ids } = lobbyState(), scene = buildScene(s, ids.plans.lobby, measure, DEFAULT_PARAMS), origin = { x: 120.5, y: -40.25 };
@@ -117,15 +130,18 @@ test('ItemTexture : un aperçu réécrit ses emplacements, rangée par rangée ;
     tex.preview(preview, slots);
     // Only texSubImage2D, on the rows of the slots it writes (and those an earlier preview wrote, set back).
     expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
-    const sent = calls.filter((c) => c.fn === 'texSubImage2D').map((c) => c.args[3] as number);
+    const sent = own(tex, calls, 'texSubImage2D').map((c) => c.args[3] as number);
     for (const [from] of rowRuns(slots)) expect(sent).toContain(from);
     // The preview's slots hold the preview, every other slot the scene.
     expect(bytes(tex.texels)).toEqual(bytes(whole(preview, origin, tex.texels.length)));
     if (d.x === 0) expect(bytes(tex.texels)).toEqual(before);
     expect(new Set(tex.previewed)).toEqual(new Set(slots));
+    // The envelopes follow the preview: the masks are laid where the groups are drawn (point 7).
+    expect(envelopeDifference(tex, preview, origin)).toBeNull();
   }
   tex.restore();
   expect(bytes(tex.texels)).toEqual(before);
+  expect(envelopeDifference(tex, scene, origin)).toBeNull();
   expect(tex.previewed).toEqual([]);
   expect(tex.scene).toBe(scene);
 });
@@ -146,6 +162,7 @@ test('ItemTexture : une action puis son annulation, un dépôt d’aperçu compr
   expect(tex.update(scene0, u.scene, texelSlots(scene0, u.scene, u.changes))).toBe(true);
   expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
   expect(bytes(tex.texels)).toEqual(bytes(whole(u.scene, origin, tex.texels.length)));
+  expect(envelopeDifference(tex, u.scene, origin)).toBeNull();
   expect(tex.previewed).toEqual([]);
   const undo = invertAction(a);
   applyOps(s, undo.ops);
@@ -153,6 +170,7 @@ test('ItemTexture : une action puis son annulation, un dépôt d’aperçu compr
   expect(tex.update(u.scene, back.scene, texelSlots(u.scene, back.scene, back.changes))).toBe(true);
   expect(bytes(tex.texels)).toEqual(bytes(whole(back.scene, origin, tex.texels.length)));
   expect(bytes(tex.texels)).toEqual(before);
+  expect(envelopeDifference(tex, back.scene, origin)).toBeNull();
   // A scene it does not hold: nothing written, to be written whole.
   expect(tex.update(u.scene, back.scene, [mdl])).toBe(false);
   expect(tex.scene).toBeNull();
@@ -164,7 +182,8 @@ test('ItemTexture : une action puis son annulation, un dépôt d’aperçu compr
   expect(grown.scene.items.length).toBeGreaterThan(512);
   calls.length = 0;
   expect(tex.update(back.scene, grown.scene, texelSlots(back.scene, grown.scene, grown.changes))).toBe(true);
-  expect(calls.filter((c) => c.fn === 'texImage2D')).toHaveLength(1);
+  expect(own(tex, calls, 'texImage2D')).toHaveLength(1);
+  expect(envelopeDifference(tex, grown.scene, origin)).toBeNull();
   expect(tex.texels.length).toBeGreaterThanOrEqual(textureRows(grown.scene.items.length) * ITEM_TEXTURE_WIDTH * 4);
   expect(bytes(tex.texels)).toEqual(bytes(whole(grown.scene, origin, tex.texels.length)));
   // The origin moved: everything again from the new one, at the same size.
@@ -172,4 +191,36 @@ test('ItemTexture : une action puis son annulation, un dépôt d’aperçu compr
   tex.writeAll(grown.scene, { x: 5e5, y: -2e5 });
   expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
   expect(bytes(tex.texels)).toEqual(bytes(whole(grown.scene, { x: 5e5, y: -2e5 }, tex.texels.length)));
+  expect(envelopeDifference(tex, grown.scene, { x: 5e5, y: -2e5 })).toBeNull();
+});
+
+test('le masque suit l’enveloppe pendant un glissement : le groupe glissé, et ses ancêtres dont l’enveloppe change, réécrits à chaque image (point 7)', () => {
+  const { s, ids } = lobbyState(), scene = buildScene(s, ids.plans.lobby, measure, DEFAULT_PARAMS), origin = { x: 40, y: 10 };
+  const { gl, calls } = recorder(), tex = new ItemTexture(gl);
+  tex.writeAll(scene, origin);
+  const g = scene.byId.get(ids.nodes.groupeInduction)!, leaf = scene.byId.get(ids.nodes.solomonoff)!, it = scene.items[g];
+  const visible = computeVisible(scene, buildIndex(scene, DEFAULT_PARAMS), { x: it.x, y: it.y, zoom: 0.5, widthPx: 2560, heightPx: 1600 }, DEFAULT_PARAMS);
+  // A point just inside the group's envelope on its right, where a connection to one of its members would be hidden.
+  const edges = (sc: PlanScene) => { const e: number[] = []; return { e, n: groupEdges(sc, g, origin, e) }; };
+  const inside = (sc: PlanScene, x: number, y: number) => { const { e, n } = edges(sc); return envelopeDistance(e, 0, n, x - origin.x, y - origin.y) < 0; };
+  const right = Math.max(...it.hull!.map((q) => q.x)) + it.pad! / 2;
+  expect(inside(scene, right, it.y)).toBe(true);
+  let previous: PlanScene | undefined;
+  for (const [moving, d] of [[g, { x: -400, y: 0 }], [g, { x: -800, y: 30 }], [leaf, { x: 900, y: 0 }]] as const) {
+    const split = previewSplit(scene, visible, [moving]);
+    const preview = withOffsets(scene, new Map([[moving, d]]), DEFAULT_PARAMS, previous), slots = previewSlots(scene, preview, split);
+    previous = preview;
+    calls.length = 0;
+    tex.preview(preview, slots);
+    // The texture holds the preview's envelopes: the group moved away (or stretched by its member), the point follows.
+    expect(envelopeDifference(tex, preview, origin)).toBeNull();
+    const held = (x: number, y: number) => { const e = tex.envelopes.edgesOf(g); return envelopeDistance(e, 0, e.length / EDGE_FLOATS, x - origin.x, y - origin.y) < 0; };
+    expect(held(right, it.y)).toBe(inside(preview, right, it.y));
+    if (moving === g) expect(held(right + d.x, it.y + d.y)).toBe(true);
+    // Only the rows of what it writes: no texture made anew.
+    expect(calls.filter((c) => c.fn === 'texImage2D')).toEqual([]);
+  }
+  expect(inside(previous!, right, it.y)).toBe(true); // the member dragged out to the right stretched the group over it
+  tex.restore();
+  expect(envelopeDifference(tex, scene, origin)).toBeNull();
 });

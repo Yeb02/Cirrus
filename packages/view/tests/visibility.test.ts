@@ -15,10 +15,10 @@ import {
 let s: State, ids: FixtureIds, sc: PlanScene, idx: SceneIndex;
 const at = (id: Id) => sc.byId.get(id)!;
 const conn = (vs: VisibleConnection[], from: Id, to: Id) =>
-  vs.find((c) => c.conns.some((i) => {
-    const members = s.connections.get(sc.connections[i].id)!.members.map((m) => m.node);
+  vs.find((c) => {
+    const members = s.connections.get(sc.connections[c.part].id)!.members.map((m) => m.node);
     return members.includes(from) && members.includes(to) && members.length === 2;
-  }));
+  });
 
 beforeAll(() => {
   ({ s, ids } = fixture());
@@ -30,53 +30,52 @@ test('zoom lisible : tout est ouvert, chaque connexion est statique', () => {
   const v = computeVisible(sc, idx, camAtTextPx(sc, 0, 16), P);
   expect(v.items).toContain(at(ids.nodes.solomonoff));
   expect(v.groups).toContain(at(ids.nodes.groupeInduction));
-  expect(v.connections.every((c) => c.fade === 'none')).toBe(true);
+  expect(v.connections.every((c) => c.fade === -1 && c.ends.every((e) => e.mask === -1))).toBe(true);
   expect(v.connections.length).toBeGreaterThan(10);
   // Parents before children.
   expect(v.groups.indexOf(at(ids.nodes.groupeTheorie))).toBeLessThan(v.groups.indexOf(at(ids.nodes.groupeInduction)));
 });
 
-test('dézoom : le groupe Induction se replie et ses connexions sortantes partent de son bord (évidées)', () => {
+test('dézoom : le groupe Induction se replie ; ses connexions sortantes gardent leur vrai bout, masqué par son fond (point 7)', () => {
   const v = computeVisible(sc, idx, camAtTextPx(sc, 0, 4), P);
   expect(v.items).not.toContain(at(ids.nodes.solomonoff));
   expect(v.groups).toContain(at(ids.nodes.groupeInduction));
   const c = conn(v.connections, ids.nodes.solomonoff, ids.nodes.universalite)!;
-  expect(c.fade).toBe('none');
-  expect(c.ends.find((e) => e.role === 'source')).toMatchObject({ item: at(ids.nodes.groupeInduction), hollow: true });
-  expect(c.ends.find((e) => e.role === 'target')).toMatchObject({ item: at(ids.nodes.universalite), hollow: false });
+  expect(c.fade).toBe(-1);
+  expect(c.ends.find((e) => e.role === 'source')).toMatchObject({ item: at(ids.nodes.solomonoff), mask: at(ids.nodes.groupeInduction), mask2: -1 });
+  expect(c.ends.find((e) => e.role === 'target')).toMatchObject({ item: at(ids.nodes.universalite), mask: -1, mask2: -1 });
 });
 
-test('en transition, les bouts glissent vers le bord, et un seul cran est en transition', () => {
+test('en transition, rien ne glisse : le bout reste sur son nœud, masqué par le groupe qui se replie (point 7)', () => {
   const v = computeVisible(sc, idx, camAtTextPx(sc, 0, 7), P);
   const c = conn(v.connections, ids.nodes.solomonoff, ids.nodes.universalite)!;
-  expect(c.fade).toBe('slide');
-  expect(c.foldK).toBe(0);
-  expect(c.ends.find((e) => e.role === 'source')).toMatchObject({ item: at(ids.nodes.solomonoff), item2: at(ids.nodes.groupeInduction), hollow: false, hollow2: true });
-  expect(new Set(v.connections.filter((x) => x.fade !== 'none').map((x) => x.foldK)).size).toBe(1);
+  expect(c.fade).toBe(-1);
+  expect(c.ends.find((e) => e.role === 'source')).toMatchObject({ item: at(ids.nodes.solomonoff), mask: at(ids.nodes.groupeInduction), mask2: -1 });
   expect(v.items).toContain(at(ids.nodes.solomonoff)); // members still drawn while they fade
 });
 
-test('connexion interne à un groupe qui se replie : en place, puis effacée', () => {
+test('connexion interne à un groupe qui se replie : en place, effacée avec lui, puis absente', () => {
   const priore = sc.items.find((i) => i.title === 'Priore universelle')!.id;
   const fading = conn(computeVisible(sc, idx, camAtTextPx(sc, 0, 7), P).connections, priore, ids.nodes.solomonoff)!;
-  expect(fading.fade).toBe('out');
+  expect(fading.fade).toBe(at(ids.nodes.groupeInduction));
   expect(fading.ends.map((e) => e.item).sort()).toEqual([at(priore), at(ids.nodes.solomonoff)].sort());
-  expect(new Set(fading.ends.map((e) => e.item2))).toEqual(new Set([at(ids.nodes.groupeInduction)]));
+  expect(fading.ends.every((e) => e.mask === -1 && e.mask2 === -1)).toBe(true);
   const closed = computeVisible(sc, idx, camAtTextPx(sc, 0, 4), P);
   expect(conn(closed.connections, priore, ids.nodes.solomonoff)).toBeUndefined();
 });
 
-test('plusieurs membres d’une même connexion fusionnent en une branche une fois repliés', () => {
-  // « Déduction jointe » : Kolmogorov, Solomonoff, MDL → Occam. With Complexité et induction closed, the three sources
-  // become one hollow branch from the group.
+test('les membres d’une connexion dans un groupe replié gardent chacun leur branche, masquée par le plus haut groupe replié (point 7)', () => {
+  // « Déduction jointe » : Kolmogorov, Solomonoff, MDL → Occam, the sources in Complexité et induction, closed.
   const v = computeVisible(sc, idx, camAtTextPx(sc, 1, 4), P);
-  const c = v.connections.find((x) => x.conns.some((i) => sc.connections[i].title === 'Déduction jointe'))!;
-  expect(c.fade).toBe('none');
-  expect(c.ends).toHaveLength(2);
-  expect(c.ends.find((e) => e.role === 'source')).toMatchObject({ item: at(ids.nodes.groupeTheorie), hollow: true });
+  const c = v.connections.find((x) => sc.titles[x.part] === 'Déduction jointe')!;
+  expect(c.fade).toBe(-1);
+  const sources = c.ends.filter((e) => e.role === 'source');
+  expect(sources).toHaveLength(3);
+  expect(sources.every((e) => e.mask === at(ids.nodes.groupeTheorie))).toBe(true);
+  expect(new Set(sources.map((e) => e.item)).size).toBe(3);
 });
 
-test('deux connexions entre les mêmes extrémités repliées fusionnent en « 2 connexions »', () => {
+test('deux connexions entre des nœuds d’un même groupe replié et un nœud dehors restent deux traits (point 7)', () => {
   const st = emptyState();
   const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
   const node = (title: string, x: number, y: number) => created(run(st, createNode(st, { plan, title, x, y, k: 0 })), 'node');
@@ -87,10 +86,28 @@ test('deux connexions entre les mêmes extrémités repliées fusionnent en « 2
   run(st, connect(st, { plan, members: [{ node: b, role: 'source' }, { node: c, role: 'target' }] }));
   const scene = buildScene(st, plan, measure, P);
   const v = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 3), P);
-  expect(v.connections).toHaveLength(1);
-  expect(v.connections[0].conns).toHaveLength(2);
-  const open = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 16), P);
-  expect(open.connections).toHaveLength(2);
+  expect(v.connections).toHaveLength(2);
+  expect(v.connections.map((x) => x.ends[0].item).sort()).toEqual([scene.byId.get(a), scene.byId.get(b)].sort());
+  expect(v.connections.every((x) => x.ends[0].mask === scene.byId.get(g) && x.ends[1].mask === -1)).toBe(true);
+});
+
+test('un nœud dans un groupe replié, lui-même dans un groupe qui se replie : deux masques, le plus haut d’abord (point 7)', () => {
+  const st = emptyState();
+  const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const node = (title: string, x: number, y: number, k = 0) => created(run(st, createNode(st, { plan, title, x, y, k })), 'node');
+  const outer = node('O', 0, 0, 4), inner = node('I', 0, 0, 2), a = node('A', 0, 0), b = node('B', 0, 300), c = node('C', 4000, 0);
+  run(st, include(st, plan, a, inner));
+  run(st, include(st, plan, b, inner));
+  run(st, include(st, plan, inner, outer));
+  run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: c, role: 'target' }] }));
+  const scene = buildScene(st, plan, measure, P);
+  const I = scene.byId.get(inner)!, O = scene.byId.get(outer)!;
+  // The outer group fades: the inner group, its member, is closed (its own members' text is smaller).
+  const cam = camAtTextPx(scene, scene.items[O].maxChildK!, 7);
+  const v = computeVisible(scene, buildIndex(scene, P), cam, P);
+  const vc = v.connections[0];
+  expect(vc.ends[0]).toMatchObject({ item: scene.byId.get(a), mask: O, mask2: I });
+  expect(vc.ends[1]).toMatchObject({ item: scene.byId.get(c), mask: -1, mask2: -1 });
 });
 
 test('hors écran : rien n’est visible loin du plan', () => {
@@ -106,7 +123,7 @@ test('une connexion reste visible si un seul de ses nœuds est à l’écran (sp
   const cam = { x: m.x, y: m.y + 150, zoom: 1, widthPx: 600, heightPx: 400 };
   const v = computeVisible(sc, idx, cam, { ...P, viewMarginPx: 0 });
   expect(conn(v.connections, ids.nodes.universalite, ids.nodes.monde)).toBeDefined();
-  expect(v.connections.some((c) => c.conns.some((i) => sc.connections[i].ends.some((e) => sc.items[e.item].title === 'Inégalité de Kraft')))).toBe(false);
+  expect(v.connections.some((c) => sc.connections[c.part].ends.some((e) => sc.items[e.item].title === 'Inégalité de Kraft'))).toBe(false);
 });
 
 test('la partie lointaine d’un bras scindé est visible près d’Universalité', () => {
@@ -162,7 +179,7 @@ test('une connexion interne vue seulement par son groupe en fondu, ses deux bout
   // Seen once an end is in the view.
   const near = computeVisible(scene, index, { ...cam, x: -2000 }, p);
   expect(near.connections).toHaveLength(1);
-  expect(near.connections[0].fade).toBe('out');
+  expect(near.connections[0].fade).toBe(scene.byId.get(g));
 });
 
 /** Cameras that look at a scene as a whole, at the fold of its first groups, and up close; around the origin when it is empty. */
@@ -255,7 +272,7 @@ test('plan vide, retrait du dernier élément, emplacement recyclé : l’index 
   }
 });
 
-test('deux connexions parallèles ouvertes restent distinctes ; elles ne fusionnent que repliées (I5 de la relecture)', () => {
+test('deux connexions parallèles restent distinctes, ouvertes ou repliées (point 7)', () => {
   const st = emptyState();
   const plan = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
   const node = (title: string, x: number, y: number) => created(run(st, createNode(st, { plan, title, x, y, k: 0 })), 'node');
@@ -265,7 +282,5 @@ test('deux connexions parallèles ouvertes restent distinctes ; elles ne fusionn
   run(st, connect(st, { plan, members: [{ node: a, role: 'source' }, { node: b, role: 'target' }], title: 'contredit' }));
   const scene = buildScene(st, plan, measure, P);
   expect(computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 16), P).connections).toHaveLength(2);
-  const folded = computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 3), P);
-  expect(folded.connections).toHaveLength(1);
-  expect(folded.connections[0].conns).toHaveLength(2);
+  expect(computeVisible(scene, buildIndex(scene, P), camAtTextPx(scene, 0, 3), P).connections).toHaveLength(2);
 });

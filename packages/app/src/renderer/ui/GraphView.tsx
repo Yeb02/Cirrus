@@ -165,7 +165,7 @@ export function GraphView(props: {
   const graphPress = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [popup, setPopup] = useState<{ x: number; y: number; connections: Id[] } | null>(null);
+  const [popup, setPopup] = useState<{ x: number; y: number; connection: Id } | null>(null);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /**
@@ -356,11 +356,11 @@ export function GraphView(props: {
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
-  /** The pop-up of a connection (or of the connections a line stands for), next to the click (spec 8.5). */
-  const openPopup = (connections: Id[], sx: number, sy: number) => {
-    for (const draft of connectionDrafts(connections)) consultations.record(draft);
+  /** The pop-up of a connection, next to the click (spec 8.5). */
+  const openPopup = (connection: Id, sx: number, sy: number) => {
+    for (const draft of connectionDrafts([connection])) consultations.record(draft);
     const r = root.current!.getBoundingClientRect();
-    setPopup({ connections, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
+    setPopup({ connection, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
   };
   /**
    * A double click on the graph (2026-11-11): the pop-up of what its second click designated (popupOf), a node's or a
@@ -372,7 +372,7 @@ export function GraphView(props: {
     if (!c || !sc) return;
     const i = c.hit.kind === 'item' ? sc.byId.get(c.hit.id) : undefined;
     const opened = popupOf(c.hit, i === undefined ? undefined : sc.items[i], c.ctrl);
-    if (opened?.kind === 'connection') openPopup(opened.ids, c.sx, c.sy);
+    if (opened?.kind === 'connection') openPopup(opened.id, c.sx, c.sy);
     else if (opened) {
       const r = root.current!.getBoundingClientRect();
       panelsRef.current.open(opened.node, { x: r.left + c.sx, y: r.top + c.sy });
@@ -613,7 +613,7 @@ export function GraphView(props: {
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
     if (h.kind === 'item') return { kind: 'item', id: h.id };
-    if (h.kind === 'connection') return { kind: 'connection', id: h.ids[0] };
+    if (h.kind === 'connection') return { kind: 'connection', id: h.id };
     if (h.kind === 'stub') return { kind: 'connection', id: h.connection };
     return null;
   };
@@ -904,7 +904,7 @@ export function GraphView(props: {
       {placement.line && <svg className="connect-line"><line x1={placement.line.x1} y1={placement.line.y1} x2={placement.line.x2} y2={placement.line.y2} /></svg>}
       {popup && (
         <ConnectionPopup
-          key={`${popup.connections.join()}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connections={popup.connections} x={popup.x} y={popup.y}
+          key={`${popup.connection}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connection={popup.connection} x={popup.x} y={popup.y}
           registry={props.registry} params={props.params} onNodeLink={props.onNodeLink}
           onEdit={(b) => edit(b).then((r) => r !== null && r.ok)} onClose={() => setPopup(null)} onRemoveMember={questions.removeMember}
           onAddMember={(connection, node) => questions.askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',

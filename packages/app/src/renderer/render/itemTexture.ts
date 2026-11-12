@@ -1,15 +1,18 @@
 import type { Vec2 } from '@cirrus/core';
 import { ITEM_TEXTURE_WIDTH, itemTexels, type PlanScene, rowRuns, textureRows } from '@cirrus/view';
 import { Texture2D, type TextureGl } from '../gl/texture.ts';
+import { EnvelopeTexture } from './envelopeTexture.ts';
 
 /**
  * The item texture (plan 3c task 8) with its rows on the CPU: the items of one scene relative to an origin, and the
  * slots a preview wrote over it (plan 3c task 9). Written whole for a scene it does not hold, at a new origin and when
  * it must grow; otherwise slot by slot, each run of rows they are in sent by one texSubImage2D (rowRuns). Extracted
- * from PlanRenderer to be tested without WebGL (Ruling of plan 3c task 9).
+ * from PlanRenderer to be tested without WebGL (Ruling of plan 3c task 9). The groups' envelopes, which the connections'
+ * masks read (spec 8.5, point 7), follow the same slots (EnvelopeTexture).
  */
 export class ItemTexture {
   readonly texture: Texture2D;
+  readonly envelopes: EnvelopeTexture;
   /** The texture's rows (SLOT_FLOATS per slot), what partial writes start from; doubled when short (Ruling R23). */
   texels = new Float32Array(ITEM_TEXTURE_WIDTH * 4);
   /** The scene whose items it holds (null: to be written whole), relative to `origin`. */
@@ -21,6 +24,7 @@ export class ItemTexture {
   constructor(gl: TextureGl) {
     this.texture = new Texture2D(gl, 'nearest');
     this.texture.allocate(ITEM_TEXTURE_WIDTH, 1);
+    this.envelopes = new EnvelopeTexture(gl);
   }
 
   /** The slots a preview holds now. */
@@ -35,6 +39,7 @@ export class ItemTexture {
     itemTexels(scene, origin, this.texels);
     this.texture.allocate(ITEM_TEXTURE_WIDTH, this.texels.length / (ITEM_TEXTURE_WIDTH * 4));
     this.texture.setRows(this.texels, 0, Math.max(1, textureRows(scene.items.length)));
+    this.envelopes.writeAll(scene, origin);
     this.scene = scene;
     this.over = [];
   }
@@ -74,17 +79,21 @@ export class ItemTexture {
     this.over = [];
   }
 
+  /** The item texture on `unit`, the envelopes' index and edges on the two next ones. */
   bind(unit: number): void {
     this.texture.bind(unit);
+    this.envelopes.bind(unit + 1, unit + 2);
   }
 
   dispose(): void {
     this.texture.dispose();
+    this.envelopes.dispose();
   }
 
   private write(scene: PlanScene, slots: readonly number[]): void {
     itemTexels(scene, this.origin, this.texels, slots);
     for (const [from, to] of rowRuns(slots)) this.texture.setRows(this.texels, from, to);
+    this.envelopes.write(scene, this.origin, slots);
   }
 
   /** Room for `slots` slots, doubling; returns whether the rows grew (everything is then to be written). */

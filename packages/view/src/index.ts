@@ -11,6 +11,7 @@ export * from './geometry/bundle.ts';
 export * from './geometry/ribbon.ts';
 export * from './geometry/simple.ts';
 export * from './geometry/envelope.ts';
+export * from './geometry/mask.ts';
 export * from './geometry/stars.ts';
 export * from './geometry/grid.ts';
 export * from './visibility.ts';

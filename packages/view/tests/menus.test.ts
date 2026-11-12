@@ -54,7 +54,7 @@ test('chaque article a un libellé français', () => {
 });
 
 test('une connexion absente du lobby peut y être ajoutée (spec 7)', () => {
-  const line = (id: string) => ({ kind: 'connection' as const, conn: -1, key: null, ids: [id], part: 'main' as const });
+  const line = (id: string) => ({ kind: 'connection' as const, conn: -1, key: null, id, part: 'main' as const });
   expect(menuFor(s, these, line(ids.connections.twoToOne), emptySelection(), false).map((m) => m.action)).toContain('addToLobby');
   expect(menuFor(s, sc, line(ids.connections.twoToTwo), emptySelection(), false).map((m) => m.action)).not.toContain('addToLobby');
 });
@@ -64,7 +64,7 @@ test('une connexion disposée à la main peut retrouver sa disposition automatiq
   const conn = ids.connections.twoToTwo;
   run(st, setLayout(st, ids.plans.lobby, conn, { angle: 1, handles: {} }));
   const scene = buildScene(st, ids.plans.lobby, measure, P);
-  const line = { kind: 'connection' as const, conn: -1, key: null, ids: [conn], part: 'main' as const };
+  const line = { kind: 'connection' as const, conn: -1, key: null, id: conn, part: 'main' as const };
   expect(menuFor(st, scene, line, emptySelection(), false).map((m) => m.action)).toContain('resetLayout');
   expect(menuFor(s, sc, line, emptySelection(), false).map((m) => m.action)).not.toContain('resetLayout');
 });
@@ -75,7 +75,7 @@ test('clic droit sur le fond d’un groupe ouvert : le menu de ce groupe, puis d
 });
 
 test('« Voir dans un autre plan » (plan 6a, D3) : proposé à un nœud ou à une connexion seulement s’il est dans un autre plan — le lobby compte —, libellé en français', () => {
-  const line = (id: string) => ({ kind: 'connection' as const, conn: -1, key: null, ids: [id], part: 'main' as const });
+  const line = (id: string) => ({ kind: 'connection' as const, conn: -1, key: null, id, part: 'main' as const });
   const sees = (m: { action: string }[]) => actions(m).includes('seeElsewhere');
   // A node: in the lobby and elsewhere; in the lobby alone; in a plan and the lobby (which counts); in one plan alone.
   expect(sees(menuFor(s, sc, item(sc, ids.nodes.mdl), emptySelection(), false))).toBe(true);

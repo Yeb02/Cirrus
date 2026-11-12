@@ -9,11 +9,10 @@ export interface BundleEnd {
   pos: Vec2;
   halfW: number;
   halfH: number;
-  /** A closed group: anchor on its padded envelope instead (centre = the group's position). */
+  /** A group node: anchor on its padded envelope instead (centre = the group's position). */
   hull?: { poly: Vec2[]; centre: Vec2; pad: number };
   role: Role;
   k: number;
-  hollow: boolean;
   dashed: boolean;
   key: Id;
 }
@@ -38,7 +37,6 @@ export interface Branch {
   role: Role;
   kNode: number;
   kMarker: number;
-  hollow: boolean;
   dashed: boolean;
   stub: boolean;
   /** The member this branch leads to (hit testing: which arm a click is on). */
@@ -131,9 +129,9 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
   const handles = input.layout?.handles;
   const off = (key: Id) => handles?.[key] ?? NO_OFFSET;
   const branches: Branch[] = [];
-  type Of = { role: Role; k: number; hollow: boolean; dashed: boolean };
+  type Of = { role: Role; k: number; dashed: boolean };
   const branch = (p0: Vec2, b1: Vec2, b2: Vec2, p3: Vec2, nodeEnd: Branch['nodeEnd'], e: Of, stub: boolean, key: Id | null): Branch =>
-    ({ p0, b1, b2, p3, nodeEnd, role: pairNeu ? 'associate' : e.role, kNode: e.k, kMarker: kMax, hollow: e.hollow, dashed: e.dashed, stub, key });
+    ({ p0, b1, b2, p3, nodeEnd, role: pairNeu ? 'associate' : e.role, kNode: e.k, kMarker: kMax, dashed: e.dashed, stub, key });
 
   const incoming = (a: Vec2, o: { b1: Vec2; b2: Vec2 }, e: Of, stub: boolean, key: Id | null) => {
     const dx = A.x - a.x, dy = A.y - a.y, l = Math.hypot(dx, dy), t = p.trunkTension * l, k = t * 0.6;
@@ -165,7 +163,7 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
   for (const st of stubs) {
     const i = count[st.role]++;
     const ang = p.stubAngle * Math.ceil((i + 1) / 2) * (i % 2 === 0 ? 1 : -1);
-    const of: Of = { role: st.role, k: kMax, hollow: false, dashed: true }, key = st.key ?? null;
+    const of: Of = { role: st.role, k: kMax, dashed: true }, key = st.key ?? null;
     if (st.role === 'source') incoming(add(A, mul(rot(mul(u, -1), ang), L)), NO_OFFSET, of, true, key);
     else if (st.role === 'target') outgoing(add(B, mul(rot(u, ang), L)), NO_OFFSET, of, true, key);
     else {

@@ -58,7 +58,7 @@ test('previewSplit : déplacer un groupe y fait entrer ses descendants, ses anc�
   // Every visible connection that ends on one of them (or is centred on one) is in the split, by its kind; no other is.
   const all = new Set([...split.items, ...split.groups]);
   visible.connections.forEach((vc, ci) => {
-    const touching = vc.ends.some((e) => all.has(e.item) || all.has(e.item2)) || (vc.center !== undefined && all.has(vc.center));
+    const touching = vc.ends.some((e) => all.has(e.item) || all.has(e.mask) || all.has(e.mask2)) || (vc.center !== undefined && all.has(vc.center));
     expect(split.complex.includes(ci), `connexion ${ci}`).toBe(touching && !isSimple(scene, vc));
     expect(split.simple.includes(ci), `connexion ${ci}`).toBe(touching && isSimple(scene, vc));
   });
@@ -128,9 +128,9 @@ test('aperçu : ce qui ne se fait pas en place est refusé sans rien changer (pa
 
 test('poignée de disposition : la disposition passe en surcharge, sans copier la scène ; une connexion simple se reconstruit', () => {
   const scene = buildScene(s, ids.plans.lobby, measure, P), cam = camAtTextPx(scene, 0, 16), shown = shownFor(scene, cam), before = contentOf(shown.inst);
-  const ci = shown.visible.connections.findIndex((vc) => vc.conns.length === 1 && vc.fade === 'none' && !isSimple(scene, vc) && vc.ends.length > 2);
+  const ci = shown.visible.connections.findIndex((vc) => vc.fade < 0 && !isSimple(scene, vc) && vc.ends.length > 2);
   expect(ci).toBeGreaterThanOrEqual(0);
-  const part = shown.visible.connections[ci].conns[0], m = shown.inst.markers[shown.inst.bundles.storage[shown.inst.bundleOf.storage[ci] * BUNDLE_INTS + BUNDLE_AT.marker]];
+  const part = shown.visible.connections[ci].part, m = shown.inst.markers[shown.inst.bundles.storage[shown.inst.bundleOf.storage[ci] * BUNDLE_INTS + BUNDLE_AT.marker]];
   const layouts: LayoutOverrides = new Map([[part, { handles: {}, marker: { x: m.pos.x + shown.inst.origin.x + 60, y: m.pos.y + shown.inst.origin.y - 30 } }]]);
   const split = layoutSplit(shown.visible, part);
   expect(patchPreview(shown, scene, split, P, layouts)).not.toBeNull();
@@ -144,7 +144,7 @@ test('poignée de disposition : la disposition passe en surcharge, sans copier l
   expect(contentOf(shown.inst)).toEqual(before);
   // A simple connection given a layout becomes a complex one: not in place.
   const simple = shown.visible.connections.findIndex((vc) => isSimple(scene, vc));
-  const sp = shown.visible.connections[simple].conns[0];
+  const sp = shown.visible.connections[simple].part;
   expect(patchPreview(shown, scene, layoutSplit(shown.visible, sp), P, new Map([[sp, { handles: {}, marker: { x: 0, y: 0 } }]]))).toBeNull();
   expect(contentOf(shown.inst)).toEqual(before);
 });
@@ -192,8 +192,8 @@ test('dépôt d’un aperçu : patchEdit réécrit aussi ce que l’aperçu avai
 
 test('une action pendant une poignée de disposition faite en place : le faisceau tiré revient à sa disposition, comme une reconstruction', () => {
   const st = copyOf(s), lobby = ids.plans.lobby, scene0 = buildScene(st, lobby, measure, P), cam = camAtTextPx(scene0, 0, 16), shown = shownFor(scene0, cam);
-  const ci = shown.visible.connections.findIndex((vc) => vc.conns.length === 1 && vc.fade === 'none' && !isSimple(scene0, vc) && vc.ends.length > 2);
-  const part = shown.visible.connections[ci].conns[0], split = layoutSplit(shown.visible, part);
+  const ci = shown.visible.connections.findIndex((vc) => vc.fade < 0 && !isSimple(scene0, vc) && vc.ends.length > 2);
+  const part = shown.visible.connections[ci].part, split = layoutSplit(shown.visible, part);
   expect(patchPreview(shown, scene0, split, P, new Map([[part, { handles: {}, marker: { x: 0, y: 0 }, angle: 1 }]]))).not.toBeNull();
   // A move of a drawn node that touches nothing of that bundle (Ctrl+Z of a move, a sync), done in place.
   const ends = new Set(shown.visible.connections[ci].ends.map((e) => e.item));

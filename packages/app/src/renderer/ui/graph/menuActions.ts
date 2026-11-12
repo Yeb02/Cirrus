@@ -25,7 +25,7 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
   const p = paramsRef.current, sel = selectionRef.current;
   // The menu may have stayed open across a rebuild: what it was opened on is found again by id (I9 of the review).
   const clicked = hit.kind === 'item' ? sc.byId.get(hit.id) ?? -1 : -1;
-  const line = hit.kind === 'connection' && hit.ids.length === 1 ? hit.ids[0] : null;
+  const line = hit.kind === 'connection' ? hit.id : null;
   const clickedId = clicked >= 0 ? sc.items[clicked].id : null;
   const targets = clickedId && sel.items.has(clickedId)
     ? [...sel.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; })

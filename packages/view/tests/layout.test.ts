@@ -13,7 +13,7 @@ beforeAll(() => {
   ({ s, ids } = fixture());
   sc = buildScene(s, ids.plans.lobby, measure, P);
   const visible = computeVisible(sc, buildIndex(sc, P), camAtTextPx(sc, 0, 16), P);
-  vc = visible.connections.find((c) => sc.connections[c.conns[0]].id === ids.connections.twoToTwo)!;
+  vc = visible.connections.find((c) => sc.connections[c.part].id === ids.connections.twoToTwo)!;
 });
 
 test('poignées d’une connexion sélectionnée : le marqueur, la rotation au-delà du tronc, deux poignées de Bézier par branche', () => {
@@ -66,7 +66,7 @@ test('une poignée se touche à sa taille à l’écran', () => {
 });
 
 test('aperçu : la scène avec la disposition d’une connexion remplacée, le reste partagé', () => {
-  const i = vc.conns[0];
+  const i = vc.part;
   const next = withLayout(sc, i, { angle: 0.5, handles: {} });
   expect(next.connections[i].layout).toEqual({ plan: ids.plans.lobby, connection: ids.connections.twoToTwo, angle: 0.5, handles: {} });
   expect(next.items).toBe(sc.items);

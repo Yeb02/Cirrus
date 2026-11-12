@@ -19,14 +19,14 @@ import {
 interface Rect { minX: number; maxX: number; minY: number; maxY: number }
 
 const ARROW: AttributeSpec[] = [
-  { name: 'aPosition', size: 2 }, { name: 'aPosition2', size: 2 }, { name: 'aOffset', size: 2 }, { name: 'aOffset2', size: 2 },
-  { name: 'aScale', size: 1 }, { name: 'aFill', size: 1 }, { name: 'aEnd0', size: 3 }, { name: 'aEnd1', size: 3 }, { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 },
+  { name: 'aPosition', size: 2 }, { name: 'aOffset', size: 2 }, { name: 'aScale', size: 1 }, { name: 'aFill', size: 1 }, { name: 'aEnd0', size: 3 },
+  { name: 'aEnd1', size: 3 }, { name: 'aFold', size: 2 }, { name: 'aConn', size: 1 }, { name: 'aMasks', size: 4 },
 ];
 const ENVELOPE: AttributeSpec[] = [
   { name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aAlpha', size: 1 }, { name: 'aOpen', size: 3 }, { name: 'aClosed', size: 3 }, { name: 'aFoldK', size: 1 },
   { name: 'aParentK', size: 1 },
 ];
-const MARKER: AttributeSpec[] = [{ name: 'aCenter', size: 2 }, { name: 'aCorner', size: 2 }, { name: 'aK', size: 1 }, { name: 'aConn', size: 1 }];
+const MARKER: AttributeSpec[] = [{ name: 'aCenter', size: 2 }, { name: 'aCorner', size: 2 }, { name: 'aK', size: 1 }, { name: 'aConn', size: 1 }, { name: 'aMasks', size: 4 }];
 const OUTLINE: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aNormal', size: 2 }, { name: 'aOuter', size: 1 }];
 const STAR: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aCorner', size: 2 }];
 const SKY: AttributeSpec[] = [{ name: 'aPosition', size: 2 }, { name: 'aWorld', size: 2 }, { name: 'aV', size: 1 }];
@@ -48,8 +48,8 @@ const envelopeAttributes = (e: EnvelopeMeshes): Record<string, Float32Array> => 
   aParentK: e.parentK.view(),
 });
 const glyphAttributes = (g: GlyphMeshes): Record<string, Float32Array> => ({
-  aPosition: g.position.view(), aPosition2: g.position2.view(), aOffset: g.offset.view(), aOffset2: g.offset2.view(), aScale: g.scale.view(),
-  aFill: g.fill.view(), aEnd0: g.end0.view(), aEnd1: g.end1.view(), aFold: g.fold.view(), aConn: g.conn.view(),
+  aPosition: g.position.view(), aOffset: g.offset.view(), aScale: g.scale.view(), aFill: g.fill.view(), aEnd0: g.end0.view(), aEnd1: g.end1.view(),
+  aFold: g.fold.view(), aConn: g.conn.view(), aMasks: g.masks.view(),
 });
 /** Past this many ranges rewritten in a buffer, one range from the first to the last is sent (Ruling R23: one call each). */
 const RANGES_MAX = 16;
@@ -78,7 +78,8 @@ const sameParts = (a: LayoutOverrides | undefined, b: LayoutOverrides | undefine
  * new scene and when the camera goes originShiftPx from the origin, and only the rows of the slots an action changed
  * otherwise. Previews and edits go through the texture (plan 3c task 9): a drag, a scale gesture or a layout handle
  * rewrites the texels of what moves and, in place in what is drawn, the complex bundles and titles that touch it, its
- * groups' envelopes drawn apart; an action that cannot have changed the visible set does the same. Draw order: sky,
+ * groups' envelopes drawn apart; an action that cannot have changed the visible set does the same. The groups' envelopes
+ * follow the texels' slots (EnvelopeTexture): the connections' masks read them (spec 8.5, point 7). Draw order: sky,
  * stars, envelopes, simple ribbons, complex ribbons, simple glyphs, complex glyphs, boxes, rings, markers, titles. A
  * lost context draws nothing; once restored, everything is made and built again.
  */
@@ -415,7 +416,7 @@ export class PlanRenderer {
     const front = this.frames.front;
     if (this.hot >= 0 || !front || this.selection.connections.size === 0) return this.hot;
     // Among what is drawn, by the scene it was built for.
-    return front.visible.connections.findIndex((vc) => vc.conns.some((c) => this.selection.connections.has(front.scene.ids[c])));
+    return front.visible.connections.findIndex((vc) => this.selection.connections.has(front.scene.ids[vc.part]));
   }
 
   /**
@@ -720,7 +721,7 @@ export class PlanRenderer {
 
   /** Bundle markers: the complex bundles' with several members; while a connection is drawn, every core (spec 11.1). */
   private updateMarkers(): void {
-    const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), index = new IndexList();
+    const center = new FloatList(), corner = new FloatList(), k = new FloatList(), conn = new FloatList(), masks = new FloatList(), index = new IndexList();
     // The cores of what is drawn, read in the scene its instances were built for (an action may have compacted the
     // scene since: the slots would be another's).
     const front = this.frames.front, cores = front ? markerCores(front.scene, front.inst, this.cam.zoom, this.p, this.allCores) : [];
@@ -730,11 +731,13 @@ export class PlanRenderer {
         corner.push2(QUAD[q * 2], QUAD[q * 2 + 1]);
         k.push1(c.kMax);
         conn.push1(c.conn);
+        masks.push2(c.masks[0], c.masks[1]);
+        masks.push2(c.masks[2], c.masks[3]);
       }
       const v = j * 4;
       index.push(v, v + 1, v + 2, v, v + 2, v + 3);
     });
-    this.meshes.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view() }, index.view());
+    this.meshes.marker.update({ aCenter: center.view(), aCorner: corner.view(), aK: k.view(), aConn: conn.view(), aMasks: masks.view() }, index.view());
   }
 
   private updateBackground(rebuilt: boolean): void {

@@ -1,6 +1,6 @@
 import {
-  DOT_SIDES, type FontData, ITEM_BADGE, ITEM_STYLE, type RenderParams, type Rgb, SIMPLE_DASHED_A, SIMPLE_DASHED_B, SIMPLE_FADE_OUT, SIMPLE_ROLE_BITS, SLOT_ROW_SHIFT,
-  TEXELS_PER_SLOT,
+  DOT_SIDES, ENVELOPE_TEXTURE_WIDTH, type FontData, ITEM_BADGE, ITEM_STYLE, type RenderParams, type Rgb, SIMPLE_DASHED_A, SIMPLE_DASHED_B, SIMPLE_FADE_OUT,
+  SIMPLE_ROLE_BITS, SLOT_ROW_SHIFT, TEXELS_PER_SLOT,
 } from '@cirrus/view';
 import { Program } from '../gl/program.ts';
 
@@ -38,8 +38,8 @@ float foldT(float k) { return k > 1e8 ? 0.0 : 1.0 - smoothRange(uFold0, uFold1, 
 /** No group: the sentinel step for foldT. */
 export const NO_GROUP = 1e9;
 
-/** The texture unit of the MSDF atlas, and of the item texture. */
-export const ATLAS_UNIT = 0, ITEMS_UNIT = 1;
+/** The texture unit of the MSDF atlas, and of the item texture; the envelopes' index and edges take the two next ones. */
+export const ATLAS_UNIT = 0, ITEMS_UNIT = 1, ENVELOPE_INDEX_UNIT = 2, ENVELOPE_EDGES_UNIT = 3;
 
 /** A simple connection's glyph vertices per branch (a dot's triangles; an arrow uses six), and per instance. */
 const SIMPLE_GLYPH_PER_BRANCH = 3 * DOT_SIDES;
@@ -52,6 +52,36 @@ uniform highp sampler2D uItems;
 vec4 itemA(int s) { return texelFetch(uItems, ivec2((s & ${(1 << SLOT_ROW_SHIFT) - 1}) * ${TEXELS_PER_SLOT}, s >> ${SLOT_ROW_SHIFT}), 0); }
 // k, the parent's maxChildK (1e9: none), its own as a group (1e9 otherwise), flags (instances.ts, ITEM_*)
 vec4 itemB(int s) { return texelFetch(uItems, ivec2((s & ${(1 << SLOT_ROW_SHIFT) - 1}) * ${TEXELS_PER_SLOT} + 1, s >> ${SLOT_ROW_SHIFT}), 0); }
+`;
+
+// The masks of the connections (spec 8.5, point 7 of 2026-11-12), geometry/mask.ts's twin: the fill of a group folding
+// over an end, opaque, laid over the connection at the opacity of its fold — the connection's own opacity times
+// 1 − s · coverage, s = its fold × (1 − its parent's fold), coverage its envelope's (padded hull, then a ring of
+// featherOpenPx to featherClosedPx). Each group's envelope is a list of edges (nx, ny, c), read from the envelope
+// textures (render/envelopeTexture.ts) by slot. Needs ITEMS. A mask list is an ivec4 of slots, −1 for none.
+const MASK = /* glsl */ `
+uniform highp sampler2D uEnvIndex; uniform highp sampler2D uEnvEdges; uniform float uFeatherOpen; uniform float uFeatherClosed;
+vec4 envIndex(int s) { return texelFetch(uEnvIndex, ivec2(s & ${ENVELOPE_TEXTURE_WIDTH - 1}, s >> ${Math.log2(ENVELOPE_TEXTURE_WIDTH)}), 0); }
+vec4 envEdge(int i) { return texelFetch(uEnvEdges, ivec2(i & ${ENVELOPE_TEXTURE_WIDTH - 1}, i >> ${Math.log2(ENVELOPE_TEXTURE_WIDTH)}), 0); }
+// The signed distance from p to group g's padded envelope (negative inside): max over its edges of n · p − c.
+float envelopeDistance(int g, vec2 p) {
+  vec4 h = envIndex(g);
+  int start = int(h.x), n = int(h.y);
+  if (n == 0) return 1e30;
+  float d = -1e30;
+  for (int i = 0; i < n; i++) { vec4 e = envEdge(start + i); d = max(d, dot(e.xy, p) - e.z); }
+  return d;
+}
+float maskStrength(int g) { if (g < 0) return 0.0; vec4 b = itemB(g); return foldT(b.z) * (1.0 - foldT(b.y)); }
+// The distance out of the envelope in feathers: its coverage is clamp(1 − reach, 0, 1).
+float maskReach(int g, vec2 p) {
+  if (g < 0) return 1e9;
+  float feather = mix(uFeatherOpen, uFeatherClosed, foldT(itemB(g).z));
+  return envelopeDistance(g, p) * uZoom / max(feather, 1e-6);
+}
+vec4 maskStrengths(ivec4 m) { return vec4(maskStrength(m.x), maskStrength(m.y), maskStrength(m.z), maskStrength(m.w)); }
+vec4 maskReaches(ivec4 m, vec2 p) { return vec4(maskReach(m.x, p), maskReach(m.y, p), maskReach(m.z, p), maskReach(m.w, p)); }
+float maskAlpha(vec4 s, vec4 reach) { vec4 k = 1.0 - s * clamp(1.0 - reach, 0.0, 1.0); return k.x * k.y * k.z * k.w; }
 `;
 
 // Cubics, evaluated as geometry/ribbon.ts's sampleBranch samples them.
@@ -78,17 +108,21 @@ float arcTo(vec2 p0, vec2 b1, vec2 b2, vec2 p3, int i, int n) {
 `;
 
 // The ribbon drawn along a cubic: two vertices per point, pushed by half the on-screen width plus one pixel of
-// antialiasing, as the CPU ribbons were (a triangle strip: point i's two sides at vertices 2i and 2i + 1).
+// antialiasing, as the CPU ribbons were (a triangle strip: point i's two sides at vertices 2i and 2i + 1). Its masks'
+// reaches at each vertex (linear along an edge of an envelope, so interpolated exactly across it), their strengths.
 const RIBBON_VERTEX = /* glsl */ `
-out float vAlpha; out float vD; out float vHalf; out float vDist;
-void ribbonVertex(vec2 pos, vec2 n, float side, float scale, float dist, vec3 e0, vec3 e1, vec2 fold, float conn) {
+out float vAlpha; out float vD; out float vHalf; out float vDist; out vec4 vMaskReach; flat out vec4 vMaskStrength;
+void ribbonVertex(vec2 pos, vec2 n, float side, float scale, float dist, vec3 e0, vec3 e1, vec2 fold, float conn, ivec4 masks) {
   float w = widthPx(scale, conn);
   float half_ = 0.5 * w + 1.0;
   vAlpha = connectionAlpha(scale, e0, e1, fold, conn);
   vD = side * half_;
   vHalf = 0.5 * w;
   vDist = dist < 0.0 ? -1.0 : dist * uZoom;
-  gl_Position = project(pos + n * side * half_ / uZoom);
+  vec2 at = pos + n * side * half_ / uZoom;
+  vMaskStrength = maskStrengths(masks);
+  vMaskReach = maskReaches(masks, at);
+  gl_Position = project(at);
 }
 `;
 
@@ -160,7 +194,6 @@ float endpointFade(vec3 e) {
   vec2 d = max(max(uScreen.xy - e.xy, e.xy - uScreen.zw), 0.0);
   return max(0.0, 1.0 - max(0.0, length(d) - e.z) / max(uFadeWorld, 1e-9));
 }
-float slideT(vec2 fold) { return fold.x == 1.0 ? foldT(fold.y) : 0.0; }
 float widthPx(float scale, float conn) {
   float raw = uWidthBase * scale * uZoom;
   return clamp(raw, uWidthMin, uWidthMax) + (conn == uHot ? uHoverBoost : 0.0);
@@ -175,13 +208,16 @@ float connectionAlpha(float scale, vec3 e0, vec3 e1, vec2 fold, float conn) {
 
 const connection = (p: RenderParams): Values => ({
   uWidthBase: p.widthBasePx, uWidthMin: p.widthMinPx, uWidthMax: p.widthMaxPx, uHoverBoost: p.hoverBoostPx, uAlpha: p.connectionAlpha,
-  uLineColor: p.connectionColor, uAbsent: p.absentColor, uSky: p.skyColor, uDash: p.dashPx,
+  uLineColor: p.connectionColor, uAbsent: p.absentColor, uDash: p.dashPx,
 });
 
-/** A ribbon's coverage: one pixel of antialiasing on its sides; dashed in the absent colour along a stub. */
+/**
+ * A ribbon's coverage: one pixel of antialiasing on its sides; dashed in the absent colour along a stub; under the
+ * fills of its masks (MASK's maskAlpha).
+ */
 const RIBBON_FRAGMENT = /* glsl */ `#version 300 es
   precision highp float;
-  in float vAlpha; in float vD; in float vHalf; in float vDist;
+  in float vAlpha; in float vD; in float vHalf; in float vDist; in vec4 vMaskReach; flat in vec4 vMaskStrength;
   uniform vec3 uLineColor; uniform vec3 uAbsent; uniform vec2 uDash;
   out vec4 finalColor;
   void main() {
@@ -191,20 +227,22 @@ const RIBBON_FRAGMENT = /* glsl */ `#version 300 es
       if (mod(vDist, uDash.x + uDash.y) > uDash.x) discard;
       c = uAbsent;
     }
-    finalColor = vec4(c, 1.0) * vAlpha * cov;
+    vec4 k = 1.0 - vMaskStrength * clamp(1.0 - vMaskReach, 0.0, 1.0);
+    finalColor = vec4(c, 1.0) * vAlpha * cov * (k.x * k.y * k.z * k.w);
   }`;
 
 /**
  * A simple connection's two ribbons, one instance (instances.ts, SIMPLE_FIELDS: aEnds = slot a, slot b, flags, visible
- * index; aFade = the fading group's slot): one strip per branch, 2 (curveSegments + 1) vertices each, joined by two
- * degenerate vertices. Its width and fade are the CPU ribbons'.
+ * index; aFade = the folding group it fades out with; aMasks = the groups laid over it): one strip per branch,
+ * 2 (curveSegments + 1) vertices each, joined by two degenerate vertices. Its width and fade are the CPU ribbons'.
  */
 const SIMPLE_RIBBON = {
   vertex: /* glsl */ `#version 300 es
-  in ivec4 aEnds; in int aFade;
+  in ivec4 aEnds; in int aFade; in ivec4 aMasks;
   ${COMMON}
   ${CONNECTION}
   ${ITEMS}
+  ${MASK}
   ${CUBIC}
   ${RIBBON_VERTEX}
   ${SIMPLE}
@@ -220,7 +258,7 @@ const SIMPLE_RIBBON = {
     float k = s.atStart ? s.kNode + (s.kMarker - s.kNode) * t : s.kMarker + (s.kNode - s.kMarker) * t;
     float dist = dashedEnd(aEnds.z, s.end) ? arcTo(s.p0, s.b1, s.b2, s.p3, i, n) : -1.0;
     ribbonVertex(cubic(s.p0, s.b1, s.b2, s.p3, t), normalAt(s.p0, s.b1, s.b2, s.p3, i, n), (j & 1) == 0 ? 1.0 : -1.0, pow(uFactor, k), dist,
-      vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), simpleFold(aEnds.z, aFade), float(aEnds.w));
+      vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), simpleFold(aEnds.z, aFade), float(aEnds.w), aMasks);
   }`,
   fragment: RIBBON_FRAGMENT,
 };
@@ -232,13 +270,14 @@ const SIMPLE_RIBBON = {
  */
 const SIMPLE_GLYPH = {
   vertex: /* glsl */ `#version 300 es
-  in ivec4 aEnds; in int aFade;
+  in ivec4 aEnds; in int aFade; in ivec4 aMasks;
   out float vAlpha; out vec3 vColor;
   uniform vec3 uLineColor; uniform vec3 uAbsent;
   uniform float uArrowLength; uniform float uArrowHalfWidth; uniform float uArrowNotch; uniform float uDotRadius;
   ${COMMON}
   ${CONNECTION}
   ${ITEMS}
+  ${MASK}
   ${CUBIC}
   ${SIMPLE}
   void main() {
@@ -267,9 +306,11 @@ const SIMPLE_GLYPH = {
     }
     float sNode = pow(uFactor, s.kNode), conn = float(aEnds.w);
     vec2 fold = simpleFold(aEnds.z, aFade);
-    vAlpha = connectionAlpha(sNode, vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), fold, conn);
+    vec2 node = s.atStart ? s.p0 : s.p3;
+    // Masked as its ribbon is at the node end.
+    vAlpha = connectionAlpha(sNode, vec3(a0.xy, max(a0.z, a0.w)), vec3(b0.xy, max(b0.z, b0.w)), fold, conn) * maskAlpha(maskStrengths(aMasks), maskReaches(aMasks, node));
     vColor = dashedEnd(aEnds.z, s.end) ? uAbsent : uLineColor;
-    gl_Position = project((s.atStart ? s.p0 : s.p3) + off * widthPx(sNode, conn) / uZoom);
+    gl_Position = project(node + off * widthPx(sNode, conn) / uZoom);
   }`,
   fragment: /* glsl */ `#version 300 es
   precision highp float;
@@ -278,50 +319,44 @@ const SIMPLE_GLYPH = {
 };
 
 /**
- * A complex bundle's branch or trunk, one instance (instances.ts, CURVE_FIELDS): its cubic open and closed, slid from
- * one to the other as the level folds; the scale from the step at t = 0 to the step at t = 1; dashed along a stub.
+ * A complex bundle's branch or trunk, one instance (instances.ts, CURVE_FIELDS): its cubic; the scale from the step at
+ * t = 0 to the step at t = 1; dashed along a stub; under the fills of its masks.
  */
 const CURVE = {
   vertex: /* glsl */ `#version 300 es
-  in vec4 aOpen0; in vec4 aOpen1; in vec4 aClosed0; in vec4 aClosed1; in vec4 aWidth; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold;
+  in vec4 aOpen0; in vec4 aOpen1; in vec4 aWidth; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold; in vec4 aMasks;
   ${COMMON}
   ${CONNECTION}
+  ${ITEMS}
+  ${MASK}
   ${CUBIC}
   ${RIBBON_VERTEX}
   void main() {
     int n = uSegments, j = gl_VertexID, i = j >> 1;
     float t = float(i) / float(n);
     vec2 pos = cubic(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, t), nrm = normalAt(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, i, n);
-    if (aFold.x == 1.0) {
-      float s = slideT(aFold);
-      pos = mix(pos, cubic(aClosed0.xy, aClosed0.zw, aClosed1.xy, aClosed1.zw, t), s);
-      nrm = mix(nrm, normalAt(aClosed0.xy, aClosed0.zw, aClosed1.xy, aClosed1.zw, i, n), s);
-      nrm = length(nrm) > 1e-6 ? normalize(nrm) : vec2(0.0, 1.0);
-    }
     float dist = aWidth.z > 0.5 ? arcTo(aOpen0.xy, aOpen0.zw, aOpen1.xy, aOpen1.zw, i, n) : -1.0;
-    ribbonVertex(pos, nrm, (j & 1) == 0 ? 1.0 : -1.0, pow(uFactor, aWidth.x + (aWidth.y - aWidth.x) * t), dist, aEnd0, aEnd1, aFold, aWidth.w);
+    ribbonVertex(pos, nrm, (j & 1) == 0 ? 1.0 : -1.0, pow(uFactor, aWidth.x + (aWidth.y - aWidth.x) * t), dist, aEnd0, aEnd1, aFold, aWidth.w, ivec4(aMasks));
   }`,
   fragment: RIBBON_FRAGMENT,
 };
 
-/** Arrows, dots and hollow insides, sized in line widths at the node end (spec 8.5: the arrow follows the width). */
+/** Arrows and dots, sized in line widths at the node end (spec 8.5: the arrow follows the width), masked there. */
 const ARROW = {
   vertex: /* glsl */ `#version 300 es
-  in vec2 aPosition; in vec2 aPosition2; in vec2 aOffset; in vec2 aOffset2;
-  in float aScale; in float aFill; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold; in float aConn;
+  in vec2 aPosition; in vec2 aOffset; in float aScale; in float aFill; in vec3 aEnd0; in vec3 aEnd1; in vec2 aFold; in float aConn; in vec4 aMasks;
   out float vAlpha; out vec3 vColor;
-  uniform vec3 uLineColor; uniform vec3 uAbsent; uniform vec3 uSky;
+  uniform vec3 uLineColor; uniform vec3 uAbsent;
   ${COMMON}
   ${CONNECTION}
+  ${ITEMS}
+  ${MASK}
   void main() {
-    float s = slideT(aFold);
     float w = widthPx(aScale, aConn);
-    vAlpha = connectionAlpha(aScale, aEnd0, aEnd1, aFold, aConn);
-    vColor = aFill == 1.0 ? uLineColor : aFill == 2.0 ? uAbsent : uSky;
-    // A hollow inside covers the arrow fully: the connection's own transparency does not apply to it.
-    if (aFill == 0.0 || aFill == 3.0) vAlpha = min(1.0, vAlpha / max(uAlpha, 1e-6));
-    if (aFill == 3.0) vAlpha *= step(0.5, s);
-    gl_Position = project(mix(aPosition, aPosition2, s) + mix(aOffset, aOffset2, s) * w / uZoom);
+    ivec4 m = ivec4(aMasks);
+    vAlpha = connectionAlpha(aScale, aEnd0, aEnd1, aFold, aConn) * maskAlpha(maskStrengths(m), maskReaches(m, aPosition));
+    vColor = aFill == 2.0 ? uAbsent : uLineColor;
+    gl_Position = project(aPosition + aOffset * w / uZoom);
   }`,
   fragment: /* glsl */ `#version 300 es
   precision highp float;
@@ -410,16 +445,19 @@ const BOX = {
   }`,
 };
 
-/** Bundle markers: discs of markerRadiusPx, fading with the connection titles (spec 8.2, 8.5). */
+/** Bundle markers: discs of markerRadiusPx, fading with the connection titles (spec 8.2, 8.5), masked as their bundle. */
 const MARKER = {
   vertex: /* glsl */ `#version 300 es
-  in vec2 aCenter; in vec2 aCorner; in float aK; in float aConn;
+  in vec2 aCenter; in vec2 aCorner; in float aK; in float aConn; in vec4 aMasks;
   out vec2 vLocal; out float vAlpha;
   uniform float uRadiusPx; uniform float uHot; uniform float uTitle0; uniform float uTitle1;
   ${COMMON}
+  ${ITEMS}
+  ${MASK}
   void main() {
     vLocal = aCorner * (uRadiusPx + 1.5);
-    vAlpha = aConn == uHot ? 1.0 : smoothRange(uTitle0, uTitle1, textPx(aK));
+    ivec4 m = ivec4(aMasks);
+    vAlpha = (aConn == uHot ? 1.0 : smoothRange(uTitle0, uTitle1, textPx(aK))) * maskAlpha(maskStrengths(m), maskReaches(m, aCenter));
     gl_Position = project(aCenter + vLocal / uZoom);
   }`,
   fragment: /* glsl */ `#version 300 es
@@ -575,7 +613,7 @@ export const connectionPrograms = (pr: Programs): Program[] => [pr.simpleRibbon,
 
 /**
  * The uniforms the settings give (set once, and again when they change); the atlas is read from texture unit
- * ATLAS_UNIT, the item texture from ITEMS_UNIT.
+ * ATLAS_UNIT, the item texture from ITEMS_UNIT, the envelopes from ENVELOPE_INDEX_UNIT and ENVELOPE_EDGES_UNIT.
  */
 export function setParamUniforms(pr: Programs, p: RenderParams, font: FontData): void {
   const l = lod(p);
@@ -586,7 +624,10 @@ export function setParamUniforms(pr: Programs, p: RenderParams, font: FontData):
     setAll(x, { uAnchorGap: p.anchorGap, uTension: p.trunkTension, uCullAlpha: p.ribbonCullAlpha, uHeadroom: p.curveZoomHeadroom });
   }
   setAll(pr.simpleGlyph, { uArrowLength: p.arrowLength, uArrowHalfWidth: p.arrowHalfWidth, uArrowNotch: p.arrowNotch, uDotRadius: p.dotRadius });
-  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.box, pr.text]) setAll(x, { uItems: ITEMS_UNIT });
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.marker, pr.box, pr.text]) setAll(x, { uItems: ITEMS_UNIT });
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.marker]) {
+    setAll(x, { uEnvIndex: ENVELOPE_INDEX_UNIT, uEnvEdges: ENVELOPE_EDGES_UNIT, uFeatherOpen: p.featherOpenPx, uFeatherClosed: p.featherClosedPx });
+  }
   setAll(pr.envelope, { uFeatherOpen: p.featherOpenPx, uFeatherClosed: p.featherClosedPx });
   setAll(pr.box, {
     uMinNodePx: p.minNodePx, uRadius: p.boxRadius, uBoxHalf: p.boxWidth / 2, uBadgePx: p.badgeRadiusPx, uBorderPx: p.boxBorderPx,

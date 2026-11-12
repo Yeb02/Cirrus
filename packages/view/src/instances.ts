@@ -98,10 +98,11 @@ export function texelSlots(prev: PlanScene, scene: PlanScene, changes: SceneChan
 // ———— Instances
 
 /**
- * A simple connection's instance, as ints: its two items' slots, its flags, its visible index (the hover), and the
- * fading group's slot for an 'out' fade (−1 otherwise). The renderer's attributes are `a` + each field's name.
+ * A simple connection's instance, as ints: its two items' slots, its flags, its visible index (the hover); the folding
+ * group it fades out with (−1 otherwise); the groups whose fill is laid over it (masksOf). The renderer's attributes are
+ * `a` + each field's name.
  */
-export const SIMPLE_FIELDS = [['ends', 4], ['fade', 1]] as const;
+export const SIMPLE_FIELDS = [['ends', 4], ['fade', 1], ['masks', 4]] as const;
 export const SIMPLE_INTS: number = SIMPLE_FIELDS.reduce((n, [, size]) => n + size, 0);
 /**
  * Flags of a simple connection: each end's role code (source 0, target 1, associate 2) in SIMPLE_ROLE_BITS bits, a's
@@ -111,12 +112,13 @@ export const SIMPLE_ROLE_BITS = 2, SIMPLE_DASHED_A = 16, SIMPLE_DASHED_B = 32, S
 const ROLE_CODE = { source: 0, target: 1, associate: 2 } as const;
 
 /**
- * A complex bundle's branch (or trunk) instance, as floats: the cubic with the fading level open (p0, b1 then b2, p3)
- * and closed (the same without a slide); width: the step at t = 0 and t = 1 (the scale goes from one to the other),
- * dashed (1 or 0), the visible index; the two endpoints of the off-screen fade (x, y, half extent); fold (mode, foldK).
- * All relative to the origin. Its glyphs are the `glyphs` mesh.
+ * A complex bundle's branch (or trunk) instance, as floats: the cubic (p0, b1 then b2, p3); width: the step at t = 0
+ * and t = 1 (the scale goes from one to the other), dashed (1 or 0), the visible index; the two endpoints of the
+ * off-screen fade (x, y, half extent); fold (2 when it fades out with a folding group, else 0; that group's maxChildK);
+ * the groups whose fill is laid over it (masksOf, slots, −1 for none). All relative to the origin. Its glyphs are the
+ * `glyphs` mesh.
  */
-export const CURVE_FIELDS = [['open0', 4], ['open1', 4], ['closed0', 4], ['closed1', 4], ['width', 4], ['end0', 3], ['end1', 3], ['fold', 2]] as const;
+export const CURVE_FIELDS = [['open0', 4], ['open1', 4], ['width', 4], ['end0', 3], ['end1', 3], ['fold', 2], ['masks', 4]] as const;
 type CurveField = (typeof CURVE_FIELDS)[number][0];
 const curveStarts = {} as Record<CurveField, number>;
 let curveFloats = 0;
@@ -124,7 +126,32 @@ for (const [f, size] of CURVE_FIELDS) { curveStarts[f] = curveFloats; curveFloat
 export const CURVE_AT: Readonly<Record<CurveField, number>> = curveStarts;
 export const CURVE_FLOATS = curveFloats;
 
-interface MarkerAt extends CoreAt { multi: boolean }
+interface MarkerAt extends CoreAt { multi: boolean; masks: number[] }
+
+/** The groups a curve can be masked by (spec 8.5, point 7): the size of an ivec4 in the shaders. */
+export const MASKS = 4;
+
+/**
+ * The groups whose fill is laid over a curve of `vc` (spec 8.5, point 7), MASKS at most, written at out[at..at + MASKS),
+ * −1 past them. For the branch of end `own`: that end's two (VisibleEnd.mask, mask2) first, then the other ends' highest,
+ * then their second ones; for a trunk, a stub's branch, a simple connection or a marker (`own` −1): every end's highest,
+ * then their second ones. A simple connection has two ends: all of its masks fit. Past MASKS (a bundle whose members sit
+ * in more than four folding groups), the ones left out are other ends': a branch crossing such a group is drawn over its
+ * fill there, as a connection that only passes over it — its own end is always hidden.
+ */
+export function masksOf(vc: VisibleConnection, own: number, out: { [i: number]: number }, at: number): void {
+  let n = 0;
+  const push = (g: number) => {
+    if (g < 0 || n === MASKS) return;
+    for (let k = 0; k < n; k++) if (out[at + k] === g) return;
+    out[at + n++] = g;
+  };
+  const ends = vc.ends;
+  if (own >= 0) { push(ends[own].mask); push(ends[own].mask2); }
+  for (const e of ends) push(e.mask);
+  for (const e of ends) push(e.mask2);
+  for (; n < MASKS; n++) out[at + n] = -1;
+}
 /** A part's layout standing in for the plan's own (a handle being dragged, spec 8.5), by part slot. */
 export type LayoutOverrides = ReadonlyMap<number, Omit<ConnectionLayout, 'plan' | 'connection'>>;
 interface StubAt { conn: number; stub: number; pos: Vec2; title: string }
@@ -223,17 +250,17 @@ const newWork = (
 });
 
 /**
- * A simple connection: two ends on boxes (no group, closed or not), no stub, centre nor layout (its own, or one in
- * `layouts`), no slide; its curves are computed in the vertex shaders from its two items' texels (simpleBranches is
- * their TS twin).
+ * A simple connection: two ends on boxes (no group node; the members of a closed group are boxes too, hidden under its
+ * fill), no stub, centre nor layout (its own, or one in `layouts`); its curves are computed in the vertex shaders from
+ * its two items' texels (simpleBranches is their TS twin).
  */
 export function isSimple(scene: PlanScene, vc: VisibleConnection, layouts?: LayoutOverrides): boolean {
   const ends = vc.ends;
-  if (ends.length !== 2 || vc.fade === 'slide' || vc.stubs.length > 0 || vc.center !== undefined) return false;
-  const a = ends[0], b = ends[1], conns = vc.conns;
-  if (a.item === b.item || a.hollow || b.hollow || conns.length !== 1) return false;
+  if (ends.length !== 2 || vc.stubs.length > 0 || vc.center !== undefined) return false;
+  const a = ends[0], b = ends[1];
+  if (a.item === b.item) return false;
   const items = scene.items;
-  return items[a.item].kind !== 'group' && items[b.item].kind !== 'group' && scene.layout[conns[0]] === undefined && !layouts?.has(conns[0]);
+  return items[a.item].kind !== 'group' && items[b.item].kind !== 'group' && scene.layout[vc.part] === undefined && !layouts?.has(vc.part);
 }
 
 /** The zoom under which a connection whose largest step is kTop is not drawn (ribbonCullAlpha at zoom × curveZoomHeadroom). */
@@ -264,7 +291,7 @@ export function buildInstances(
   inst.origin = origin;
   inst.revealZoom = Infinity;
   for (const l of [inst.bundles, inst.bundleOf, inst.groupTitles, inst.titleGlyphs, inst.titled]) l.clear();
-  const items = scene.items, connections = visible.connections, n = connections.length, titles = scene.titles;
+  const connections = visible.connections, n = connections.length, titles = scene.titles;
   const w = newWork(scene, visible, cam, origin, p, font, sides, layouts);
   inst.work = w;
   inst.pending = true;
@@ -280,12 +307,7 @@ export function buildInstances(
   for (let ci = 0; ci < n; ci++) {
     const vc = connections[ci];
     if (!isSimple(scene, vc, layouts)) { w.queue.push(ci); continue; }
-    const a = vc.ends[0], b = vc.ends[1];
-    let fade = -1;
-    if (vc.fade === 'out') {
-      // The fading level: the end's lifted group of the largest maxChildK (vc.foldK).
-      for (const e of vc.ends) if (e.item2 !== e.item && (fade < 0 || items[e.item2].maxChildK! > items[fade].maxChildK!)) fade = e.item2;
-    }
+    const a = vc.ends[0], b = vc.ends[1], fade = vc.fade;
     const o = simple.extend(SIMPLE_INTS);
     if (o + SIMPLE_INTS > d.length) d = simple.storage;
     d[o] = a.item;
@@ -293,7 +315,8 @@ export function buildInstances(
     d[o + 2] = ROLE_CODE[a.role] | (ROLE_CODE[b.role] << SIMPLE_ROLE_BITS) | (a.dashed ? SIMPLE_DASHED_A : 0) | (b.dashed ? SIMPLE_DASHED_B : 0) | (fade >= 0 ? SIMPLE_FADE_OUT : 0);
     d[o + 3] = ci;
     d[o + 4] = fade;
-    if (titles[vc.conns[0]] !== '') { w.titled.push(ci); inst.titled.push1(ci); }
+    masksOf(vc, -1, d, o + 5);
+    if (titles[vc.part] !== '') { w.titled.push(ci); inst.titled.push1(ci); }
   }
   if (font) inst.revealZoom = Math.min(inst.revealZoom, appendItemTitles(inst.texts, scene, visible, cam, p, font, (g) => paddedOf(w, g), inst.groupTitles));
   inst.itemTexts = inst.texts.length;
@@ -404,16 +427,18 @@ export function placeTitlesAnew(inst: Instances, scene: PlanScene, visible: Visi
  * draws it at `zoom`. `scene` is the one the instances were built for: their slots are its own (a scene updated since,
  * compacted, holds others).
  */
-export function markerCores(scene: PlanScene, inst: Instances, zoom: number, p: RenderParams, all: boolean): { x: number; y: number; kMax: number; conn: number }[] {
-  const out: { x: number; y: number; kMax: number; conn: number }[] = [];
-  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn });
+export function markerCores(
+  scene: PlanScene, inst: Instances, zoom: number, p: RenderParams, all: boolean,
+): { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number> }[] {
+  const out: { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number> }[] = [];
+  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn, masks: m.masks });
   if (!all) return out;
   const s = inst.simple.view(), o = inst.origin, items = scene.items;
   for (let q = 0; q < s.length; q += SIMPLE_INTS) {
     const a = items[s[q]], b = items[s[q + 1]], kMax = Math.max(a.k, b.k);
     if (zoom < visibleFrom(kMax, p)) continue;
     const m = simpleMarker(a, b);
-    out.push({ x: m.x - o.x, y: m.y - o.y, kMax, conn: s[q + 3] });
+    out.push({ x: m.x - o.x, y: m.y - o.y, kMax, conn: s[q + 3], masks: s.subarray(q + 5, q + 5 + MASKS) });
   }
   return out;
 }
@@ -497,7 +522,6 @@ function appendComplex(inst: Instances, w: Work, ci: number): void {
 /** A complex bundle's geometry, and what it writes: curve instances, glyph vertices, stubs. */
 interface Complex {
   open: BundleGeometry;
-  closed: BundleGeometry | null;
   /** The two endpoints nearest the camera (x, y, half extent), relative to the origin. */
   e0: { x: number; y: number; e: number };
   e1: { x: number; y: number; e: number };
@@ -509,18 +533,13 @@ interface Complex {
 /** Visible connection ci's bundle as it is drawn, or null when too thin at the deepest zoom a rebuild serves (w.cullFrom). */
 function complexOf(w: Work, ci: number): Complex | null {
   const { scene, visible, cam, p } = w, items = scene.items, vc = visible.connections[ci];
-  const slide = vc.fade === 'slide';
-  let kOpen = vc.ends.length > 0 ? -Infinity : 0, kClosed = slide && vc.ends.length === 0 ? 0 : -Infinity;
-  for (const e of vc.ends) {
-    if (items[e.item].k > kOpen) kOpen = items[e.item].k;
-    if (slide && items[e.item2].k > kClosed) kClosed = items[e.item2].k;
-  }
+  let kTop = vc.ends.length > 0 ? -Infinity : 0;
+  for (const e of vc.ends) if (items[e.item].k > kTop) kTop = items[e.item].k;
   // Bundles mostly share their largest step: its threshold is computed again only when it changes.
-  const kTop = Math.max(kOpen, kClosed);
   if (kTop !== w.cullK) { w.cullK = kTop; w.cullFrom = visibleFrom(kTop, p); }
   if (cam.zoom < w.cullFrom) return null;
-  const o = w.origin, layout = w.layouts && vc.conns.length === 1 ? w.layouts.get(vc.conns[0]) : undefined;
-  const open = bundleFor(scene, vc, p, o, layout, false, w.hulls), closed = slide ? bundleFor(scene, vc, p, o, layout, true, w.hulls) : null;
+  const o = w.origin, layout = w.layouts?.get(vc.part);
+  const open = bundleFor(scene, vc, p, o, layout, w.hulls);
   // The two endpoints nearest the camera carry the off-screen fade (spec 8.5); a far part: its node and its centre. The
   // first two of a stable sort by distance, in one scan.
   const cx = cam.x - o.x, cy = cam.y - o.y, n = vc.ends.length + (vc.center !== undefined ? 1 : 0);
@@ -533,7 +552,7 @@ function complexOf(w: Work, ci: number): Complex | null {
   const e0 = end(i0), e1 = i1 >= 0 ? end(i1) : e0;
   let stubs = 0;
   for (const b of open.branches) if (b.stub) stubs++;
-  return { open, closed, e0, e1, curves: (open.trunk ? 1 : 0) + open.branches.length, glyphs: bundleGlyphCount(open, closed), stubs };
+  return { open, e0, e1, curves: (open.trunk ? 1 : 0) + open.branches.length, glyphs: bundleGlyphCount(open), stubs };
 }
 
 /**
@@ -541,19 +560,20 @@ function complexOf(w: Work, ci: number): Complex | null {
  * (rewriteBundles checks them).
  */
 function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1): void {
-  const vc = w.visible.connections[ci], { open, closed, e0, e1 } = c, b = inst.bundles.storage, r = row * BUNDLE_INTS;
-  const mode = vc.fade === 'slide' ? 1 : vc.fade === 'out' ? 2 : 0, foldK = Number.isFinite(vc.foldK) ? vc.foldK : 0;
+  const vc = w.visible.connections[ci], { open, e0, e1 } = c, b = inst.bundles.storage, r = row * BUNDLE_INTS;
+  const foldK = vc.fade >= 0 ? w.scene.items[vc.fade].maxChildK! : 0, mode = vc.fade >= 0 ? 2 : 0;
   let at = row >= 0 ? b[r + 1] * CURVE_FLOATS : inst.curves.extend(c.curves * CURVE_FLOATS);
   const d = inst.curves.storage;
-  const curve = (a: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, q: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, k0: number, k1: number, dashed: boolean, key: Id | null) => {
-    // Written in place, field by field (CURVE_FIELDS): open0, open1, closed0, closed1, width, end0, end1, fold.
+  /** A branch's end among vc's (by its key), −1 for a trunk or a stub's branch. */
+  const endOf = (key: Id | null, stub: boolean) => (key === null || stub ? -1 : vc.ends.findIndex((e) => e.key === key));
+  const curve = (a: Pick<Branch, 'p0' | 'b1' | 'b2' | 'p3'>, k0: number, k1: number, dashed: boolean, key: Id | null, own: number) => {
+    // Written in place, field by field (CURVE_FIELDS): open0, open1, width, end0, end1, fold, masks.
     d[at] = a.p0.x; d[at + 1] = a.p0.y; d[at + 2] = a.b1.x; d[at + 3] = a.b1.y;
     d[at + 4] = a.b2.x; d[at + 5] = a.b2.y; d[at + 6] = a.p3.x; d[at + 7] = a.p3.y;
-    d[at + 8] = q.p0.x; d[at + 9] = q.p0.y; d[at + 10] = q.b1.x; d[at + 11] = q.b1.y;
-    d[at + 12] = q.b2.x; d[at + 13] = q.b2.y; d[at + 14] = q.p3.x; d[at + 15] = q.p3.y;
-    d[at + 16] = k0; d[at + 17] = k1; d[at + 18] = dashed ? 1 : 0; d[at + 19] = ci;
-    d[at + 20] = e0.x; d[at + 21] = e0.y; d[at + 22] = e0.e; d[at + 23] = e1.x; d[at + 24] = e1.y; d[at + 25] = e1.e;
-    d[at + 26] = mode; d[at + 27] = foldK;
+    d[at + 8] = k0; d[at + 9] = k1; d[at + 10] = dashed ? 1 : 0; d[at + 11] = ci;
+    d[at + 12] = e0.x; d[at + 13] = e0.y; d[at + 14] = e0.e; d[at + 15] = e1.x; d[at + 16] = e1.y; d[at + 17] = e1.e;
+    d[at + 18] = mode; d[at + 19] = foldK;
+    masksOf(vc, own, d, at + 20);
     at += CURVE_FLOATS;
     if (row < 0) inst.curveKeys.push(key);
   };
@@ -562,15 +582,17 @@ function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1
     const [A, B] = t, dx = B.x - A.x, dy = B.y - A.y;
     return { p0: A, b1: { x: A.x + dx / 3, y: A.y + dy / 3 }, b2: { x: A.x + (2 * dx) / 3, y: A.y + (2 * dy) / 3 }, p3: B };
   };
-  if (open.trunk) curve(straight(open.trunk), straight(closed?.trunk ?? open.trunk), open.kMax, open.kMax, false, null);
-  open.branches.forEach((a, i) => {
-    const q = closed?.branches[i] ?? a;
+  if (open.trunk) curve(straight(open.trunk), open.kMax, open.kMax, false, null, -1);
+  for (const a of open.branches) {
     const [k0, k1] = a.nodeEnd === 'p0' ? [a.kNode, a.kMarker] : [a.kMarker, a.kNode];
-    curve(a, q, k0, k1, a.dashed, a.key);
-  });
-  appendBundleGlyphs(inst.glyphs, open, closed, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: vc.fade, foldK: vc.foldK, conn: ci }, w.p,
+    curve(a, k0, k1, a.dashed, a.key, endOf(a.key, a.stub));
+  }
+  const masks = (br: Branch, out: number[]) => masksOf(vc, endOf(br.key, br.stub), out, 0);
+  appendBundleGlyphs(inst.glyphs, open, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: mode, foldK, conn: ci, masks }, w.p,
     row >= 0 ? b[r + 3] : undefined);
-  const marker = { conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi };
+  const markerMasks: number[] = [];
+  masksOf(vc, -1, markerMasks, 0);
+  const marker = { conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi, masks: markerMasks };
   if (row >= 0) inst.markers[b[r + 5]] = marker;
   else inst.markers.push(marker);
   let si = 0;
@@ -586,7 +608,7 @@ function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1
 /** A simple connection's two ends as bundle ends, relative to `origin`. */
 export function simpleEnds(scene: PlanScene, vc: VisibleConnection, origin: Vec2): [ReturnType<typeof bundleEnd>, ReturnType<typeof bundleEnd>] {
   const [a, b] = vc.ends;
-  return [bundleEnd(scene, a.item, a.role, false, a.dashed, a.key, origin), bundleEnd(scene, b.item, b.role, false, b.dashed, b.key, origin)];
+  return [bundleEnd(scene, a.item, a.role, a.dashed, a.key, origin), bundleEnd(scene, b.item, b.role, b.dashed, b.key, origin)];
 }
 
 /**
@@ -611,7 +633,7 @@ function finishTitles(inst: Instances, w: Work): void {
     const samples = curveSamples(inst, w);
     inst.revealZoom = Math.min(inst.revealZoom, placeConnectionTitles(scene, visible, cores, cam, o, p, samples, w.sides, inst.titles));
   }
-  if (w.font) appendConnectionTitles(inst.texts, visible, inst.titles, p, w.font, inst.titleGlyphs);
+  if (w.font) appendConnectionTitles(inst.texts, scene, visible, inst.titles, p, w.font, inst.titleGlyphs);
 }
 
 /** The curves' samples in a rectangle (relative to the origin), from an index of their extents made at the first call. */
@@ -649,13 +671,9 @@ function curveSamples(inst: Instances, w: Work): (x0: number, y0: number, x1: nu
     if (entry >= 0) {
       const c = inst.curves.storage, at = entry * CURVE_FLOATS;
       const cubic = (from: number) => ({ p0: { x: c[from], y: c[from + 1] }, b1: { x: c[from + 2], y: c[from + 3] }, b2: { x: c[from + 4], y: c[from + 5] }, p3: { x: c[from + 6], y: c[from + 7] } });
-      const a = cubic(at + CURVE_AT.open0), b = cubic(at + CURVE_AT.closed0);
+      const a = cubic(at + CURVE_AT.open0);
       if (inst.curveKeys[entry] === null) pts = [a.p0, a.p3]; // a trunk
-      else {
-        const segs = Math.max(bezierSegments(a.p0, a.b1, a.b2, a.p3, pxPerUnit, p.curveTolerancePx),
-          c[at + CURVE_AT.fold] === 1 ? bezierSegments(b.p0, b.b1, b.b2, b.p3, pxPerUnit, p.curveTolerancePx) : 0);
-        pts = sampleBranch(a, segs);
-      }
+      else pts = sampleBranch(a, bezierSegments(a.p0, a.b1, a.b2, a.p3, pxPerUnit, p.curveTolerancePx));
     } else {
       const [ea, eb] = simpleEnds(scene, visible.connections[-1 - entry], o);
       for (const br of simpleBranches(ea, eb, p)) pts.push(...sampleBranch(br, bezierSegments(br.p0, br.b1, br.b2, br.p3, pxPerUnit, p.curveTolerancePx)));

@@ -34,10 +34,10 @@ export interface PreviewSplit {
   drawnGroups: number[];
 }
 
-/** Whether a visible connection ends on (or is centred on) an item of `set`, its fading level open or closed. */
+/** Whether a visible connection ends on (or is centred on) an item of `set`, or is masked by one of its groups. */
 function touches(vc: VisibleConnection, set: ReadonlySet<number>): boolean {
   if (vc.center !== undefined && set.has(vc.center)) return true;
-  for (const e of vc.ends) if (set.has(e.item) || set.has(e.item2)) return true;
+  for (const e of vc.ends) if (set.has(e.item) || set.has(e.mask) || set.has(e.mask2)) return true;
   return false;
 }
 
@@ -68,7 +68,7 @@ export function previewSplit(scene: PlanScene, visible: VisibleSet, moving: read
 /** The split of a handle dragged on part `part` (spec 8.5): its visible connections, given another layout; nothing moves. */
 export function layoutSplit(visible: VisibleSet, part: number): PreviewSplit {
   const complex: number[] = [];
-  visible.connections.forEach((vc, ci) => { if (vc.conns.includes(part)) complex.push(ci); });
+  visible.connections.forEach((vc, ci) => { if (vc.part === part) complex.push(ci); });
   return { visible, items: [], groups: [], complex, simple: [], hidden: [], drawnGroups: [] };
 }
 

@@ -10,7 +10,7 @@ test('simpleBranches égale bundleGeometry à deux membres, à 1e-9 près, sur 1
   const r = rng(2026);
   const end = (key: string): BundleEnd => ({
     pos: { x: (r() - 0.5) * 2e5, y: (r() - 0.5) * 2e5 }, halfW: 1 + r() * 400, halfH: 1 + r() * 120, role: ROLES[Math.floor(r() * 3)],
-    k: Math.floor(r() * 9) - 3, hollow: false, dashed: r() < 0.2, key,
+    k: Math.floor(r() * 9) - 3, dashed: r() < 0.2, key,
   });
   const close = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
   let pairs = 0;
@@ -39,7 +39,7 @@ test('un associé face à une source ou une cible est sur l’axe : il la rejoin
   const r = rng(7);
   for (let i = 0; i < 500; i++) {
     const far = 10 ** (2 + r() * 6), x = (r() - 0.5) * far, y = (r() - 0.5) * far, d = 50 + r() * 5000, ang = r() * 2 * Math.PI;
-    const end = (px: number, py: number, role: Role): BundleEnd => ({ pos: { x: px, y: py }, halfW: 20, halfH: 10, role, k: 0, hollow: false, dashed: false, key: role });
+    const end = (px: number, py: number, role: Role): BundleEnd => ({ pos: { x: px, y: py }, halfW: 20, halfH: 10, role, k: 0, dashed: false, key: role });
     const other: Role = r() < 0.5 ? 'source' : 'target';
     const side = (round: (v: number) => number) => {
       const a = end(round(x), round(y), other), b = end(round(x + d * Math.cos(ang)), round(y + d * Math.sin(ang)), 'associate');

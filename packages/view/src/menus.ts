@@ -56,8 +56,7 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
   }
   if (hit.kind === 'stub') return make(['importNode']);
   if (hit.kind === 'connection') {
-    if (hit.ids.length !== 1) return [];
-    const sc = partOf(scene, hit.ids[0]).map((i) => scene.connections[i]).find((c) => c.part === hit.part);
+    const sc = partOf(scene, hit.id).map((i) => scene.connections[i]).find((c) => c.part === hit.part);
     if (!sc) return [];
     if (sc.part === 'far') return make(['joinArm', 'deleteConnection']);
     const placed = sc.ends.some((e) => e.key === hit.key && !e.dashed && scene.items[e.item].kind !== 'phantom');

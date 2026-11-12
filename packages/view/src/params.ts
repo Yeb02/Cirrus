@@ -55,7 +55,6 @@ export interface RenderParams {
   arrowHalfWidth: number;
   arrowNotch: number;
   dotRadius: number;
-  hollowInset: number;
   markerRadiusPx: number;
   titleFontPx: number;
   titleGap: number;
@@ -395,7 +394,6 @@ export const DEFAULT_PARAMS: RenderParams = {
   arrowHalfWidth: 3,
   arrowNotch: 0.66,
   dotRadius: 2.2,
-  hollowInset: 0.55,
   markerRadiusPx: 6.5,
   titleFontPx: 13,
   titleGap: 11,
@@ -624,7 +622,6 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('arrowHalfWidth', 'Demi-largeur des flèches (en largeurs de trait)', A, 'Flèches et marqueurs', 1, 10, 0.25),
   num('arrowNotch', 'Échancrure des flèches', A, 'Flèches et marqueurs', 0, 1, 0.01),
   num('dotRadius', 'Rayon du point d’un associé (en largeurs de trait)', A, 'Flèches et marqueurs', 1, 8, 0.1),
-  num('hollowInset', 'Intérieur d’une flèche évidée', A, 'Flèches et marqueurs', 0.2, 0.9, 0.01),
   num('markerRadiusPx', 'Rayon du marqueur d’un faisceau (px)', A, 'Flèches et marqueurs', 2, 20, 0.5),
   num('titleFontPx', 'Taille des titres de connexion', A, 'Connexions', 6, 30, 0.5),
   num('titleGap', 'Distance du titre des connexions', G, 'Connexions', 0, 60, 1),

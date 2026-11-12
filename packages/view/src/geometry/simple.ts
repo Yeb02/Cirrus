@@ -5,7 +5,7 @@ import { type Branch, type BundleEnd, SIDE_TOLERANCE } from './bundle.ts';
 import { add, len, mul, norm, perp, sub } from './vec.ts';
 
 /**
- * A simple connection's curves (plan 3c task 8): two ends on boxes (no closed group), no stub, centre nor layout. It is
+ * A simple connection's curves (plan 3c task 8): two ends on boxes (no group node), no stub, centre nor layout. It is
  * bundleGeometry with two members, step by step as the vertex shaders compute it from the two items' texels
  * (render/shaders.ts, SIMPLE): no trunk, the two branches meeting at the marker M, midway between the boxes. Hit testing
  * computes here the curves the GPU draws. Branches come as bundleGeometry gives them: sources, then targets, then
@@ -29,7 +29,7 @@ export function simpleBranches(a: BundleEnd, b: BundleEnd, p: RenderParams): Bra
     const at = add(e.pos, mul(d, Math.min(sx, sy, 1)));
     const t = p.trunkTension * len(sub(M, at));
     const role: Role = pairNeu ? 'associate' : e.role;
-    const extra = { role, kNode: e.k, kMarker: kMax, hollow: e.hollow, dashed: e.dashed, stub: false, key: e.key };
+    const extra = { role, kNode: e.k, kMarker: kMax, dashed: e.dashed, stub: false, key: e.key };
     if (c === 0) return { p0: at, b1: add(at, mul(norm(sub(M, at), u), t * 0.6)), b2: sub(M, mul(u, t)), p3: M, nodeEnd: 'p0', ...extra };
     if (c === 1) return { p0: M, b1: add(M, mul(u, t)), b2: add(at, mul(norm(sub(M, at), mul(u, -1)), t * 0.6)), p3: at, nodeEnd: 'p3', ...extra };
     let n = perp(u);
