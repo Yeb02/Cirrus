@@ -165,9 +165,8 @@ export function App() {
 
   // Ctrl+K opens the search (plan 6a, D1) from anywhere, a text field included — but not over a full screen or a
   // question, which are modal (a file's, the preamble's; AskDialog), nor in a code editor (CodeMirror), where it keeps
-  // its own meaning, nor in the box itself. Heard first (capture): a panel that keeps its keys from the graph (a
-  // connection's pop-up stops them all) does not swallow it (fix round 1, Important 1). Open, it gives its field the
-  // focus again.
+  // its own meaning, nor in the box itself. Heard first (capture): an element that stops the keys it gets does not
+  // swallow it (fix round 1, Important 1). Open, it gives its field the focus again.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.shiftKey || e.metaKey || e.key.toLowerCase() !== 'k') return;
@@ -594,8 +593,8 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={openRegistry} onTrash={openTrash}
-            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onClickAway={clickAway} onOverlay={dropSearch}
-            onDropFiles={files.importInto} registry={registry} onNodeLink={nodeLink} tabs={tabs} ref={graph}
+            onOpenNode={(id, at) => panels.current?.openNode(id, at)} onOpenConnection={(id, at) => panels.current?.openConnection(id, at)}
+            onClickAway={clickAway} onOverlay={dropSearch} onDropFiles={files.importInto} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
             overlay={searchBox && searchWhere && (
               <SearchBox
@@ -624,6 +623,7 @@ export function App() {
           views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
           onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
           onDeleteAnnotation={(node) => deleteAnnotation(node, false)} onCompare={(node, original, copy) => setFull({ kind: 'compare', node, original, copy })}
+          plan={active} onAddMember={(c, node) => graph.current?.addMember(c, node)} onRemoveMember={(c, node) => graph.current?.removeMember(c, node)}
         />
         <Toasts toasts={toasts} onClose={closeToast}>
           <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />

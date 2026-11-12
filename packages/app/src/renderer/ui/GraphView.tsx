@@ -3,12 +3,12 @@ import {
   type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
   type PlanScene, type RenderParams, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
-  dropEffects, dropTarget, type MenuItem, menuFor, otherPlans,
+  dropEffects, dropTarget, type MenuItem, menuFor,
   isPinch, newlyPressed, renderPaused, type SceneIndex, type FontData, previewSplit, type PreviewSplit,
 } from '@cirrus/view';
 import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
-import { connectionDrafts, consultations, jumpDraft } from '../consultations.ts';
+import { consultations, jumpDraft } from '../consultations.ts';
 import { createGl, type Gl } from '../gl/context.ts';
 import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
@@ -17,14 +17,11 @@ import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
-import { absentBuild, addMemberBuild, type Build } from '../actions.ts';
+import { absentBuild, type Build } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
-import { ConnectionPopup } from './ConnectionPopup.tsx';
 import { AskDialog } from './Dialogs.tsx';
 import { nodeOpenedBy, popupOf } from './panels/Panels.tsx';
-import type { Rect } from './panels/geometry.ts';
 import type { Refusal } from '../files/nodeFiles.ts';
-import type { LatexRegistry } from '../latex/registry.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 import { BIB_WAITING, useBibImport } from './graph/bibImport.ts';
 import { useCopyPaste } from './graph/copyPaste.ts';
@@ -48,7 +45,8 @@ import { useScenes } from './graph/scenes.ts';
  * to an object (plan 6a, D2: Revealer), false at once for one gone, which pushes the place it leaves on the stack of
  * « précédent » et « suivant » (`back` and `forward`, false when there is nowhere to go); the focus back (the search closed);
  * a node of the trash to put down in the plan shown (`restore`, plan 6a, D5: « Restaurer » in the trash's panel), and that placement
- * given up (`cancelRestore`: the panel is closed).
+ * given up (`cancelRestore`: the panel is closed); a member added to a connection or removed from it, from its pop-up
+ * (`addMember`, `removeMember`: the graph asks where, in the plan shown).
  */
 export interface GraphHandle {
   dropFilesAt(sx: number, sy: number, paths: string[], refused?: Refusal[]): Promise<void>;
@@ -58,6 +56,8 @@ export interface GraphHandle {
   focus(): void;
   restore(node: Id): void;
   cancelRestore(): void;
+  addMember(connection: Id, node: Id): void;
+  removeMember(connection: Id, node: Id): void;
 }
 /** Nothing found: the ring of the search drawn around nothing. */
 const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
@@ -97,15 +97,12 @@ export function GraphView(props: {
    * there, in window coordinates (plan 4a, D7; a double click since 2026-11-11, a single click only selects).
    */
   onOpenNode(node: Id, client: { x: number; y: number }): void;
+  /** A double click on a connection, or on a split arm's centre phantom, opens its pop-up there (spec 8.5), as a node's. */
+  onOpenConnection(connection: Id, client: { x: number; y: number }): void;
   /** A click on anything else (background, connection, stub, absent or centre phantom, Ctrl+click) closes the loose pop-ups. */
   onClickAway(): void;
   /** Files dropped on a node or a group (plan 4a, task 4): their paths, and those refused already (App's importInto). */
   onDropFiles(node: Id, paths: string[], refused?: Refusal[]): Promise<void>;
-  /**
-   * The labels and keys of the base, for a connection's relation compiled in its pop-up (plan 4b: App's, null until
-   * built); a link to a node clicked in it opens that node's pop-up beside it (`onNodeLink`, App's).
-   */
-  registry: LatexRegistry | null; onNodeLink(node: Id, near: Rect): void;
   /** The open tabs in their order (App's): « Voir dans un autre plan » lists the plans in it (plan 6a, D3). */
   tabs: readonly Id[];
   /**
@@ -165,7 +162,6 @@ export function GraphView(props: {
   const graphPress = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [popup, setPopup] = useState<{ x: number; y: number; connection: Id } | null>(null);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /**
@@ -241,8 +237,8 @@ export function GraphView(props: {
   const tabsRef = useRef(props.tabs);
   tabsRef.current = props.tabs;
   // The clicks replayed for captures go through the handlers of the first render: the pop-ups' callbacks are read here.
-  const panelsRef = useRef({ open: props.onOpenNode, away: props.onClickAway });
-  panelsRef.current = { open: props.onOpenNode, away: props.onClickAway };
+  const panelsRef = useRef({ open: props.onOpenNode, connection: props.onOpenConnection, away: props.onClickAway });
+  panelsRef.current = { open: props.onOpenNode, connection: props.onOpenConnection, away: props.onClickAway };
   /** A notice in a toast, not an edit's outcome. */
   const notify = (message: string) => onResultRef.current({ ok: false, message });
   const onLongNoticeRef = useRef(props.onLongNotice);
@@ -356,12 +352,6 @@ export function GraphView(props: {
 
   /** The items of the selection, as indices of this scene. */
   const selectedItems = (sc: PlanScene) => [...selectionRef.current.items].flatMap((id) => { const i = sc.byId.get(id); return i === undefined ? [] : [i]; });
-  /** The pop-up of a connection, next to the click (spec 8.5). */
-  const openPopup = (connection: Id, sx: number, sy: number) => {
-    for (const draft of connectionDrafts([connection])) consultations.record(draft);
-    const r = root.current!.getBoundingClientRect();
-    setPopup({ connection, x: Math.max(8, Math.min(sx + 12, r.width - 332)), y: Math.max(8, Math.min(sy + 12, r.height - 340)) });
-  };
   /**
    * A double click on the graph (2026-11-11): the pop-up of what its second click designated (popupOf), a node's or a
    * connection's, at that click. By ids, not indices: a frame may have been rebuilt since (I9 of the review).
@@ -372,11 +362,10 @@ export function GraphView(props: {
     if (!c || !sc) return;
     const i = c.hit.kind === 'item' ? sc.byId.get(c.hit.id) : undefined;
     const opened = popupOf(c.hit, i === undefined ? undefined : sc.items[i], c.ctrl);
-    if (opened?.kind === 'connection') openPopup(opened.id, c.sx, c.sy);
-    else if (opened) {
-      const r = root.current!.getBoundingClientRect();
-      panelsRef.current.open(opened.node, { x: r.left + c.sx, y: r.top + c.sy });
-    }
+    if (!opened) return;
+    const r = root.current!.getBoundingClientRect(), at = { x: r.left + c.sx, y: r.top + c.sy };
+    if (opened.kind === 'connection') panelsRef.current.connection(opened.id, at);
+    else panelsRef.current.open(opened.node, at);
   };
 
   // One WebGL context for the window's lifetime; the font is read before the first scene (its boxes are measured with it).
@@ -545,7 +534,6 @@ export function GraphView(props: {
       questions.setQuestion(null);
       feed({ t: 'cancel' });
       setSelection(emptySelection());
-      setPopup(null);
       bib.planLeft();
     }
     sceneRef.current = scene;
@@ -572,8 +560,8 @@ export function GraphView(props: {
   useEffect(() => {
     const el = root.current!;
     const onWheel = (ev: WheelEvent) => {
-      // A pop-up, a question or the search box scrolls its own content.
-      if (ignored(ev) || (ev.target as Element).closest?.('.popup, .ask, .search-box')) return;
+      // A question or the search box scrolls its own content.
+      if (ignored(ev) || (ev.target as Element).closest?.('.ask, .search-box')) return;
       ev.preventDefault();
       const r = el.getBoundingClientRect();
       const sx = ev.clientX - r.left, sy = ev.clientY - r.top;
@@ -609,6 +597,8 @@ export function GraphView(props: {
     },
     // The trash's panel closed (× or Escape): the placement of a node being restored goes with it, as with its own Escape.
     cancelRestore: () => { if (trashCloseGivesUp(placement.placing.current)) feed({ t: 'cancel' }); },
+    addMember: questions.addMember,
+    removeMember: questions.removeMember,
   }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */
   const targetOf = (h: Hit): { kind: 'item' | 'connection'; id: Id } | null => {
@@ -863,9 +853,9 @@ export function GraphView(props: {
       onKeyDown={(ev) => {
         if (ignored(ev)) return;
         if (ev.key === 'Escape') {
-          // Taken by the gesture it cancels, or by the menu or connection pop-up it closes, it is not the floating panels'
-          // (they close on an Escape nothing took).
-          if (handles.held() || gestures.current.busy || menu || popup) ev.preventDefault();
+          // Taken by the gesture it cancels, or by the menu it closes, it is not the floating panels' (they close on an
+          // Escape nothing took).
+          if (handles.held() || gestures.current.busy || menu) ev.preventDefault();
           if (handles.held()) handles.dropHandle(false); else feed({ t: 'key', key: 'Escape' });
           return;
         }
@@ -902,15 +892,6 @@ export function GraphView(props: {
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} onPick={(a) => pickMenuAction(graph, a, menu.hit, { x: menu.x, y: menu.y })} />}
       {editor && <TitleEditor x={editor.x} y={editor.y} width={editor.width} initial={editor.initial} onDone={(t) => { setEditor(null); editor.done(t); root.current?.focus(); }} />}
       {placement.line && <svg className="connect-line"><line x1={placement.line.x1} y1={placement.line.y1} x2={placement.line.x2} y2={placement.line.y2} /></svg>}
-      {popup && (
-        <ConnectionPopup
-          key={`${popup.connection}|${popup.x}|${popup.y}`} state={props.state} plan={props.plan} connection={popup.connection} x={popup.x} y={popup.y}
-          registry={props.registry} params={props.params} onNodeLink={props.onNodeLink}
-          onEdit={(b) => edit(b).then((r) => r !== null && r.ok)} onClose={() => setPopup(null)} onRemoveMember={questions.removeMember}
-          onAddMember={(connection, node) => questions.askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
-            otherPlans(stateRef.current, props.plan, [node], connection), (everywhere) => edit(addMemberBuild(props.plan, connection, node, everywhere)))}
-        />
-      )}
       {questions.question && <AskDialog q={questions.question} onClose={() => { questions.setQuestion(null); root.current?.focus(); }} />}
       {publication.dialog && (
         <PublicationDialog

@@ -70,7 +70,7 @@ export function useGraphDrop(graph: Graph, onDropFiles: (node: Id, paths: string
     else graph.repercussion.askRepercussion(sc.plan.id, [{ node, from: null, to: sc.items[host].id }], build, () => {});
   };
   /**
-   * Files dropped on the graph (not on a connection's pop-up or a question over it: those refuse them); a node dragged
+   * Files dropped on the graph (not on a question over it: it refuses them); a node dragged
    * out of a list of annotations, by its own route (plan 4c, task 3), the node or group it would enter lit meanwhile.
    */
   const handlers = {

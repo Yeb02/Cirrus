@@ -108,8 +108,8 @@ test('dropZone et dropRoute : un dépôt va au nœud ou au groupe du graphe, au 
   check('le fantôme d’un nœud lointain', graphDrop(canvas, far), { to: 'node', node: 'loin' });
   check('un fantôme absent', graphDrop(canvas, absent), { to: 'notice' });
   check('le fond du graphe', graphDrop(canvas), { to: 'notice' });
-  // What floats over the graph and refuses files: a connection's pop-up, a question.
-  check('le pop-up d’une connexion', graphDrop(at(...GRAPH, 'div.popup', 'ul', 'li'), node), { to: 'refused' });
+  // What floats over the graph and refuses files: a question; a connection's pop-up, a floating panel (2026-11-12), takes none.
+  check('le pop-up d’une connexion', graphDrop(at(...MAIN, 'div.panels', 'section.panel.connection-popup', 'div.body', 'ul', 'li'), node), { to: 'refused' });
   check('une question', graphDrop(at(...GRAPH, 'div.ask', 'button'), node), { to: 'refused' });
   // The import dialog (plan 4c, task 5): the graph never takes a PDF dropped there, the dialog's own drop zone does.
   expect(graphDrop(at(...GRAPH, 'div.publication-dialog', 'p.status'), node), 'le dialogue d’import').toEqual({ to: 'refused' });
@@ -165,7 +165,7 @@ test('carried et dropRoute (plan 4c, tâche 3) : un nœud tiré d’une liste n�
   expect(route(at(...popup, 'ol.annotation-list', 'li'), 'mdl', NODE)).toEqual({ to: 'refused' });
   expect(route(at(...popup, 'ul.files', 'li.file'), 'mdl', FILES)).toEqual({ to: 'node', node: 'mdl' });
   for (const where of [
-    at(...GRAPH, 'div.popup', 'ul', 'li'), at(...GRAPH, 'div.ask', 'button'), at(...MAIN, 'div.panels', 'section.panel.file-preview', 'div.body', 'aside.annotation-margin'),
+    at(...MAIN, 'div.panels', 'section.panel.connection-popup', 'div.body', 'ul', 'li'), at(...GRAPH, 'div.ask', 'button'), at(...MAIN, 'div.panels', 'section.panel.file-preview', 'div.body', 'aside.annotation-margin'),
     at(...APP, 'div.full-screen', 'div.viewer'), at(...APP, 'div.tabs', 'div.tab.on'),
   ]) expect(route(where, null, NODE)).toEqual({ to: 'refused' });
 });
@@ -179,7 +179,7 @@ test('dropRoute (plan 4c, tâche 6) : un .bib seul lâché sur le fond du graphe
   expect(dropRoute(dropZone(at(...MAIN, 'div.panels', 'section.panel.node-popup', 'div.body', 'ul.files')), 'mdl', 'files', ['C:\\docs\\bibliographie.bib']))
     .toEqual({ to: 'node', node: 'mdl' });
   // The import dialog takes a PDF only: the graph never takes a .bib let go there; nor what else floats over it.
-  for (const where of [at(...GRAPH, 'div.publication-dialog', 'p.status'), at(...GRAPH, 'div.ask', 'button'), at(...GRAPH, 'div.popup', 'ul')]) {
+  for (const where of [at(...GRAPH, 'div.publication-dialog', 'p.status'), at(...GRAPH, 'div.ask', 'button'), at(...MAIN, 'div.panels', 'section.panel.connection-popup', 'div.body', 'ul')]) {
     expect(dropRoute(dropZone(where), null, 'files', ['C:\\docs\\bibliographie.bib'])).toEqual({ to: 'refused' });
   }
   // With another file, two of them, another kind, or none: a notice on the background, as before.

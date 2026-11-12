@@ -720,7 +720,7 @@ const SCENARIOS = [
     env: { CIRRUS_VIEW: '0,140,1' },
     async run(page) {
       const centre = await graphCentre(page), mdl = { x: centre.x + 175, y: centre.y };
-      const MDL = 'Minimum Description Length Principle (MDL)', LINE = `document.querySelector('.popup input.title')?.value === 'Analogue bayésien'`;
+      const MDL = 'Minimum Description Length Principle (MDL)', LINE = `document.querySelector('.connection-popup input.title')?.value === 'Analogue bayésien'`;
       // The double clicks are repeated until the engine is up; then Échap, and the single clicks open nothing.
       await openPopup(page, mdl, MDL);
       await page.press('Escape', 'Escape', 27);
@@ -730,9 +730,25 @@ const SCENARIOS = [
       if (await page.evaluate(`!!document.querySelector('.node-popup')`)) throw new Error('un simple clic sur un nœud ouvre son pop-up');
       await page.click(centre.x, centre.y);
       await sleep(700);
-      if (await page.evaluate(`!!document.querySelector('.popup')`)) throw new Error('un simple clic sur une connexion ouvre son pop-up');
+      if (await page.evaluate(`!!document.querySelector('.connection-popup')`)) throw new Error('un simple clic sur une connexion ouvre son pop-up');
       await page.dblclick(centre.x, centre.y);
       if (!(await page.until(LINE))) throw new Error('un double clic sur la connexion n’ouvre pas son pop-up');
+      // The user's feedback of 2026-11-12: the connection's pop-up is a floating panel, as a node's. Taken by its header,
+      // it moves; pinned, a click on the background (the sky at the left, over no node nor envelope) leaves it; its × closes it.
+      const box = () => page.evaluate(`(() => { const b = document.querySelector('.connection-popup').getBoundingClientRect(); return { x: b.x, y: b.y }; })()`);
+      const before = await box(), grip = await page.centre('.connection-popup > header .grip', '');
+      await page.drag(grip, { x: grip.x - 120, y: grip.y + 80 });
+      const after = await box();
+      if (Math.abs(after.x - before.x + 120) > 2 || Math.abs(after.y - before.y - 80) > 2) {
+        throw new Error(`le pop-up de la connexion ne se déplace pas par son en-tête : ${JSON.stringify([before, after])}`);
+      }
+      await page.evaluate(`document.querySelector('.connection-popup .pin:not(.on)')?.click()`);
+      await page.click(60, 800);
+      await sleep(700);
+      if (!(await page.evaluate(`!!document.querySelector('.connection-popup.pinned')`))) throw new Error('épinglé, le pop-up de la connexion se ferme au clic sur le fond');
+      const close = await page.centre('.connection-popup > header .close', '');
+      await page.click(close.x, close.y);
+      if (!(await page.until(`!document.querySelector('.connection-popup')`))) throw new Error('la croix ne ferme pas le pop-up de la connexion');
     },
   },
   {
@@ -901,10 +917,10 @@ const SCENARIOS = [
       // The connection at the view's centre (the captures' « fenetre-connexion », whose point is the graph's): its pop-up,
       // its title field focused.
       const centre = await page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup input.title')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
-      const title = await page.centre('.popup input.title', '');
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.connection-popup input.title')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
+      const title = await page.centre('.connection-popup input.title', '');
       await page.click(title.x, title.y);
-      if (!(await page.evaluate(`document.activeElement?.matches('.popup input.title') === true`))) throw new Error('le titre du pop-up de la connexion n’a pas le focus');
+      if (!(await page.evaluate(`document.activeElement?.matches('.connection-popup input.title') === true`))) throw new Error('le titre du pop-up de la connexion n’a pas le focus');
       await page.press('k', 'KeyK', 75, 2);
       if (!(await page.until(FIELD))) throw new Error('Ctrl+K, depuis le pop-up d’une connexion, n’ouvre pas la recherche');
       await page.type('comp');
@@ -2358,28 +2374,28 @@ const SCENARIOS = [
     async run(page, base) {
       const tagged = (key) => base(`SELECT json FROM connections WHERE trashed = 0`).map((r) => JSON.parse(r.json)).filter((c) => c.tags.some((t) => t.key === key));
       const centre = await graphCentre(page);
-      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.popup .tag-field')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
-      const field = await page.centre('.popup .tag-field', '');
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.connection-popup .tag-field')`, 1000)); i++) await page.dblclick(centre.x, centre.y);
+      const field = await page.centre('.connection-popup .tag-field', '');
       await page.click(field.x, field.y);
       // Focused and empty: the keys of scope connection (or both), none of a node's.
-      const picks = await page.evaluate(`[...document.querySelectorAll('.popup .suggestions .pick')].map((b) => b.textContent)`);
+      const picks = await page.evaluate(`[...document.querySelectorAll('.connection-popup .suggestions .pick')].map((b) => b.textContent)`);
       if (JSON.stringify(picks) !== JSON.stringify(['parallèle', 'déduction', 'partie', 'suivant'])) throw new Error(`suggestions d’une connexion : ${JSON.stringify(picks)}`);
       // The connection's own tags are chips already; the word it lacks is the one added.
-      const chips = await page.evaluate(`[...document.querySelectorAll('.popup .tags .tag')].map((t) => t.textContent)`);
+      const chips = await page.evaluate(`[...document.querySelectorAll('.connection-popup .tags .tag')].map((t) => t.textContent)`);
       if (chips.length === 0) throw new Error('le pop-up de la connexion ne montre aucun de ses tags');
       const word = chips.some((c) => c.startsWith('parallèle')) ? 'déduction' : 'parallèle';
       const before = tagged(word).length;
       await page.type(word);
       await page.press('Enter', 'Enter', 13);
       if (!(await until(() => tagged(word).length === before + 1))) throw new Error(`le tag n’est pas écrit ; ${await toastsText(page)}`);
-      if (!(await page.until(`[...document.querySelectorAll('.popup .tags .tag')].some((t) => t.textContent.startsWith(${JSON.stringify(word)}))`))) throw new Error('la puce du tag n’est pas dans le pop-up');
+      if (!(await page.until(`[...document.querySelectorAll('.connection-popup .tags .tag')].some((t) => t.textContent.startsWith(${JSON.stringify(word)}))`))) throw new Error('la puce du tag n’est pas dans le pop-up');
       // A refused tag stays in the field and says why.
       await page.type('partie:deux');
       await page.press('Enter', 'Enter', 13);
-      const error = await page.evaluate(`document.querySelector('.popup .error')?.textContent ?? null`);
+      const error = await page.evaluate(`document.querySelector('.connection-popup .error')?.textContent ?? null`);
       if (error !== 'Le tag « partie » demande un nombre : « deux » n’en est pas un.') throw new Error(`le refus : ${JSON.stringify(error)}`);
       // Taken off by its ×.
-      const remove = await page.evaluate(`(() => { const b = [...document.querySelectorAll('.popup .tags .tag')].find((t) => t.textContent.startsWith(${JSON.stringify(word)})).querySelector('.remove').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
+      const remove = await page.evaluate(`(() => { const b = [...document.querySelectorAll('.connection-popup .tags .tag')].find((t) => t.textContent.startsWith(${JSON.stringify(word)})).querySelector('.remove').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
       await page.click(remove.x, remove.y);
       if (!(await until(() => tagged(word).length === before))) throw new Error('le tag n’est pas retiré');
     },

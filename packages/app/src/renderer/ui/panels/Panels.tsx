@@ -2,12 +2,13 @@ import type { Action, Anchor, FileRef, Id, NodeRec, State } from '@cirrus/core';
 import type { Hit, RenderParams, SceneItem } from '@cirrus/view';
 import { type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { Build } from '../../actions.ts';
-import { type ConsultationDraft, consultations } from '../../consultations.ts';
+import { type ConsultationDraft, connectionDrafts, consultations } from '../../consultations.ts';
 import type { AnnotationIndex } from '../../files/annotations.ts';
 import { sameName } from '../../files/merge.ts';
 import type { NodeFiles } from '../../files/nodeFiles.ts';
 import type { ViewStates } from '../../files/viewState.ts';
 import type { LatexRegistry } from '../../latex/registry.ts';
+import { ConnectionPopup } from '../ConnectionPopup.tsx';
 import { NodePopup } from '../NodePopup.tsx';
 import { PanelBoundary } from '../PanelBoundary.tsx';
 import { FilePreview } from './FilePreview.tsx';
@@ -16,6 +17,8 @@ import { clampRect, placeAt, placeBeside, type Rect } from './geometry.ts';
 
 /** What a floating panel shows: a node's pop-up, or a preview of one of its files (task 5), the file by its name. */
 export type PanelTarget = { kind: 'node'; node: Id } | { kind: 'file'; node: Id; name: string };
+/** A connection's pop-up (spec 8.5, 11.2), a floating panel as a node's (the user's feedback of 2026-11-12). */
+export type ConnectionTarget = { kind: 'connection'; connection: Id };
 
 /** An annotation a file's preview is asked to show (plan 4c, task 3): its version, its page, its passage blinking; `seq` counts the asks. */
 interface Reveal { anchor: Anchor; seq: number }
@@ -26,7 +29,7 @@ interface Reveal { anchor: Anchor; seq: number }
  * (withoutReveal, final review I1). `linked`: a node's pop-up opened by a link (withLinked), which offers « Aller au nœud »
  * (plan 6a, D2).
  */
-export interface Panel { id: number; target: PanelTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal; linked?: boolean }
+export interface Panel { id: number; target: PanelTarget | ConnectionTarget; rect: Rect; pinned: boolean; z: number; reveal?: Reveal; linked?: boolean }
 
 /**
  * What a panel's target is now, or null when it is gone (Review Focus 5): a node absent or in the trash, a file no longer
@@ -45,15 +48,25 @@ export function resolveTarget(s: State, t: PanelTarget): { node: NodeRec; file?:
 /** The depth above every panel. */
 const front = (panels: Panel[]) => panels.reduce((z, p) => Math.max(z, p.z), 0) + 1;
 const isNode = (p: Panel, node: Id) => p.target.kind === 'node' && p.target.node === node;
+const isConnection = (p: Panel, connection: Id) => p.target.kind === 'connection' && p.target.connection === connection;
+
+/** A pop-up opened from the graph (withNode, withConnection): `own`, the one open already for its target, if any. */
+function withPopup(panels: Panel[], own: Panel | undefined, target: Panel['target'], rect: Rect, id: number): Panel[] {
+  const z = front(panels), kept = panels.filter((p) => p.pinned || p === own);
+  return own ? kept.map((p) => (p === own ? { ...p, z } : p)) : [...kept, { id, target, rect, pinned: false, z }];
+}
 
 /**
  * A node's pop-up opened (plan 4a): the loose panels close, the pinned ones stay. A node whose pop-up is open already
  * gets no second one: that one comes in front, where it is; else a new loose one opens at `rect`, in front.
  */
 export function withNode(panels: Panel[], node: Id, rect: Rect, id: number): Panel[] {
-  const z = front(panels), own = panels.find((p) => isNode(p, node));
-  const kept = panels.filter((p) => p.pinned || p === own);
-  return own ? kept.map((p) => (p === own ? { ...p, z } : p)) : [...kept, { id, target: { kind: 'node', node }, rect, pinned: false, z }];
+  return withPopup(panels, panels.find((p) => isNode(p, node)), { kind: 'node', node }, rect, id);
+}
+
+/** A connection's pop-up opened (spec 8.5): as a node's (withNode), by the same rules. */
+export function withConnection(panels: Panel[], connection: Id, rect: Rect, id: number): Panel[] {
+  return withPopup(panels, panels.find((p) => isConnection(p, connection)), { kind: 'connection', connection }, rect, id);
 }
 
 /**
@@ -128,9 +141,11 @@ export function closedIds(before: Panel[], after: Panel[]): number[] {
  */
 export function openedPanels(before: Panel[], after: Panel[]): ConsultationDraft[] {
   const had = new Set(before.map((p) => p.id));
-  return after.filter((p) => !had.has(p.id)).map((p): ConsultationDraft => (
-    p.target.kind === 'file' ? { kind: 'file_preview', subject: p.target.node, detail: p.target.name } : { kind: 'node_popup', subject: p.target.node }
-  ));
+  return after.filter((p) => !had.has(p.id)).flatMap((p): ConsultationDraft[] => {
+    const t = p.target;
+    if (t.kind === 'connection') return connectionDrafts([t.connection]);
+    return [t.kind === 'file' ? { kind: 'file_preview', subject: t.node, detail: t.name } : { kind: 'node_popup', subject: t.node }];
+  });
 }
 
 /**
@@ -164,7 +179,7 @@ export function popupOf(hit: Hit, item: Pick<SceneItem, 'kind' | 'id' | 'node' |
   return node === null ? null : { kind: 'node', node };
 }
 
-/** Where a node's pop-up opens (placeAt): at its settings' size, never under panelMinPx, kept usable in `bounds`. */
+/** Where a node's or a connection's pop-up opens (placeAt): at its settings' size, never under panelMinPx, kept usable in `bounds`. */
 export function openingRect(
   at: { x: number; y: number }, p: Pick<RenderParams, 'popupWidthPx' | 'popupHeightPx' | 'panelMinPx' | 'panelGapPx'>, bounds: Rect,
 ): Rect {
@@ -196,13 +211,15 @@ export interface PanelsHandle {
   openFile(node: Id, name: string, near: Rect): void;
   /** A node's pop-up a link leads to, beside the panel `near` it was clicked in (withLinked). */
   openLinked(node: Id, near: Rect): void;
+  /** A double click on a connection (GraphView), at this point of the window (withConnection). */
+  openConnection(connection: Id, client: { x: number; y: number }): void;
   /** Any other click in the graph. */
   closeLoose(): void;
 }
 
 const NODE_GONE = 'Ce nœud n’existe plus.', FILE_GONE = 'Ce fichier n’est plus dans le nœud.';
 /** What a panel that failed says, in its body (PanelBoundary); its cause is in the console. */
-const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'Cet aperçu n’a pas pu s’afficher.';
+const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', CONNECTION = 'Connexion', PREVIEW_FAILED = 'Cet aperçu n’a pas pu s’afficher.';
 
 /**
  * The floating panels of the window (plan 4a, D7), over every tab: pinned, they stay from one tab to the next; loose,
@@ -221,6 +238,8 @@ const POPUP_FAILED = 'Ce pop-up n’a pas pu s’afficher.', PREVIEW_FAILED = 'C
  * (withoutReveal, final review I1). An annotation's line, in a preview's margin or a pop-up's list, has its menu (final
  * review, I2): its node's pop-up beside that panel (`onNodeLink`, as a link), its deletion (`onDeleteAnnotation`). A
  * conflict copy of a .tex, in a pop-up, is compared with its original in full screen (`onCompare`, plan 5b, D7).
+ * A connection's pop-up is one of them (the user's feedback of 2026-11-12): its members are read in the plan shown
+ * (`plan`), and one is added or removed by the graph (`onAddMember`, `onRemoveMember`), which asks where.
  */
 export function Panels(props: {
   ref?: Ref<PanelsHandle>;
@@ -234,6 +253,7 @@ export function Panels(props: {
   views: ViewStates; fullHash: string | null; onFullScreen(node: Id, name: string): void; registry: LatexRegistry | null;
   onNodeLink(node: Id, near: Rect): void; covered?: boolean; annotations: AnnotationIndex | null; onAnnotate(a: Anchor): boolean;
   onDeleteAnnotation(node: Id): void; onCompare(node: Id, original: string, copy: string): void;
+  plan: Id; onAddMember(connection: Id, node: Id): void; onRemoveMember(connection: Id, node: Id): void;
 }) {
   const [panels, setPanels] = useState<Panel[]>([]);
   const panelsRef = useRef(panels);
@@ -280,6 +300,10 @@ export function Panels(props: {
       const id = nextId.current++, rect = linkedRect(near, paramsRef.current, bounds());
       apply((ps) => withLinked(ps, node, rect, id));
     },
+    openConnection: (connection, client) => {
+      const id = nextId.current++, rect = openingRect(client, paramsRef.current, bounds());
+      apply((ps) => withConnection(ps, connection, rect, id));
+    },
     closeLoose: () => apply(withoutLoose),
   }), []);
   useEffect(() => {
@@ -318,13 +342,24 @@ export function Panels(props: {
           onPin: () => change(p.id, (x) => ({ ...x, pinned: !x.pinned })),
           onClose: () => apply((ps) => ps.filter((x) => x.id !== p.id)),
         };
-        const node = p.target.node;
         /** The panel in place of one that failed (PanelBoundary): its frame, its title, and why. */
         const failed = (className: string, title: string, text: string) => (
           <FloatingPanel frame={frame} className={className} title={<span className="title gone" title={title}>{title}</span>}>
             <p className="dim gone">{text}</p>
           </FloatingPanel>
         );
+        if (p.target.kind === 'connection') {
+          const connection = p.target.connection, title = props.state.connections.get(connection)?.title || CONNECTION;
+          return (
+            <PanelBoundary key={p.id} what={`Pop-up de la connexion « ${title} »`} fallback={failed('connection-popup', title, POPUP_FAILED)}>
+              <ConnectionPopup
+                frame={frame} state={props.state} plan={props.plan} connection={connection} registry={props.registry} params={props.params}
+                onEdit={props.onEdit} onAddMember={props.onAddMember} onRemoveMember={props.onRemoveMember} onNodeLink={(id) => props.onNodeLink(id, p.rect)}
+              />
+            </PanelBoundary>
+          );
+        }
+        const node = p.target.node;
         if (p.target.kind === 'file') {
           const file = resolveTarget(props.state, p.target)?.file ?? null, name = p.target.name;
           return (

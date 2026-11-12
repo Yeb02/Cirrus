@@ -10,8 +10,8 @@ import { filesBuild, removeFileBuild, summaryBuild, tagsBuild } from '../src/ren
 import { parseTag, tagSuggestions, withoutTag, withTag } from '../src/renderer/files/tags.ts';
 import { clampRect, dragRect, HEADER_PX, placeAt, type Rect } from '../src/renderer/ui/panels/geometry.ts';
 import {
-  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, popupOf, resolveTarget, withFile, withLinked, withNode, withoutLoose, withoutReveal,
-  withoutTopLoose,
+  closedIds, inFront, linkedRect, nodeOpenedBy, openingRect, type Panel, popupOf, resolveTarget, withConnection, withFile, withLinked, withNode, withoutLoose,
+  withoutReveal, withoutTopLoose,
 } from '../src/renderer/ui/panels/Panels.tsx';
 
 // One test base for the whole file, never the user's: each test reads its state from the store again.
@@ -119,6 +119,29 @@ test('panneaux : un nœud ouvert ferme les non épinglés, garde les épinglés,
   expect(withoutTopLoose([...loose2, { id: 8, target: { kind: 'node', node: 'f' }, rect: at(60), pinned: false, z: 1 }]).map((p) => p.id)).toEqual([2, 8]);
   expect(withoutTopLoose(loose2.filter((p) => p.pinned))).toEqual(loose2.filter((p) => p.pinned));
   expect(withoutLoose(loose2).map((p) => p.id)).toEqual([2]);
+});
+
+test('pop-up d’une connexion (retour de l’utilisateur, 2026-11-12) : un panneau flottant comme celui d’un nœud, qui ferme les non épinglés, garde les épinglés et n’a jamais de double', () => {
+  const at = (x: number): Rect => ({ x, y: 100, w: 380, h: 460 });
+  let ps: Panel[] = withNode([], 'a', at(10), 1);
+  // A connection's pop-up closes the loose node pop-up, in front.
+  ps = withConnection(ps, 'c1', at(20), 2);
+  expect(ps).toEqual([{ id: 2, target: { kind: 'connection', connection: 'c1' }, rect: at(20), pinned: false, z: 2 }]);
+  // Asked for again: no second one, it comes in front where it was.
+  expect(withConnection(ps, 'c1', at(99), 3).map((p) => [p.id, p.rect.x])).toEqual([[2, 20]]);
+  // Pinned, it stays when a node's pop-up or another connection's opens; asked for again, it comes in front where it was.
+  ps = withNode(ps.map((p) => ({ ...p, pinned: true })), 'b', at(30), 4);
+  ps = withConnection(ps, 'c2', at(40), 5);
+  expect(ps.map((p) => [p.id, p.pinned])).toEqual([[2, true], [5, false]]);
+  ps = withConnection(ps, 'c1', at(50), 6);
+  expect(ps.map((p) => [p.id, p.rect.x, p.z])).toEqual([[2, 20, 5]]);
+  // Loose, a file's preview leaves it, Escape and a click elsewhere close it.
+  const loose = withConnection([], 'c3', at(60), 8);
+  expect(withFile(loose, 'n', 'a.pdf', at(70), 9).map((p) => p.id)).toEqual([8, 9]);
+  expect(withoutTopLoose(loose)).toEqual([]);
+  expect(withoutLoose(loose)).toEqual([]);
+  // A node and a connection of the same id are not the same pop-up.
+  expect(withNode(loose.map((p) => ({ ...p, pinned: true })), 'c3', at(80), 10).map((p) => p.id)).toEqual([8, 10]);
 });
 
 test('fermeture : les panneaux qu’une règle ferme, dont un champ en cours de saisie est quitté d’abord (I1 de la relecture)', () => {

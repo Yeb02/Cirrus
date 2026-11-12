@@ -12,7 +12,7 @@ const el = (classes: string[], inside: string[] = []): OnScreen => ({
 
 test('hasEscapeFirst : un pop-up volant libre, un pop-up de connexion, un menu, un titre en cours, un plein écran prennent Échap avant le panneau', () => {
   expect(hasEscapeFirst(el(['panel', 'node-popup'], ['panels']))).toBe(true);
-  expect(hasEscapeFirst(el(['popup']))).toBe(true);
+  expect(hasEscapeFirst(el(['panel', 'connection-popup'], ['panels']))).toBe(true);
   expect(hasEscapeFirst(el(['menu', 'context-menu']))).toBe(true);
   expect(hasEscapeFirst(el(['title-editor']))).toBe(true);
   expect(hasEscapeFirst(el(['full-screen', 'compare-view']))).toBe(true);
@@ -21,6 +21,7 @@ test('hasEscapeFirst : un pop-up volant libre, un pop-up de connexion, un menu, 
 test('hasEscapeFirst : un pop-up épinglé ne prend pas Échap (seule la croix le ferme)', () => {
   expect(hasEscapeFirst(el(['panel', 'node-popup', 'pinned'], ['panels']))).toBe(false);
   expect(hasEscapeFirst(el(['panel', 'pinned'], ['panels']))).toBe(false);
+  expect(hasEscapeFirst(el(['panel', 'connection-popup', 'pinned'], ['panels']))).toBe(false);
 });
 
 test('hasEscapeFirst : un panneau hors de .panels (un latéral) n’est pas un pop-up volant', () => {
@@ -41,5 +42,5 @@ test('escapeYielded : rien à l’écran, ou seulement des pop-ups épinglés, l
   expect(escapeYielded([pinned, pinned])).toBe(false);
   expect(escapeYielded([pinned, loose])).toBe(true);
   expect(escapeYielded([el(['search-box']), el(['publication-dialog']), pinned])).toBe(false);
-  expect(escapeYielded([el(['popup'])])).toBe(true);
+  expect(escapeYielded([el(['panel', 'connection-popup'], ['panels'])])).toBe(true);
 });

@@ -14,7 +14,7 @@ import {
   MAX_CONSULTATION_BATCH, MAX_DETAIL_CHARS, planShownDraft, searchDraft,
 } from '../src/renderer/consultations.ts';
 import { type JumpHost, Jumps } from '../src/renderer/ui/graph/jumps.ts';
-import { openedPanels, type Panel, withFile, withLinked, withNode, withoutLoose } from '../src/renderer/ui/panels/Panels.tsx';
+import { openedPanels, type Panel, withConnection, withFile, withLinked, withNode, withoutLoose } from '../src/renderer/ui/panels/Panels.tsx';
 import { fullDraft } from '../src/renderer/ui/screens.ts';
 
 // The recording of consultations (plan 6a, D6, task 5): the file and its batches (main), the queue that feeds it
@@ -578,6 +578,13 @@ test('node_popup et file_preview : un pop-up ou un aperçu qui s’ouvre est un 
   // Closing opens nothing.
   expect(openedPanels(d, withoutLoose(d))).toEqual([]);
   expect(openedPanels(d, d)).toEqual([]);
+});
+
+test('connection_popup : le pop-up d’une connexion qui s’ouvre est un événement ; remis devant, non', () => {
+  const a = withConnection([], 'c1', rect, 1);
+  expect(openedPanels([], a)).toEqual([{ kind: 'connection_popup', subject: 'c1' }]);
+  expect(openedPanels(a, withConnection(a, 'c1', rect, 2))).toEqual([]);
+  expect(openedPanels(a, withNode(a, 'n1', rect, 3))).toEqual([{ kind: 'node_popup', subject: 'n1' }]);
 });
 
 test('file_fullscreen : le plein écran d’un fichier est un événement, sa fermeture et la comparaison d’un .tex avec sa copie non', () => {

@@ -50,8 +50,11 @@ export const refusesStrayDrop = (e: Dragged & { defaultPrevented: boolean }): bo
 type DropZone = 'popup' | 'graph';
 /** What a drop lands on: an element of the page, or what stands for one (its `closest`). */
 type DropTarget = { closest?(selectors: string): unknown };
-/** What floats over the graph and refuses files (task 4): a connection's pop-up, a question; the import dialog takes its own (plan 4c). */
-const GRAPH_REFUSES = '.popup, .ask, .publication-dialog';
+/**
+ * What floats over the graph and refuses files (task 4): a question; the import dialog takes its own (plan 4c). A
+ * connection's pop-up is a floating panel, out of the graph, which takes none (2026-11-12).
+ */
+const GRAPH_REFUSES = '.ask, .publication-dialog';
 
 /**
  * What takes the files let go on `target` (Review Focus 2): a node's pop-up, anywhere on it (its list of files, its

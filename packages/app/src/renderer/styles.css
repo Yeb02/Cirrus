@@ -203,27 +203,20 @@ button, input, select { font: inherit; color: var(--ink); }
 .search-box .search-results .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-box .search-results li.connection .title { font-style: italic; }
 .search-box .search-results .where { flex: none; font-size: 12px; color: var(--muted); }
-.popup {
-  position: absolute; z-index: 28; width: 320px; box-sizing: border-box; padding: 10px 12px 12px; user-select: text;
-  background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.35); border-radius: 10px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);
-}
-.popup .close { position: absolute; right: 6px; top: 4px; border: none; background: none; font-size: 16px; color: var(--muted); cursor: pointer; }
-.popup h4 { margin: 10px 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
-.popup input, .popup textarea, .popup select {
+/* A connection's pop-up (spec 8.5, 11.2): a floating panel as a node's (.panel, below); its members and the addition of one. */
+.connection-popup select {
   box-sizing: border-box; background: var(--sky1); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 3px 6px; color: var(--ink);
 }
-.popup .title { width: calc(100% - 20px); font-weight: 600; }
-.popup textarea { display: block; width: 100%; margin-top: 6px; resize: vertical; font: 12.5px/1.4 Consolas, monospace; }
-.popup ul { list-style: none; margin: 0; padding: 0; }
-.popup li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
-.popup li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.popup .dim, .popup li.dim .name { color: var(--muted); opacity: 0.7; }
-.popup .remove { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 15px; }
-.popup .remove:hover { color: var(--ink); }
-.popup .add { margin-top: 6px; border: none; background: none; color: var(--accent); cursor: pointer; padding: 2px 0; }
-.popup .adding input { width: 100%; margin-top: 6px; }
-.popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
-.popup .pick:hover { background: rgba(143, 184, 255, 0.14); }
+.connection-popup ul { list-style: none; margin: 0; padding: 0; }
+.connection-popup li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.connection-popup li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connection-popup li.dim .name { color: var(--muted); opacity: 0.7; }
+.connection-popup .remove { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 15px; }
+.connection-popup .remove:hover { color: var(--ink); }
+.connection-popup .add { margin-top: 6px; border: none; background: none; color: var(--accent); cursor: pointer; padding: 2px 0; }
+.connection-popup .adding input { width: 100%; margin-top: 6px; }
+.connection-popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
+.connection-popup .pick:hover { background: rgba(143, 184, 255, 0.14); }
 /*
  * Floating panels (plan 4a): node pop-ups, file previews. In window pixels (position: fixed), over the graph and its
  * hover marks, under the tabs' menu (16), the toasts, the graph's menus, dialogs and ghosts. `.panel > header` is
@@ -269,24 +262,24 @@ button, input, select { font: inherit; color: var(--ink); }
 }
 .panel textarea { display: block; width: 100%; resize: vertical; font: 12.5px/1.4 Consolas, monospace; }
 .panel .dim { color: var(--muted); opacity: 0.7; }
-.node-popup .tags, .popup .tags { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0 0 6px; padding: 0; }
-.node-popup .tag, .popup .tag {
+.node-popup .tags, .connection-popup .tags { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0 0 6px; padding: 0; }
+.node-popup .tag, .connection-popup .tag {
   display: inline-flex; align-items: center; padding: 1px 2px 1px 8px; border-radius: 11px; font-size: 12.5px;
   background: rgba(143, 184, 255, 0.13); border: 1px solid rgba(143, 184, 255, 0.25);
 }
-.node-popup .tag .remove, .popup .tag .remove { border: none; background: none; padding: 0 5px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
-.node-popup .tag .remove:hover, .popup .tag .remove:hover { color: var(--ink); }
-.node-popup .tag.default, .popup .tag.default { padding: 0; background: none; border-style: dashed; opacity: 0.6; }
-.node-popup .tag.default button, .popup .tag.default button { border: none; background: none; padding: 1px 8px; color: var(--muted); cursor: pointer; font-size: inherit; }
-.node-popup .tag-field, .popup .tag-field { width: 100%; }
-.node-popup .error, .popup .error { margin: 4px 0 0; color: var(--warn); font-size: 12.5px; }
-.node-popup .suggestions, .popup .suggestions { margin-top: 2px; padding: 2px; border: 1px solid rgba(143, 184, 255, 0.2); border-radius: 6px; }
+.node-popup .tag .remove, .connection-popup .tag .remove { border: none; background: none; padding: 0 5px; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.node-popup .tag .remove:hover, .connection-popup .tag .remove:hover { color: var(--ink); }
+.node-popup .tag.default, .connection-popup .tag.default { padding: 0; background: none; border-style: dashed; opacity: 0.6; }
+.node-popup .tag.default button, .connection-popup .tag.default button { border: none; background: none; padding: 1px 8px; color: var(--muted); cursor: pointer; font-size: inherit; }
+.node-popup .tag-field, .connection-popup .tag-field { width: 100%; }
+.node-popup .error, .connection-popup .error { margin: 4px 0 0; color: var(--warn); font-size: 12.5px; }
+.node-popup .suggestions, .connection-popup .suggestions { margin-top: 2px; padding: 2px; border: 1px solid rgba(143, 184, 255, 0.2); border-radius: 6px; }
 .node-popup .pick { display: block; width: 100%; text-align: left; border: none; background: none; padding: 3px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px; }
 .node-popup .pick:hover, .node-popup .pick.on { background: rgba(143, 184, 255, 0.14); }
-/* The same tags in a connection's pop-up (plan 6a, D4): its list rules (.popup li, .pick) give way to the chips' and the suggestions'. */
-.popup .tag { gap: 0; }
-.popup .suggestions .pick { padding: 3px 6px; font-size: 12.5px; }
-.popup .pick.on { background: rgba(143, 184, 255, 0.14); }
+/* The same tags in a connection's pop-up (plan 6a, D4): its list rules (.connection-popup li, .pick) give way to the chips' and the suggestions'. */
+.connection-popup .tag { gap: 0; }
+.connection-popup .suggestions .pick { padding: 3px 6px; font-size: 12.5px; }
+.connection-popup .pick.on { background: rgba(143, 184, 255, 0.14); }
 .node-popup .meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: 12.5px; }
 .node-popup .meta dt { color: var(--muted); }
 .node-popup .meta dd { margin: 0; }
@@ -578,8 +571,7 @@ button, input, select { font: inherit; color: var(--ink); }
 .latex-field { position: relative; outline: none; border-radius: 5px; }
 .latex-field.view { cursor: text; }
 .latex-field:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
-.popup .latex-field { margin-top: 6px; }
-.popup .latex-field textarea { margin-top: 0; }
+.connection-popup .latex-field { margin-top: 6px; }
 .latex-snippet { padding: 6px 8px; background: #fff; border-radius: 5px; }
 .latex-snippet .pages { position: relative; }
 .latex-snippet .pdf-page { box-shadow: none; }

@@ -1,7 +1,7 @@
 import type { Id } from '@cirrus/core';
-import { deleteSummary, type PlanScene } from '@cirrus/view';
+import { deleteSummary, otherPlans, type PlanScene } from '@cirrus/view';
 import { useRef, useState } from 'react';
-import { deleteBuild, deleteConnectionBuild, hideBuild, lastPlanNodes, removeMemberBuild } from '../../actions.ts';
+import { addMemberBuild, deleteBuild, deleteConnectionBuild, hideBuild, lastPlanNodes, removeMemberBuild } from '../../actions.ts';
 import type { Question } from '../Dialogs.tsx';
 import { type Graph, plural } from './core.ts';
 import { connectionElsewhere, connectionPlans, memberElsewhere, memberPlans, nodesElsewhere } from './where.ts';
@@ -35,6 +35,16 @@ export function useQuestions(graph: Graph) {
       text, choices: plans.map((id) => ({ value: id, label: stateRef.current.plans.get(id)?.name ?? '?' })),
       answer: (v) => { if (v !== null) go(v); },
     });
+  };
+  /**
+   * Adding a member to a connection from its pop-up (spec 11.2), in the plan shown: also in the other plans where the
+   * connection is shown, if the answer is « partout ».
+   */
+  const addMember = (connection: Id, node: Id) => {
+    const plan = sceneRef.current?.plan.id;
+    if (!plan) return;
+    askWhere('Ajouter aussi ce nœud à la connexion dans les autres plans où elle est affichée ?',
+      otherPlans(stateRef.current, plan, [node], connection), (everywhere) => edit(addMemberBuild(plan, connection, node, everywhere)));
   };
   /**
    * Removing a member of a connection (spec 11.2, 7): here only or everywhere, with its plans counted, a warning for the
@@ -142,7 +152,7 @@ export function useQuestions(graph: Graph) {
       answer: (v) => { if (v !== null) edit(deleteConnectionBuild(plan, connection, v === 'everywhere')); },
     });
   };
-  return { question, setQuestion, asking, askWhere, askPlan, removeMember, titles, askHide, askDelete, askDeleteConnection };
+  return { question, setQuestion, asking, askWhere, askPlan, addMember, removeMember, titles, askHide, askDelete, askDeleteConnection };
 }
 
 export type QuestionsPart = ReturnType<typeof useQuestions>;

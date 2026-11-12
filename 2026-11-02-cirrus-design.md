@@ -680,8 +680,9 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Pop-ups épinglés et non épinglés :**
   - un clic sur un nœud, sur un groupe ou sur le fantôme d'un nœud lointain ouvre son pop-up près du clic. Pour le fantôme, c'est la règle de la section 8.5 ;
   - un nœud n'a qu'un pop-up : un second clic le fait passer devant ;
+  - le pop-up d'une connexion (8.5, 11.2) est un panneau comme celui d'un nœud (retour de l'utilisateur, 2026-11-12) : il s'ouvre près du double clic, à la taille d'un pop-up, se déplace par son en-tête, qui porte son titre, se redimensionne, s'épingle et suit les mêmes règles. Ses membres se lisent, s'ajoutent et se retirent dans le plan montré ;
   - un pop-up non épinglé se ferme quand un autre s'ouvre, à tout clic hors de tout panneau, ou par Échap. Échap annule d'abord un geste du graphe en cours, même lancé depuis le menu contextuel, et le pop-up reste ;
-  - exception connue, reportée : un clic sur ce qui flotte au-dessus du graphe (le coin de la hiérarchie, le pop-up d'une connexion, le menu, une question) laisse ouvert le pop-up non épinglé ;
+  - exception connue, reportée : un clic sur ce qui flotte au-dessus du graphe (le coin de la hiérarchie, le menu, une question) laisse ouvert le pop-up non épinglé ;
   - un pop-up épinglé reste d'un onglet à l'autre, mais pas d'une session à l'autre ;
   - l'aperçu d'un fichier suit les mêmes règles. Un seul aperçu non épinglé est ouvert à la fois ;
   - le pop-up d'un nœud supprimé dit « Ce nœud n'existe plus. », et son contenu revient si la suppression est annulée.
@@ -914,7 +915,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **La boîte de Ctrl+K :** un champ en haut du graphe, centré sur lui et non sur la fenêtre, avec ses filtres et la liste des résultats dessous.
   - Chaque ligne montre le titre et l'endroit : « ce plan », « lobby », le nom d'un autre plan, ou « aucun plan » pour une annotation. Les flèches parcourent la liste, Entrée ou un clic saute au résultat, Échap ferme.
   - Les filtres : Titre, Tags et Résumé sont cochés ; Contenu (les `.tex`) ne l'est pas, ni « Ce plan seulement ». Le texte des PDF et des autres fichiers attend le plan 6b.
-  - Ctrl+K marche partout, un champ de texte compris, sauf sous un plein écran ou l'éditeur du préambule, pendant une question, et dans un éditeur de code, où il garde son sens [C]. Il est entendu avant tout panneau : le pop-up d'une connexion, qui garde ses touches, ne l'avale pas [C]. Un second Ctrl+K rend le focus au champ et sélectionne ce qui y est tapé [C].
+  - Ctrl+K marche partout, un champ de texte compris, sauf sous un plein écran ou l'éditeur du préambule, pendant une question, et dans un éditeur de code, où il garde son sens [C]. Il est entendu avant tout panneau, qui ne l'avale pas [C]. Un second Ctrl+K rend le focus au champ et sélectionne ce qui y est tapé [C].
   - Un clic dans le graphe qui ferme les pop-ups libres ferme aussi la recherche [C]. Un plein écran qui s'ouvre la ferme. La boîte passe au-dessus des notifications [C].
   - Tant qu'elle est ouverte, les résultats du plan actuel sont cerclés dans le graphe, d'une couleur à eux, `searchFoundColor`, un vert (#5ee38f), sans devenir une sélection [C]. Une connexion est cerclée par ses extrémités dessinées dans le plan [C]. Le cercle se dessine après celui des intrus et avant le dépôt et la sélection : un objet trouvé et sélectionné montre la sélection [C].
 - **L'index,** en mémoire (section 4), garde pour chaque nœud, et pour chaque connexion de connaissance, hors de la corbeille :
