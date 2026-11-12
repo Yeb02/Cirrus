@@ -268,6 +268,9 @@ test('cœurs montrés pendant un tracé de connexion : lus dans la scène des in
   cores.forEach((c, j) => {
     const a = scene.items[sv[j * SIMPLE_INTS]], b = scene.items[sv[j * SIMPLE_INTS + 1]];
     expect([c.x, c.y, c.conn]).toEqual([(a.x + b.x) * 0.5 - cam.x, (a.y + b.y) * 0.5 - cam.y, sv[j * SIMPLE_INTS + 3]]);
+    // Its masks read in place in the simple instances, no view made per core (point 7, ronde 1, M4).
+    expect(c.maskAt).toBe(j * SIMPLE_INTS + 5);
+    expect(c.masks).toBe(cores[0].masks);
   });
   // An action that compacts the scene: its slots are no longer those the instances cite.
   let next = scene;

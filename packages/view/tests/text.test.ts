@@ -128,12 +128,15 @@ test('le titre d’un nœud donne une instance par glyphe visible ; un texte ill
 });
 
 test('la disposition d’une instance de glyphe n’a qu’une définition : appendTitle écrit chaque champ à sa place', () => {
-  expect(GLYPH_FIELDS.map(([f]) => f)).toEqual(['anchor', 'glyph', 'atlas', 'title', 'fold', 'slot']);
+  expect(GLYPH_FIELDS.map(([f]) => f)).toEqual(['anchor', 'glyph', 'atlas', 'title', 'fold', 'slot', 'masks']);
   expect(GLYPH_FIELDS.reduce((n, [, size]) => n + size, 0)).toBe(GLYPH_FLOATS);
   let at = 0;
   for (const [f, size] of GLYPH_FIELDS) { expect(GLYPH_AT[f]).toBe(at); at += size; }
   const out = new FloatList();
-  appendTitle(out, font, 'Ab', 32, 0, 40, 5, 6, TITLE_CONNECTION, 3, 0.5, 7, 8, 9);
+  appendTitle(out, font, 'Ab', 32, 0, 40, 5, 6, TITLE_CONNECTION, 3, 0.5, 7, 8, 9, [11, 12, -1, -1]);
+  const none = new FloatList();
+  appendTitle(none, font, 'Ab', 32, 0, 40, 5, 6, TITLE_CONNECTION, 3, 0.5, 7, 8, 9);
+  expect([...none.view().subarray(GLYPH_AT.masks, GLYPH_AT.masks + 4)]).toEqual([-1, -1, -1, -1]);
   const l = layoutText(font, 'Ab', 32, 0, 40), d = out.view(), s = 32 / font.size, G = GLYPH_AT.glyph, U = GLYPH_AT.atlas;
   expect(d.length).toBe(l.glyphs.length * GLYPH_FLOATS);
   l.glyphs.forEach((gl, j) => {
@@ -143,5 +146,6 @@ test('la disposition d’une instance de glyphe n’a qu’une définition : app
     expect(d[o + U] / font.scaleW).toBeCloseTo(gl.u0, 9);
     expect(d[o + U + 1] / font.scaleH).toBeCloseTo(gl.v0, 9);
     expect([d[o + T], d[o + T + 1], d[o + T + 2], d[o + T + 3], d[o + F], d[o + F + 1], d[o + S]]).toEqual([32, TITLE_CONNECTION, 3, 0.5, 7, 8, 9]);
+    expect([...d.subarray(o + GLYPH_AT.masks, o + GLYPH_AT.masks + 4)]).toEqual([11, 12, -1, -1]);
   });
 });

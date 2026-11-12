@@ -42,7 +42,7 @@ test('pointes : une flèche par bout de branche, à la couleur des connexions, n
 test('pointes masquées : chaque branche porte les groupes repliés de son bout ; l’effacement avec un groupe passe en mode 2', () => {
   const g = bundleGeometry({ ends: [end(0, 0, 'source'), end(1000, 300, 'target')], stubs: [] }, P);
   const m = newGlyphMeshes();
-  appendBundleGlyphs(m, g, opts({ fade: 2, foldK: 1, masks: (b, out) => { out.length = 0; out.push(b.nodeEnd === 'p0' ? 7 : 9, -1, -1, -1); } }), P);
+  appendBundleGlyphs(m, g, opts({ fade: 2, foldK: 1, masks: (b) => [b.nodeEnd === 'p0' ? 7 : 9, -1, -1, -1] }), P);
   const masks = [...m.masks.view()];
   expect(masks.slice(0, 4)).toEqual([7, -1, -1, -1]);
   expect(masks.slice(16, 20)).toEqual([9, -1, -1, -1]);

@@ -145,7 +145,7 @@ export function nodeOpenedBy(item: Pick<SceneItem, 'kind' | 'id' | 'node' | 'pha
   return item.phantom === 'node' ? item.node : null;
 }
 
-/** The pop-up a double click in the graph opens: a node's, or a connection's (of the connections a line stands for). */
+/** The pop-up a double click in the graph opens: a node's, or a connection's. */
 export type GraphPopup = { kind: 'node'; node: Id } | { kind: 'connection'; id: Id };
 
 /**

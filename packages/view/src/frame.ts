@@ -6,6 +6,7 @@ import type { FloatList, IntList } from './geometry/arrays.ts';
 import { type BundleEnd, type BundleGeometry, bundleGeometry } from './geometry/bundle.ts';
 import { NO_PARENT } from './geometry/envelope.ts';
 import { offsetPolygon } from './geometry/hull.ts';
+import { masksOf } from './geometry/mask.ts';
 import { foldT, stepScale } from './lod.ts';
 import type { RenderParams, Rgb } from './params.ts';
 import type { PlanScene, SceneItem } from './scene.ts';
@@ -180,8 +181,9 @@ export function placeConnectionTitles(
 }
 
 /**
- * The glyphs of the connection titles placed, after the items' (TITLE_CONNECTION, anchored relative to the origin);
- * `spans`: for each title, its first glyph and their count (a title that follows its core moves its anchor).
+ * The glyphs of the connection titles placed, after the items' (TITLE_CONNECTION, anchored relative to the origin), with
+ * their connection's masks (point 7, ronde 1); `spans`: for each title, its first glyph and their count (a title that
+ * follows its core moves its anchor).
  */
 export function appendConnectionTitles(
   out: FloatList, scene: PlanScene, visible: VisibleSet, titles: PlacedTitle[], p: RenderParams, font: FontData, spans?: IntList,
@@ -189,7 +191,7 @@ export function appendConnectionTitles(
   for (const t of titles) {
     const size = p.titleFontPx * stepScale(t.kMax, p), vc = visible.connections[t.conn], start = out.length / GLYPH_FLOATS;
     appendTitle(out, font, t.text, size, 0, size * p.lineHeight, t.box.x + t.box.w / 2, t.box.y + t.box.h / 2,
-      TITLE_CONNECTION, t.conn, 1, vc.fade >= 0 ? scene.items[vc.fade].maxChildK! : NO_PARENT, NO_PARENT, -1);
+      TITLE_CONNECTION, t.conn, 1, vc.fade >= 0 ? scene.items[vc.fade].maxChildK! : NO_PARENT, NO_PARENT, -1, masksOf(vc, -1));
     spans?.push2(start, out.length / GLYPH_FLOATS - start);
   }
 }

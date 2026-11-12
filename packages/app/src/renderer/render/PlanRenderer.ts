@@ -731,8 +731,8 @@ export class PlanRenderer {
         corner.push2(QUAD[q * 2], QUAD[q * 2 + 1]);
         k.push1(c.kMax);
         conn.push1(c.conn);
-        masks.push2(c.masks[0], c.masks[1]);
-        masks.push2(c.masks[2], c.masks[3]);
+        masks.push2(c.masks[c.maskAt], c.masks[c.maskAt + 1]);
+        masks.push2(c.masks[c.maskAt + 2], c.masks[c.maskAt + 3]);
       }
       const v = j * 4;
       index.push(v, v + 1, v + 2, v, v + 2, v + 3);

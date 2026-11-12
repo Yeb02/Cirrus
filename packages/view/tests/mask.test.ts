@@ -1,13 +1,15 @@
-import { connect, createNode, createPlan, emptyState, type Id, include, type State } from '@cirrus/core';
+import { readFileSync } from 'node:fs';
+import { connect, createNode, createPlan, emptyState, type Id, include, movePhantom, splitArm, type State } from '@cirrus/core';
 import { expect, test } from 'vitest';
-import { envelopeDistance, envelopeEdges, groupEdges, maskAlpha, maskStrength } from '../src/geometry/mask.ts';
+import { envelopeDistance, envelopeEdges, groupEdges, maskAlpha, MASKS, masksOf, maskStrength } from '../src/geometry/mask.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
 import { sampleBranch } from '../src/geometry/ribbon.ts';
 import { simpleBranches } from '../src/geometry/simple.ts';
-import { CURVE_AT, CURVE_FLOATS, isSimple, MASKS, masksOf, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
+import { buildInstances, CURVE_AT, CURVE_FLOATS, isSimple, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
 import { foldT } from '../src/lod.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
-import type { VisibleConnection, VisibleEnd } from '../src/visibility.ts';
+import { buildIndex, computeVisible, type VisibleConnection, type VisibleEnd } from '../src/visibility.ts';
+import { GLYPH_AT, GLYPH_FLOATS, parseBmFont, TITLE_CONNECTION } from '../src/text.ts';
 import { camAtTextPx, created, frameAt, measure, P, run } from './helpers.ts';
 
 // Point 7 of 2026-11-12: a connection keeps its own path to its own nodes; the fill of a group that folds over one of its
@@ -95,10 +97,10 @@ test('en repli : rien ne glisse, la connexion interne s’efface avec son groupe
 
 /** A visible connection made by hand: its ends' masks. */
 const vcOf = (masks: [number, number][]): VisibleConnection => ({
-  part: 0, stubs: [], fade: -1,
+  part: 0, stubs: [], fade: -1, centerMask: -1,
   ends: masks.map(([mask, mask2], i): VisibleEnd => ({ item: 100 + i, role: i === 0 ? 'target' : 'source', key: `n${i}`, dashed: false, mask, mask2 })),
 });
-const masks = (vc: VisibleConnection, own: number) => { const out: number[] = []; masksOf(vc, own, out, 0); return out; };
+const masks = (vc: VisibleConnection, own: number) => [...masksOf(vc, own)];
 
 test('au plus quatre masques par courbe : ceux de son bout d’abord, puis le plus haut groupe des autres, puis leurs seconds', () => {
   // Three members, each in a closed group within a folding one: six groups for four places.
@@ -151,4 +153,55 @@ test('clics (point 7) : sur la partie masquée par un fond opaque, le groupe ; s
   expect(hits.hit(inside.x, inside.y, cam.zoom)).toMatchObject({ kind: 'item', item: g });
   expect(maskAlpha(scene, [g], outside.x, outside.y, cam.zoom, P)).toBe(1);
   expect(hits.hit(outside.x, outside.y, cam.zoom)).toMatchObject({ kind: 'connection', conn: ci, id: scene.ids[visible.connections[ci].part] });
+});
+
+// ———— Ronde 1 of the review
+
+const font = parseBmFont(readFileSync(new URL('../../app/src/renderer/public/font/inter-msdf.fnt', import.meta.url), 'utf8'));
+
+test('le titre d’une connexion porte ses masques : posé sur le fond d’un groupe fermé, il s’efface avec lui ; les autres titres n’en ont pas (ronde 1, I2)', () => {
+  // G wide, x at its left (step 0); y (step 1) just right of G: the core, midway, falls inside G.
+  const st = emptyState();
+  const p = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const node = (title: string, x: number, y: number, k = 0) => created(run(st, createNode(st, { plan: p, title, x, y, k })), 'node');
+  const g = node('G', 0, 0, 2), x = node('x', 0, 0), w = node('w', 3000, 0), y = node('y', 3600, 0, 1);
+  run(st, include(st, p, x, g));
+  run(st, include(st, p, w, g));
+  run(st, connect(st, { plan: p, members: [{ node: x, role: 'source' }, { node: y, role: 'target' }], title: 'relie' }));
+  const scene = buildScene(st, p, measure, P), G = scene.byId.get(g)!;
+  const cam = { ...camAtTextPx(scene, 0, 16 * 0.37), x: 1800, y: 0 };
+  const visible = computeVisible(scene, buildIndex(scene, P), cam, P);
+  const inst = buildInstances(scene, visible, cam, { x: 0, y: 0 }, P, undefined, font, new Map());
+  expect(inst.titles.map((t) => t.text)).toEqual(['relie']);
+  const t = inst.texts.view(), titleGlyphs: number[][] = [], others: number[][] = [];
+  for (let o = 0; o < t.length; o += GLYPH_FLOATS) {
+    const masks = [...t.subarray(o + GLYPH_AT.masks, o + GLYPH_AT.masks + MASKS)];
+    (t[o + GLYPH_AT.title + 1] === TITLE_CONNECTION ? titleGlyphs : others).push([...masks, t[o + GLYPH_AT.anchor], t[o + GLYPH_AT.anchor + 1]]);
+  }
+  expect(titleGlyphs.length).toBeGreaterThan(0);
+  expect(titleGlyphs.every((m) => m.slice(0, 4).join() === [G, -1, -1, -1].join())).toBe(true);
+  expect(others.every((m) => m.slice(0, 4).every((v) => v === -1))).toBe(true);
+  // Where it sits on the closed group's fill, the mask hides it; a title away from any group keeps its opacity.
+  const [ax, ay] = titleGlyphs[0].slice(4);
+  expect(maskAlpha(scene, titleGlyphs[0].slice(0, 4), ax, ay, cam.zoom, P)).toBe(maskAlpha(scene, [G], ax, ay, cam.zoom, P));
+  expect(maskAlpha(scene, [-1, -1, -1, -1], ax, ay, cam.zoom, P)).toBe(1);
+});
+
+test('le fantôme centre d’une partie lointaine, dans un groupe qui se replie, la masque aussi (ronde 1, M1)', () => {
+  const st = emptyState();
+  const p = created(run(st, createPlan(st, 'P', 'plan')), 'plan');
+  const node = (title: string, x: number, y: number) => created(run(st, createNode(st, { plan: p, title, x, y, k: 0 })), 'node');
+  const a = node('A', 0, 0), b = node('B', 400, 0), c = node('C', 6000, 0), h = node('H', 6000, 600), d = node('D', 6000, 600);
+  run(st, include(st, p, d, h));
+  const conn = created(run(st, connect(st, { plan: p, members: [{ node: a, role: 'source' }, { node: b, role: 'source' }, { node: c, role: 'target' }] })), 'connection');
+  run(st, splitArm(st, p, conn, c, { x: 600, y: 0, k: 0 }, { x: 6000, y: 400, k: 0 }));
+  const centre = [...st.phantoms.values()].find((x) => x.of.kind === 'center')!;
+  run(st, movePhantom(st, centre.id, 6000, 450, h));
+  const scene = buildScene(st, p, measure, P), H = scene.byId.get(h)!, ctr = scene.byId.get(centre.id)!;
+  expect(scene.items[ctr].parent).toBe(H);
+  const cam = { ...camAtTextPx(scene, 0, 7), x: 6000, y: 300 };
+  const vc = computeVisible(scene, buildIndex(scene, P), cam, P).connections.find((x) => x.center === ctr)!;
+  expect(vc.centerMask).toBe(H);
+  expect(masks(vc, -1)).toContain(H);
+  expect(masks(vc, 0)).toContain(H);
 });

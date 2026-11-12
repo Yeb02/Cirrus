@@ -265,7 +265,7 @@ export const TITLE_NODE = 0, TITLE_GROUP_OPEN = 1, TITLE_GROUP_CLOSED = 2, TITLE
  * - fold (2): the group's or the fading connection's maxChildK, the parent group's (NO_PARENT: none);
  * - slot (1): its item's slot in the item texture, −1 for none.
  */
-export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2], ['slot', 1]] as const;
+export const GLYPH_FIELDS = [['anchor', 2], ['glyph', 4], ['atlas', 2], ['title', 4], ['fold', 2], ['slot', 1], ['masks', 4]] as const;
 type GlyphField = (typeof GLYPH_FIELDS)[number][0];
 
 const starts = {} as Record<GlyphField, number>;
@@ -275,15 +275,17 @@ for (const [f, size] of GLYPH_FIELDS) { starts[f] = floats; floats += size; }
 export const GLYPH_AT: Readonly<Record<GlyphField, number>> = starts;
 /** Floats per glyph instance. */
 export const GLYPH_FLOATS = floats;
-const { anchor: AT_ANCHOR, glyph: AT_GLYPH, atlas: AT_ATLAS, title: AT_TITLE, fold: AT_FOLD, slot: AT_SLOT } = GLYPH_AT;
+const { anchor: AT_ANCHOR, glyph: AT_GLYPH, atlas: AT_ATLAS, title: AT_TITLE, fold: AT_FOLD, slot: AT_SLOT, masks: AT_MASKS } = GLYPH_AT;
 
 /**
  * Appends one instance per visible glyph of a title (world font size `size`, wrap and line height in world units):
- * (x, y) from the centre of the item at `slot`, or relative to the origin without one (slot −1).
+ * (x, y) from the centre of the item at `slot`, or relative to the origin without one (slot −1). `masks`: a connection
+ * title's, its connection's (instances.ts, masksOf: the shader hides it under their fills where it sits, point 7); none
+ * for an item's title.
  */
 export function appendTitle(
   out: FloatList, font: FontData, text: string, size: number, wrap: number, lineHeight: number,
-  x: number, y: number, kind: number, index: number, dim: number, foldK: number, parentK: number, slot: number,
+  x: number, y: number, kind: number, index: number, dim: number, foldK: number, parentK: number, slot: number, masks?: ArrayLike<number>,
 ): void {
   const fi = indexOf(font);
   const l = cachedLayout(fi, text, wrap * (font.size / size), lineHeight * (font.size / size));
@@ -298,5 +300,7 @@ export function appendTitle(
     d[m] = size; d[m + 1] = kind; d[m + 2] = index; d[m + 3] = dim;
     d[f] = foldK; d[f + 1] = parentK;
     d[o + AT_SLOT] = slot;
+    const k = o + AT_MASKS;
+    if (masks) { d[k] = masks[0]; d[k + 1] = masks[1]; d[k + 2] = masks[2]; d[k + 3] = masks[3]; } else { d[k] = -1; d[k + 1] = -1; d[k + 2] = -1; d[k + 3] = -1; }
   }
 }

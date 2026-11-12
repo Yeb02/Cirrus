@@ -2,6 +2,7 @@ import type { Vec2 } from '@cirrus/core';
 import { foldT } from '../lod.ts';
 import type { RenderParams } from '../params.ts';
 import type { PlanScene } from '../scene.ts';
+import type { VisibleConnection } from '../visibility.ts';
 import { offsetPolygon } from './hull.ts';
 
 /**
@@ -80,4 +81,43 @@ export function maskAlpha(scene: PlanScene, masks: ArrayLike<number>, x: number,
     a *= 1 - maskStrength(scene, g, zoom, p) * Math.min(1, Math.max(0, 1 - reach));
   }
   return a;
+}
+
+/** The groups a curve can be masked by (spec 8.5, point 7): the size of an ivec4 in the shaders. */
+export const MASKS = 4;
+
+/** masksOf's answer: one array, filled again at each call. */
+const OUT = new Int32Array(4);
+
+/**
+ * The groups whose fill is laid over a curve of `vc` (spec 8.5, point 7), MASKS at most, −1 past them: an Int32Array of
+ * MASKS, the same one at each call (valid until the next; callers copy it). For the branch of end `own`: that end's two
+ * (VisibleEnd.mask, mask2) first, then the other ends' highest and the centre phantom's (VisibleConnection.centerMask),
+ * then their second ones; for a trunk, a stub's branch, a simple connection, a marker or a title (`own` −1): every end's
+ * highest and the centre's, then their second ones. A simple connection has two ends: all of its masks fit. Past MASKS
+ * (a bundle whose members sit in more than four folding groups), the ones left out are other ends': a branch crossing
+ * such a group is drawn over its fill there, as a connection that only passes over it — its own end is always hidden.
+ * Written into one typed array of its own (ronde 1 of the review, I1): written straight into the callers' Int32Array,
+ * Float32Array and arrays, its stores went megamorphic and doubled buildInstances on a flat plan.
+ */
+export function masksOf(vc: VisibleConnection, own: number): Int32Array {
+  const out = OUT, ends = vc.ends, ne = ends.length, centre = vc.centerMask;
+  // No group over any end nor the centre (most connections): four −1.
+  let any = centre >= 0;
+  for (let k = 0; k < ne && !any; k++) if (ends[k].mask >= 0) any = true;
+  if (!any) { out[0] = -1; out[1] = -1; out[2] = -1; out[3] = -1; return out; }
+  let n = 0;
+  // Candidates in order (own end's two, every end's highest and the centre's, every end's second), each written once.
+  for (let pass = 0; pass < 3 && n < MASKS; pass++) {
+    const count = pass === 0 ? (own >= 0 ? 2 : 0) : pass === 1 ? ne + 1 : ne;
+    for (let k = 0; k < count && n < MASKS; k++) {
+      const g = pass === 0 ? (k === 0 ? ends[own].mask : ends[own].mask2) : pass === 1 ? (k < ne ? ends[k].mask : centre) : ends[k].mask2;
+      if (g < 0) continue;
+      let seen = false;
+      for (let q = 0; q < n; q++) if (out[q] === g) { seen = true; break; }
+      if (!seen) out[n++] = g;
+    }
+  }
+  for (; n < MASKS; n++) out[n] = -1;
+  return out;
 }

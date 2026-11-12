@@ -69,8 +69,8 @@ interface GlyphOptions {
   foldK: number;
   /** Visible connection index (hover). */
   conn: number;
-  /** Writes into out[0..4) the groups masking a branch's glyphs (masksOf); none without it. */
-  masks?: (b: Branch, out: number[]) => void;
+  /** The groups masking a branch's glyphs (masksOf: four, −1 for none); none without it. */
+  masks?: (b: Branch) => ArrayLike<number>;
 }
 
 /** The glyph vertices of one bundle, in the order appendBundleGlyphs writes them (what an in-place rewrite checks). */
@@ -104,7 +104,7 @@ export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, o: Glyp
   // Each attribute written in place, vertex by vertex, in the storage once extended.
   const pos = g.position.storage, off = g.offset.storage, sc = g.scale.storage, fi = g.fill.storage;
   const e0 = g.end0.storage, e1 = g.end1.storage, fo = g.fold.storage, cn = g.conn.storage, ms = g.masks.storage;
-  let masks = NO_MASKS;
+  let masks: ArrayLike<number> = NO_MASKS;
   /** A fan of glyph vertices around the node end: vertex 0 first, triangles given as offsets into the list. */
   const glyph = (p0: Vec2, offs: Vec2[], tris: number[], scale: number, fill: number) => {
     if (at === undefined) for (const t of tris) g.index.push(v + t);
@@ -135,9 +135,8 @@ export function appendBundleGlyphs(g: GlyphMeshes, open: BundleGeometry, o: Glyp
     const d = tangent(b.p3, b.b2), n = perp(d);
     return [{ x: 0, y: 0 }, sub(mul(n, H), mul(d, L)), mul(d, -L * p.arrowNotch), sub(mul(n, -H), mul(d, L))];
   };
-  const own: number[] = [];
   for (const a of open.branches) {
-    if (o.masks) { o.masks(a, own); masks = own; }
+    if (o.masks) masks = o.masks(a);
     const sNode = p.factor ** a.kNode, node = a.nodeEnd === 'p0' ? a.p0 : a.p3;
     glyph(node, a.role === 'associate' ? dot(p.dotRadius) : arrow(a), a.role === 'associate' ? DOT_TRIS : ARROW_TRIS, sNode, a.dashed ? 2 : 1);
     if (a.stub && a.role !== 'associate') glyph(node, dot(p.dotRadius), DOT_TRIS, sNode, 2);

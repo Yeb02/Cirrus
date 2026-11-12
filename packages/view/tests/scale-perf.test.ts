@@ -12,7 +12,8 @@ import { copyClip, pasteSteps } from '../src/clip.ts';
 import { dropEffects, dropTarget, intruders, visibleIntruders } from '../src/edit.ts';
 import { buildHitIndex } from '../src/hit.ts';
 import { type EnvelopeMeshes, newEnvelopeMeshes } from '../src/geometry/envelope.ts';
-import { buildInstances, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
+import { MASKS, masksOf } from '../src/geometry/mask.ts';
+import { buildInstances, isSimple, itemTexels, SIMPLE_INTS, SLOT_FLOATS } from '../src/instances.ts';
 import { patchEdit, patchPreview, previewEnvelopes, previewSlots, previewSplit, type PreviewSplit, type Shown } from '../src/preview.ts';
 import { dropScenes, repercussion } from '../src/repercussion.ts';
 import { buildScene, isLive, type PlanScene, withOffsets } from '../src/scene.ts';
@@ -187,6 +188,23 @@ test('plan plat de 20 000 nœuds vu en entier : ses instances, titres compris (c
   expect(r.out.simple.length / SIMPLE_INTS).toBeGreaterThan(15_000);
   expect(r.out.pending).toBe(false);
   expect(r.ms).toBeLessThanOrEqual(FLAT_INSTANCES_CEILING_MS);
+}, 120_000);
+
+/** The masks of the flat plan's simple connections (none: no group), as buildInstances writes them (ronde 1 of point 7, I1). */
+const MASKS_CEILING_MS = 1;
+
+test('plan plat : les masques de ses 18 000 connexions simples, sans groupe, en 1 ms au plus (point 7, ronde 1)', () => {
+  const { scene, cam } = flatPlan(), visible = computeVisible(scene, buildIndex(scene, P), cam, P);
+  const simple = visible.connections.filter((vc) => isSimple(scene, vc)), out = new Int32Array(MASKS * simple.length);
+  // As buildInstances writes them into the simple instances.
+  const r = best(() => {
+    for (let i = 0, o = 0; i < simple.length; i++, o += MASKS) { const m = masksOf(simple[i], -1); out[o] = m[0]; out[o + 1] = m[1]; out[o + 2] = m[2]; out[o + 3] = m[3]; }
+    return out;
+  }, 10, 15);
+  show(`masksOf, plan plat (${simple.length} connexions simples)`, r.ms);
+  expect(simple.length).toBeGreaterThan(15_000);
+  expect(r.out.every((g) => g === -1)).toBe(true);
+  expect(r.ms).toBeLessThanOrEqual(MASKS_CEILING_MS);
 }, 120_000);
 
 test('base de référence : la scène du lobby se construit d’un passage (cible 400 ms) et tient en 30 % de la mesure du 2026-11-03', () => {

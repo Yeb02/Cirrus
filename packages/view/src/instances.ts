@@ -4,6 +4,7 @@ import type { Camera } from './camera.ts';
 import { FloatList, IntList } from './geometry/arrays.ts';
 import type { Branch, BundleGeometry } from './geometry/bundle.ts';
 import { appendEnvelope, clearEnvelopeMeshes, type EnvelopeMeshes, newEnvelopeMeshes, NO_PARENT } from './geometry/envelope.ts';
+import { masksOf } from './geometry/mask.ts';
 import { offsetPolygon } from './geometry/hull.ts';
 import { appendBundleGlyphs, bezierSegments, bundleGlyphCount, clearGlyphMeshes, type GlyphMeshes, newGlyphMeshes, sampleBranch } from './geometry/ribbon.ts';
 import { simpleBranches, simpleMarker } from './geometry/simple.ts';
@@ -128,30 +129,6 @@ export const CURVE_FLOATS = curveFloats;
 
 interface MarkerAt extends CoreAt { multi: boolean; masks: number[] }
 
-/** The groups a curve can be masked by (spec 8.5, point 7): the size of an ivec4 in the shaders. */
-export const MASKS = 4;
-
-/**
- * The groups whose fill is laid over a curve of `vc` (spec 8.5, point 7), MASKS at most, written at out[at..at + MASKS),
- * −1 past them. For the branch of end `own`: that end's two (VisibleEnd.mask, mask2) first, then the other ends' highest,
- * then their second ones; for a trunk, a stub's branch, a simple connection or a marker (`own` −1): every end's highest,
- * then their second ones. A simple connection has two ends: all of its masks fit. Past MASKS (a bundle whose members sit
- * in more than four folding groups), the ones left out are other ends': a branch crossing such a group is drawn over its
- * fill there, as a connection that only passes over it — its own end is always hidden.
- */
-export function masksOf(vc: VisibleConnection, own: number, out: { [i: number]: number }, at: number): void {
-  let n = 0;
-  const push = (g: number) => {
-    if (g < 0 || n === MASKS) return;
-    for (let k = 0; k < n; k++) if (out[at + k] === g) return;
-    out[at + n++] = g;
-  };
-  const ends = vc.ends;
-  if (own >= 0) { push(ends[own].mask); push(ends[own].mask2); }
-  for (const e of ends) push(e.mask);
-  for (const e of ends) push(e.mask2);
-  for (; n < MASKS; n++) out[at + n] = -1;
-}
 /** A part's layout standing in for the plan's own (a handle being dragged, spec 8.5), by part slot. */
 export type LayoutOverrides = ReadonlyMap<number, Omit<ConnectionLayout, 'plan' | 'connection'>>;
 interface StubAt { conn: number; stub: number; pos: Vec2; title: string }
@@ -315,7 +292,8 @@ export function buildInstances(
     d[o + 2] = ROLE_CODE[a.role] | (ROLE_CODE[b.role] << SIMPLE_ROLE_BITS) | (a.dashed ? SIMPLE_DASHED_A : 0) | (b.dashed ? SIMPLE_DASHED_B : 0) | (fade >= 0 ? SIMPLE_FADE_OUT : 0);
     d[o + 3] = ci;
     d[o + 4] = fade;
-    masksOf(vc, -1, d, o + 5);
+    const m = masksOf(vc, -1);
+    d[o + 5] = m[0]; d[o + 6] = m[1]; d[o + 7] = m[2]; d[o + 8] = m[3];
     if (titles[vc.part] !== '') { w.titled.push(ci); inst.titled.push1(ci); }
   }
   if (font) inst.revealZoom = Math.min(inst.revealZoom, appendItemTitles(inst.texts, scene, visible, cam, p, font, (g) => paddedOf(w, g), inst.groupTitles));
@@ -429,16 +407,17 @@ export function placeTitlesAnew(inst: Instances, scene: PlanScene, visible: Visi
  */
 export function markerCores(
   scene: PlanScene, inst: Instances, zoom: number, p: RenderParams, all: boolean,
-): { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number> }[] {
-  const out: { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number> }[] = [];
-  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn, masks: m.masks });
+): { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number>; maskAt: number }[] {
+  // Its masks: MASKS from maskAt in `masks` (a simple connection's in its instance: no view made per core, M4 of the review).
+  const out: { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number>; maskAt: number }[] = [];
+  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn, masks: m.masks, maskAt: 0 });
   if (!all) return out;
   const s = inst.simple.view(), o = inst.origin, items = scene.items;
   for (let q = 0; q < s.length; q += SIMPLE_INTS) {
     const a = items[s[q]], b = items[s[q + 1]], kMax = Math.max(a.k, b.k);
     if (zoom < visibleFrom(kMax, p)) continue;
     const m = simpleMarker(a, b);
-    out.push({ x: m.x - o.x, y: m.y - o.y, kMax, conn: s[q + 3], masks: s.subarray(q + 5, q + 5 + MASKS) });
+    out.push({ x: m.x - o.x, y: m.y - o.y, kMax, conn: s[q + 3], masks: s, maskAt: q + 5 });
   }
   return out;
 }
@@ -573,7 +552,8 @@ function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1
     d[at + 8] = k0; d[at + 9] = k1; d[at + 10] = dashed ? 1 : 0; d[at + 11] = ci;
     d[at + 12] = e0.x; d[at + 13] = e0.y; d[at + 14] = e0.e; d[at + 15] = e1.x; d[at + 16] = e1.y; d[at + 17] = e1.e;
     d[at + 18] = mode; d[at + 19] = foldK;
-    masksOf(vc, own, d, at + 20);
+    const m = masksOf(vc, own);
+    d[at + 20] = m[0]; d[at + 21] = m[1]; d[at + 22] = m[2]; d[at + 23] = m[3];
     at += CURVE_FLOATS;
     if (row < 0) inst.curveKeys.push(key);
   };
@@ -587,11 +567,10 @@ function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1
     const [k0, k1] = a.nodeEnd === 'p0' ? [a.kNode, a.kMarker] : [a.kMarker, a.kNode];
     curve(a, k0, k1, a.dashed, a.key, endOf(a.key, a.stub));
   }
-  const masks = (br: Branch, out: number[]) => masksOf(vc, endOf(br.key, br.stub), out, 0);
+  const masks = (br: Branch) => masksOf(vc, endOf(br.key, br.stub));
   appendBundleGlyphs(inst.glyphs, open, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: mode, foldK, conn: ci, masks }, w.p,
     row >= 0 ? b[r + 3] : undefined);
-  const markerMasks: number[] = [];
-  masksOf(vc, -1, markerMasks, 0);
+  const markerMasks = [...masksOf(vc, -1)];
   const marker = { conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi, masks: markerMasks };
   if (row >= 0) inst.markers[b[r + 5]] = marker;
   else inst.markers.push(marker);

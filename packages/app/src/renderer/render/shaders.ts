@@ -542,25 +542,28 @@ const OUTLINE = {
 /**
  * Titles: one quad per glyph of the MSDF atlas (spec 8.2 to 8.5, plan 3c task 7). The fades BitmapText's alphas
  * followed, from uZoom: a box's text with its step and its parent's fold (a phantom's dimmed), a group's two titles
- * swapping with its fold, a connection's with its size, its fading level, and lit when hovered. Below 1 %, a glyph is
- * not drawn (BitmapText was hidden). The coverage is Pixi's MSDF shader's: the median's distance in screen pixels
+ * swapping with its fold, a connection's with its size, its fading level, its masks (MASK, at its anchor), and lit when
+ * hovered. Below 1 %, a glyph is not drawn (BitmapText was hidden). The coverage is Pixi's MSDF shader's: the median's distance in screen pixels
  * (distanceRange · size · zoom / font size), its gamma by the ink's luminance, premultiplied. An item's title is
  * anchored on its item's centre, read from the item texture (plan 3c task 8); a connection's has its anchor.
  */
 const TEXT = {
   vertex: /* glsl */ `#version 300 es
-  in vec2 aCorner; in vec2 aAnchor; in vec4 aGlyph; in vec2 aAtlas; in vec4 aTitle; in vec2 aFold; in float aSlot;
+  in vec2 aCorner; in vec2 aAnchor; in vec4 aGlyph; in vec2 aAtlas; in vec4 aTitle; in vec2 aFold; in float aSlot; in vec4 aMasks;
   out vec2 vUv; out float vAlpha; out vec3 vColor; out float vDistance;
   uniform vec2 uTextFade; uniform vec2 uTitleFade; uniform vec2 uSwap; uniform float uHot;
   uniform vec3 uInk; uniform vec3 uTitleInk; uniform vec2 uAtlasSize; uniform float uFontSize; uniform float uRange;
   ${COMMON}
   ${ITEMS}
+  ${MASK}
   void main() {
     vec2 anchor = aSlot >= 0.0 ? itemA(int(aSlot)).xy + aAnchor : aAnchor;
     float size = aTitle.x, kind = aTitle.y, px = size * uZoom;
     float a;
     if (kind == 3.0) {
-      a = aTitle.z == uHot ? 1.0 : smoothRange(uTitleFade.x, uTitleFade.y, px) * (1.0 - foldT(aFold.x));
+      // Under the fills of its connection's masks where it sits, as its line there (point 7, ronde 1).
+      ivec4 m = ivec4(aMasks);
+      a = (aTitle.z == uHot ? 1.0 : smoothRange(uTitleFade.x, uTitleFade.y, px) * (1.0 - foldT(aFold.x))) * maskAlpha(maskStrengths(m), maskReaches(m, anchor));
     } else {
       a = aTitle.w * smoothRange(uTextFade.x, uTextFade.y, px) * (1.0 - foldT(aFold.y));
       if (kind == 1.0) a *= 1.0 - smoothRange(uSwap.x, uSwap.y, foldT(aFold.x));
@@ -625,7 +628,7 @@ export function setParamUniforms(pr: Programs, p: RenderParams, font: FontData):
   }
   setAll(pr.simpleGlyph, { uArrowLength: p.arrowLength, uArrowHalfWidth: p.arrowHalfWidth, uArrowNotch: p.arrowNotch, uDotRadius: p.dotRadius });
   for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.marker, pr.box, pr.text]) setAll(x, { uItems: ITEMS_UNIT });
-  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.marker]) {
+  for (const x of [pr.simpleRibbon, pr.simpleGlyph, pr.curve, pr.arrow, pr.marker, pr.text]) {
     setAll(x, { uEnvIndex: ENVELOPE_INDEX_UNIT, uEnvEdges: ENVELOPE_EDGES_UNIT, uFeatherOpen: p.featherOpenPx, uFeatherClosed: p.featherClosedPx });
   }
   setAll(pr.envelope, { uFeatherOpen: p.featherOpenPx, uFeatherClosed: p.featherClosedPx });

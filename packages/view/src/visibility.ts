@@ -614,6 +614,8 @@ export interface VisibleConnection {
   ends: VisibleEnd[];
   stubs: SceneStub[];
   center?: number;
+  /** The highest folding group above the centre phantom, below the common group: it masks the part too (−1 for none). */
+  centerMask: number;
   /** The folding group the connection is internal to, which it fades out with (−1 for none). */
   fade: number;
 }
@@ -792,8 +794,14 @@ export function computeVisible(scene: PlanScene, index: SceneIndex, cam: Camera,
     // Internal to a folding group (its common group or one above it): it fades out with that group.
     let fade = -1;
     if (capped) for (let a = L; a !== ROOT; a = parent[a]) if (st(a) === 2) { fade = a; break; }
-    const vc: VisibleConnection = { part: pi, ends, stubs, fade };
-    if (ctr >= 0) vc.center = ctr;
+    let centerMask = -1;
+    if (ctr >= 0) {
+      // A closed group above the centre left the part out (seen above): only a folding one masks it.
+      const c = capped ? under(ctr, L) : liftC[ctr];
+      if (c !== ctr) centerMask = c;
+    }
+    // One shape for every visible connection (its readers stay monomorphic): `center` undefined without a centre.
+    const vc: VisibleConnection = { part: pi, ends, stubs, center: ctr >= 0 ? ctr : undefined, centerMask, fade };
     out.connections.push(vc);
   }
   return out;
