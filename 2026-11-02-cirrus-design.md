@@ -463,6 +463,8 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
 
 **Fixé le 2026-11-11 (retours de l'utilisateur).** Le repli d'un groupe suit la même plage que le texte des nœuds (`textFade`, 6 à 8 px par défaut), selon son plus grand membre : le texte de ce membre et l'opacité du groupe vont ensemble, et les membres plus petits s'effacent plus tôt. Le réglage du repli (`groupFold`) n'existe plus.
 
+**Fixé le 2026-11-12 (retours de l'utilisateur, point 7).** Pendant le repli, seule l'opacité change : rien ne glisse ni ne se déforme. Le fond du groupe couvre peu à peu ses membres et la partie intérieure des connexions qui vont vers eux (8.5).
+
 ### 8.3 Nœuds
 
 - **Forme :** une boîte avec son titre, rien d'autre. Au premier coup d'œil, « le titre suffit ».
@@ -475,6 +477,7 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
 ### 8.4 Groupes
 
 - **Groupe :** un nœud. Ouvert, il apparaît comme une enveloppe diffuse colorée autour de ses membres. En dézoomant, l'enveloppe s'opacifie jusqu'à cacher son contenu et devient le nœud de groupe, portant son titre. Rien ne bouge à l'écran, et sa taille reflète son contenu.
+  - **Fixé le 2026-11-12 (retours de l'utilisateur, point 7).** Le contenu caché comprend la partie intérieure des connexions qui ont une extrémité dans le groupe : son fond passe par-dessus elles, à l'opacité de son repli. Une connexion qui ne fait que passer au-dessus du groupe, ses deux nœuds dehors, reste au-dessus de son fond.
 - **Imbrication :** les groupes s'imbriquent sur plusieurs niveaux.
 - **Couleurs non miscibles [C, non contesté] :** l'intérieur de chaque niveau est opaque, et seul le bord flou se mêle au parent. Des couches transparentes de même teinte perdraient vite leur contraste : 68 %, puis 46 %, puis 31 % du premier écart à l'opacité 0,32.
   - **Défaut :** la teinte du parent, avec une luminosité décalée d'un écart minimal dans l'espace OKLCH.
@@ -514,13 +517,15 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
   - L'échelle locale varie le long de la branche, de l'échelle d'un nœud à celle de l'autre. Une connexion entre deux échelles très différentes s'amincit donc et se dissout vers le petit nœud.
   - La flèche suit la largeur locale. Le marqueur et le tronc prennent la plus grande échelle de la connexion. Une connexion n'a pas d'échelle propre.
   - **Implémentation :** des rubans de triangles à largeur variable, et non de simples traits.
-- **Groupe replié :**
-  - une connexion interne s'efface avec le groupe ;
-  - l'extrémité d'une connexion sortante glisse en continu du membre vers le bord du groupe ;
-  - plusieurs membres d'une même connexion fusionnent en une seule branche ;
-  - plusieurs connexions entre les mêmes extrémités deviennent une ligne titrée « 2 connexions », que le pop-up détaille ;
-  - la flèche est évidée si la branche vient de l'intérieur, pleine si elle est attachée au groupe lui-même.
-- **À faire dans l'app :** répartir les points d'arrivée sur le bord d'un groupe, car des connexions venant du même côté se superposent dans la maquette.
+- **Groupe replié** (fixé le 2026-11-12, retours de l'utilisateur, point 7) :
+  - une connexion garde toujours son vrai tracé jusqu'à ses vrais nœuds, à tous les zooms, même quand un nœud est dans un groupe fermé ou qui se ferme ;
+  - le fond d'un groupe qui se ferme ou qui est fermé passe par-dessus les connexions qui ont une extrémité à l'intérieur, à l'opacité de son repli : leur partie intérieure disparaît peu à peu sous lui, et une fois le groupe opaque on voit la connexion entrer dans le groupe là où elle traverse son bord, en direction du nœud caché. Seule l'opacité change ;
+  - une connexion entre deux groupes fermés reste un trait séparé, masqué dans chacun des deux fonds ; deux connexions parallèles restent deux traits ;
+  - une connexion entièrement interne s'efface avec le groupe ;
+  - une connexion qui passe par-dessus un groupe fermé sans y avoir d'extrémité reste au-dessus de son fond ;
+  - un clic sur la partie masquée par un fond opaque touche le groupe ; la partie visible, hors du groupe, reste cliquable ;
+  - **Implémentation :** chaque connexion multiplie son opacité par celle que lui laissent les fonds des groupes qui la masquent, calculée dans ses shaders. Comme une enveloppe est opaque, c'est exactement le fond dessiné par-dessus, sans changer l'ordre de dessin. Une courbe porte au plus quatre groupes masquants : ceux de son propre bout d'abord, puis le plus haut groupe des autres bouts. Au-delà, rare, une branche qui traverse le groupe d'un autre membre passe au-dessus de son fond.
+  - **Retiré :** le glissement des extrémités vers le bord, la levée sur le groupe avec une flèche évidée, la fusion des membres en une branche et des connexions en une ligne « 2 connexions », et le réglage de l'intérieur d'une flèche évidée.
 
 ### 8.6 Fond
 
