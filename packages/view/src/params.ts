@@ -416,7 +416,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   phantomFillAlpha: 0.45,
   phantomTitleDim: 0.65,
   viewMarginPx: 200,
-  hitTolerancePx: 6,
+  hitTolerancePx: 10,
   clickSlopPx: 4,
   scaleGesturePauseMs: 400,
   scaleWheelStepPx: 100,
