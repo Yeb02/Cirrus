@@ -8,7 +8,9 @@
 >   - une connexion à un seul nœud se dessine comme un bras court et un marqueur déplaçable. Elle peut se créer d'un seul nœud, et elle reste quand on retire son avant-dernier membre ;
 >   - la couleur d'un groupe se choisit dans une palette, ou librement, ou revient à « Automatique » ;
 >   - « Poids de l'historique » (plan 6c) ne supprimera que des fichiers.
-> - Les autres décisions sont de Claude. Celles qui méritent un regard de l'utilisateur portent **[à revoir]**.
+>   - un nœud qui part à la corbeille, partout ou de son dernier plan, quitte ses connexions, et celles qui gardent 0 ou 1 nœud le suivent (D2, D3) ;
+>   - l'exécution : Claude fait lui-même les petites tâches, et confie à des sous-agents les plus volumineuses ou critiques.
+> - Les autres décisions sont de Claude.
 
 **Goal :** finir ce qui manque à la saisie des vraies données. L'utilisateur pourra alors :
 - colorer ses groupes plan par plan ;
@@ -84,7 +86,11 @@ Ce plan fixe aussi deux choses :
 - **D2, une connexion à un seul membre** (spec 5.3, 8.5, 11 ; retour de l'utilisateur du 2026-11-11, point 4).
   - **La règle :** une connexion de connaissance vivante a au moins un membre. L'invariant `members` (`invariants.ts:119-124`) refuse désormais zéro membre, avec le message « Une connexion doit relier au moins un nœud. ». Les connexions d'inclusion et de structure ne changent pas.
   - **Retirer un membre** (`removeMember`) garde la connexion tant qu'il lui reste un membre. Retirer le dernier la met à la corbeille, et ce membre reste dans sa liste, pour une restauration.
-  - **Supprimer un nœud partout** (`deleteEverywhere`) met toujours à la corbeille une connexion qui avait au moins deux membres et n'en garderait qu'un. Une connexion qui n'avait que lui y va aussi. **[à revoir]** Le retrait volontaire d'un membre garde la connexion. La suppression d'un nœud, elle, ne doit pas laisser derrière lui, sur ses voisins, des dizaines de connexions à un bras qui ne parlaient que de lui. Coût si c'est faux : une condition.
+  - **Un nœud qui part à la corbeille quitte ses connexions** (décision de l'utilisateur, 2026-11-14). Cela vaut pour « Supprimer partout » (`deleteEverywhere`) comme pour le retrait de son dernier plan (`removeFromPlan`, « Cacher » ou « Ici seulement ») : il est retiré de chacune de ses connexions, vivantes ou déjà à la corbeille, avec ses branches et ses fantômes. Une connexion vivante qui garde alors 0 ou 1 nœud part à la corbeille avec lui. Le retrait volontaire d'un membre (`removeMember`), lui, garde une connexion à un nœud.
+    - Un seul outil du cœur, `Draft.leaveConnections(s, node)`, sert aux deux chemins.
+    - Une annotation qui quitte son dernier plan reste vivante (spec 7) : elle garde ses connexions.
+    - Restaurer un nœud ne lui rend pas ses connexions ; la corbeille rend une connexion, avec les membres qui lui restent.
+    - L'avertissement de « Cacher » (`trashNote`, `questions.ts:78`) compte aussi les connexions qui partiraient : « « A » ira à la corbeille (dernier plan), avec 2 connexions ».
   - **La création :** le geste « Ajouter une connexion » se termine aussi :
     - par un clic sur le fond. Le marqueur est épinglé là, dans ce plan (`setLayout`, `marker`) ;
     - par Entrée. Le marqueur prend alors sa place par défaut.
@@ -99,21 +105,21 @@ Ce plan fixe aussi deux choses :
   - **La corbeille :** restaurer une connexion demande au moins un membre vivant. Il y a deux refus :
     - « Ses nœuds sont à la corbeille : restaure-les d’abord. », quand elle a des membres mais aucun vivant ;
     - « Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir. » (`RESTORE_CONNECTION_LOST`), quand elle n'en a plus aucun.
-    - Elle revient avec une branche par membre vivant, dans chaque plan où au moins `min(2, vivants)` de ses membres sont placés.
+    - Elle revient avec une branche par membre vivant, dans chaque plan où au moins `min(2, vivants)` de ses membres sont placés. Une connexion jetée avec un nœud ne l'a plus dans sa liste (D2) : elle revient sans lui, à un nœud s'il ne lui en reste qu'un.
   - **Les messages qui disaient « deux » :**
     - la question du retrait d'un membre (`questions.ts:58-67`) ne parle de corbeille que pour le dernier membre ;
     - `RESTORED_WITHOUT_BRANCH` devient « Connexion restaurée ; aucun plan ne montre ses nœuds. » ;
     - `CONNECTION_NO_PLAN` devient « Cette connexion n’est dans aucun plan. ».
 - **D3, la règle de synchro de la section 7** (« une connexion vivante dont un membre est à la corbeille »).
-  - **Le constat :** une connexion vivante avec un membre à la corbeille est un état normal. « Cacher » un nœud de son dernier plan le jette sans le retirer de ses connexions (`removeFromPlan`, `commands.ts:345`), pour qu'il revienne avec elles. Aucun invariant ne peut donc l'interdire. Le cas fautif est une **suppression partout** croisée avec la **restauration** d'une connexion qui contenait le nœud : la connexion revient avec un nœud supprimé partout, et une amorce vers lui que l'import refuse.
-  - **La règle :** une suppression partout l'emporte sur une restauration concurrente. La connexion restaurée revient sans ce nœud, sans ses branches et sans ses fantômes. Il lui faut au moins un membre vivant ; sinon elle reste à la corbeille.
+  - **Le constat :** avec D2, aucune commande ne laisse plus un nœud jeté dans une connexion vivante. Seule une synchro croisée le peut : un PC jette un nœud (partout, ou de son dernier plan) pendant qu'un autre restaure une connexion qui le contenait, lui ajoute un membre ou la recrée par Ctrl+Z.
+  - **La règle :** le départ d'un nœud à la corbeille l'emporte. La connexion fusionnée n'a pas ce nœud, ni ses branches, ni ses fantômes, et si elle garde 0 ou 1 nœud alors qu'elle en avait au moins deux, elle va à la corbeille ; le même état sur les deux PC, dans tous les ordres.
   - **Le moyen :**
-    - `deleteEverywhere(X)` retire aussi X de la liste des connexions déjà à la corbeille qui le contiennent. Aujourd'hui elle les saute (`commands.ts:358`).
-    - La fusion des membres par nœud (`mergeMembers`, `merge.ts:280`) garde alors ce retrait face au changement de `trashedAt` de la restauration.
-    - `rebaseUnit` doit écarter, dans les ops de la restauration rebasée, les branches et les fantômes d'un membre que la fusion a retiré (sur le modèle des `extra`, `merge.ts:438-474`). Sinon `addedViolation` jetterait toute la restauration.
-    - Une restauration locale lit la liste ainsi réduite. Ce qui a été retiré avec un nœud ne revient pas, comme le dit déjà la spec (section 7, « Ce qui ne revient pas »).
+    - la fusion des membres par nœud (`mergeMembers`, `merge.ts:280`) garde le retrait fait par `leaveConnections`, face au changement de `trashedAt` d'une restauration ;
+    - `rebaseUnit` (`merge.ts:358-474`) écarte des ops rebasées les branches et les fantômes d'un membre retiré, et ajoute, pour une écriture qui jette un nœud, le retrait de ce nœud des connexions vivantes de l'état reçu (sur le modèle des `extra`, `merge.ts:438-474`). Sinon `addedViolation` jetterait l'écriture entière ;
+    - aucun invariant nouveau : une base ancienne qui a déjà un tel état reste lisible, et la santé du graphe ne le liste pas [C].
   - **Les tests :**
-    - quatre ordres × {[X, Y], [X, Y, Z]} (`core/tests/trash.test.ts:226-249`, `crossed`). Le résultat attendu change : la connexion revient sans X, sans branche ni fantôme de X, aucune écriture n'est perdue, et les deux PC finissent dans le même état ;
+    - quatre ordres × {[X, Y], [X, Y, Z]} × {suppression partout, retrait du dernier plan}, croisés avec la restauration de la connexion (`core/tests/trash.test.ts:226-249`, `crossed`). Attendu : aucune écriture perdue ; X à la corbeille ; la connexion sans X, ni branche ni fantôme de X ; à la corbeille pour [X, Y], vivante à deux pour [X, Y, Z] ; les deux PC dans le même état ;
+    - le même croisement avec `addMember(c, X)` sur l'autre PC ;
     - les 2 000 commandes tirées au hasard (`reconcile.test.ts:448`) passent toujours.
 - **D4, la couleur d'un groupe, propre au plan** (spec 5.5, 8.4, « Choix manuel »).
   - **La règle de couleur** (`groupColors`, `view/src/frame.ts:21`) remonte de ce groupe, lui compris, jusqu'au premier ancêtre qui porte une couleur dans ce plan.
@@ -267,7 +273,7 @@ Ce plan fixe aussi deux choses :
 Rigueur complète : synchro.
 
 **Files:**
-- Modify : `packages/core/src/invariants.ts:119-124`, `commands.ts` (`deleteEverywhere` :351-371, `removeMember` :423-433, `restoreConnection` :889-912, `RESTORE_CONNECTION_LOST` :376), `merge.ts` (`mergeMembers` :280, `rebaseUnit` :358-474), `packages/core/tests/oracle/invariants.ts:117`
+- Modify : `packages/core/src/invariants.ts:119-124`, `commands.ts` (`Draft.leaveConnections`, `removeFromPlan` :335-348, `deleteEverywhere` :351-371, `removeMember` :423-433, `restoreConnection` :889-912, `RESTORE_CONNECTION_LOST` :376), `merge.ts` (`mergeMembers` :280, `rebaseUnit` :358-474), `packages/core/tests/oracle/invariants.ts:117`
 - Modify (tests qui supposaient deux membres) : `core/tests/invariants.test.ts:41`, `transact.test.ts:283` (prendre une autre violation déjà là), `commands.test.ts:61, 198`, `core/tests/trash.test.ts:178-249`, `server/tests/seed.test.ts:115`, `app/tests/firstSync.test.ts:391`
 - Test : `packages/core/tests/single.test.ts` (nouveau), `packages/core/tests/trash.test.ts`
 
@@ -279,21 +285,18 @@ Rigueur complète : synchro.
   - `une connexion sans membre est refusée` (code `members`, « Une connexion doit relier au moins un nœud. ») ;
   - `retirer l’avant-dernier membre garde la connexion`, avec un seul membre, vivante, et ses branches de l'autre retirées ;
   - `retirer le dernier membre la met à la corbeille`, ce membre restant dans sa liste ;
-  - `supprimer partout un nœud d’une connexion de deux la jette` (D2, inchangé) ; `… d’une connexion de trois la garde à deux` ;
-  - `supprimer partout retire le nœud des connexions déjà à la corbeille` (D3) ;
+  - `supprimer partout un nœud d’une connexion de deux la jette, sans lui` ; `… d’une connexion de trois la garde à deux` ; `… d’une connexion d’un seul nœud la jette` ;
+  - `retirer un nœud de son dernier plan le retire de ses connexions`, avec les mêmes trois cas ; `une annotation qui quitte son dernier plan garde ses connexions` ;
+  - `jeter un nœud le retire aussi des connexions déjà à la corbeille` ;
+  - `restaurer un nœud ne lui rend pas ses connexions` ;
   - `restaurer une connexion d’un membre vivant` revient, avec une branche dans chaque plan où ce nœud est placé ;
   - `restaurer une connexion sans membre` → `RESTORE_CONNECTION_LOST` ;
   - `restaurer une connexion dont tous les membres sont à la corbeille` → « Ses nœuds sont à la corbeille : restaure-les d’abord. ».
-- [ ] **Step 2 : réécrire le test des quatre ordres** (`trash.test.ts:226-249`). Pour `[X, Y]` et `[X, Y, Z]`, `crossed(s, restoreConnection(c), deleteEverywhere(X), order, when)` donne :
-  - `dropped` vide ;
-  - `c` vivante, sans X dans ses membres ;
-  - aucune branche ni aucun fantôme de X ;
-  - X à la corbeille ;
-  - l'état des deux PC identique (`encodeState` égaux).
+- [ ] **Step 2 : réécrire le test des quatre ordres** (`trash.test.ts:226-249`) selon D3 : quatre ordres × {[X, Y], [X, Y, Z]} × {`deleteEverywhere(X)`, `removeFromPlan(dernier plan de X)`}, croisés avec `restoreConnection(c)`, puis avec `addMember(c, X)`. Attendu : `dropped` vide ; X à la corbeille ; `c` sans X, ni branche ni fantôme de X ; à la corbeille pour [X, Y], vivante pour [X, Y, Z] ; l'état des deux PC identique (`encodeState` égaux).
 - [ ] **Step 3 : les lancer**, `npm test -w packages/core -- single trash`. Attendu : ÉCHEC.
-- [ ] **Step 4 : implémenter D2 (règle, commandes, messages du cœur) puis D3 (`deleteEverywhere` sur la corbeille, `rebaseUnit` qui écarte branches et fantômes d'un membre retiré).** Mettre à jour l'oracle et les tests listés.
+- [ ] **Step 4 : implémenter D2 (règle, `leaveConnections`, commandes, messages du cœur) puis D3 (`mergeMembers`, `rebaseUnit`).** L'avertissement de « Cacher » (`questions.ts:78`, `lastPlanNodes` d'`actions.ts`) compte les connexions qui partiraient ; son test dans `app/tests`. Mettre à jour l'oracle et les tests listés.
 - [ ] **Step 5 : tout lancer**, `npm test -w packages/core && npm test -w packages/server && npm test -w packages/app`, dont les 2 000 commandes au hasard (`reconcile.test.ts`). Attendu : SUCCÈS.
-- [ ] **Step 6 : commit**, `feat(core): une connexion peut n’avoir qu’un membre ; une suppression partout l’emporte sur une restauration concurrente`.
+- [ ] **Step 6 : commit**, `feat(core): une connexion peut n’avoir qu’un membre ; un nœud jeté quitte ses connexions, même en synchro croisée`.
 
 ### Task 4 : connexions à un membre, le dessin et le geste (D2)
 
