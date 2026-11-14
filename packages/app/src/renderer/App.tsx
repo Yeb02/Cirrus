@@ -30,6 +30,7 @@ import { OBJECT_GONE, showNodeIn } from './ui/graph/jumps.ts';
 import { measuring } from './ui/graph/launch.ts';
 import { PanelBoundary } from './ui/PanelBoundary.tsx';
 import type { Rect } from './ui/panels/geometry.ts';
+import { LinkLayer } from './ui/latex/LinkLayer.tsx';
 import { Panels, type PanelsHandle, resolveTarget } from './ui/panels/Panels.tsx';
 import { useScreens } from './ui/screens.ts';
 import { keepOpenViews } from './ui/viewers/common.tsx';
@@ -618,13 +619,18 @@ export function App() {
             state={state} rev={shown.rev} onRestoreConnection={restoreConnection} onRestoreNode={(node) => graph.current?.restore(node)} onClose={closeTrash}
           />
         )}
-        <Panels
-          ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onShowIn={showIn} onGoToNode={goToNode} files={files}
-          views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
-          onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
-          onDeleteAnnotation={(node) => deleteAnnotation(node, false)} onCompare={(node, original, copy) => setFull({ kind: 'compare', node, original, copy })}
-          plan={active} onAddMember={(c, node) => graph.current?.addMember(c, node)} onRemoveMember={(c, node) => graph.current?.removeMember(c, node)}
-        />
+        <LinkLayer
+          state={state} params={params} registry={registry} here={active} tabs={tabs} onOpen={nodeLink} onShowIn={showIn}
+          onImport={(node) => graph.current?.importHere(node)}
+        >
+          <Panels
+            ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onShowIn={showIn} onGoToNode={goToNode} files={files}
+            views={views} fullHash={fullNow?.file?.hash ?? null} onFullScreen={(node, name) => setFull({ kind: 'file', node, name })} registry={registry}
+            onNodeLink={nodeLink} covered={preambleOpen} annotations={annotations} onAnnotate={(a) => annotate(a, false)}
+            onDeleteAnnotation={(node) => deleteAnnotation(node, false)} onCompare={(node, original, copy) => setFull({ kind: 'compare', node, original, copy })}
+            plan={active} onAddMember={(c, node) => graph.current?.addMember(c, node)} onRemoveMember={(c, node) => graph.current?.removeMember(c, node)}
+          />
+        </LinkLayer>
         <Toasts toasts={toasts} onClose={closeToast}>
           <LatexNotice status={latex} toastMs={params.toastMs} onInstall={installLatex} />
         </Toasts>

@@ -314,7 +314,19 @@ button, input, select { font: inherit; color: var(--ink); }
 .panel.dropping { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 12px 32px rgba(2, 6, 16, 0.6); }
 /* A file's menu, at the click in window pixels: out of the body it is opened in, which scrolls and clips; an
    annotation's line's too, in a panel or in the full screen (final review, I2). */
-.panel .context-menu, .full-screen .context-menu { position: fixed; }
+.panel .context-menu, .full-screen .context-menu, .link-menu .context-menu { position: fixed; }
+
+/*
+ * A node's preview beside a link hovered (plan 6b, D5): over the pop-ups (.panels, 15), under the graph's menus and the
+ * toasts; never taken by the pointer, so that the link under it keeps its hover.
+ */
+.link-preview {
+  position: fixed; z-index: 45; box-sizing: border-box; max-height: 60vh; overflow: hidden; padding: 8px 10px; pointer-events: none;
+  background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.45); border-radius: 10px; box-shadow: 0 12px 32px rgba(2, 6, 16, 0.6);
+}
+.link-preview-title { font-weight: 600; }
+.link-preview-plans { margin: 2px 0 6px; color: var(--muted); font-size: 12px; }
+.link-preview-source { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.4 Consolas, monospace; color: var(--muted); }
 .capture .volatile { visibility: hidden; }
 /* An editor's cursor blinks: a capture never draws it (plan 4b, task 8). */
 .capture * { caret-color: transparent !important; }

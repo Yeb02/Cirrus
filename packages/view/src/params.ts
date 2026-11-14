@@ -204,6 +204,8 @@ export interface RenderParams {
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
+  /** A link to a node hovered this long shows its node's preview (plan 6b, D5). */
+  linkPreviewDelayMs: number;
   popupHeightPx: number;
   /** a file's preview as it opens, beside it, */
   previewWidthPx: number;
@@ -474,6 +476,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   bibNoticeLines: 5,
   bibNoticeMs: 20_000,
   popupWidthPx: 380,
+  linkPreviewDelayMs: 400,
   popupHeightPx: 460,
   previewWidthPx: 560,
   previewHeightPx: 460,
@@ -709,6 +712,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('bibNoticeLines', 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', A, 'Publications', 1, 100, 1),
   num('bibNoticeMs', 'Durée d’affichage de la notification d’un .bib importé, qu’un clic ou Échap ferme (ms)', A, 'Publications', 2000, 600_000, 500),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
+  num('linkPreviewDelayMs', 'Survol d’un lien avant l’aperçu de son nœud (ms)', A, 'Pop-ups', 0, 3000, 50),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('previewHeightPx', 'Hauteur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),

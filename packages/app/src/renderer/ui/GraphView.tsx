@@ -17,7 +17,7 @@ import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
-import { absentBuild, type Build } from '../actions.ts';
+import { absentBuild, ALREADY_HERE, type Build } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
 import { AskDialog } from './Dialogs.tsx';
 import { nodeOpenedBy, popupOf } from './panels/Panels.tsx';
@@ -55,6 +55,8 @@ export interface GraphHandle {
   forward(): boolean;
   focus(): void;
   restore(node: Id): void;
+  /** « Importer ici » (plan 6b, D5): the node placed in this plan by a click, its title following the cursor. */
+  importHere(node: Id): void;
   cancelRestore(): void;
   addMember(connection: Id, node: Id): void;
   removeMember(connection: Id, node: Id): void;
@@ -592,6 +594,24 @@ export function GraphView(props: {
       if (busy() && placement.placing.current?.kind !== 'restore') { notify(busyReason('de restaurer')); return; }
       const r = el.getBoundingClientRect();
       placement.startPlacing({ kind: 'restore', node }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
+      el.focus({ preventScroll: true });
+      redraw();
+    },
+    importHere: (node) => {
+      // « Importer ici » from a link's menu (plan 6b, D5), as « Restaurer »: the node's title follows the cursor until a click
+      // puts it down in this plan (importBuild) or Escape gives it up. Already here: said, and the view framed on it.
+      const n = stateRef.current.nodes.get(node), el = root.current, e = engine.current, sc = sceneRef.current;
+      if (!n || !el || !e || !sc) return;
+      if (n.trashedAt !== undefined) { notify('Ce nœud est à la corbeille.'); return; }
+      const here = sc.byId.get(node);
+      if (here !== undefined) {
+        notify(ALREADY_HERE);
+        moveCamera(fitItem(sc, here, e.renderer.camera, paramsRef.current));
+        return;
+      }
+      if (busy()) { notify(busyReason('d’importer')); return; }
+      const r = el.getBoundingClientRect();
+      placement.startPlacing({ kind: 'import', node, label: 'Importer ici' }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
       el.focus({ preventScroll: true });
       redraw();
     },

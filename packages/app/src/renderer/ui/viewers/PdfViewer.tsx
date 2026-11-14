@@ -1,6 +1,6 @@
 import type { Anchor, Id } from '@cirrus/core';
 import { AbortException, type PDFDocumentProxy, type PDFPageProxy, RenderingCancelledException, TextLayer } from 'pdfjs-dist';
-import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type AnnotationEntry, type PageHit, rectsOnScreen, selectionToAnchor } from '../../files/annotations.ts';
 import { type ViewRef, viewKey } from '../../files/kind.ts';
 import { CSS_PER_PT, destination, openPdf, type PdfDoc, pageSize, pdfFailure } from '../../files/pdf.ts';
@@ -8,6 +8,7 @@ import {
   anchorAt, currentPage, fitWidthZoom, type PageSize, pageNumber, pageOffsets, placeAnchor, type Anchor as ViewPoint, visiblePages, wheelSteps, zoomBy,
 } from '../../files/pdfLayout.ts';
 import { loading } from '../../files/read.ts';
+import { LinkActionsContext } from '../latex/linkActions.ts';
 import { linkTarget } from '../latex/links.ts';
 import { AnnotationLayer, type Flash, type MarkStyle } from './AnnotationLayer.tsx';
 import { keptView, Message, useKeptView, type ViewProps } from './common.tsx';
@@ -526,6 +527,16 @@ export const PdfPage = memo(function PdfPage(props: PageProps) {
   const scaleNow = useRef(scale);
   scaleNow.current = scale;
   const text = useRef<{ layer: TextLayer; rendered: boolean } | null>(null);
+  // A link to a node hovered (plan 6b, D5): left when the pointer leaves it, and when it goes from under the pointer
+  // (its pop-up closed, the page's links read anew) — React tells no mouseleave then.
+  const actions = useContext(LinkActionsContext);
+  const hovered = useRef(false);
+  const leaveLink = () => {
+    if (!hovered.current) return;
+    hovered.current = false;
+    actions?.hover(null, null);
+  };
+  useEffect(() => leaveLink, [links]);
 
   // The page while it is drawn: its real size for the layout, its links. A new document's (live) replaces the last
   // one's once read, so that its drawing stays meanwhile.
@@ -650,8 +661,11 @@ export const PdfPage = memo(function PdfPage(props: PageProps) {
               : l.node !== undefined
                 ? props.onNode && (
                   <a
-                    key={i} href="#" title="Ouvrir le pop-up de ce nœud" style={l.box} draggable={false}
-                    onClick={(e) => { e.preventDefault(); props.onNode!(l.node!); }}
+                    key={i} href="#" title={actions ? undefined : 'Ouvrir le pop-up de ce nœud'} style={l.box} draggable={false}
+                    onClick={(e) => { e.preventDefault(); leaveLink(); props.onNode!(l.node!); }}
+                    onMouseEnter={actions ? (e) => { hovered.current = true; actions.hover(l.node!, e.currentTarget); } : undefined}
+                    onMouseLeave={actions ? leaveLink : undefined}
+                    onContextMenu={actions ? (e) => { e.preventDefault(); e.stopPropagation(); leaveLink(); actions.menu(l.node!, e.clientX, e.clientY, e.currentTarget); } : undefined}
                   />
                 )
                 : props.onDest && (
