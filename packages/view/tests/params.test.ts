@@ -482,6 +482,16 @@ test('les consultations (plan 6a, D6, tâche 5) : l’interrupteur est un choix 
   expect(settingValue('consultationsRecord', 'oui')).toBeUndefined();
 });
 
+test('l’envoi des consultations au serveur (plan 6b, D7, tâche 8) : toutes les 60 s, de 10 s à 1 h, un réglage avancé du groupe « Consultations »', () => {
+  expect(DEFAULT_PARAMS.consultationsSendMs).toBe(60_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'consultationsSendMs')).toEqual({
+    key: 'consultationsSendMs', label: 'Délai entre deux envois des consultations au serveur (ms)', section: 'avancé', group: 'Consultations', kind: 'number', min: 10_000, max: 3_600_000, step: 1000,
+  });
+  expect(PARAM_SPECS.filter((s) => s.group === 'Consultations').map((s) => s.key)).toEqual(['consultationsRecord', 'consultationsFlushMs', 'consultationsSendMs']);
+  expect(withOverrides({ consultationsSendMs: 5 })).toMatchObject({ consultationsSendMs: 10_000 });
+  expect(withOverrides({ consultationsSendMs: 1e12 })).toMatchObject({ consultationsSendMs: 3_600_000 });
+});
+
 test('le délai sans progrès d’une mise à jour forcée : un réglage avancé du groupe « Mises à jour », avec la recherche des mises à jour, sous « Serveur » (plan 6b, D9)', () => {
   expect(DEFAULT_PARAMS.updateStallMs).toBe(120_000);
   expect(PARAM_SPECS.find((s) => s.key === 'updateStallMs')).toEqual({

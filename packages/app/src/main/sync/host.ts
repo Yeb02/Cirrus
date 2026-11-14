@@ -5,7 +5,7 @@ import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
 import type { ServerImport } from '../publications/via.ts';
 import { SharedSettings } from '../settings.ts';
-import { type OpenFile, SyncClient, type UpdateHook } from './client.ts';
+import { type ConsultationsFile, type OpenFile, SyncClient, type UpdateHook } from './client.ts';
 import type { SecretStore } from './config.ts';
 import { messageOf } from './connection.ts';
 import { DOWNLOADS_FILE } from './downloads.ts';
@@ -69,6 +69,8 @@ export interface HostDeps {
   relaunch(): void;
   /** The updater (plan 9, D4), told what each hello says of the versions, by every client this host makes. */
   update?: UpdateHook;
+  /** This PC's consultations' file (plan 6b, D7), which every client this host makes sends to the server, and reads « vu » from. */
+  consultations?: ConsultationsFile;
 }
 
 /** A file open in full screen as the interface names it (cirrus:sync:tex:opened, :closed): null for anything that is not one. */
@@ -131,6 +133,7 @@ export class SyncHost {
     return new SyncClient({
       fetch: deps.fetch, store: deps.store, storeDir: deps.dir, secrets: deps.secrets, now: deps.now, params: deps.params, settings: this.settings,
       presence: () => [...this.openTex.values()],
+      ...(deps.consultations ? { consultations: deps.consultations } : {}),
       ...(deps.freeBytes ? { freeBytes: deps.freeBytes } : {}),
       downloadAll: (p) => deps.window.downloadAll(p),
       reconcile: (incoming, refused) => this.reconcile(incoming, refused),
@@ -391,6 +394,14 @@ export class SyncHost {
   serverStatus(): Promise<ServerStatus> {
     if (!this.pairing.paired() || this.closed) return Promise.resolve({ latencyMs: null, throughput: null, server: null });
     return this.client.serverStatus();
+  }
+
+  /**
+   * « Vu » (cirrus:consultations:seen, plan 6b, D7): the last time each node or connection was looked at, every PC
+   * together while connected, this PC's alone otherwise (SyncClient.seen), as [id, time] pairs.
+   */
+  async consultationsSeen(): Promise<[Id, number][]> {
+    return [...(await this.client.seen())];
   }
 
   /** « Télécharger tous les PDF… » (D8): its plan, of the PDFs the interface counted (SyncClient.downloadAllPlan). */

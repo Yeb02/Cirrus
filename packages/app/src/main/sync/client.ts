@@ -1,9 +1,13 @@
-import { type Id, isObject, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, SyncDivergedError } from '@cirrus/core';
+import {
+  type Id, isObject, MAX_CONSULTATIONS_BODY_BYTES, MAX_CONSULTATIONS_PER_REQUEST, MAX_ID_CHARS, MAX_SETTING_AHEAD_MS, parseRemoteUnit, type RemoteUnit, type SentConsultation,
+  SyncDivergedError,
+} from '@cirrus/core';
 import type { PublicationRequest } from '@cirrus/sources';
 import type { LocalStore } from '@cirrus/store';
 import type { RenderParams } from '@cirrus/view';
+import type { Consultations } from '../consultations.ts';
 import { type SecretStore, SERVER_FILE, type ServerConfig } from './config.ts';
-import { Connection, exchange, FORMAT, JSON_BODY, json, messageOf, ok, Refusal } from './connection.ts';
+import { Connection, exchange, FORMAT, JSON_BODY, json, messageOf, ok, reasonOf, Refusal } from './connection.ts';
 import { DownloadAll, Downloads, filesToFetch, freeBytes, isHash, LastMeasures, missingFiles, TransferRates } from './downloads.ts';
 import { readEvents } from './events.ts';
 import type { DownloadAllPlan, DownloadAllProgress, DownloadAllStart, ServerSpace, ServerStatus, SyncStatus } from './protocol.ts';
@@ -32,8 +36,11 @@ import { Uploads } from './uploads.ts';
 export type SyncParams = Pick<
   RenderParams,
   'syncBatchUnits' | 'syncDownloads' | 'syncRetryMinMs' | 'syncRetryMaxMs' | 'syncClockSkewWarnMs' | 'syncReceiveBatchMs' | 'downloadAllReserveMb'
-  | 'serverStatusSamples' | 'throughputMinMb' | 'syncRequestTimeoutMs' | 'syncStreamSilenceMs' | 'syncReceiveMaxUnits'
+  | 'serverStatusSamples' | 'throughputMinMb' | 'syncRequestTimeoutMs' | 'syncStreamSilenceMs' | 'syncReceiveMaxUnits' | 'consultationsRecord' | 'consultationsSendMs'
 >;
+
+/** This PC's consultations' file, as the client sends it (plan 6b, D7: main/consultations.ts's Consultations). */
+export type ConsultationsFile = Pick<Consultations, 'pending' | 'sentUpto' | 'markSent' | 'localSeen'>;
 
 /**
  * A publication's import by the server (POST /publications) waits for its metadata, which the server asks of several
@@ -78,6 +85,11 @@ export interface SyncDeps {
    * the client sends no list.
    */
   presence?: () => readonly OpenFile[];
+  /**
+   * This PC's consultations (plan 6b, D7), sent to the server while connected, and read with the server's by `seen`;
+   * none: the client sends none, and `seen` knows none.
+   */
+  consultations?: ConsultationsFile;
   /**
    * The server's state and « Tout télécharger » (plan 5b, D8): the clock its round trips and transfers are measured by
    * (ms, monotonic; performance.now by default), the free space of a folder's disk (its statfs by default), and what is
@@ -128,6 +140,40 @@ function othersOf(body: unknown): FileOpenElsewhere[] | null {
   return ok ? (others as FileOpenElsewhere[]).map(({ node, name, pc, since }) => ({ node, name, pc, since })) : null;
 }
 
+/** The server's `{ upto }` (plan 6b, D7: POST /consultations, GET /consultations/upto), checked: a whole number from 0; a failure otherwise. */
+function uptoOf(body: unknown, path: string): number {
+  const upto = (body as { upto?: unknown } | null)?.upto;
+  if (typeof upto !== 'number' || !Number.isSafeInteger(upto) || upto < 0) throw new Error(`Réponse du serveur illisible à ${path}.`);
+  return upto;
+}
+
+/** GET /consultations/seen's answer (D7), checked: each subject an identifier, each time a finite number; null otherwise. */
+function seenOf(body: unknown): Map<Id, number> | null {
+  const seen = (body as { seen?: unknown } | null)?.seen;
+  if (!Array.isArray(seen)) return null;
+  const out = new Map<Id, number>();
+  for (const pair of seen as unknown[]) {
+    if (!Array.isArray(pair) || pair.length !== 2) return null;
+    const [subject, at] = pair as unknown[];
+    if (typeof subject !== 'string' || subject.length === 0 || subject.length > MAX_ID_CHARS || typeof at !== 'number' || !Number.isFinite(at)) return null;
+    out.set(subject, at);
+  }
+  return out;
+}
+
+/**
+ * The first of `events` whose body, `{ events }` in JSON, stays within MAX_CONSULTATIONS_BODY_BYTES — one at least: an
+ * event holds 13 KiB at most. Counted as JSON.stringify writes that body.
+ */
+function fitting(events: SentConsultation[]): SentConsultation[] {
+  let bytes = '{"events":[]}'.length;
+  for (let i = 0; i < events.length; i++) {
+    bytes += Buffer.byteLength(JSON.stringify(events[i])) + (i > 0 ? 1 : 0);
+    if (bytes > MAX_CONSULTATIONS_BODY_BYTES) return events.slice(0, Math.max(1, i));
+  }
+  return events;
+}
+
 /** A server whose base is another than the one this PC follows (R31): its data replaced. */
 const BASE_REPLACED = 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.';
 
@@ -164,6 +210,17 @@ export class SyncClient {
   private statusAsked: Promise<ServerStatus> | null = null;
   /** A GET /status that failed is said once in the console: the block asks every few seconds. */
   private statusWarned = false;
+  /**
+   * The consultations' sending (plan 6b, D7): the next round's timer, while a connection is open; the round under way
+   * (it never rejects), which stop awaits; whether where the server stands is unknown — a POST /consultations whose
+   * answer was not read: the next round asks it (GET /consultations/upto) before it sends anything. A failed round, and
+   * a failed reading of « vu », said once until one succeeds.
+   */
+  private consultationsTimer: ReturnType<typeof setTimeout> | null = null;
+  private consultationsRound: Promise<void> = Promise.resolve();
+  private consultationsAsk = false;
+  private consultationsWarned = false;
+  private seenWarned = false;
 
   constructor(deps: SyncDeps) {
     this.deps = deps;
@@ -198,6 +255,8 @@ export class SyncClient {
       conn.close();
       await conn.done;
     }
+    this.stopConsultations();
+    await this.consultationsRound;
     await this.reconciled();
     await this.downloads.stop();
     this.setMode('off');
@@ -279,6 +338,111 @@ export class SyncClient {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.presenceChain, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
     clearTimeout(timer);
+  }
+
+  /**
+   * « Vu » (plan 6b, D7): the last time each subject was looked at. While a connection is open, the server's answer for
+   * every PC (GET /consultations/seen), with this PC's events not yet at the server — those after the mark of the base
+   * followed, read before the request: one sent meanwhile is in the answer or after the mark. Otherwise, or when the
+   * server's answer cannot be had (said once), this PC's file alone. Without a file, nothing.
+   */
+  async seen(): Promise<Map<Id, number>> {
+    const file = this.deps.consultations;
+    if (!file) return new Map();
+    const conn = this.conn, base = this.deps.store.baseId();
+    if (conn !== null && !conn.closed && conn.open && base !== null) {
+      try {
+        const mark = file.sentUpto(base) ?? 0;
+        const server = seenOf(await json(await conn.request('/consultations/seen')));
+        if (server === null) throw new Error('Réponse du serveur illisible à /consultations/seen.');
+        for (const [subject, at] of file.localSeen(mark)) if (!((server.get(subject) ?? -Infinity) >= at)) server.set(subject, at);
+        this.seenWarned = false;
+        return server;
+      } catch (e) {
+        if (!conn.closed && !this.seenWarned) console.warn(`Consultations des autres PC non lues : ${messageOf(e)}`);
+        this.seenWarned ||= !conn.closed;
+      }
+    }
+    return file.localSeen(0);
+  }
+
+  /** The consultations' rounds of `conn` (D7): one now, then one every consultationsSendMs (read each time) after the last ends, while it is open. */
+  private consultationsEvery(conn: Connection): void {
+    const round = () => {
+      this.consultationsTimer = null;
+      if (conn.closed || conn !== this.conn) return;
+      // After the last round, a former connection's included: one sending at a time.
+      this.consultationsRound = this.consultationsRound.then(() => this.sendConsultations(conn)).then(() => {
+        if (conn.closed || conn !== this.conn) return;
+        this.consultationsTimer = setTimeout(round, Math.max(1, this.deps.params().consultationsSendMs));
+      });
+    };
+    round();
+  }
+
+  private stopConsultations(): void {
+    if (this.consultationsTimer !== null) clearTimeout(this.consultationsTimer);
+    this.consultationsTimer = null;
+  }
+
+  /**
+   * One round (D7): with the switch on (consultationsRecord exactly 'yes', as the recording reads it) and a file, this
+   * PC's events after the mark of the base followed, by batches of MAX_CONSULTATIONS_PER_REQUEST at most, each cut short
+   * of MAX_CONSULTATIONS_BODY_BYTES (fitting), one at a time, each answer's `upto` the new mark. No mark for this base —
+   * a base taken from another server, a first sending — or a sending whose answer was lost: the server's upto first. A
+   * batch the server refuses (400, 413) goes again by halves; an event refused alone is dropped — one event never holds
+   * the rest back —, those dropped said once at the round's end; a batch taken doubles the next one's size, up to the
+   * bound (a server that refused every event would cost one request each, not a storm of halvings). Any other failure
+   * ends the round, said once: the next round, or the next connection, takes it up. Never rejects.
+   */
+  private async sendConsultations(conn: Connection): Promise<void> {
+    const file = this.deps.consultations, base = this.deps.store.baseId();
+    const on = () => !conn.closed && this.deps.params().consultationsRecord === 'yes';
+    if (!file || base === null || !on()) return;
+    try {
+      let mark = this.consultationsAsk ? null : file.sentUpto(base);
+      if (mark === null) {
+        mark = uptoOf(await json(await conn.request('/consultations/upto')), '/consultations/upto');
+        file.markSent(base, mark);
+        this.consultationsAsk = false;
+      }
+      let max = MAX_CONSULTATIONS_PER_REQUEST;
+      const dropped = { count: 0, reason: '' };
+      try {
+        while (on()) {
+          const events = fitting(file.pending(mark, max));
+          if (events.length === 0) break;
+          const last = events[events.length - 1].seq;
+          // From the request until its answer is read, what the server holds is unknown.
+          this.consultationsAsk = true;
+          const res = await conn.request('/consultations', { method: 'POST', headers: JSON_BODY, body: JSON.stringify({ events }) });
+          if (res.status === 400 || res.status === 413) {
+            // Refused whole: nothing of it written.
+            const reason = await reasonOf(res);
+            this.consultationsAsk = false;
+            if (events.length > 1) {
+              max = Math.ceil(events.length / 2);
+              continue;
+            }
+            dropped.count++;
+            dropped.reason = reason;
+          } else {
+            mark = uptoOf(await json(res), '/consultations');
+            this.consultationsAsk = false;
+            max = Math.min(MAX_CONSULTATIONS_PER_REQUEST, max * 2);
+          }
+          // At least past what was sent, or dropped: a server that would answer less never holds the sending in place.
+          mark = Math.max(mark, last);
+          file.markSent(base, mark);
+        }
+      } finally {
+        if (dropped.count > 0) console.warn(`${dropped.count} consultation${dropped.count > 1 ? 's' : ''} refusée${dropped.count > 1 ? 's' : ''} par le serveur, abandonnée${dropped.count > 1 ? 's' : ''} : ${dropped.reason}`);
+      }
+      this.consultationsWarned = false;
+    } catch (e) {
+      if (!conn.closed && !this.consultationsWarned) console.warn(`Consultations non envoyées au serveur : ${messageOf(e)}`);
+      this.consultationsWarned ||= !conn.closed;
+    }
   }
 
   /**
@@ -382,6 +546,7 @@ export class SyncClient {
     } catch (e) {
       conn.fail(e);
     }
+    this.stopConsultations();
     await sender;
     if (this.conn !== conn) return;
     this.conn = null;
@@ -442,6 +607,8 @@ export class SyncClient {
     // The .tex open here (D6): what this PC has open now, an empty list included — a list left by a stop without closing
     // them (a laptop shut) goes so at its next connection.
     void this.presence();
+    // This PC's consultations (plan 6b, D7): what waits now, then every consultationsSendMs while it stays open.
+    this.consultationsEvery(conn);
     this.progress(conn);
     started(send(conn, this.sending));
     for await (const e of readEvents(res.body, conn.abort.signal, () => this.heard(conn))) {

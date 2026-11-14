@@ -359,6 +359,8 @@ export interface RenderParams {
   consultationsRecord: 'yes' | 'no';
   /** How long the interface keeps its events before it hands them to the main process, which writes them in one go. */
   consultationsFlushMs: number;
+  /** How long between two sendings of this PC's consultations to a server paired (plan 6b, D7), while connected. */
+  consultationsSendMs: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -559,6 +561,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   navHistoryMax: 100,
   consultationsRecord: 'yes',
   consultationsFlushMs: 10_000,
+  consultationsSendMs: 60_000,
 };
 
 /**
@@ -803,6 +806,7 @@ export const PARAM_SPECS: ParamSpec[] = [
     choices: [{ value: 'yes', label: 'Oui' }, { value: 'no', label: 'Non' }], invalid: 'no',
   },
   num('consultationsFlushMs', 'Délai entre deux enregistrements des consultations sur le disque (ms)', A, 'Consultations', 1000, 600_000, 1000),
+  num('consultationsSendMs', 'Délai entre deux envois des consultations au serveur (ms)', A, 'Consultations', 10_000, 3_600_000, 1000),
 ];
 
 /**

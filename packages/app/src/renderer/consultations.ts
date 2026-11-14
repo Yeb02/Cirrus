@@ -1,4 +1,4 @@
-import type { Id } from '@cirrus/core';
+import { type Consultation, type Id, MAX_CONSULTATION_BATCH, MAX_DETAIL_CHARS } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 
 /**
@@ -9,26 +9,12 @@ import type { RenderParams } from '@cirrus/view';
  * them. Neither typed text nor content is recorded, but the text of a search.
  */
 
-/** What is recorded, in one place: the main process accepts these kinds and no other. Identifiers, never French words. */
-export const CONSULTATION_KINDS = [
-  'app_open', 'app_close', 'plan_shown', 'node_popup', 'connection_popup', 'file_preview', 'file_fullscreen', 'search', 'jump', 'focus', 'blur',
-] as const;
-export type ConsultationKind = (typeof CONSULTATION_KINDS)[number];
-
-/**
- * One event, as the interface hands it to the main process: `at` in milliseconds (this PC's clock), `subject` the node
- * or connection concerned, `plan` the plan it happened in (or, for a jump, the one it went to), `detail` the search's
- * text, a file's name, or how a jump was made.
- */
-export interface Consultation { at: number; kind: ConsultationKind; subject?: Id; plan?: Id; detail?: string }
+// The events' form — their kinds, their fields, the bounds of a batch — is the core's (plan 6b, D7: the server checks
+// them too), named here as well for the interface.
+export { CONSULTATION_KINDS, type Consultation, type ConsultationKind, MAX_CONSULTATION_BATCH, MAX_DETAIL_CHARS } from '@cirrus/core';
 
 /** What an emission point decides: the event without its date. Without a `plan`, the queue puts the plan shown. */
 export type ConsultationDraft = Omit<Consultation, 'at'>;
-
-/** The most events in one batch the main process accepts, and the most the queue keeps (the oldest dropped beyond). */
-export const MAX_CONSULTATION_BATCH = 10_000;
-/** The longest `detail` the main process accepts; the queue cuts a longer one (a search typed at length). */
-export const MAX_DETAIL_CHARS = 2000;
 
 /** `text` cut to MAX_DETAIL_CHARS UTF-16 units, without leaving half of a surrogate pair at its end. */
 function clip(text: string): string {

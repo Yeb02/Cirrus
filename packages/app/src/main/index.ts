@@ -332,6 +332,8 @@ void app.whenReady().then(() => {
     },
     // What each hello says of the versions, to the updater (plan 9, D4).
     update: { hello: (version) => { void updater?.heard(version); }, refused: () => { void updater?.formatRefused(); } },
+    // This PC's consultations, sent to the server while connected (plan 6b, D7).
+    consultations,
   });
   wireSync(sync);
   if (!capture && !bench) updater = wireUpdater({ host: sync, dev: identity.dev, params: currentParams, env: process.env, capture: false, appDir: app.getPath('userData') });

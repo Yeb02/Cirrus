@@ -1,49 +1,16 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { MAX_ID_CHARS } from '@cirrus/core';
-import { CONSULTATION_KINDS, type Consultation, MAX_CONSULTATION_BATCH, MAX_DETAIL_CHARS } from '../renderer/consultations.ts';
+import { type Consultation, type Id, parseConsultations, SEEN_KINDS, type SentConsultation } from '@cirrus/core';
 
 /** The consultations' file (plan 6a, D6), in the base's folder and no part of it. */
 export const CONSULTATIONS_FILE = 'consultations.db';
 
-const KINDS: ReadonlySet<string> = new Set(CONSULTATION_KINDS);
-const FIELDS: ReadonlySet<string> = new Set(['at', 'kind', 'subject', 'plan', 'detail']);
+/** A row of `events` as pending reads it: its rowid as its seq, its absent fields NULL. */
+interface EventRow { seq: number; at: number; kind: string; subject: string | null; plan: string | null; detail: string | null }
 
-/** An identifier, as a field of an event: text of 1 to MAX_ID_CHARS characters, or absent. */
-function idField(x: unknown, what: string): string | undefined {
-  if (x === undefined) return undefined;
-  if (typeof x !== 'string' || x.length === 0 || x.length > MAX_ID_CHARS) throw new Error(`${what} n’est pas un identifiant`);
-  return x;
-}
-
-/**
- * A batch from the interface, checked whole before anything is written: an array of at most MAX_CONSULTATION_BATCH
- * events, each a plain object of the fields at, kind, subject, plan and detail alone (the PC is this process's to say),
- * a known kind, an integer time, identifiers within MAX_ID_CHARS, a detail within MAX_DETAIL_CHARS. One event out of
- * line refuses the batch: a page that sends one is not the page that was built. Throws, in French, saying what.
- */
-export function parseConsultations(batch: unknown): Consultation[] {
-  if (!Array.isArray(batch)) throw new Error('le lot n’est pas un tableau');
-  if (batch.length > MAX_CONSULTATION_BATCH) throw new Error(`le lot compte plus de ${MAX_CONSULTATION_BATCH} événements`);
-  return batch.map((x: unknown, i): Consultation => {
-    try {
-      if (x === null || typeof x !== 'object' || Array.isArray(x)) throw new Error('pas un objet');
-      for (const key of Object.keys(x)) if (!FIELDS.has(key)) throw new Error(`le champ « ${key.slice(0, 40)} » est inconnu`);
-      const e = x as Record<string, unknown>;
-      if (typeof e.kind !== 'string' || !KINDS.has(e.kind)) throw new Error('genre inconnu');
-      if (typeof e.at !== 'number' || !Number.isSafeInteger(e.at) || e.at < 0) throw new Error('l’heure n’est pas un entier positif');
-      if (e.detail !== undefined && (typeof e.detail !== 'string' || e.detail.length > MAX_DETAIL_CHARS)) throw new Error(`le détail n’est pas un texte de ${MAX_DETAIL_CHARS} caractères au plus`);
-      const out: Consultation = { at: e.at, kind: e.kind as Consultation['kind'] };
-      const subject = idField(e.subject, 'le sujet'), plan = idField(e.plan, 'le plan');
-      if (subject !== undefined) out.subject = subject;
-      if (plan !== undefined) out.plan = plan;
-      if (e.detail !== undefined) out.detail = e.detail as string;
-      return out;
-    } catch (err) {
-      throw new Error(`événement ${i} : ${err instanceof Error ? err.message : String(err)}`);
-    }
-  });
-}
+/** The kinds that say an object was looked at, as SQL reads them (SEEN_KINDS: the core's, the server's too). */
+const SEEN_IN = `kind IN (${SEEN_KINDS.map((k) => `'${k}'`).join(', ')})`;
 
 /**
  * The consultations' file of this PC (plan 6a, D6): a plain database beside the base, with one table, `events`, and an
@@ -52,6 +19,11 @@ export function parseConsultations(batch: unknown): Consultation[] {
  * a base moves it to the new one (swap.ts). A batch the file refuses — locked by another program, damaged, the disk full
  * or the folder gone — is dropped with one warning, said again only after a write succeeded: nothing is visible, the
  * app goes on, and a file that stays damaged does not flood the console. The file is never replaced nor repaired.
+ *
+ * Its events go to the server (plan 6b, D7: the sync client's), each numbered by its rowid — `events` has no key of its
+ * own, nothing deletes from it, so the rowid grows —, this PC's alone. A second table, `sent (base, upto)`, keeps the
+ * last number the server of each base (its baseId) has said it holds. Reading touches no disk either while the file is
+ * absent: nothing recorded, nothing to send.
  */
 export class Consultations {
   private readonly dir: string;
@@ -111,6 +83,65 @@ export class Consultations {
     console.warn(`Consultations non enregistrées : ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  /**
+   * This PC's events after number `after`, in order, `max` at most, as the server takes them (SentConsultation: its
+   * absent fields absent). A row another PC wrote (a folder brought from another machine) is never among them: the
+   * server keys a PC's rows by its token's PC. Throws when the file cannot be read.
+   */
+  pending(after: number, max: number): SentConsultation[] {
+    const rows = this.read((db) => db.prepare('SELECT rowid AS seq, at, kind, subject, plan, detail FROM events WHERE rowid > ? AND pc = ? ORDER BY rowid LIMIT ?')
+      .all(after, this.pc, Math.max(0, Math.floor(max))) as unknown as EventRow[], []);
+    return rows.map((r) => {
+      const e: SentConsultation = { seq: r.seq, at: r.at, kind: r.kind as Consultation['kind'] };
+      if (r.subject !== null) e.subject = r.subject;
+      if (r.plan !== null) e.plan = r.plan;
+      if (r.detail !== null) e.detail = r.detail;
+      return e;
+    });
+  }
+
+  /** The last number the server of base `base` said it holds of this PC's events; null when none has been heard of. Throws when the file cannot be read. */
+  sentUpto(base: string): number | null {
+    return this.read((db) => (db.prepare('SELECT upto FROM sent WHERE base = ?').get(base) as { upto: number } | undefined)?.upto ?? null, null);
+  }
+
+  /** What the server of base `base` holds now (its answer's `upto`), kept for the next sending. Throws when the file cannot be written. */
+  markSent(base: string, upto: number): void {
+    this.use((db) => { db.prepare('INSERT INTO sent (base, upto) VALUES (?, ?) ON CONFLICT(base) DO UPDATE SET upto = excluded.upto').run(base, upto); });
+  }
+
+  /**
+   * The last time each subject was looked at (SEEN_KINDS, a subject given) by the events after number `after`, every row
+   * of the file — another PC's too: what this file holds was seen by its user. Never throws: a file that cannot be read
+   * is said once, and reads as nothing.
+   */
+  localSeen(after: number): Map<Id, number> {
+    try {
+      const rows = this.read((db) => db.prepare(`SELECT subject, MAX(at) AS at FROM events WHERE rowid > ? AND subject IS NOT NULL AND ${SEEN_IN} GROUP BY subject`)
+        .all(after) as unknown as { subject: string; at: number }[], []);
+      return new Map(rows.map((r) => [r.subject, r.at]));
+    } catch (e) {
+      this.warn('file', e);
+      return new Map();
+    }
+  }
+
+  /** `fn` on the file, opened if need be; a failure lets its connection go (the next use opens it again) and is thrown. */
+  private use<T>(fn: (db: DatabaseSync) => T): T {
+    try {
+      return fn(this.handle());
+    } catch (e) {
+      this.release();
+      throw e;
+    }
+  }
+
+  /** As use, but `none` without opening the file when it does not exist: nothing was ever recorded. */
+  private read<T>(fn: (db: DatabaseSync) => T, none: T): T {
+    if (!this.db && !existsSync(join(this.dir, CONSULTATIONS_FILE))) return none;
+    return this.use(fn);
+  }
+
   /** Lets the file go (the app is quitting); a write after it opens the file again. */
   close(): void {
     this.release();
@@ -125,6 +156,7 @@ export class Consultations {
       db.exec(`
         CREATE TABLE IF NOT EXISTS events (at INTEGER NOT NULL, pc TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT, plan TEXT, detail TEXT);
         CREATE INDEX IF NOT EXISTS events_at ON events (at);
+        CREATE TABLE IF NOT EXISTS sent (base TEXT PRIMARY KEY, upto INTEGER NOT NULL);
       `);
       this.insert = db.prepare('INSERT INTO events (at, pc, kind, subject, plan, detail) VALUES (?, ?, ?, ?, ?, ?)');
     } catch (err) {

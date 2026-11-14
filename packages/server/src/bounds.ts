@@ -81,6 +81,13 @@ export const MAX_PUBLICATION_PDF_MS = 10 * 60_000;
 export const MAX_PRESENCE_ENTRIES = 100;
 export const MAX_PRESENCE_BODY_BYTES = 64 * 1024;
 
+/**
+ * The consultations of every PC (plan 6b, D7: POST /consultations), the core's — the PC cuts its batches to them: the
+ * most events in one request (413 beyond), and its largest body (413 beyond). Each event checked by the core's
+ * parseSentConsultations. serveur.db keeps every row, without a cap: one user's year of reading is a few MB.
+ */
+export { MAX_CONSULTATIONS_BODY_BYTES, MAX_CONSULTATIONS_PER_REQUEST } from '@cirrus/core';
+
 /** The longest name of a paired PC: the one `jumeler` gives, and the one the PC gives of itself. */
 export const MAX_PC_NAME_CHARS = 100;
 

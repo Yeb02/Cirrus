@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('cirrus', {
   // The consultations (plan 6a, D6): sent, never awaited, on the channel the closing's « ready » is sent on, so that they
   // arrive before it.
   recordConsultations: (events: unknown) => ipcRenderer.send('cirrus:consultations', events),
+  // « Vu » (plan 6b, D7): the last time each node or connection was looked at, every PC together while connected.
+  consultationsSeen: () => ipcRenderer.invoke('cirrus:consultations:seen'),
   // The Windows app commands « Précédent » et « Suivant » (plan 6a, D2: the mouse's side buttons, the browser keys).
   onAppCommand: (fn: (command: string) => void) => on('cirrus:app-command', (c) => { if (c === 'browser-backward' || c === 'browser-forward') fn(c); }),
   onQuit: (fn: () => void) => {

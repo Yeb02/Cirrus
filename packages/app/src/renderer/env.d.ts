@@ -42,6 +42,11 @@ export interface CirrusBridge {
    * goes. The main process checks it strictly, and drops a batch it cannot write, with a warning in its console.
    */
   recordConsultations(events: Consultation[]): void;
+  /**
+   * « Vu » (plan 6b, D7): for each node or connection looked at, the last time it was (ms, the clock of the PC that
+   * recorded it) — every PC's, from the server, while connected, with this PC's not yet sent; this PC's alone otherwise.
+   */
+  consultationsSeen(): Promise<[Id, number][]>;
   /** Windows' app commands « Précédent » et « Suivant » (plan 6a, D2), as the main process hears them. Returns the unsubscription. */
   onAppCommand(fn: (command: 'browser-backward' | 'browser-forward') => void): () => void;
   /** The window is closing: `fn` saves what it must, then calls quitReady. Returns the unsubscription. */

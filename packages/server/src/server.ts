@@ -7,11 +7,12 @@ import { encodeState, isObject, SNAPSHOT_VERSION, SYNC_PROTOCOL_VERSION, type Un
 import { unreachable } from '@cirrus/sources';
 import { BlobError, filePath, lockBase, receiveBlob, SCHEMA_VERSION } from '@cirrus/store';
 import {
-  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_INSTALLER_BODY_BYTES, MAX_JOURNAL_PAGE,
+  DRAIN_LINGER_MS, DRAIN_MAX_BYTES, DRAIN_MAX_MS, MAX_BODY_BYTES, MAX_CONSULTATIONS_BODY_BYTES, MAX_FILE_BYTES, MAX_HASHES_PER_REQUEST, MAX_HOST_NAME_CHARS, MAX_INSTALLER_BODY_BYTES, MAX_JOURNAL_PAGE,
   MAX_PAIR_BODY_BYTES, MAX_PRESENCE_BODY_BYTES, MAX_PUBLICATION_BODY_BYTES, MAX_SEED_BYTES, MAX_SETTING_AHEAD_MS, MAX_SMALL_BODY_MS, MAX_UNITS_PER_REQUEST,
   MIN_BODY_BYTES_PER_S, SERVER_HEADERS_TIMEOUT_MS, SERVER_IDLE_MS, SERVER_KEEP_ALIVE_MS, SERVER_REQUEST_TIMEOUT_MS,
 } from './bounds.ts';
 import { Canon, ForbiddenError } from './canon.ts';
+import { ConsultationsError, parseConsultationsBody } from './consultations.ts';
 import { Hub } from './events.ts';
 import {
   contentDisposition, installerPage, ManifestError, NOTHING_PUBLISHED, officialVersion, type OpenInstaller, openInstaller, PAGE_HEADERS, readVersionFile, WRONG_CODE,
@@ -28,7 +29,7 @@ import { hashToken, PairingError, Tokens } from './tokens.ts';
 // installer for a pairing code) — the signed updates (/versions/*, plan 9, D4) included —, no CORS header (no browser
 // is answered but there), every body bounded and checked
 // before anything is written. Its data: `dataDir/base/` (a base in a PC's format, its files with it), `dataDir/serveur.db` (the
-// paired PCs, the shared settings, the files each PC has open in full screen), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
+// paired PCs, the shared settings, the files each PC has open in full screen, every PC's consultations), and `dataDir/seed/` while a PC sends its base to it, empty (task 5, D7). Its network
 // serves only a paired PC's import of a publication (plan 5b, D2: publications.ts). Its space, which GET /status gives
 // (plan 5b, D8), is storeSize.ts's.
 
@@ -449,6 +450,26 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
         reply(res, 200, { others: tokens.putPresence(who.pc, open, now()) });
       },
     },
+    /**
+     * The consultations of every PC (plan 6b, D7). POST `{ events: [{ seq, at, kind, subject?, plan?, detail? }] }`, this
+     * PC's events by their numbers in its file — MAX_CONSULTATIONS_PER_REQUEST at most and MAX_CONSULTATIONS_BODY_BYTES
+     * (413 beyond), checked whole before anything is written (parseConsultationsBody, 400) —, kept under the token's PC,
+     * each once: its answer, `{ upto }`, the greatest number kept of this PC's. GET /consultations/upto, that number
+     * alone: where a PC resumes. GET /consultations/seen, `{ seen: [subject, at][] }`: the last time each subject was
+     * looked at, every PC together.
+     */
+    '/consultations': {
+      POST: async (req, res, _url, who) => {
+        const events = parseConsultationsBody(await readJson(req, MAX_CONSULTATIONS_BODY_BYTES));
+        reply(res, 200, { upto: tokens.putConsultations(who.pc, events) });
+      },
+    },
+    '/consultations/upto': {
+      GET: (_req, res, _url, who) => reply(res, 200, { upto: tokens.consultationsUpto(who.pc) }),
+    },
+    '/consultations/seen': {
+      GET: (_req, res) => reply(res, 200, { seen: tokens.seen() }),
+    },
     '/files/missing': {
       POST: async (req, res) => {
         const body = await readJson(req, MAX_BODY_BYTES);
@@ -676,6 +697,7 @@ async function listen({ port: wanted, host, names, now, dataDir, baseDir, tokens
       } catch (e) {
         const known = e instanceof HttpError ? e
           : e instanceof PairingError || e instanceof SeedError || e instanceof SettingsError || e instanceof PublicationError || e instanceof PresenceError
+            || e instanceof ConsultationsError
             ? new HttpError(e.status, e.message)
           : e instanceof ForbiddenError ? new HttpError(403, e.message) : null;
         if (res.headersSent) {

@@ -2,11 +2,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { MAX_ID_CHARS } from '@cirrus/core';
+import { MAX_CONSULTATIONS_BODY_BYTES, MAX_ID_CHARS, parseConsultations, parseSentConsultations } from '@cirrus/core';
+import { LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openBase } from '../src/main/base.ts';
-import { CONSULTATIONS_FILE, Consultations, parseConsultations } from '../src/main/consultations.ts';
+import { CONSULTATIONS_FILE, Consultations } from '../src/main/consultations.ts';
+import { SyncClient, type SyncParams } from '../src/main/sync/client.ts';
+import type { SecretStore, ServerConfig } from '../src/main/sync/config.ts';
 import { READY_FILE, stagedDir } from '../src/main/sync/firstSync.ts';
 import { swapStaged } from '../src/main/sync/swap.ts';
 import {
@@ -16,6 +19,7 @@ import {
 import { type JumpHost, Jumps } from '../src/renderer/ui/graph/jumps.ts';
 import { openedPanels, type Panel, withConnection, withFile, withLinked, withNode, withoutLoose } from '../src/renderer/ui/panels/Panels.tsx';
 import { fullDraft } from '../src/renderer/ui/screens.ts';
+import { Lab, sleep, TEST_PARAMS, until } from './support/virtualPc.ts';
 
 // The recording of consultations (plan 6a, D6, task 5): the file and its batches (main), the queue that feeds it
 // (interface), and the decisions at each emission point, on files of their own and never the user's base.
@@ -652,3 +656,243 @@ test('jump : le brouillon d’un saut — l’objet pour sujet, le plan d’arri
   expect(jumpDraft({ kind: 'back', plan: 'p1' })).toEqual({ kind: 'jump', plan: 'p1', detail: 'back' });
   expect(jumpDraft({ kind: 'forward', plan: 'p3' })).toEqual({ kind: 'jump', plan: 'p3', detail: 'forward' });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The sending to the server (plan 6b, D7, task 8): the file's side (what waits, the marks per base), then the client's,
+// against a server of the test's network, then the real server.
+
+/** A server's configuration kept in memory, as serveur.json would keep it. */
+function memorySecrets(c: ServerConfig): SecretStore {
+  let config: ServerConfig | null = c;
+  return { read: () => (config ? { ...config } : null), write: (x) => { config = x ? { ...x } : null; } };
+}
+
+const closing: (() => Promise<void> | void)[] = [];
+afterEach(async () => {
+  for (const close of closing.splice(0).reverse()) await close();
+});
+
+/** `n` events of the kind that says a node was looked at, from `at`. */
+const popups = (n: number, at = 1000, rest: Partial<Consultation> = {}): Consultation[] =>
+  Array.from({ length: n }, (_, i) => ev('node_popup', at + i, { subject: `n${i}`, ...rest }));
+
+test('pending rend ce qui suit le dernier envoyé', () => {
+  const dir = folder();
+  const c = Consultations.open(dir, 'pc-1');
+  // Nothing recorded: nothing waits, and the reading does not make the file.
+  expect(c.pending(0, 10)).toEqual([]);
+  expect(existsSync(join(dir, CONSULTATIONS_FILE))).toBe(false);
+  c.write([ev('app_open', 1000), ev('search', 1500, { subject: 'n1', plan: 'p1', detail: 'tenseur' }), ev('node_popup', 1600, { subject: 'n2' })]);
+  // A row of another PC (a folder brought from another machine): never sent by this one.
+  const db = new DatabaseSync(join(dir, CONSULTATIONS_FILE));
+  db.prepare("INSERT INTO events (at, pc, kind, subject) VALUES (1650, 'pc-2', 'node_popup', 'n3')").run();
+  db.close();
+  c.write([ev('blur', 1700)]);
+  // Each event numbered by its row (its seq), in order, its absent fields absent.
+  const all = c.pending(0, 10);
+  expect(all).toEqual([
+    { seq: 1, at: 1000, kind: 'app_open' },
+    { seq: 2, at: 1500, kind: 'search', subject: 'n1', plan: 'p1', detail: 'tenseur' },
+    { seq: 3, at: 1600, kind: 'node_popup', subject: 'n2' },
+    { seq: 5, at: 1700, kind: 'blur' },
+  ]);
+  // What the server's check takes as it is.
+  expect(parseSentConsultations(all)).toEqual(all);
+  expect(c.pending(0, 2).map((e) => e.seq)).toEqual([1, 2]);
+  c.markSent('base-1', 2);
+  expect(c.pending(c.sentUpto('base-1')!, 10).map((e) => e.seq)).toEqual([3, 5]);
+  expect(c.pending(3, 10).map((e) => e.seq)).toEqual([5]);
+  expect(c.pending(5, 10)).toEqual([]);
+  c.close();
+  expect(warn).not.toHaveBeenCalled();
+});
+
+test('markSent est par base', () => {
+  const dir = folder();
+  const c = Consultations.open(dir, 'pc-1');
+  expect(c.sentUpto('base-1')).toBeNull();
+  expect(existsSync(join(dir, CONSULTATIONS_FILE))).toBe(false);
+  c.write(popups(3));
+  expect(c.sentUpto('base-1')).toBeNull();
+  c.markSent('base-1', 2);
+  c.markSent('base-2', 1);
+  expect(c.sentUpto('base-1')).toBe(2);
+  expect(c.sentUpto('base-2')).toBe(1);
+  expect(c.sentUpto('base-3')).toBeNull();
+  // A mark moves either way: a server restored says where it stands.
+  c.markSent('base-1', 3);
+  c.markSent('base-2', 0);
+  c.close();
+  // Kept in the file, in a table of its own: sent (base, upto).
+  const again = Consultations.open(dir, 'pc-1');
+  expect([again.sentUpto('base-1'), again.sentUpto('base-2')]).toEqual([3, 0]);
+  again.close();
+  const db = new DatabaseSync(join(dir, CONSULTATIONS_FILE));
+  try {
+    expect((db.prepare('PRAGMA table_info(sent)').all() as { name: string; pk: number }[]).map((x) => [x.name, x.pk])).toEqual([['base', 1], ['upto', 0]]);
+  } finally {
+    db.close();
+  }
+});
+
+test('le local « vu » : la dernière consultation de chaque sujet, des sortes qui disent qu’on a regardé un objet, à partir d’un numéro', () => {
+  const dir = folder();
+  const c = Consultations.open(dir, 'pc-1');
+  expect(c.localSeen(0)).toEqual(new Map());
+  c.write([
+    ev('node_popup', 100, { subject: 'n1' }), ev('connection_popup', 110, { subject: 'c1' }), ev('file_preview', 120, { subject: 'n2', detail: 'a.pdf' }),
+    ev('file_fullscreen', 130, { subject: 'n3', detail: 'b.tex' }), ev('jump', 140, { subject: 'n4', plan: 'p1' }), ev('search', 150, { subject: 'n5', detail: 'x' }),
+    ev('app_open', 160), ev('plan_shown', 170, { plan: 'p1' }), ev('search', 180, { detail: 'rien' }), ev('jump', 190, { plan: 'p2' }), ev('node_popup', 200, { subject: 'n1' }),
+  ]);
+  expect(c.localSeen(0)).toEqual(new Map([['n1', 200], ['c1', 110], ['n2', 120], ['n3', 130], ['n4', 140], ['n5', 150]]));
+  expect(c.localSeen(5)).toEqual(new Map([['n5', 150], ['n1', 200]]));
+  expect(c.localSeen(6)).toEqual(new Map([['n1', 200]]));
+  c.close();
+});
+
+/**
+ * The server of the test's network, for one PC: /hello (its base `base-x`), a stream that brings nothing, and the
+ * consultations' routes, which keep each event once by its seq, the batch checked as the server checks it. `cut`: the
+ * next answer to a POST /consultations comes without its body, the batch kept. `refuse`: a batch that holds one of
+ * these numbers is refused whole (400), as the server refuses one event out of line.
+ */
+function consultationsServer(seen: [string, number][] = []) {
+  const kept = new Map<number, unknown>(), posted: number[][] = [], bodies: number[] = [], asked: string[] = [];
+  const state = { cut: false, seen, refuse: new Set<number>() };
+  const upto = () => Math.max(0, ...kept.keys());
+  const f: typeof fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname, method = init?.method ?? 'GET';
+    asked.push(`${method} ${path}`);
+    if (path === '/hello') return Response.json({ serverTime: Date.now(), lastSeq: 0, empty: false, nodes: 0, baseId: 'base-x' });
+    if (path === '/events') return new Response(new ReadableStream({ pull: () => new Promise<void>(() => {}) }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    if (path === '/consultations/upto' && method === 'GET') return Response.json({ upto: upto() });
+    if (path === '/consultations/seen' && method === 'GET') return Response.json({ seen: state.seen });
+    if (path === '/consultations' && method === 'POST') {
+      const body = String(init?.body);
+      bodies.push(Buffer.byteLength(body));
+      const events = parseSentConsultations((JSON.parse(body) as { events: unknown }).events);
+      posted.push(events.map((e) => e.seq));
+      if (events.some((e) => state.refuse.has(e.seq))) return Response.json({ error: 'Consultations refusées : événement hors ligne.' }, { status: 400 });
+      for (const e of events) if (!kept.has(e.seq)) kept.set(e.seq, e);
+      if (state.cut) {
+        state.cut = false;
+        return new Response(null, { status: 200 });
+      }
+      return Response.json({ upto: upto() });
+    }
+    throw new Error(`requête inattendue : ${method} ${path}`);
+  };
+  return { fetch: f, kept, posted, bodies, asked, state, count: (what: string) => asked.filter((a) => a === what).length };
+}
+
+/** A client of `f` on a base of its own, its consultations' file beside it; `params` read at each use (a test changes them). */
+function consultingClient(f: typeof fetch, params: Partial<SyncParams>) {
+  const dir = folder(), store = LocalStore.open(dir, { pc: 'pc-1' }), file = Consultations.open(dir, 'pc-1');
+  const client = new SyncClient({
+    fetch: f, store, storeDir: dir, secrets: memorySecrets({ url: 'http://127.0.0.1:7310', token: 't'.repeat(43), name: 'R' }), reconcile: async () => {}, now: Date.now,
+    params: () => ({ ...TEST_PARAMS, ...params }), status: () => {}, consultations: file,
+  });
+  closing.push(() => store.close(), () => file.close(), () => client.stop());
+  return { client, file, store };
+}
+
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+test('un envoi coupé reprend à upto', async () => {
+  const server = consultationsServer();
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 30 });
+  file.write(popups(2500));
+  // The first batch's answer lost, the batch kept by the server.
+  server.state.cut = true;
+  client.start();
+  await until(() => file.sentUpto('base-x') === 2500, 10_000, () => JSON.stringify(server.asked));
+  // By batches of 1 000 at most; the one whose answer was lost not sent again: the PC asked where the server stands.
+  expect(server.posted.map((p) => [p[0], p.at(-1)])).toEqual([[1, 1000], [1001, 2000], [2001, 2500]]);
+  expect(server.count('GET /consultations/upto')).toBe(2);
+  expect([...server.kept.keys()]).toEqual(range(1, 2500));
+  // Recorded since: the next round sends those alone.
+  file.write(popups(3, 9000));
+  await until(() => server.kept.size === 2503);
+  expect(server.posted.at(-1)).toEqual(range(2501, 2503));
+  expect(server.posted.flat()).toEqual(range(1, 2503));
+  expect(warn).toHaveBeenCalledTimes(1);
+}, 20_000);
+
+test('un lot ne passe jamais MAX_CONSULTATIONS_BODY_BYTES : il est coupé avant', async () => {
+  const server = consultationsServer();
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 30 });
+  // 1 000 events of 2 000 « é » each: 4 Mo at least as JSON.
+  file.write(popups(1000, 1000, { kind: 'search', detail: 'é'.repeat(MAX_DETAIL_CHARS) }));
+  client.start();
+  await until(() => file.sentUpto('base-x') === 1000, 10_000);
+  expect(server.bodies.length).toBeGreaterThanOrEqual(4);
+  expect(server.bodies.every((b) => b <= MAX_CONSULTATIONS_BODY_BYTES), server.bodies.join(', ')).toBe(true);
+  expect(server.posted.flat()).toEqual(range(1, 1000));
+}, 20_000);
+
+test('un événement que le serveur refuse est abandonné seul : le lot repart par moitiés, les autres passent, un seul avertissement', async () => {
+  const server = consultationsServer();
+  server.state.refuse = new Set([7, 1500]);
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 30 });
+  file.write(popups(2000));
+  client.start();
+  await until(() => file.sentUpto('base-x') === 2000, 10_000);
+  expect([...server.kept.keys()]).toEqual(range(1, 2000).filter((s) => s !== 7 && s !== 1500));
+  // Bounded: far from one request per event, and none of the two sent again once dropped.
+  expect(server.posted.length).toBeLessThan(60);
+  expect(server.posted.filter((p) => p.length === 1 && (p[0] === 7 || p[0] === 1500))).toHaveLength(2);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0][0])).toContain('2 consultations refusées par le serveur, abandonnées');
+}, 20_000);
+
+test('interrupteur éteint : rien ne part', async () => {
+  const server = consultationsServer();
+  const params: Partial<SyncParams> = { consultationsSendMs: 20, consultationsRecord: 'no' };
+  const { client, file } = consultingClient(server.fetch, params);
+  file.write(popups(5));
+  client.start();
+  await until(() => client.connected());
+  await sleep(200);
+  expect(server.asked.filter((a) => a.includes('/consultations'))).toEqual([]);
+  // Turned on again: they leave at the next round.
+  params.consultationsRecord = 'yes';
+  await until(() => server.kept.size === 5);
+  // And off again: what is recorded meanwhile stays.
+  params.consultationsRecord = 'no';
+  await sleep(50);
+  const asked = server.asked.length;
+  file.write(popups(2, 5000));
+  await sleep(200);
+  expect(server.asked.length).toBe(asked);
+  expect(file.sentUpto('base-x')).toBe(5);
+});
+
+test('« vu » : le serveur et ce qui n’est pas encore parti ; sans serveur, le local seul', async () => {
+  const server = consultationsServer([['n1', 900], ['n9', 950], ['c1', 10]]);
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 3_600_000 });
+  file.write([ev('node_popup', 500, { subject: 'n1' }), ev('connection_popup', 600, { subject: 'c1' })]);
+  // Not connected: the file alone.
+  expect([...(await client.seen())].sort()).toEqual([['c1', 600], ['n1', 500]]);
+  client.start();
+  await until(() => file.sentUpto('base-x') === 2);
+  // Recorded after the last sending: not at the server yet, read here.
+  file.write([ev('node_popup', 1000, { subject: 'n2' }), ev('node_popup', 400, { subject: 'n9' })]);
+  expect([...(await client.seen())].sort()).toEqual([['c1', 10], ['n1', 900], ['n2', 1000], ['n9', 950]]);
+  // A server's answer that is not one: the file alone, said once.
+  server.state.seen = [['n1', 'hier']] as never;
+  expect([...(await client.seen())].sort()).toEqual([['c1', 600], ['n1', 500], ['n2', 1000], ['n9', 400]]);
+  expect(warn).toHaveBeenCalledTimes(1);
+});
+
+test('deux PC et le vrai serveur : chacun envoie les siennes, « vu » les rend toutes, la plus récente l’emportant', async () => {
+  const lab = await Lab.start();
+  closing.push(() => lab.close());
+  const params = { consultationsSendMs: 30 };
+  const a = await lab.pc('pc-a', { consultations: true, params }), b = await lab.pc('pc-b', { consultations: true, params });
+  a.consultations!.write([ev('node_popup', 100, { subject: 'n1' }), ev('app_open', 105), ev('connection_popup', 300, { subject: 'c1' })]);
+  b.consultations!.write([ev('jump', 200, { subject: 'n1', plan: 'p1' }), ev('search', 400, { subject: 'n2', detail: 'tenseur' })]);
+  await until(() => a.consultations!.sentUpto(a.store.baseId()!) === 3 && b.consultations!.sentUpto(b.store.baseId()!) === 2, 10_000);
+  const expected = [['c1', 300], ['n1', 200], ['n2', 400]];
+  expect([...(await a.client.seen())].sort()).toEqual(expected);
+  expect([...(await b.client.seen())].sort()).toEqual(expected);
+}, 30_000);

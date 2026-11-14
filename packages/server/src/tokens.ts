@@ -2,16 +2,17 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { fileNameKey, newer, type SettingRow } from '@cirrus/core';
+import { fileNameKey, newer, SEEN_KINDS, type SentConsultation, type SettingRow } from '@cirrus/core';
 import { MAX_ID_CHARS, MAX_PAIR_CODE_CHARS, MAX_PC_NAME_CHARS, MAX_SETTINGS_KEPT, PAIRING_TRIES, PAIRING_TTL_MS, SERVER_DB_BUSY_MS } from './bounds.ts';
 import type { OpenElsewhere, OpenFile } from './presence.ts';
 import { SettingsError, type StoredChange } from './settings.ts';
 
 // Pairing and tokens (plan 5a, D3): `jumeler` makes a one-time code, a PC trades it for a token of 256 bits. The
 // server's own file, serveur.db, keeps only their SHA-256 hashes: neither a code nor a token is ever on its disk. It
-// keeps the shared settings too (task 6, D9), and the files each PC has open in full screen (plan 5b, D6).
+// keeps the shared settings too (task 6, D9), the files each PC has open in full screen (plan 5b, D6), and every PC's
+// consultations (plan 6b, D7).
 
-/** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings, the open files. */
+/** The server's own file, next to its base: the paired PCs, the pending codes, the shared settings, the open files, the consultations. */
 const SERVER_DB = 'serveur.db';
 
 /** Forward-only migrations of serveur.db: index i upgrades user_version i to i + 1. Never edit a shipped migration. */
@@ -29,6 +30,15 @@ const MIGRATIONS: string[] = [
    */ `
   CREATE TABLE open_tex (pc TEXT NOT NULL, node TEXT NOT NULL, name_key TEXT NOT NULL, name TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (pc, node, name_key));
   CREATE INDEX open_tex_file ON open_tex (node, name_key);
+  `,
+  /*
+   * v4 (plan 6b, task 8, D7): every PC's consultations, each by its PC (the token's) and its number in that PC's file;
+   * its time (that PC's clock), its kind, its subject, plan and detail as recorded. The index reads the last time each
+   * subject was seen.
+   */ `
+  CREATE TABLE consultations (pc TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL,
+    subject TEXT, plan TEXT, detail TEXT, PRIMARY KEY (pc, seq));
+  CREATE INDEX consultations_subject ON consultations (subject, at);
   `,
 ];
 
@@ -321,6 +331,34 @@ export class Tokens {
       }
       return { rows, changed };
     });
+  }
+
+  /**
+   * POST /consultations (plan 6b, D7): the events of PC `pc` (parseConsultationsBody), in one transaction, each kept
+   * once — an event the PC sends again, its answer lost, is ignored (INSERT OR IGNORE on (pc, seq)). Returns the
+   * greatest number kept for that PC (consultationsUpto). Every row is kept: no cap, nothing ever dropped.
+   */
+  putConsultations(pc: string, events: readonly SentConsultation[]): number {
+    return this.transaction(() => {
+      const insert = this.q('INSERT OR IGNORE INTO consultations (pc, seq, at, kind, subject, plan, detail) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const e of events) insert.run(pc, e.seq, e.at, e.kind, e.subject ?? null, e.plan ?? null, e.detail ?? null);
+      return this.consultationsUpto(pc);
+    });
+  }
+
+  /** GET /consultations/upto (D7): the greatest number kept of PC `pc`'s consultations, 0 for none; a PC sends what follows it. */
+  consultationsUpto(pc: string): number {
+    return (this.q('SELECT MAX(seq) AS upto FROM consultations WHERE pc = ?').get(pc) as { upto: number | null }).upto ?? 0;
+  }
+
+  /**
+   * GET /consultations/seen (D7): for each subject, the last time it was looked at — the kinds of SEEN_KINDS, a subject
+   * given —, every PC together (each PC's clock as it recorded it). A revoked PC's rows count too: they were the user's.
+   */
+  seen(): [string, number][] {
+    const rows = this.q(`SELECT subject, MAX(at) AS at FROM consultations WHERE subject IS NOT NULL AND kind IN (${SEEN_KINDS.map(() => '?').join(', ')}) GROUP BY subject`)
+      .all(...SEEN_KINDS) as { subject: string; at: number }[];
+    return rows.map((r) => [r.subject, r.at]);
   }
 
   close(): void {

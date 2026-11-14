@@ -36,7 +36,7 @@ function send(channel: string, ...args: unknown[]): boolean {
 /**
  * The interface's calls (preload: syncStart, syncRetry, syncReconciled, syncPending, syncServer, syncPair, syncFirst,
  * syncUnpair; texOpened and texClosed, plan 5b, D6; serverStatus, downloadAllPlan, downloadAllStart and downloadAllStop,
- * plan 5b, D8), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
+ * plan 5b, D8; consultationsSeen, plan 6b, D7), and sleep: `suspend` sends what is pending (syncSuspendFlushMs), `resume` brings the veil and a new
  * connection. A window whose page goes away (closed, reloaded, crashed) has its reconciliations rejected (detach).
  */
 export function wireSync(host: SyncHost): void {
@@ -55,6 +55,7 @@ export function wireSync(host: SyncHost): void {
   ipcMain.handle('cirrus:sync:download-all:plan', (_e, refs: unknown) => host.downloadAllPlan(refs));
   ipcMain.handle('cirrus:sync:download-all:start', (_e, refs: unknown) => host.downloadAllStart(refs));
   ipcMain.on('cirrus:sync:download-all:stop', () => host.downloadAllStop());
+  ipcMain.handle('cirrus:consultations:seen', () => host.consultationsSeen());
   powerMonitor.on('suspend', () => { void host.suspend(); });
   powerMonitor.on('resume', () => { void host.resume(); });
 }

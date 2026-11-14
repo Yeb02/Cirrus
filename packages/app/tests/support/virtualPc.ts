@@ -9,6 +9,7 @@ import { type RunningServer, startServer, Tokens } from '@cirrus/server';
 import type { FetchFn } from '@cirrus/sources';
 import { type ChangeRow, LocalStore } from '@cirrus/store';
 import { DEFAULT_PARAMS } from '@cirrus/view';
+import { Consultations } from '../../src/main/consultations.ts';
 import { replayFetch, replayOpen } from '../../src/main/publications/replay.ts';
 import { SyncClient, type SyncParams } from '../../src/main/sync/client.ts';
 import { freeBytes as diskFree } from '../../src/main/sync/downloads.ts';
@@ -35,6 +36,7 @@ export const TEST_PARAMS: SyncParams = {
   syncClockSkewWarnMs: DEFAULT_PARAMS.syncClockSkewWarnMs, syncReceiveBatchMs: DEFAULT_PARAMS.syncReceiveBatchMs,
   downloadAllReserveMb: DEFAULT_PARAMS.downloadAllReserveMb, serverStatusSamples: DEFAULT_PARAMS.serverStatusSamples, throughputMinMb: DEFAULT_PARAMS.throughputMinMb,
   syncRequestTimeoutMs: DEFAULT_PARAMS.syncRequestTimeoutMs, syncStreamSilenceMs: DEFAULT_PARAMS.syncStreamSilenceMs, syncReceiveMaxUnits: DEFAULT_PARAMS.syncReceiveMaxUnits,
+  consultationsRecord: DEFAULT_PARAMS.consultationsRecord, consultationsSendMs: DEFAULT_PARAMS.consultationsSendMs,
 };
 
 /** A state's content, each list sorted: equal states, whatever the order their rows were made in. */
@@ -227,12 +229,15 @@ export class VirtualPc {
   readonly allProgress: DownloadAllProgress[] = [];
   onAll: ((p: DownloadAllProgress) => void) | null = null;
   private readonly presence: boolean;
+  /** Its consultations' file (plan 6b, D7), which its client sends, when it was made with `consultations`; none otherwise. */
+  readonly consultations: Consultations | null;
 
-  constructor(o: { id: string; dir: string; now: () => number; params?: Partial<SyncParams>; presence?: boolean }) {
+  constructor(o: { id: string; dir: string; now: () => number; params?: Partial<SyncParams>; presence?: boolean; consultations?: boolean }) {
     this.id = o.id;
     this.dir = o.dir;
     this.now = o.now;
     this.presence = o.presence ?? false;
+    this.consultations = o.consultations ? Consultations.open(o.dir, o.id) : null;
     this.params = { ...TEST_PARAMS, ...o.params };
     this.store = LocalStore.open(o.dir, { pc: o.id });
     this.s = this.store.loadState();
@@ -244,6 +249,7 @@ export class VirtualPc {
     return new SyncClient({
       fetch: this.net.fetch, store: this.store, storeDir: this.dir, secrets: fileSecrets(this.dir, PLAIN), reconcile: (incoming, refused) => this.reconcile(incoming, refused),
       now: this.now, params: () => this.params, status: (s) => { this.statuses.push(s); }, ...(this.presence ? { presence: () => this.openTex } : {}),
+      ...(this.consultations ? { consultations: this.consultations } : {}),
       clock: () => this.clock(), freeBytes: async (dir) => this.free ?? diskFree(dir), downloadAllEveryMs: 0,
       downloadAll: (p) => {
         this.allProgress.push(p);
@@ -303,6 +309,7 @@ export class VirtualPc {
 
   async close(): Promise<void> {
     await this.client.stop();
+    this.consultations?.close();
     this.store.close();
   }
 }
@@ -427,11 +434,11 @@ export class Lab {
    * A virtual PC paired with the server (its name there: its id in capitals), its client started unless `start` is false;
    * with `presence`, it sends the .tex it has open (VirtualPc.openTex).
    */
-  async pc(id: string, o: { skewMs?: number; params?: Partial<SyncParams>; start?: boolean; presence?: boolean } = {}): Promise<VirtualPc> {
+  async pc(id: string, o: { skewMs?: number; params?: Partial<SyncParams>; start?: boolean; presence?: boolean; consultations?: boolean } = {}): Promise<VirtualPc> {
     const dir = join(this.root, id);
     mkdirSync(dir, { recursive: true });
     fileSecrets(dir, PLAIN).write(await this.pairing(id.toUpperCase(), id));
-    const pc = new VirtualPc({ id, dir, now: () => this.clock + (o.skewMs ?? 0), params: o.params, presence: o.presence });
+    const pc = new VirtualPc({ id, dir, now: () => this.clock + (o.skewMs ?? 0), params: o.params, presence: o.presence, consultations: o.consultations });
     this.pcs.push(pc);
     if (o.start !== false) pc.client.start();
     return pc;

@@ -20,3 +20,4 @@ export * from './merge.ts';
 export * from './sync.ts';
 export * from './snapshot.ts';
 export * from './codec.ts';
+export * from './consultations.ts';
