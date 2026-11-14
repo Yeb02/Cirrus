@@ -212,8 +212,6 @@ export interface RenderParams {
   // Pop-ups (plan 4a): floating panels in window pixels
   /** A node's pop-up as it opens, */
   popupWidthPx: number;
-  /** A link to a node hovered this long shows its node's preview (plan 6b, D5). */
-  linkPreviewDelayMs: number;
   popupHeightPx: number;
   /** a file's preview as it opens, beside it, */
   previewWidthPx: number;
@@ -224,6 +222,13 @@ export interface RenderParams {
   panelGapPx: number;
   /** The registry's keys or values offered while a tag is typed. */
   tagSuggestions: number;
+  /**
+   * A link to a node hovered this long shows its node's preview (plan 6b, D5), this far from the link: below it while the
+   * link's bottom is within this share of the window's height from its top, above it further down.
+   */
+  linkPreviewDelayMs: number;
+  linkPreviewGapPx: number;
+  linkPreviewBelowShare: number;
   // LaTeX (plan 4b)
   /** The packages installed on demand, which every PC installs at its start (D1). */
   latexPackages: string[];
@@ -496,13 +501,15 @@ export const DEFAULT_PARAMS: RenderParams = {
   bibNoticeLines: 5,
   bibNoticeMs: 20_000,
   popupWidthPx: 380,
-  linkPreviewDelayMs: 400,
   popupHeightPx: 460,
   previewWidthPx: 560,
   previewHeightPx: 460,
   panelMinPx: 200,
   panelGapPx: 12,
   tagSuggestions: 8,
+  linkPreviewDelayMs: 400,
+  linkPreviewGapPx: 6,
+  linkPreviewBelowShare: 0.6,
   latexPackages: [],
   latexWarmProcesses: 2,
   latexTimeoutMs: 10_000,
@@ -740,13 +747,15 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('bibNoticeLines', 'Lignes de chaque liste de la notification d’un .bib importé (doublons, problèmes)', A, 'Publications', 1, 100, 1),
   num('bibNoticeMs', 'Durée d’affichage de la notification d’un .bib importé, qu’un clic ou Échap ferme (ms)', A, 'Publications', 2000, 600_000, 500),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
-  num('linkPreviewDelayMs', 'Survol d’un lien avant l’aperçu de son nœud (ms)', A, 'Pop-ups', 0, 3000, 50),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('previewHeightPx', 'Hauteur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('panelMinPx', 'Côté minimal d’un panneau flottant (px)', A, 'Pop-ups', 120, 600, 1),
   num('panelGapPx', 'Écart entre le clic et le pop-up qu’il ouvre (px)', A, 'Pop-ups', 0, 60, 1),
   num('tagSuggestions', 'Suggestions montrées pendant la saisie d’un tag', A, 'Pop-ups', 1, 50, 1),
+  num('linkPreviewDelayMs', 'Survol d’un lien avant l’aperçu de son nœud (ms)', A, 'Pop-ups', 0, 3000, 50),
+  num('linkPreviewGapPx', 'Écart entre un lien et l’aperçu de son nœud (px)', A, 'Pop-ups', 0, 60, 1),
+  num('linkPreviewBelowShare', 'Part haute de la fenêtre où l’aperçu d’un lien s’ouvre sous lui (plus bas : au-dessus)', A, 'Pop-ups', 0.1, 1, 0.05),
   num('healthRowsShown', 'Lignes montrées d’abord par section de « Santé du graphe »', A, 'Pop-ups', 10, 2000, 10),
   { key: 'latexPackages', label: 'Paquets LaTeX ajoutés (installés sur chaque PC)', section: G, group: 'Paquets et installation', kind: 'words' },
   num('latexWarmProcesses', 'pdfLaTeX préparés d’avance', A, 'Compilation', 1, 4, 1),

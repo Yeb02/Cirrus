@@ -549,3 +549,20 @@ test('la santé du graphe (plan 6b, D8, tâche 9) : « jamais revu » après 30 
   expect(withOverrides({ healthUnseenDays: 0, healthRowsShown: 1 })).toMatchObject({ healthUnseenDays: 1, healthRowsShown: 10 });
   expect(withOverrides({ healthUnseenDays: 1e9, healthRowsShown: 1e9 })).toMatchObject({ healthUnseenDays: 3650, healthRowsShown: 2000 });
 });
+
+test('l’aperçu d’un lien (plan 6b, D5, revue finale) : délai, écart et part de la fenêtre où il s’ouvre dessous, réglages avancés de « Pop-ups », après les suggestions de tags', () => {
+  expect(DEFAULT_PARAMS).toMatchObject({ linkPreviewDelayMs: 400, linkPreviewGapPx: 6, linkPreviewBelowShare: 0.6 });
+  expect(PARAM_SPECS.find((s) => s.key === 'linkPreviewGapPx')).toEqual({
+    key: 'linkPreviewGapPx', label: 'Écart entre un lien et l’aperçu de son nœud (px)', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 0, max: 60, step: 1,
+  });
+  expect(PARAM_SPECS.find((s) => s.key === 'linkPreviewBelowShare')).toEqual({
+    key: 'linkPreviewBelowShare', label: 'Part haute de la fenêtre où l’aperçu d’un lien s’ouvre sous lui (plus bas : au-dessus)', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 0.1, max: 1, step: 0.05,
+  });
+  // The pairs of widths and heights together; the link's three settings after the tag suggestions (final review, M2).
+  expect(PARAM_SPECS.filter((s) => s.group === 'Pop-ups').map((s) => s.key)).toEqual([
+    'popupWidthPx', 'popupHeightPx', 'previewWidthPx', 'previewHeightPx', 'panelMinPx', 'panelGapPx', 'tagSuggestions',
+    'linkPreviewDelayMs', 'linkPreviewGapPx', 'linkPreviewBelowShare', 'healthRowsShown',
+  ]);
+  expect(withOverrides({ linkPreviewGapPx: -5, linkPreviewBelowShare: 0 })).toMatchObject({ linkPreviewGapPx: 0, linkPreviewBelowShare: 0.1 });
+  expect(withOverrides({ linkPreviewGapPx: 1e9, linkPreviewBelowShare: 9 })).toMatchObject({ linkPreviewGapPx: 60, linkPreviewBelowShare: 1 });
+});

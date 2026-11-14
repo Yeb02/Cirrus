@@ -13,9 +13,6 @@ import { type LinkActions, LinkActionsContext } from './linkActions.ts';
 
 const LatexSnippet = lazy(() => loading(import('./LatexSnippet.tsx')).then((m) => ({ default: m.LatexSnippet })));
 
-/** The gap between a link and its preview (px). */
-const GAP_PX = 6;
-
 const rectOf = (el: Element): Rect => {
   const r = el.getBoundingClientRect();
   return { x: r.left, y: r.top, w: r.width, h: r.height };
@@ -85,7 +82,8 @@ export function LinkLayer(props: LayerProps) {
 /**
  * A node's preview beside the link hovered (D5): its title, its plans, its summary compiled (the main process's cache
  * answers a summary already shown at once), its source meanwhile. Under the link, or above it when the window has no
- * room below; never taken by the pointer. Opening a node from a preview is for later (spec 14).
+ * room below (linkPreviewBelowShare), linkPreviewGapPx from it; never taken by the pointer. Opening a node from a
+ * preview is for later (spec 14).
  */
 function LinkPreview(props: { target: LinkHoverTarget; state: State; params: RenderParams; registry: LatexRegistry | null; here: Id }) {
   const { target, state, params, registry } = props;
@@ -98,10 +96,11 @@ function LinkPreview(props: { target: LinkHoverTarget; state: State; params: Ren
   if (!n) return null;
   const gone = n.trashedAt !== undefined;
   const plans = gone ? [] : plansShowing(state, 'node', target.node).map((p) => (p === props.here ? 'ce plan' : state.plans.get(p)?.name ?? '?'));
-  const width = Math.min(params.popupWidthPx, window.innerWidth - 2 * GAP_PX);
-  const left = Math.max(GAP_PX, Math.min(target.rect.x, window.innerWidth - width - GAP_PX));
-  const below = target.rect.y + target.rect.h + GAP_PX;
-  const place = below < window.innerHeight * 0.6 ? { top: below } : { bottom: window.innerHeight - target.rect.y + GAP_PX };
+  const gap = params.linkPreviewGapPx;
+  const width = Math.min(params.popupWidthPx, window.innerWidth - 2 * gap);
+  const left = Math.max(gap, Math.min(target.rect.x, window.innerWidth - width - gap));
+  const below = target.rect.y + target.rect.h + gap;
+  const place = below < window.innerHeight * params.linkPreviewBelowShare ? { top: below } : { bottom: window.innerHeight - target.rect.y + gap };
   const source = summary.trim() !== '' && <p className="link-preview-source">{summary}</p>;
   return (
     <div className="link-preview" style={{ left, width, ...place }}>
