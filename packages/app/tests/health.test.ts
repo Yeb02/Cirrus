@@ -1,12 +1,13 @@
 import {
   type Action, type Anchor, applyOp, applyOps, CITE_KEY_TAG, connect, connKind, connRowCount, createAnnotation, createNode, createPlan, deleteEverywhere,
-  editNode, emptyState, type FileRef, type Id, include, KNOWLEDGE, LABEL_TAG, placementOf, type State, type TagKeyDef,
+  editNode, emptyState, type FileRef, type Id, include, KNOWLEDGE, LABEL_TAG, moveNodes, placementOf, type State, type TagKeyDef,
 } from '@cirrus/core';
 import { buildLargeState } from '@cirrus/fixtures';
-import { buildScene, DEFAULT_PARAMS as P, type PlanScene } from '@cirrus/view';
+import { buildScene, DEFAULT_PARAMS as P, type PlanScene, updateScene } from '@cirrus/view';
 import { afterEach, expect, test, vi } from 'vitest';
 import {
-  createdAt, healthJump, type HealthRow, healthRows, type HealthSection, IntruderScan, rowTitle, SKIPPED_MAX, SkippedPlans, skippedOf, unseenNote,
+  createdAt, healthJump, type HealthRow, healthRows, type HealthSection, IntruderBook, latexRows, rowTitle, type SceneSource, SKIPPED_MAX, SkippedPlans, skippedOf, stateHealth,
+  unseenNote,
 } from '../src/renderer/health.ts';
 import { OBJECT_GONE } from '../src/renderer/ui/graph/jumps.ts';
 import { LatexRegistry } from '../src/renderer/latex/registry.ts';
@@ -145,6 +146,25 @@ test('une clé de portée connexion ne liste pas les nœuds, mais les connexions
   expect(ids(tags)).not.toContain(bc);
 });
 
+test('stateHealth : chaque clé obligatoire comptée, ses lignes faites seulement quand on les demande ; orphelins et jamais revus faits pour la tranche montrée', () => {
+  const { s, mk, link } = world();
+  applyOp(s, { t: 'tagKey', before: null, after: required('statut', 'node', 'hypothèse') });
+  applyOp(s, { t: 'tagKey', before: null, after: required('force', 'connection') });
+  const A = mk('A'), B = mk('B'), C = mk('C', { made: NOW - 40 * DAY }), D = mk('D', { made: NOW - 50 * DAY });
+  link(A, B);
+  const h = stateHealth(s, new Map(), [], NOW, P);
+  expect(h.tags.map((g) => [g.key, g.count])).toEqual([['force', 1], ['statut', 4]]);
+  expect(h.tags[1].rows().map((r) => r.id)).toEqual([A, B, C, D]);
+  expect(h.tags[1].rows().every((r) => r.group === 'statut' && r.section === 'tags')).toBe(true);
+  expect(h.orphans.length).toBe(2);
+  expect(h.orphans.slice(1, 2).map((r) => [r.section, r.id])).toEqual([['orphans', D]]);
+  expect(h.unseen.length).toBe(2);
+  expect(h.unseen.slice(0, 1).map((r) => [r.id, r.detail])).toEqual([[C, 'créé il y a 40 jours']]);
+  // Sections 1 and 2 apart, from the registry alone.
+  mk('E', { summary: String.raw`\ref{nulle}` });
+  expect(latexRows(s, registryOf(s)).map((r) => r.section)).toEqual(['broken']);
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
 // 5. Orphans
 
@@ -203,33 +223,92 @@ test('jamais revus : sans les consultations (seen null), la section est vide, et
 // ---------------------------------------------------------------------------------------------------------------------
 // 7. Intruders
 
-test('IntruderScan trouve l’intrus d’un plan, par tranches : step(0.001) rend false jusqu’à la fin, puis rows()', () => {
-  const { s, lobby, plan, mk } = world();
-  // A group of two members, 800 apart; a third node between them, in its envelope, not a member.
-  const G = mk('Groupe', { y: 0 }), a = mk('Membre a', { y: 0 }), b = mk('Membre b', { y: 0 });
+/** Plan P with a group of two members, 800 apart, and a third node between them, in its envelope, not a member. */
+function intruderWorld() {
+  const w = world(), { s, plan, mk } = w;
+  const G = mk('Groupe'), a = mk('Membre a'), b = mk('Membre b');
   applyOp(s, { t: 'placement', before: placementOf(s, plan, a) ?? null, after: { plan, node: a, x: 0, y: 0, k: 0 } });
   applyOp(s, { t: 'placement', before: placementOf(s, plan, b) ?? null, after: { plan, node: b, x: 800, y: 0, k: 0 } });
   run(s, include(s, plan, a, G));
   run(s, include(s, plan, b, G));
   const X = mk('Intrus');
   applyOp(s, { t: 'placement', before: placementOf(s, plan, X) ?? null, after: { plan, node: X, x: 400, y: 0, k: 0 } });
+  return { ...w, G, X };
+}
+/** The scenes of a book: none cached by the graph unless told; each built and updated counted. */
+function source(s: State, cached: (plan: Id) => PlanScene | undefined = () => undefined) {
   const built: Id[] = [];
-  const sceneOf = (q: Id): PlanScene => { built.push(q); return buildScene(s, q, measure, P); };
-  const scan = new IntruderScan(s, [lobby, plan], sceneOf);
+  const src: SceneSource = {
+    key: 'k', cached,
+    build: (q) => { built.push(q); return buildScene(s, q, measure, P); },
+    update: (scene, ops) => updateScene(scene, s, ops, measure, P).scene,
+  };
+  return { built, src };
+}
+/** The book's work done as the panel does it: a build alone, the scans by steps of a thousandth of a millisecond. */
+function drain(book: IntruderBook): number {
+  let steps = 0;
+  for (let w = book.next(); w !== null; w = book.next(), steps++) if (w === 'build') book.build(); else book.step(0.001);
+  return steps;
+}
+
+test('IntruderBook trouve l’intrus d’un plan : une scène bâtie à part, un plan à la fois, puis les enveloppes par tranches', () => {
+  const { s, lobby, plan, X } = intruderWorld();
+  const { built, src } = source(s);
+  const book = new IntruderBook();
+  book.follow(s, 0, null, src);
+  // Nothing built while it follows the state: a build is a step of its own, one plan.
   expect(built).toEqual([]);
-  // A step of a thousandth of a millisecond takes one scene or one envelope: false until the last.
-  let steps = 1;
-  while (!scan.step(0.001)) steps++;
-  expect(steps).toBeGreaterThanOrEqual(3);
-  expect(scan.step(0.001)).toBe(true);
+  expect(book.started()).toBe(false);
+  expect(book.next()).toBe('build');
+  book.build();
+  expect(built).toEqual([lobby]);
+  // A step of a thousandth of a millisecond takes one envelope: false until the plan's scan is over.
+  expect(book.next()).toBe('scan');
+  expect(drain(book)).toBeGreaterThanOrEqual(3);
   expect(built).toEqual([lobby, plan]);
-  const found = scan.rows();
+  expect(book.done()).toBe(true);
+  const found = book.rows();
   expect(found.map((r) => [r.section, r.kind, r.id, r.plan])).toEqual([['intruders', 'node', X, plan]]);
   expect(found[0].detail).toBe('dans l’enveloppe de « Groupe »');
-  // A plan without a scene (the graph not ready) is passed over.
-  const none = new IntruderScan(s, [plan], () => null);
-  expect(none.step(10)).toBe(true);
-  expect(none.rows()).toEqual([]);
+});
+
+test('IntruderBook : une action qui ne touche pas un plan ne le rebâtit ni ne le relit ; une qui le touche le met à jour sans le rebâtir ; un rendu groupé rebâtit ; une scène du graphe sert telle quelle', () => {
+  const { s, lobby, plan, X } = intruderWorld();
+  const other = idOf(run(s, createPlan(s, 'Q', 'plan')), 'plan');
+  const Y = idOf(run(s, createNode(s, { plan: other, title: 'Y', x: 0, y: 0, k: 0 })), 'node');
+  const { built, src } = source(s);
+  const book = new IntruderBook();
+  book.follow(s, 0, null, src);
+  drain(book);
+  expect([built.length, book.scans]).toEqual([3, 3]);
+  // Y renamed, in Q only: Q's scene updated and read again; the lobby and P neither built nor read.
+  let rev = 0;
+  const act = (a: Action) => { run(s, a); book.follow(s, ++rev, a.ops, src); expect(book.done()).toBe(false); drain(book); };
+  act(editNode(s, Y, { title: 'Y bis' }));
+  expect([built.length, book.scans]).toEqual([3, 4]);
+  act(editNode(s, Y, { title: 'Y ter' }));
+  expect([built.length, book.scans]).toEqual([3, 5]);
+  expect(book.rows().map((r) => r.id)).toEqual([X]);
+  // X moved out of the envelope, in P: P read again, and its intruder gone.
+  act(moveNodes(s, plan, [{ node: X, x: 400, y: 3000 }]));
+  expect([built.length, book.scans]).toEqual([3, 6]);
+  expect(book.rows()).toEqual([]);
+  // Renders gathered (a revision skipped): its own scenes are built again, one per step.
+  book.follow(s, rev += 2, null, src);
+  expect(book.next()).toBe('build');
+  drain(book);
+  expect([built.length, book.scans]).toEqual([6, 9]);
+  // A scene the graph keeps serves as it is: read once, then not again while it is the same object.
+  const kept = buildScene(s, lobby, measure, P);
+  const graph = source(s, (q) => (q === lobby ? kept : undefined));
+  book.follow(s, ++rev, run(s, editNode(s, Y, { title: 'Y quater' })).ops, graph.src);
+  drain(book);
+  expect(graph.built).toEqual([]);
+  expect(book.scans).toBe(11);
+  book.follow(s, ++rev, run(s, editNode(s, Y, { title: 'Y quinquies' })).ops, graph.src);
+  drain(book);
+  expect(book.scans).toBe(12);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -315,47 +394,62 @@ test('healthJump : un conflit ouvre la comparaison de la copie avec son original
 // Slow (the base takes seconds to build) and timed: run alone, CIRRUS_LENT=1 npx vitest run health — under the whole
 // suite's load the machine is shared, and the time measured says so rather than the code.
 
-test.runIf(process.env.CIRRUS_LENT === '1')('base de référence (lent) : healthRows, sections 1 à 6, en moins de 150 ms, médiane de trois passes', () => {
-  const { state: s, lobby } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
-  // The test base's two required keys on nodes, which no node of the bench carries: every node a row of each.
+test.runIf(process.env.CIRRUS_LENT === '1')('base de référence (lent) : sections 1 à 6 et 8 comme le panneau les calcule à chaque action, en moins de 150 ms, médiane de trois passes ; les intrus par tranches', () => {
+  const { state: s } = buildLargeState({ seed: 1, nodes: 50_000, connections: 500_000 });
+  // The test base's two required keys on nodes, which no node of the bench carries: every node lacks each.
   applyOp(s, { t: 'tagKey', before: null, after: required('statut_epistémique', 'node', 'hypothèse') });
   applyOp(s, { t: 'tagKey', before: null, after: required('pertinence', 'node', 'utile') });
   const registry = LatexRegistry.build(s, new Map());
   // Half the nodes seen; the bench's nodes were all made on 2026-01-01: the other half never seen.
   const seen = new Map<Id, number>();
   for (const n of s.nodes.values()) if (seen.size < s.nodes.size / 2) seen.set(n.id, NOW);
-  const median = (label: string) => {
+  // What the panel computes at each action (its sections folded or showing healthRowsShown rows each): sections 3 to 6
+  // and 8, and the first rows of the long ones; sections 1 and 2 only when the registry is built again.
+  const median = (label: string, fn: () => unknown) => {
     const times: number[] = [];
-    let out: HealthRow[] = [];
     for (let i = 0; i < 3; i++) {
       const t = performance.now();
-      out = healthRows(s, registry, seen, [], NOW, P);
+      fn();
       times.push(performance.now() - t);
     }
     const m = [...times].sort((a, b) => a - b)[1];
-    console.log(`healthRows, ${label} : ${times.map((t) => t.toFixed(1)).join(', ')} ms (médiane ${m.toFixed(1)} ms) ; ${out.length} lignes`);
-    return { m, out };
+    console.log(`${label} : ${times.map((t) => t.toFixed(1)).join(', ')} ms (médiane ${m.toFixed(1)} ms)`);
+    return m;
   };
-  const { m, out } = median('base de référence, deux clés obligatoires de nœud');
-  expect(of(out, 'tags').length).toBe(2 * s.nodes.size);
-  expect(of(out, 'unseen').length).toBe(s.nodes.size - seen.size);
-  expect(m).toBeLessThan(150);
-  // The worst case, for the registry only: a required key on connections that none carries, every knowledge one a row.
+  const action = () => {
+    const h = stateHealth(s, seen, [], NOW, P);
+    h.orphans.slice(0, P.healthRowsShown);
+    h.unseen.slice(0, P.healthRowsShown);
+    return h;
+  };
+  const h = action();
+  expect(h.tags.map((g) => g.count)).toEqual([s.nodes.size, s.nodes.size]);
+  expect(h.unseen.length).toBe(s.nodes.size - seen.size);
+  expect(median('stateHealth, base de référence, deux clés obligatoires de nœud', action)).toBeLessThan(150);
+  median('latexRows, base de référence', () => latexRows(s, registry));
+  median('une clé dépliée (ses 50 000 lignes faites)', () => h.tags[0].rows());
+  // The worst case, for the registry only: a required key on connections that none carries.
   applyOp(s, { t: 'tagKey', before: null, after: required('force', 'connection') });
   let knowledge = 0;
   for (let r = 0; r < connRowCount(s); r++) if (connKind(s, r) === KNOWLEDGE) knowledge++;
-  expect(of(median('pire cas, une clé obligatoire de connexion en plus').out, 'tags').length).toBe(2 * s.nodes.size + knowledge);
-  // The intruders of the lobby, for the registry: its scene built, then the scan.
+  expect(action().tags.find((g) => g.key === 'force')!.count).toBe(knowledge);
+  median('stateHealth, pire cas, une clé obligatoire de connexion en plus', action);
+  // The intruders of the lobby, for the registry: its scene built (a step alone), then its envelopes by slices.
+  const book = new IntruderBook();
+  const { src } = source(s);
+  book.follow(s, 0, null, src);
   let t = performance.now();
-  const scene = buildScene(s, lobby, measure, P);
+  book.build();
   const built = performance.now() - t;
   t = performance.now();
-  const scan = new IntruderScan(s, [lobby], () => scene);
   let slices = 0, longest = 0;
   for (let done = false; !done; slices++) {
     const u = performance.now();
-    done = scan.step(P.searchBuildSliceMs);
+    done = book.step(P.searchBuildSliceMs);
     longest = Math.max(longest, performance.now() - u);
   }
-  console.log(`Intrus du lobby : scène ${built.toFixed(0)} ms, puis ${(performance.now() - t).toFixed(0)} ms en ${slices} tranches (la plus longue ${longest.toFixed(1)} ms) ; ${scan.rows().length} intrus`);
+  console.log(`Intrus du lobby : scène ${built.toFixed(0)} ms, puis ${(performance.now() - t).toFixed(0)} ms en ${slices} tranches (la plus longue ${longest.toFixed(1)} ms) ; ${book.rows().length} intrus`);
+  // An action that leaves the lobby's scene as it is: nothing read again.
+  book.follow(s, 1, [], src);
+  expect(book.next()).toBeNull();
 }, 300_000);

@@ -1,6 +1,6 @@
 import {
   connectionName, connectionOfRow, connId, connKind, connRow, connRowCount, connTags, connTitle, connTrashed, type Id, KNOWLEDGE, memberOfAt, memberOfCount, type NodeRec,
-  nodeRow, type State,
+  nodeRow, type Op, type State, type TagKeyDef,
 } from '@cirrus/core';
 import { intrudersByGroup, type PlanScene, plansShowing, type RenderParams } from '@cirrus/view';
 import { conflictOriginal } from './files/merge.ts';
@@ -166,35 +166,72 @@ function carries(tags: readonly { key: string }[], key: string): boolean {
   return false;
 }
 
-/** Section 4: for each required key (by name), the live objects of its scope that do not carry it — default or not (spec 5.4). */
-function tagRows(s: State, out: HealthRow[]): void {
-  const defs = [...s.tagKeys.values()].filter((d) => d.required).sort((a, b) => compare(a.key, b.key));
-  for (const def of defs) {
-    const key = def.key, detail = `sans « ${key} »`;
-    if (def.scope !== 'connection') {
-      for (const n of s.nodes.values()) {
-        if (n.trashedAt !== undefined || n.anchor !== undefined || carries(n.tags, key)) continue;
-        out.push({ section: 'tags', kind: 'node', id: n.id, title: shown(n.title), detail, key: n.id, group: key });
-      }
-    }
-    if (def.scope !== 'node') {
-      // A group link or a document's structure is not an object of the user's: only the knowledge connections.
-      for (let r = 0, end = connRowCount(s); r < end; r++) {
-        if (connKind(s, r) !== KNOWLEDGE || connTrashed(s, r) || carries(connTags(s, r), key)) continue;
-        const id = connId(s, r);
-        out.push({ section: 'tags', kind: 'connection', id, title: connTitle(s, r), detail, key: id, group: key });
-      }
-    }
+/** Rows made only when shown: their number, and the rows of a slice (an array is one). */
+export interface RowList { readonly length: number; slice(from?: number, to?: number): HealthRow[] }
+
+/** A required key of section 4: how many live objects of its scope lack it, and their rows, made when asked (unfolded). */
+export interface TagGroup { key: string; count: number; rows(): HealthRow[] }
+
+/** Nodes listed by identifier, each row made for the slice shown: a section may hold the whole base. */
+class NodeRows implements RowList {
+  private readonly s: State;
+  private readonly ids: Id[];
+  private readonly make: (n: NodeRec) => HealthRow;
+  constructor(s: State, ids: Id[], make: (n: NodeRec) => HealthRow) {
+    this.s = s;
+    this.ids = ids;
+    this.make = make;
+  }
+  get length(): number {
+    return this.ids.length;
+  }
+  slice(from = 0, to = this.ids.length): HealthRow[] {
+    return this.ids.slice(from, to).flatMap((id) => { const n = this.s.nodes.get(id); return n ? [this.make(n)] : []; });
   }
 }
 
 /**
- * Sections 3, 5 and 6, in one pass over the nodes: the conflict copies of a .tex whose original is there; the live nodes,
- * annotations aside, member of no live knowledge connection; and those made more than healthUnseenDays ago that no PC
- * looked at (none when the consultations could not be read: `seen` null).
+ * The live objects of the scope of `def` (annotations and connections other than knowledge ones aside) that do not carry
+ * its key — default or not (spec 5.4) —: counted, and given to `emit` if any.
  */
-function nodeRows(s: State, seen: ReadonlyMap<Id, number> | null, now: number, p: RenderParams): { conflicts: HealthRow[]; orphans: HealthRow[]; unseen: HealthRow[] } {
-  const conflicts: HealthRow[] = [], orphans: HealthRow[] = [], unseen: HealthRow[] = [];
+function lacking(s: State, def: TagKeyDef, emit?: (row: HealthRow) => void): number {
+  const key = def.key, detail = `sans « ${key} »`;
+  let count = 0;
+  if (def.scope !== 'connection') {
+    for (const n of s.nodes.values()) {
+      if (n.trashedAt !== undefined || n.anchor !== undefined || carries(n.tags, key)) continue;
+      count++;
+      emit?.({ section: 'tags', kind: 'node', id: n.id, title: shown(n.title), detail, key: n.id, group: key });
+    }
+  }
+  if (def.scope !== 'node') {
+    for (let r = 0, end = connRowCount(s); r < end; r++) {
+      if (connKind(s, r) !== KNOWLEDGE || connTrashed(s, r) || carries(connTags(s, r), key)) continue;
+      count++;
+      if (emit) { const id = connId(s, r); emit({ section: 'tags', kind: 'connection', id, title: connTitle(s, r), detail, key: id, group: key }); }
+    }
+  }
+  return count;
+}
+
+/** Section 4: each required key by name, counted; its rows made by a pass of their own when asked. */
+function tagGroups(s: State): TagGroup[] {
+  return [...s.tagKeys.values()].filter((d) => d.required).sort((a, b) => compare(a.key, b.key)).map((def) => ({
+    key: def.key, count: lacking(s, def), rows: () => { const out: HealthRow[] = []; lacking(s, def, (r) => out.push(r)); return out; },
+  }));
+}
+
+/** Sections 3 to 6 and 8, as the panel reads them (D8): the long ones (4, 5, 6) made for what is shown. */
+export interface StateHealth { conflicts: HealthRow[]; tags: TagGroup[]; orphans: RowList; unseen: RowList; skipped: HealthRow[] }
+
+/**
+ * Sections 3 to 6 and 8 (D8), computed again at each action while the panel is open: one pass over the nodes — the
+ * conflict copies of a .tex whose original is there; the live nodes, annotations aside, member of no live knowledge
+ * connection; those made more than healthUnseenDays ago that no PC looked at (none when the consultations could not be
+ * read: `seen` null) —, then a pass per required key (over the connections only for a key of their scope), counting.
+ */
+export function stateHealth(s: State, seen: ReadonlyMap<Id, number> | null, skipped: readonly SkippedPlan[], now: number, p: RenderParams): StateHealth {
+  const conflicts: HealthRow[] = [], orphans: Id[] = [], unseen: Id[] = [];
   const limit = now - p.healthUnseenDays * DAY_MS;
   for (const n of s.nodes.values()) {
     if (!alive(n)) continue;
@@ -210,14 +247,39 @@ function nodeRows(s: State, seen: ReadonlyMap<Id, number> | null, now: number, p
       const c = memberOfAt(s, row, i);
       linked = connKind(s, c) === KNOWLEDGE && !connTrashed(s, c);
     }
-    if (!linked) orphans.push({ section: 'orphans', kind: 'node', id: n.id, title: shown(n.title), detail: 'aucune connexion de connaissance', key: n.id });
-    if (seen === null) continue;
-    const made = createdAt(n.id);
-    if (!(made < limit) || seen.has(n.id)) continue;
-    const days = Math.floor((now - made) / DAY_MS);
-    unseen.push({ section: 'unseen', kind: 'node', id: n.id, title: shown(n.title), detail: `créé il y a ${days} jour${days > 1 ? 's' : ''}`, key: n.id });
+    if (!linked) orphans.push(n.id);
+    if (seen !== null && createdAt(n.id) < limit && !seen.has(n.id)) unseen.push(n.id);
   }
-  return { conflicts, orphans, unseen };
+  const days = (id: Id) => Math.floor((now - createdAt(id)) / DAY_MS);
+  return {
+    conflicts,
+    tags: tagGroups(s),
+    orphans: new NodeRows(s, orphans, (n) => ({ section: 'orphans', kind: 'node', id: n.id, title: shown(n.title), detail: 'aucune connexion de connaissance', key: n.id })),
+    unseen: new NodeRows(s, unseen, (n) => {
+      const d = days(n.id);
+      return { section: 'unseen', kind: 'node', id: n.id, title: shown(n.title), detail: `créé il y a ${d} jour${d > 1 ? 's' : ''}`, key: n.id };
+    }),
+    skipped: skippedRows(s, skipped),
+  };
+}
+
+/** Section 8: the journal's plans skipped, the latest first; one whose node or plan is gone since is left out. */
+function skippedRows(s: State, skipped: readonly SkippedPlan[]): HealthRow[] {
+  const out: HealthRow[] = [];
+  skipped.forEach((e, i) => {
+    const n = s.nodes.get(e.node), plan = s.plans.get(e.plan);
+    if (!alive(n) || !plan) return;
+    out.push({ section: 'skipped', kind: 'node', id: n.id, title: shown(n.title), detail: `plan « ${plan.name} » : ${WHY[e.why]}`, key: `skipped:${skipped.length - i}`, plan: plan.id });
+  });
+  return out;
+}
+
+/** Sections 1 and 2 (D8), from the LaTeX registry: computed again when it is built again. */
+export function latexRows(s: State, registry: LatexRegistry): HealthRow[] {
+  const out: HealthRow[] = [];
+  brokenRows(s, registry, out);
+  doubleRows(s, registry, out);
+  return out;
 }
 
 /** `rows` added at the end of `out`, one by one: a spread of a whole base's rows would pass the engine's limit on arguments. */
@@ -225,33 +287,20 @@ function append(out: HealthRow[], rows: readonly HealthRow[]): void {
   for (const r of rows) out.push(r);
 }
 
-/** Section 8: the journal's plans skipped, the latest first; one whose node or plan is gone since is left out. */
-function skippedRows(s: State, skipped: readonly SkippedPlan[], out: HealthRow[]): void {
-  skipped.forEach((e, i) => {
-    const n = s.nodes.get(e.node), plan = s.plans.get(e.plan);
-    if (!alive(n) || !plan) return;
-    out.push({ section: 'skipped', kind: 'node', id: n.id, title: shown(n.title), detail: `plan « ${plan.name} » : ${WHY[e.why]}`, key: `skipped:${skipped.length - i}`, plan: plan.id });
-  });
-}
-
 /**
- * Every row of sections 1 to 6 and 8, in the panel's order (D8): computed again at each action while the panel is open —
- * one pass over the nodes, and over the connections only for a required key of their scope. `registry`: null while none
- * is built (sections 1 and 2 then empty); `seen`: the last consultation of each subject on every PC (D7), null when unread.
- * Section 7 is IntruderScan's, by slices.
+ * Every row of sections 1 to 6 and 8, made, in the panel's order (D8): latexRows, then stateHealth's rows all made — what
+ * the panel never needs whole. `registry`: null while none is built (sections 1 and 2 then empty).
  */
 export function healthRows(
   s: State, registry: LatexRegistry | null, seen: ReadonlyMap<Id, number> | null, skipped: readonly SkippedPlan[], now: number, p: RenderParams,
 ): HealthRow[] {
-  const out: HealthRow[] = [];
-  if (registry) brokenRows(s, registry, out);
-  if (registry) doubleRows(s, registry, out);
-  const { conflicts, orphans, unseen } = nodeRows(s, seen, now, p);
-  append(out, conflicts);
-  tagRows(s, out);
-  append(out, orphans);
-  append(out, unseen);
-  skippedRows(s, skipped, out);
+  const out = registry ? latexRows(s, registry) : [];
+  const h = stateHealth(s, seen, skipped, now, p);
+  append(out, h.conflicts);
+  for (const g of h.tags) append(out, g.rows());
+  append(out, h.orphans.slice());
+  append(out, h.unseen.slice());
+  append(out, h.skipped);
   return out;
 }
 
@@ -279,57 +328,146 @@ export function healthJump(s: State, row: HealthRow, here: Id, tabs: readonly Id
 }
 
 /**
- * Section 7 (D8), by slices: each plan's intruders (spec 10: an item an envelope covers without being its member), with
- * the deepest such group, one envelope at a time (intrudersByGroup). `sceneOf` gives a plan's scene — the graph's cached
- * one as it is, else one built, which is not sliced —, null when none can be had (the graph not ready): that plan is
- * passed over. A phantom is left out: its node is elsewhere.
+ * Where the intruders' scan takes its plans' scenes (D8): the graph's own scene of a plan, current, while it keeps one
+ * (`cached`, served as it is); else one the scan builds (`build`) and keeps up to date by each action (`update`,
+ * updateScene's) — made with the parameters `key` (sceneParamsKey): another key makes them again.
  */
-export class IntruderScan {
-  private next = 0;
-  private current: { plan: Id; scene: PlanScene; steps: Generator<undefined, Map<number, number>, undefined> } | null = null;
-  private readonly out: HealthRow[] = [];
-  private readonly s: State;
-  private readonly plans: readonly Id[];
-  private readonly sceneOf: (plan: Id) => PlanScene | null;
-  constructor(s: State, plans: readonly Id[], sceneOf: (plan: Id) => PlanScene | null) {
-    this.s = s;
-    this.plans = plans;
-    this.sceneOf = sceneOf;
+export interface SceneSource {
+  key: string;
+  cached(plan: Id): PlanScene | undefined;
+  build(plan: Id): PlanScene;
+  update(scene: PlanScene, ops: readonly Op[]): PlanScene;
+}
+
+/** A plan of the scan: its scene (null: to build), whether the scan owns it, its intruders' rows as last found, and whether they are current. */
+interface Book { scene: PlanScene | null; own: boolean; rows: HealthRow[] | null; fresh: boolean }
+
+/**
+ * Section 7 (D8), kept while the panel is open: each plan's intruders (spec 10: an item an envelope covers without being
+ * its member), with the deepest such group; a phantom is left out (its node is elsewhere). `follow` brings it to each
+ * revision of the state: a plan is read again only when its scene is another object — the graph's, by identity; its own,
+ * updated by the action's operations (updateScene gives the same object back for a plan the action does not touch). A
+ * scene of its own is built again only after renders gathered (a revision skipped: no operations to follow), a change
+ * of `key`, or the graph letting the plan's scene go. The work is done by the panel in idle moments: `build` one plan's
+ * scene, alone in its moment (never in a slice); `step`, envelopes one at a time (intrudersByGroup).
+ */
+export class IntruderBook {
+  /** The plans' scans begun since it was made: what the measures and the tests count. */
+  scans = 0;
+  /** Counts the changes of what `rows`, `done` and `started` say: the panel draws again only then. */
+  version = 0;
+  private readonly plans = new Map<Id, Book>();
+  private order: Id[] = [];
+  private rev = Number.NaN;
+  private key = '';
+  private src: SceneSource | null = null;
+  private scanning: { plan: Id; scene: PlanScene; steps: Generator<undefined, Map<number, number>, undefined> } | null = null;
+
+  /** The state at revision `rev`; `ops`, the operations of the action that made it from the last one followed, if known. */
+  follow(s: State, rev: number, ops: readonly Op[] | null, src: SceneSource): void {
+    this.src = src;
+    if (src.key !== this.key) {
+      this.plans.clear();
+      this.key = src.key;
+    } else if (rev !== this.rev) {
+      const next = ops !== null && rev === this.rev + 1;
+      for (const [plan, b] of this.plans) {
+        if (!s.plans.has(plan)) { this.plans.delete(plan); continue; }
+        if (!b.own || b.scene === null) continue;
+        const scene = next ? src.update(b.scene, ops!) : null;
+        if (scene !== b.scene) { b.scene = scene; b.fresh = false; }
+      }
+    }
+    this.rev = rev;
+    this.order = [...s.plans.keys()];
+    for (const plan of this.order) {
+      const cached = src.cached(plan), b = this.plans.get(plan);
+      if (!b) this.plans.set(plan, { scene: cached ?? null, own: cached === undefined, rows: null, fresh: false });
+      else if (cached !== undefined) {
+        if (b.scene !== cached) { b.scene = cached; b.own = false; b.fresh = false; }
+      } else if (!b.own) {
+        // The graph let it go: its last scene goes on without the graph's updates, which may have shared its parts.
+        b.scene = null;
+        b.own = true;
+        b.fresh = false;
+      }
+    }
+    if (this.scanning && this.plans.get(this.scanning.plan)?.scene !== this.scanning.scene) this.scanning = null;
+    this.version++;
   }
 
-  /** One step at least — a plan's scene, or an envelope —, then others while `budgetMs` lasts; whether every plan is done. */
+  /** What is left: envelopes to read in the scenes at hand first, then a plan's scene to build, or nothing. */
+  next(): 'build' | 'scan' | null {
+    if (this.scanning) return 'scan';
+    let build = false;
+    for (const plan of this.order) {
+      const b = this.plans.get(plan)!;
+      if (b.fresh) continue;
+      if (b.scene !== null) return 'scan';
+      build = true;
+    }
+    return build ? 'build' : null;
+  }
+
+  /** The scene of the first plan that needs one, built: a step of its own. */
+  build(): void {
+    for (const plan of this.order) {
+      const b = this.plans.get(plan)!;
+      if (b.fresh || b.scene !== null) continue;
+      b.scene = this.src!.build(plan);
+      return;
+    }
+  }
+
+  /** Envelopes read, one at least, then others while `budgetMs` lasts, plan after plan; whether no scan is left. */
   step(budgetMs: number): boolean {
     const end = performance.now() + budgetMs;
     do {
-      if (this.current === null) {
-        if (this.next >= this.plans.length) return true;
-        const plan = this.plans[this.next++];
-        const scene = this.s.plans.has(plan) ? this.sceneOf(plan) : null;
-        if (scene) this.current = { plan, scene, steps: intrudersByGroup(scene) };
-        continue;
+      if (!this.scanning) {
+        const plan = this.order.find((q) => { const b = this.plans.get(q)!; return !b.fresh && b.scene !== null; });
+        if (plan === undefined) return true;
+        const scene = this.plans.get(plan)!.scene!;
+        this.scanning = { plan, scene, steps: intrudersByGroup(scene) };
+        this.scans++;
       }
-      const r = this.current.steps.next();
+      const r = this.scanning.steps.next();
       if (r.done) {
-        this.found(this.current.plan, this.current.scene, r.value);
-        this.current = null;
+        const b = this.plans.get(this.scanning.plan)!;
+        b.rows = found(this.scanning.plan, this.scanning.scene, r.value);
+        b.fresh = true;
+        this.scanning = null;
+        this.version++;
       }
     } while (performance.now() < end);
-    return this.current === null && this.next >= this.plans.length;
+    return this.next() !== 'scan';
   }
 
-  /** The rows found so far: all of them once step said it is done. */
+  /** Every plan's intruders as last found, in the plans' order. */
   rows(): HealthRow[] {
-    return this.out;
+    return this.order.flatMap((plan) => this.plans.get(plan)?.rows ?? []);
   }
 
-  private found(plan: Id, scene: PlanScene, map: Map<number, number>): void {
-    for (const [i, g] of [...map].sort((a, b) => a[0] - b[0])) {
-      const it = scene.items[i];
-      if (it.kind === 'phantom') continue;
-      this.out.push({
-        section: 'intruders', kind: 'node', id: it.node, title: shown(it.title), detail: `dans l’enveloppe de « ${shown(scene.items[g].title)} »`,
-        key: `${plan}:${it.id}`, plan,
-      });
-    }
+  /** Whether every plan's intruders are current. */
+  done(): boolean {
+    return this.order.every((plan) => this.plans.get(plan)!.fresh);
   }
+
+  /** Whether some plan's intruders were found already. */
+  started(): boolean {
+    return this.order.some((plan) => this.plans.get(plan)!.rows !== null);
+  }
+}
+
+/** A plan's intruders as rows, by item. */
+function found(plan: Id, scene: PlanScene, map: Map<number, number>): HealthRow[] {
+  const out: HealthRow[] = [];
+  for (const [i, g] of [...map].sort((a, b) => a[0] - b[0])) {
+    const it = scene.items[i];
+    if (it.kind === 'phantom') continue;
+    out.push({
+      section: 'intruders', kind: 'node', id: it.node, title: shown(it.title), detail: `dans l’enveloppe de « ${shown(scene.items[g].title)} »`,
+      key: `${plan}:${it.id}`, plan,
+    });
+  }
+  return out;
 }

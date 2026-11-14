@@ -544,6 +544,8 @@ test('la santé du graphe (plan 6b, D8, tâche 9) : « jamais revu » après 30 
     key: 'healthRowsShown', label: 'Lignes montrées d’abord par section de « Santé du graphe »', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 10, max: 2000, step: 10,
   });
   expect(PARAM_SPECS.filter((s) => s.group === 'Consultations').map((s) => s.key)).toEqual(['consultationsRecord', 'consultationsFlushMs', 'consultationsSendMs', 'healthUnseenDays']);
+  // At the end of « Pop-ups », not between its pairs of widths and heights (fix round 1 of task 9, minor 5).
+  expect(PARAM_SPECS.filter((s) => s.group === 'Pop-ups').at(-1)!.key).toBe('healthRowsShown');
   expect(withOverrides({ healthUnseenDays: 0, healthRowsShown: 1 })).toMatchObject({ healthUnseenDays: 1, healthRowsShown: 10 });
   expect(withOverrides({ healthUnseenDays: 1e9, healthRowsShown: 1e9 })).toMatchObject({ healthUnseenDays: 3650, healthRowsShown: 2000 });
 });

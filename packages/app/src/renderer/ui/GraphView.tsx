@@ -4,7 +4,7 @@ import {
   type NavInput,
   type PlanScene, type RenderParams, screenToWorld, type Selection, toggle, withOffsets, worldToScreen,
   dropEffects, dropTarget, type MenuItem, menuFor,
-  isPinch, newlyPressed, renderPaused, type SceneIndex, type FontData, previewSplit, type PreviewSplit, buildScene, sceneParamsKey,
+  isPinch, newlyPressed, renderPaused, type SceneIndex, type FontData, previewSplit, type PreviewSplit, type Measure, sceneParamsKey,
 } from '@cirrus/view';
 import { type ReactNode, type Ref, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { type BenchView, mark, runBench } from '../bench.ts';
@@ -68,11 +68,14 @@ export interface GraphHandle {
   addMember(connection: Id, node: Id): void;
   removeMember(connection: Id, node: Id): void;
   /**
-   * A plan's scene, for the intruders of the graph's health (plan 6b, D8): the cached one as it is when it is at the
-   * state's revision, else one built, its titles measured as the cached ones; null before the engine is ready.
+   * What the intruders of the graph's health build their scenes with (plan 6b, D8): the scenes' parameters (`key`) and
+   * measure of titles, and the scene this view keeps of a plan, current at the state's revision; null before the engine
+   * is ready.
    */
-  sceneOf(plan: Id): PlanScene | null;
+  sceneTools(): SceneTools | null;
 }
+/** GraphHandle.sceneTools'. */
+export interface SceneTools { key: string; measure: Measure; cached(plan: Id): PlanScene | undefined }
 /** Nothing found: the ring of the search drawn around nothing. */
 const NOTHING_FOUND: readonly Id[] = Object.freeze([]);
 
@@ -687,11 +690,16 @@ export function GraphView(props: {
     cancelRestore: () => { if (trashCloseGivesUp(placement.placing.current)) feed({ t: 'cancel' }); },
     addMember: questions.addMember,
     removeMember: questions.removeMember,
-    sceneOf: (plan) => {
+    sceneTools: () => {
       if (!engine.current) return null;
-      const p = paramsRef.current, cache = scenes.cache.current;
-      const current = cache.key === sceneParamsKey(p) && cache.rev === sessionRef.current?.rev;
-      return (current ? cache.byPlan.get(plan)?.scene : undefined) ?? buildScene(stateRef.current, plan, scenes.measureOf(p), p);
+      const p = paramsRef.current, key = sceneParamsKey(p);
+      return {
+        key, measure: scenes.measureOf(p),
+        cached: (plan) => {
+          const cache = scenes.cache.current;
+          return cache.key === key && cache.rev === sessionRef.current?.rev ? cache.byPlan.get(plan)?.scene : undefined;
+        },
+      };
     },
   }));
   /** The object a hit designates, for the selection: an item, or a connection (by its stub too). */

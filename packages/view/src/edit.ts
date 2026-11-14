@@ -111,9 +111,12 @@ export function intruders(scene: PlanScene): Map<number, number> {
   return r.value;
 }
 
+/** The centres `intrudersByGroup` indexes between two of its steps. */
+export const INTRUDER_INDEX_CHUNK = 4096;
+
 /**
- * `intruders`, one envelope at a time (plan 6b, D8: the graph's health computes them in idle slices): each `next()` but the
- * last looks at one more group, after a first that indexes the centres; the last gives the map.
+ * `intruders`, one envelope at a time (plan 6b, D8: the graph's health computes them in idle slices): the centres indexed
+ * INTRUDER_INDEX_CHUNK at a time, then each `next()` but the last looks at one more group; the last gives the map.
  */
 export function* intrudersByGroup(scene: PlanScene): Generator<undefined, Map<number, number>, undefined> {
   const out = new Map<number, number>();
@@ -123,7 +126,11 @@ export function* intrudersByGroup(scene: PlanScene): Generator<undefined, Map<nu
   const isDescendant = (i: number, g: number) => { for (let a = items[i].parent; a >= 0; a = items[a].parent) if (a === g) return true; return false; };
   // Centres indexed once: each envelope only looks at the items under its bounding box (C1 of the plan 3b review).
   const centres = new Flatbush(live.length);
-  for (const i of live) centres.add(items[i].x, items[i].y, items[i].x, items[i].y);
+  let added = 0;
+  for (const i of live) {
+    centres.add(items[i].x, items[i].y, items[i].x, items[i].y);
+    if (++added % INTRUDER_INDEX_CHUNK === 0) yield;
+  }
   centres.finish();
   for (const gi of live) {
     const g = items[gi];

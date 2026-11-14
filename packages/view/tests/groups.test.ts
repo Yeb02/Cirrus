@@ -1,7 +1,7 @@
 import { applyOps, type State } from '@cirrus/core';
 import { buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { dropEffects, dropTarget, intruders, intrudersByGroup, visibleIntruders } from '../src/edit.ts';
+import { dropEffects, dropTarget, INTRUDER_INDEX_CHUNK, intruders, intrudersByGroup, visibleIntruders } from '../src/edit.ts';
 import { insidePolygon, offsetPolygon } from '../src/geometry/hull.ts';
 import { buildScene, isLive, type PlanScene, sceneWith } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
@@ -126,6 +126,18 @@ test('intrus, une enveloppe à la fois (plan 6b, D8) : un pas par groupe, puis l
   for (; !r.done; r = steps.next()) n++;
   expect(n).toBe(sc.items.filter((it, i) => isLive(sc, i) && it.kind === 'group').length);
   expect([...r.value]).toEqual([...intruders(sc)]);
+});
+
+test('intrus, une enveloppe à la fois : l’index des centres se bâtit aussi par pas, INTRUDER_INDEX_CHUNK centres chacun (relecture de la tâche 9, mineur 3)', () => {
+  const { state, lobby } = buildLargeState({ seed: 2, nodes: 10_000, connections: 2_000 });
+  const big = buildScene(state, lobby, measure, P);
+  const live = big.items.filter((_it, i) => isLive(big, i)), groups = live.filter((it) => it.kind === 'group').length;
+  const steps = intrudersByGroup(big);
+  let n = 0, r = steps.next();
+  for (; !r.done; r = steps.next()) n++;
+  expect(n).toBe(groups + Math.floor(live.length / INTRUDER_INDEX_CHUNK));
+  expect(live.length).toBeGreaterThan(2 * INTRUDER_INDEX_CHUNK);
+  expect([...r.value]).toEqual([...intruders(big)]);
 });
 
 /** Every drawn item against every drawn envelope: each covered item with the deepest such group, the first by slot among equals. */

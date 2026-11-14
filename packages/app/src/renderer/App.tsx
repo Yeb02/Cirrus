@@ -754,8 +754,8 @@ export function App() {
         )}
         {healthOpen && (
           <HealthPanel
-            state={state} rev={shown.rev} registry={registry} params={params} here={active} tabs={tabs} sceneOf={(plan) => graph.current?.sceneOf(plan) ?? null}
-            onJump={healthGo} onClose={() => setHealthOpen(false)}
+            state={state} rev={shown.rev} action={shown.action} registry={registry} params={params} here={active} tabs={tabs}
+            scenes={() => graph.current?.sceneTools() ?? null} onJump={healthGo} onClose={() => setHealthOpen(false)}
           />
         )}
         <LinkLayer
