@@ -18,6 +18,8 @@ export function ColorChoices(props: { color: string | null; params: RenderParams
     el.addEventListener('change', changed);
     return () => el.removeEventListener('change', changed);
   }, []);
+  // « Autre… » opens on the colour as it is now (a swatch, « Automatique », an undo since): never on a stale one.
+  useEffect(() => { other.current!.value = props.color ?? palette[0]; }, [props.color, palette]);
   return (
     <div className="color-choices">
       <div className="swatches">
