@@ -609,7 +609,8 @@ export function GraphView(props: {
         moveCamera(fitItem(sc, here, e.renderer.camera, paramsRef.current));
         return;
       }
-      if (busy()) { notify(busyReason('d’importer')); return; }
+      // Another « Importer ici » replaces one under way, as « Restaurer » does.
+      if (busy() && placement.placing.current?.kind !== 'import') { notify(busyReason('d’importer')); return; }
       const r = el.getBoundingClientRect();
       placement.startPlacing({ kind: 'import', node, label: 'Importer ici' }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
       el.focus({ preventScroll: true });

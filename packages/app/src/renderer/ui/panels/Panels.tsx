@@ -311,8 +311,9 @@ export function Panels(props: {
     // loose panel; not under a full screen, whose Escape it is.
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !covered.current) apply(withoutTopLoose); };
     // A press outside the panels closes the loose ones, outside the graph: there, a press may begin a drag, and the graph
-    // reports its clicks itself (openNode, closeLoose). A press in a full screen is its own.
-    const away = (e: PointerEvent) => { if (!covered.current && !(e.target as Element | null)?.closest?.('.panel, .graph')) apply(withoutLoose); };
+    // reports its clicks itself (openNode, closeLoose). A press in a full screen is its own; one in a link's menu (plan 6b,
+    // D5) is the pop-up's that carries the link, as its left click is.
+    const away = (e: PointerEvent) => { if (!covered.current && !(e.target as Element | null)?.closest?.('.panel, .graph, .link-menu')) apply(withoutLoose); };
     // A smaller window: each panel kept usable in it.
     const resize = () => {
       const b = bounds(), min = paramsRef.current.panelMinPx;

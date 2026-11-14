@@ -93,7 +93,7 @@ function LinkPreview(props: { target: LinkHoverTarget; state: State; params: Ren
   const summary = n?.trashedAt === undefined ? n?.summary ?? '' : '';
   const origin = useMemo(() => ({ kind: 'summary' as const, node: target.node }), [target.node]);
   const req = useMemo(() => (registry === null || summary.trim() === '' ? null
-    : buildRequest({ origin, source: summary, s: state, registry, known: knownLabels(slotOf(origin)), widthCm: params.latexSnippetWidthCm })), [summary, registry, origin]);
+    : buildRequest({ origin, source: summary, s: state, registry, known: knownLabels(slotOf(origin)), widthCm: params.latexSnippetWidthCm })), [summary, registry, origin, state, params.latexSnippetWidthCm]);
   const view = useCompiled(req, 0);
   if (!n) return null;
   const gone = n.trashedAt !== undefined;
