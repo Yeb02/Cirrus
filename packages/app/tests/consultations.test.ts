@@ -793,7 +793,7 @@ function consultingClient(f: typeof fetch, params: Partial<SyncParams>) {
     params: () => ({ ...TEST_PARAMS, ...params }), status: () => {}, consultations: file,
   });
   closing.push(() => store.close(), () => file.close(), () => client.stop());
-  return { client, file, store };
+  return { client, file, store, dir };
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -844,6 +844,74 @@ test('un événement que le serveur refuse est abandonné seul : le lot repart p
   expect(warn).toHaveBeenCalledTimes(1);
   expect(String(warn.mock.calls[0][0])).toContain('2 consultations refusées par le serveur, abandonnées');
 }, 20_000);
+
+test('un serveur qui refuse chaque événement : le tour s’arrête après trois refus seuls d’affilée, la marque en place, rien d’abandonné, un seul avertissement ; réparé, tout part', async () => {
+  const server = consultationsServer();
+  server.state.refuse = new Set(range(1, 10));
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 30 });
+  file.write(popups(10));
+  client.start();
+  // Several rounds.
+  await until(() => server.posted.filter((p) => p.length === 1).length >= 9, 10_000);
+  expect(server.kept.size).toBe(0);
+  expect(file.sentUpto('base-x')).toBe(0);
+  // Each round: the batch by halves, then three events alone (1, 2, 3), never further.
+  expect(server.posted.filter((p) => p.length === 1).every((p) => p[0] <= 3)).toBe(true);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0][0])).toContain('le serveur refuse les consultations une à une');
+  // The server mended: the backlog leaves whole.
+  server.state.refuse = new Set();
+  await until(() => file.sentUpto('base-x') === 10, 10_000);
+  expect([...server.kept.keys()]).toEqual(range(1, 10));
+}, 20_000);
+
+test('un serveur restauré d’une copie plus ancienne : la connexion suivante lui renvoie ce qui lui manque', async () => {
+  const server = consultationsServer();
+  const { client, file } = consultingClient(server.fetch, { consultationsSendMs: 3_600_000 });
+  file.write(popups(5));
+  client.start();
+  await until(() => file.sentUpto('base-x') === 5);
+  // The server's data restored: it holds the first two only; the PC's mark says 5.
+  await client.stop();
+  for (const seq of [3, 4, 5]) server.kept.delete(seq);
+  const asked = server.count('GET /consultations/upto');
+  client.start();
+  await until(() => server.kept.size === 5, 10_000);
+  expect([...server.kept.keys()]).toEqual(range(1, 5));
+  expect(server.count('GET /consultations/upto')).toBe(asked + 1);
+  expect(server.posted.at(-1)).toEqual([3, 4, 5]);
+  expect(file.sentUpto('base-x')).toBe(5);
+});
+
+test('une erreur hors des requêtes (l’identité de la base illisible) n’arrête pas les tours suivants, et stop se résout', async () => {
+  const server = consultationsServer();
+  const { client, file, store } = consultingClient(server.fetch, { consultationsSendMs: 30 });
+  const baseId = store.baseId.bind(store);
+  let thrown = 0;
+  // The first reading while connected (the first round's) fails; the hello's, before, does not.
+  vi.spyOn(store, 'baseId').mockImplementation(() => {
+    if (client.connected() && thrown++ === 0) throw new Error('base illisible');
+    return baseId();
+  });
+  file.write(popups(3));
+  client.start();
+  await until(() => file.sentUpto('base-x') === 3, 10_000);
+  expect(thrown).toBeGreaterThan(1);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0][0])).toContain('base illisible');
+  await client.stop();
+});
+
+test('rien d’enregistré : un tour ne demande rien au serveur et ne crée pas le fichier', async () => {
+  const server = consultationsServer();
+  const { client, file, dir } = consultingClient(server.fetch, { consultationsSendMs: 20 });
+  client.start();
+  await until(() => client.connected());
+  await sleep(150);
+  expect(server.asked.filter((a) => a.includes('/consultations'))).toEqual([]);
+  expect(file.sentUpto('base-x')).toBeNull();
+  expect(existsSync(join(dir, CONSULTATIONS_FILE))).toBe(false);
+});
 
 test('interrupteur éteint : rien ne part', async () => {
   const server = consultationsServer();

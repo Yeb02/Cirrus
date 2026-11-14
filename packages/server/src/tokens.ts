@@ -34,11 +34,11 @@ const MIGRATIONS: string[] = [
   /*
    * v4 (plan 6b, task 8, D7): every PC's consultations, each by its PC (the token's) and its number in that PC's file;
    * its time (that PC's clock), its kind, its subject, plan and detail as recorded. The index reads the last time each
-   * subject was seen.
+   * subject was seen (Tokens.seen) without touching the table: it covers the subject, the kind and the time.
    */ `
   CREATE TABLE consultations (pc TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, kind TEXT NOT NULL,
     subject TEXT, plan TEXT, detail TEXT, PRIMARY KEY (pc, seq));
-  CREATE INDEX consultations_subject ON consultations (subject, at);
+  CREATE INDEX consultations_subject ON consultations (subject, kind, at);
   `,
 ];
 

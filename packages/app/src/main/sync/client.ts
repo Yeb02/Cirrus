@@ -174,6 +174,13 @@ function fitting(events: SentConsultation[]): SentConsultation[] {
   return events;
 }
 
+/**
+ * The events refused alone in a row that end a round of consultations (plan 6b, D7), the mark left where it was: past
+ * it, the server is taken to refuse every one (a bug, a kind it does not know), and the backlog stays on this PC. A
+ * guard, not a setting: below it, isolated events out of line are passed over.
+ */
+const MAX_SINGLE_REFUSALS = 3;
+
 /** A server whose base is another than the one this PC follows (R31): its data replaced. */
 const BASE_REPLACED = 'Le serveur tient une autre base que celle que suit ce PC : ses données ont été remplacées. Dissocie ce PC, puis jumelle-le de nouveau.';
 
@@ -366,8 +373,15 @@ export class SyncClient {
     return file.localSeen(0);
   }
 
-  /** The consultations' rounds of `conn` (D7): one now, then one every consultationsSendMs (read each time) after the last ends, while it is open. */
+  /**
+   * The consultations' rounds of `conn` (D7): one now, then one every consultationsSendMs (read each time) after the last
+   * ends, while it is open. Its first round asks the server where it stands (GET /consultations/upto): the mark kept in
+   * the file only spares the requests between two connections — a server restored from an older copy, or a file whose
+   * last writes a power cut undid, is caught up at the next connection. The chain never rejects: a failure there is
+   * said, and the next connection starts it again.
+   */
   private consultationsEvery(conn: Connection): void {
+    this.consultationsAsk = true;
     const round = () => {
       this.consultationsTimer = null;
       if (conn.closed || conn !== this.conn) return;
@@ -375,7 +389,7 @@ export class SyncClient {
       this.consultationsRound = this.consultationsRound.then(() => this.sendConsultations(conn)).then(() => {
         if (conn.closed || conn !== this.conn) return;
         this.consultationsTimer = setTimeout(round, Math.max(1, this.deps.params().consultationsSendMs));
-      });
+      }).catch((e: unknown) => { console.warn(`Consultations : envoi arrêté jusqu’à la prochaine connexion : ${messageOf(e)}`); });
     };
     round();
   }
@@ -390,16 +404,19 @@ export class SyncClient {
    * PC's events after the mark of the base followed, by batches of MAX_CONSULTATIONS_PER_REQUEST at most, each cut short
    * of MAX_CONSULTATIONS_BODY_BYTES (fitting), one at a time, each answer's `upto` the new mark. No mark for this base —
    * a base taken from another server, a first sending — or a sending whose answer was lost: the server's upto first. A
-   * batch the server refuses (400, 413) goes again by halves; an event refused alone is dropped — one event never holds
-   * the rest back —, those dropped said once at the round's end; a batch taken doubles the next one's size, up to the
-   * bound (a server that refused every event would cost one request each, not a storm of halvings). Any other failure
-   * ends the round, said once: the next round, or the next connection, takes it up. Never rejects.
+   * batch the server refuses (400, 413) goes again by halves; an event refused alone is passed over — one event never
+   * holds the rest back —, and dropped for good once a later batch is taken (the mark passes it then), those dropped
+   * said once at the round's end; a batch taken doubles the next one's size, up to the bound. MAX_SINGLE_REFUSALS events
+   * refused alone in a row end the round, the mark where it was, said as a failure: a server that refuses every event
+   * (a kind it does not know) never makes this PC drop its backlog. Any other failure ends the round, said once: the
+   * next round, or the next connection, takes it up. Nothing of this PC's recorded: no request, no file made. Never
+   * rejects.
    */
   private async sendConsultations(conn: Connection): Promise<void> {
-    const file = this.deps.consultations, base = this.deps.store.baseId();
-    const on = () => !conn.closed && this.deps.params().consultationsRecord === 'yes';
-    if (!file || base === null || !on()) return;
     try {
+      const file = this.deps.consultations, base = this.deps.store.baseId();
+      const on = () => !conn.closed && this.deps.params().consultationsRecord === 'yes';
+      if (!file || base === null || !on() || file.pending(0, 1).length === 0) return;
       let mark = this.consultationsAsk ? null : file.sentUpto(base);
       if (mark === null) {
         mark = uptoOf(await json(await conn.request('/consultations/upto')), '/consultations/upto');
@@ -407,10 +424,12 @@ export class SyncClient {
         this.consultationsAsk = false;
       }
       let max = MAX_CONSULTATIONS_PER_REQUEST;
+      /** The events refused alone since the last batch taken: passed over, not yet dropped. */
+      let refused = 0;
       const dropped = { count: 0, reason: '' };
       try {
-        while (on()) {
-          const events = fitting(file.pending(mark, max));
+        for (let at = mark; on();) {
+          const events = fitting(file.pending(at, max));
           if (events.length === 0) break;
           const last = events[events.length - 1].seq;
           // From the request until its answer is read, what the server holds is unknown.
@@ -424,15 +443,17 @@ export class SyncClient {
               max = Math.ceil(events.length / 2);
               continue;
             }
-            dropped.count++;
             dropped.reason = reason;
-          } else {
-            mark = uptoOf(await json(res), '/consultations');
-            this.consultationsAsk = false;
-            max = Math.min(MAX_CONSULTATIONS_PER_REQUEST, max * 2);
+            if (++refused >= MAX_SINGLE_REFUSALS) throw new Error(`le serveur refuse les consultations une à une (${reason}) ; elles restent sur ce PC`);
+            at = last;
+            continue;
           }
-          // At least past what was sent, or dropped: a server that would answer less never holds the sending in place.
-          mark = Math.max(mark, last);
+          // At least past what was sent: a server that would answer less never holds the sending in place.
+          mark = at = Math.max(uptoOf(await json(res), '/consultations'), last);
+          this.consultationsAsk = false;
+          max = Math.min(MAX_CONSULTATIONS_PER_REQUEST, max * 2);
+          dropped.count += refused;
+          refused = 0;
           file.markSent(base, mark);
         }
       } finally {
@@ -442,6 +463,8 @@ export class SyncClient {
     } catch (e) {
       if (!conn.closed && !this.consultationsWarned) console.warn(`Consultations non envoyées au serveur : ${messageOf(e)}`);
       this.consultationsWarned ||= !conn.closed;
+      // A failure before any request (the base's identity, the settings, the file unreadable): nothing known of the server.
+      this.consultationsAsk ||= !conn.closed;
     }
   }
 
