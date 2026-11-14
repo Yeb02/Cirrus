@@ -713,7 +713,7 @@ class PartColumns {
   ends: EndPool;
   readonly partHead: Int32Array;
 
-  /** `parts`, `ends`: how many there may be (an upper bound: nothing to grow). */
+  /** `parts`, `ends`: how many there may be (an estimate: add() grows the columns past it). */
   constructor(partHead: Int32Array, parts: number, ends: number) {
     this.partHead = partHead;
     this.resize(parts);
@@ -813,7 +813,8 @@ export function buildScene(s: State, planId: Id, measure: Measure, p: RenderPara
     s, plan, planRow: pr, kind: drawnKind(plan), itemOfNode, phantomItem: (id) => phantomSlots.get(id) ?? -1,
     layoutOf: (c) => (layouts.size === 0 ? undefined : layouts.get(idOfConn(s, c))),
   };
-  // At most: a main part per two solid ends (placed members or far nodes' phantoms), and a far part per centre phantom.
+  // About: a main part per two solid ends (placed members or far nodes' phantoms), and a far part per centre phantom. A
+  // connection of one member has a main part for its one end (plan 6b, D2): rare, add() grows the columns for them.
   let degrees = 0;
   for (let i = 0; i < nodeCount; i++) degrees += inCount(s, rowOfSlot[i]);
   const cols = new PartColumns(new Int32Array(capacityFor(connRowCount(s))).fill(-1), ((degrees + phantoms.length) >> 1) + phantoms.length + 1, degrees + 2 * phantoms.length + 1);

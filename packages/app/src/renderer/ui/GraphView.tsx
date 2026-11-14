@@ -273,7 +273,11 @@ export function GraphView(props: {
     cameras.current.set(sc.plan.id, next);
     redraw();
     // Wheel and arrows stay active while a connection is drawn: its line follows the node; a .bib's block, its outline.
-    if (placement.placing.current?.kind === 'connect' && lastPointer.current) placement.aimLine(lastPointer.current.x, lastPointer.current.y);
+    // The target under the pointer too: the view moved under it, and Entrée reads it (plan 6b, D2).
+    if (placement.placing.current?.kind === 'connect' && lastPointer.current) {
+      placement.aimLine(lastPointer.current.x, lastPointer.current.y);
+      placement.aimTarget(lastPointer.current.x, lastPointer.current.y);
+    }
     if (placement.placing.current?.kind === 'bib' || bib.bibWaiting()) bib.showBib();
   };
   const nav = (input: NavInput) => {

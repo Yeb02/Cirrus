@@ -66,7 +66,9 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
     const sc = partOf(scene, hit.id).map((i) => scene.connections[i]).find((c) => c.part === hit.part);
     if (!sc) return [];
     if (sc.part === 'far') return make(['joinArm', 'deleteConnection']);
-    const placed = sc.ends.some((e) => e.key === hit.key && !e.dashed && scene.items[e.item].kind !== 'phantom');
+    // A connection of one member has a single arm: nothing to split (plan 6b, D2).
+    const placed = (s.connections.get(sc.id)?.members.length ?? 0) > 1
+      && sc.ends.some((e) => e.key === hit.key && !e.dashed && scene.items[e.item].kind !== 'phantom');
     const actions: MenuAction[] = placed ? ['splitArm', 'layout'] : ['layout'];
     if (sc.layout) actions.push('resetLayout');
     actions.push('deleteConnection');

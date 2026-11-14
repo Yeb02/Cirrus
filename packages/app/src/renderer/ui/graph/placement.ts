@@ -205,7 +205,7 @@ export function usePlacement(graph: Graph) {
     if (what?.kind === 'repercussion') graph.repercussion.nextRepercussion();
     if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
   };
-  return { placing, ghost, setGhost, line, pendingPlace, startPlacing, aimLine, startPending, followCursor, place, enter, cancelPlacing };
+  return { placing, ghost, setGhost, line, pendingPlace, startPlacing, aimLine, aimTarget, startPending, followCursor, place, enter, cancelPlacing };
 }
 
 export type PlacementPart = ReturnType<typeof usePlacement>;

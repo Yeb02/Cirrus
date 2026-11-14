@@ -1,4 +1,4 @@
-import { placeNode, setBranches, setLayout, type State } from '@cirrus/core';
+import { connect, placeNode, setBranches, setLayout, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
 import { menuFor } from '../src/menus.ts';
@@ -110,4 +110,16 @@ test('« Voir dans un autre plan » (plan 6a, D3) : proposé à un nœud ou à u
   expect(sees(menuFor(s, sc, item(sc, ids.phantoms.node), emptySelection(), false))).toBe(false);
   const sel = { items: new Set([ids.nodes.mdl, ids.nodes.monde]), connections: new Set<string>() };
   expect(sees(menuFor(s, sc, item(sc, ids.nodes.mdl), sel, true))).toBe(false);
+});
+
+test('une connexion d’un seul nœud (plan 6b, D2) : pas de « Scinder ce bras », son bras est seul', () => {
+  const st = copyOf(s), lobby = ids.plans.lobby;
+  const made = run(st, connect(st, { plan: lobby, members: [{ node: ids.nodes.mdl, role: 'source' }] }));
+  const conn = (made.ops.find((o) => o.t === 'connection' && o.before === null) as { after: { id: string } }).after.id;
+  run(st, setBranches(st, conn, [{ plan: lobby, node: ids.nodes.mdl }], true));
+  const scene = buildScene(st, lobby, measure, P);
+  const line = { kind: 'connection' as const, conn: -1, key: ids.nodes.mdl, id: conn, part: 'main' as const };
+  const m = menuFor(st, scene, line, emptySelection(), false).map((x) => x.action);
+  expect(m).toContain('deleteConnection');
+  expect(m).not.toContain('splitArm');
 });
