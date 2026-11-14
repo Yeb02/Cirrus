@@ -1,3 +1,14 @@
 # Registre du plan 6b : la saisie et l'interface — décisions, écarts
 
 Plan : `docs/superpowers/plans/2026-11-14-cirrus-saisie-interface.md` (écrit le 2026-11-14 avec l'utilisateur, qui l'a relu avant l'exécution) : le format 2 (l'agenda, les feuillets, la couleur d'un placement), les connexions à un membre, la couleur d'un groupe, les liens, les onglets de l'agenda et des feuillets, l'envoi des consultations et la santé du graphe. Une décision que le plan ne fixe pas se consigne ici : `Ruling: … — pourquoi — coût si faux`.
+
+## Tâche 1 : le format 2 (D1)
+
+- Ruling: **un groupe, pour `setGroupColor`, est un nœud qui a des membres dans ce plan (`hasMembers`, celui de `removeFromPlan`)** ; sinon `NOT_A_GROUP`. Un groupe caché (des membres, pas de placement) est refusé par « Ce groupe n’est pas dans ce plan. » : la couleur vit sur le placement — coût si faux : un message.
+- Ruling: **la commande vérifie ses bornes par `parseOp` lui-même (`bounded`, dans `commands.ts`), sa `SyncFormatError` devenue `CommandError`** : une seule vérification pour la commande, le serveur et l’envoi, comme D1 le demande ; le message est celui de `parseOp` (« Opération mal formée : agenda.after.day n’est pas une date… »), que l’interface de la tâche 7 devra prévenir par ses propres bornes (`AGENDA_TITLE_CHARS`, `AGENDA_TEXT_CHARS`, `AGENDA_NODES`, `SHEET_TEXT_CHARS`, `COLOR`, exportés d’`ops.ts`) — coût si faux : des messages plus doux.
+- Ruling: **`Canon.empty` compte aussi l’agenda et les feuillets**, comme `isEmpty`, dont il est le jumeau (D7) : un serveur qui n’a qu’eux n’est pas « frais » et ne prend pas de base entière — coût si faux : une condition.
+- Ruling: **la couleur suit le placement là où une commande le recopie (`moveNodes`, la renaissance d’un nœud dans le même plan à la fusion) ; tout placement neuf naît sans couleur** (`createNode`, `placeNode`, `restoreNode`) — la couleur est propre au plan — coût si faux : nul.
+- Ruling: **`putAgendaEntry` et `putSheet` écrivent l’enregistrement tel quel (une copie, ses seuls champs) : ni `trim` du titre, ni vérification que les nœuds nommés existent** — une entrée peut nommer un nœud jeté ou disparu (Review Focus 4) ; une écriture identique n’est pas refusée — coût si faux : une ligne.
+- Ruling: **une date d’agenda se vérifie par aller-retour dans `setUTCFullYear`** (et non `Date.UTC`, qui lit les années 0 à 99 comme 1900 à 1999) — coût si faux : nul.
+- Ruling: **`Snapshot.agenda` et `Snapshot.sheets` sont obligatoires dans le type, mais `loadRecords` lit leur absence comme vide**, comme le préambule — coût si faux : nul.
+- Ruling: **`flowOf` nomme désormais les sortes de la mise en page (placement, branche, disposition, fantôme) ; toute autre est du contenu** — une sorte nouvelle ne tombe plus par défaut dans la mise en page — coût si faux : nul.

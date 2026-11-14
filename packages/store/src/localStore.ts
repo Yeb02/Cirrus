@@ -2,9 +2,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
-  type Action, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, encodeState, type Flow, flowOf, fromSnapshot, type Id, MAX_ID_CHARS,
-  MAX_LABEL_CHARS, type NodeRec, type Op, OpConflictError, parseOp, type PhantomRec, type Placement, type PlanRec, type PreambleRec, type Reconciliation,
-  type RemoteUnit, snapshotVersion, type State, subjectOf, SyncFormatError, type TagKeyDef, type Unit, uuidv7,
+  type Action, type AgendaEntryRec, canonical, checkRecord, type ConnectionLayout, type ConnectionRec, encodeState, type Flow, flowOf, fromSnapshot, type Id,
+  MAX_ID_CHARS, MAX_LABEL_CHARS, type NodeRec, type Op, OpConflictError, parseOp, type PhantomRec, type Placement, type PlanRec, type PreambleRec,
+  type Reconciliation, type RemoteUnit, type SheetRec, snapshotVersion, type State, subjectOf, SyncFormatError, type TagKeyDef, type Unit, uuidv7,
 } from '@cirrus/core';
 import { insertState } from './bulk.ts';
 import { migrate } from './schema.ts';
@@ -104,6 +104,7 @@ function loadState(db: DatabaseSync): State {
     branches: (db.prepare('SELECT plan, connection, node FROM branches').all() as { plan: string; connection: string; node: string }[])
       .map((b) => [b.plan, b.connection, b.node]),
     preamble: json<PreambleRec>('SELECT json FROM preamble WHERE id = 1')[0] ?? null,
+    agenda: json<AgendaEntryRec>('SELECT json FROM agenda'), sheets: json<SheetRec>('SELECT json FROM sheets'),
   });
 }
 
@@ -136,6 +137,11 @@ function rowOf(op: Exclude<Op, { t: 'branch' }>): { sql: string; key: string[]; 
     }
     case 'phantom': return { sql: 'SELECT json FROM phantoms WHERE id = ?', key: [(rec as PhantomRec).id], what: 'Le fantôme' };
     case 'preamble': return { sql: 'SELECT json FROM preamble WHERE id = 1', key: [], what: 'Le préambule' };
+    case 'agenda': {
+      const e = rec as AgendaEntryRec;
+      return { sql: 'SELECT json FROM agenda WHERE id = ?', key: [e.id], what: `L’entrée « ${e.title} » de l’agenda` };
+    }
+    case 'sheet': return { sql: 'SELECT json FROM sheets WHERE id = ?', key: [(rec as SheetRec).id], what: 'Le feuillet' };
   }
 }
 
@@ -216,6 +222,18 @@ function persistOp(q: Query, op: Op): void {
     case 'preamble': {
       if (op.after) q('INSERT INTO preamble (id, json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json').run(j(op.after));
       else q('DELETE FROM preamble WHERE id = 1').run();
+      return;
+    }
+    case 'agenda': {
+      const id = (op.after ?? op.before)!.id;
+      if (op.after) q('INSERT INTO agenda (id, json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json').run(id, j(op.after));
+      else q('DELETE FROM agenda WHERE id = ?').run(id);
+      return;
+    }
+    case 'sheet': {
+      const id = (op.after ?? op.before)!.id;
+      if (op.after) q('INSERT INTO sheets (id, json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET json = excluded.json').run(id, j(op.after));
+      else q('DELETE FROM sheets WHERE id = ?').run(id);
       return;
     }
   }
@@ -411,7 +429,7 @@ export class LocalStore {
     this.transaction(() => {
       const held = this.q(`SELECT EXISTS (SELECT 1 FROM nodes) OR EXISTS (SELECT 1 FROM connections) OR EXISTS (SELECT 1 FROM plans) OR EXISTS (SELECT 1 FROM tag_keys)
         OR EXISTS (SELECT 1 FROM placements) OR EXISTS (SELECT 1 FROM branches) OR EXISTS (SELECT 1 FROM conn_layouts) OR EXISTS (SELECT 1 FROM phantoms)
-        OR EXISTS (SELECT 1 FROM preamble) AS held`).get() as { held: number };
+        OR EXISTS (SELECT 1 FROM preamble) OR EXISTS (SELECT 1 FROM agenda) OR EXISTS (SELECT 1 FROM sheets) AS held`).get() as { held: number };
       if (held.held !== 0) throw new Error('Import de l’état refusé : la base tient déjà un état.');
       insertState(this.db, s);
       this.dropSnapshot();
@@ -598,11 +616,12 @@ export class LocalStore {
 
   /**
    * Empty in the sense of D7 (plan 5a), as the server reads its own (Canon.empty): no node (in the trash included), no
-   * connection, no placement, no plan but a lobby. A few index lookups, whatever the size of the base.
+   * connection, no placement, no plan but a lobby, no agenda entry and no sheet (plan 6b, D1). A few index lookups,
+   * whatever the size of the base.
    */
   isEmpty(): boolean {
     const sql = `SELECT EXISTS (SELECT 1 FROM nodes) OR EXISTS (SELECT 1 FROM connections) OR EXISTS (SELECT 1 FROM placements)
-      OR EXISTS (SELECT 1 FROM plans WHERE json_extract(json, '$.type') != 'lobby') AS full`;
+      OR EXISTS (SELECT 1 FROM plans WHERE json_extract(json, '$.type') != 'lobby') OR EXISTS (SELECT 1 FROM agenda) OR EXISTS (SELECT 1 FROM sheets) AS full`;
     return (this.q(sql).get() as { full: number }).full === 0;
   }
 

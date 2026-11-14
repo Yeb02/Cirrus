@@ -1,7 +1,9 @@
 import { isObject, validAnchor } from './annotation.ts';
 import { BranchSet, connectionAt, ConnectionsFacade, MapFacade, PlacementsFacade, placementAt, RecordFacade } from './facades.ts';
 import { DEFAULT_PREAMBLE } from './latex.ts';
-import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
+import type {
+  AgendaEntryRec, BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, SheetRec, TagKeyDef, TagValue,
+} from './model.ts';
 import type { Op } from './ops.ts';
 import type { Snapshot } from './snapshot.ts';
 import {
@@ -59,6 +61,8 @@ export interface State {
   readonly phantoms: ReadonlyMap<Id, PhantomRec>;
   /** The global LaTeX preamble; null: never set (preambleText gives the one in effect). */
   readonly preamble: PreambleRec | null;
+  readonly agenda: ReadonlyMap<Id, AgendaEntryRec>;
+  readonly sheets: ReadonlyMap<Id, SheetRec>;
 }
 
 /** Core's own view of a state: the façades plus the tables and indices behind them (not exported from @cirrus/core). */
@@ -87,6 +91,7 @@ function stateOf(tables: Tables, index: Indices): StateData {
     tagKeys: new MapFacade(tables.tagKeys), placements: new PlacementsFacade(tables), branches: new BranchSet(tables),
     connLayouts: new MapFacade(tables.layouts), phantoms: new MapFacade(tables.phantoms),
     get preamble() { return tables.preamble; },
+    agenda: new MapFacade(tables.agenda), sheets: new MapFacade(tables.sheets),
   };
 }
 
@@ -350,6 +355,22 @@ function write(d: StateData, op: Op, checked: boolean, back: boolean): void {
       d.tables.preamble = after;
       return;
     }
+    case 'agenda': {
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
+      if (!rec) throw new Error('empty agenda operation');
+      if (checked) check(d.tables.agenda.get(rec.id) ?? null, before, `L’entrée « ${rec.title} » de l’agenda`);
+      if (after) d.tables.agenda.set(rec.id, after);
+      else d.tables.agenda.delete(rec.id);
+      return;
+    }
+    case 'sheet': {
+      const before = back ? op.after : op.before, after = back ? op.before : op.after, rec = after ?? before;
+      if (!rec) throw new Error('empty sheet operation');
+      if (checked) check(d.tables.sheets.get(rec.id) ?? null, before, 'Le feuillet');
+      if (after) d.tables.sheets.set(rec.id, after);
+      else d.tables.sheets.delete(rec.id);
+      return;
+    }
   }
 }
 
@@ -389,6 +410,9 @@ export function loadRecords(s: State, x: Snapshot): void {
   // A snapshot made before plan 4b has none.
   if (x.preamble) checkPreamble(x.preamble);
   T.preamble = x.preamble ?? null;
+  // A snapshot made before plan 6b has neither.
+  for (const e of x.agenda ?? []) T.agenda.set(e.id, e);
+  for (const sh of x.sheets ?? []) T.sheets.set(sh.id, sh);
 }
 
 /** Builds every index from the tables (at load, after loadRecords): O(base), once, each list exactly its size. */

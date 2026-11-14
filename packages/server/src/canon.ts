@@ -104,10 +104,10 @@ export class Canon {
     return this.store;
   }
 
-  /** Empty in the sense of D7: no node, no connection, no placement, no plan but a lobby. */
+  /** Empty in the sense of D7: no node, no connection, no placement, no plan but a lobby, no agenda entry, no sheet (plan 6b, D1). */
   empty(): boolean {
     const s = this.s;
-    if (s.nodes.size > 0 || s.connections.size > 0 || s.placements.size > 0) return false;
+    if (s.nodes.size > 0 || s.connections.size > 0 || s.placements.size > 0 || s.agenda.size > 0 || s.sheets.size > 0) return false;
     for (const p of s.plans.values()) if (p.type !== 'lobby') return false;
     return true;
   }

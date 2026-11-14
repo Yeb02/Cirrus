@@ -47,8 +47,11 @@ export interface Reconciliation {
  */
 export type UnitResult = { accepted: number } | { stale: number } | { refused: string };
 
-/** The version of the protocol between a PC and its server (D10): /hello refuses another. */
-export const SYNC_PROTOCOL_VERSION = 1;
+/**
+ * The version of the protocol between a PC and its server (D10): /hello refuses another. 2 (plan 6b, D1): the agenda,
+ * the sheets and a placement's colour, which a PC of version 1 could not read.
+ */
+export const SYNC_PROTOCOL_VERSION = 2;
 
 /** A write's most operations (a server bound, Global Constraints: packages/server/src/bounds.ts); its longest label is ops.ts's. */
 export const MAX_OPS_PER_UNIT = 200_000;

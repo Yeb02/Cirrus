@@ -29,6 +29,8 @@ export function recordKey(op: Op): string {
     case 'connection':
     case 'plan':
     case 'phantom':
+    case 'agenda':
+    case 'sheet':
       return `${op.t}${SEP}${(op.after ?? op.before)!.id}`;
     case 'tagKey':
       return `tagKey${SEP}${(op.after ?? op.before)!.key}`;
@@ -65,6 +67,8 @@ function current(s: State, op: Op): unknown {
     }
     case 'phantom': return s.phantoms.get((op.after ?? op.before)!.id) ?? null;
     case 'preamble': return s.preamble;
+    case 'agenda': return s.agenda.get((op.after ?? op.before)!.id) ?? null;
+    case 'sheet': return s.sheets.get((op.after ?? op.before)!.id) ?? null;
   }
 }
 
@@ -153,7 +157,10 @@ function pick<T>(b: T, t: T, m: T, field: string, c: Ctx): T {
   return newer(c.stamps?.get(field), c.mine) ? t : m;
 }
 
-/** A record that is one field (placement, phantom, layout, registry key, preamble, D4): deleted on one side, changed on the other, the change wins. */
+/**
+ * A record that is one field (placement — its colour with it —, phantom, layout, registry key, preamble, D4; agenda
+ * entry, sheet, plan 6b): deleted on one side, changed on the other, the change wins.
+ */
 function whole(b: unknown, t: unknown, m: unknown, c: Ctx): unknown {
   if (same(m, b)) return t;
   if (same(t, b)) return m;

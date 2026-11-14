@@ -2,9 +2,10 @@ import { ANNOTATION_TITLE_CHARS, annotationTitle, validAnchor } from './annotati
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
 import type {
-  Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role, TagKeyDef, TagValue,
+  AgendaEntryRec, Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role,
+  SheetRec, TagKeyDef, TagValue,
 } from './model.ts';
-import { MAX_ID_CHARS, type Op, truncateLabel } from './ops.ts';
+import { MAX_ID_CHARS, type Op, parseOp, SyncFormatError, truncateLabel } from './ops.ts';
 import { normalizeTag, PROTECTED_TAG_KEYS, TagError, type TagKeyShape, tagValueFits, tagValuesFit } from './registry.ts';
 import {
   applyKnown, applyOp, canonical, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn,
@@ -594,6 +595,71 @@ export function setLayout(s: State, plan: Id, connection: Id, layout: Omit<Conne
   return transact(s, (d) => {
     d.push({ t: 'connLayout', before: s.connLayouts.get(layoutKey(plan, connection)) ?? null, after: layout && { plan, connection, ...layout } });
     return d.finish(layout ? 'Disposer une connexion' : 'Rétablir la disposition automatique');
+  });
+}
+
+/** setGroupColor's refusal of a node that has no members in the plan. */
+export const NOT_A_GROUP = 'Ce nœud n’est pas un groupe dans ce plan.';
+
+/**
+ * An operation held to its record's bounds before the draft writes it (plan 6b, D1): parseOp's check, the one the
+ * server and the sending make; its refusal, a CommandError.
+ */
+function bounded(op: Op): Op {
+  try {
+    return parseOp(op);
+  } catch (e) {
+    if (e instanceof SyncFormatError) throw new CommandError(e.message);
+    throw e;
+  }
+}
+
+/**
+ * A group's colour in this plan (spec 5.5, plan 6b, D1), kept on its placement: `#rrggbb` in lower case; null, back to
+ * « Automatique » (the field goes). Refused for a node with no members in this plan (NOT_A_GROUP).
+ */
+export function setGroupColor(s: State, plan: Id, node: Id, color: string | null): Action {
+  const n = nodeOf(s, node);
+  if (!hasMembers(s, plan, node)) throw new CommandError(NOT_A_GROUP);
+  const p = placementIn(s, plan, node, 'Ce groupe n’est pas dans ce plan.');
+  const { color: _old, ...rest } = p;
+  return transact(s, (d) => {
+    d.push(bounded({ t: 'placement', before: p, after: color === null ? rest : { ...rest, color } }));
+    return d.finish(`Couleur de « ${n.title} »`);
+  });
+}
+
+/** An agenda entry created or changed (spec 5.6, plan 6b, D1), as given (a copy); its bounds are parseOp's. */
+export function putAgendaEntry(s: State, e: AgendaEntryRec): Action {
+  const after: AgendaEntryRec = { id: e.id, day: e.day, title: e.title, text: e.text, nodes: [...e.nodes] };
+  return transact(s, (d) => {
+    d.push(bounded({ t: 'agenda', before: s.agenda.get(e.id) ?? null, after }));
+    return d.finish(`Agenda : « ${e.title} »`);
+  });
+}
+
+export function deleteAgendaEntry(s: State, id: Id): Action {
+  const e = need(s.agenda.get(id), 'Entrée d’agenda introuvable.');
+  return transact(s, (d) => {
+    d.push({ t: 'agenda', before: e, after: null });
+    return d.finish(`Supprimer « ${e.title} » de l’agenda`);
+  });
+}
+
+/** A sheet created or changed (spec 5.6, plan 6b, D1), as given (a copy); its bounds are parseOp's. */
+export function putSheet(s: State, sh: SheetRec): Action {
+  const after: SheetRec = { id: sh.id, createdAt: sh.createdAt, text: sh.text };
+  return transact(s, (d) => {
+    d.push(bounded({ t: 'sheet', before: s.sheets.get(sh.id) ?? null, after }));
+    return d.finish('Feuillet');
+  });
+}
+
+export function deleteSheet(s: State, id: Id): Action {
+  const sh = need(s.sheets.get(id), 'Feuillet introuvable.');
+  return transact(s, (d) => {
+    d.push({ t: 'sheet', before: sh, after: null });
+    return d.finish('Supprimer un feuillet');
   });
 }
 

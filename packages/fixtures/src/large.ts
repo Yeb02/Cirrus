@@ -57,7 +57,7 @@ export function buildLargeState(spec: LargeSpec): { state: State; lobby: Id } {
   const lobby = benchId('plan', 0);
   const x: Snapshot = {
     nodes: [], connections: [], plans: [{ id: lobby, name: 'Lobby', type: 'lobby' }], tagKeys: [], placements: [], branches: [], connLayouts: [], phantoms: [],
-    preamble: null,
+    preamble: null, agenda: [], sheets: [],
   };
   const ids = new Map(scene.nodes.map((n) => [n.id, benchId('node', n.id)]));
   const id = (i: number) => ids.get(i)!;

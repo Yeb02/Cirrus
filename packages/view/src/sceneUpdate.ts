@@ -198,6 +198,8 @@ function touchedBy(prev: PlanScene, s: State, ops: readonly Op[]): Touched {
       case 'plan': // this plan's record: compared whole below; another plan's: nothing here
       case 'tagKey':
       case 'preamble': // not drawn
+      case 'agenda':
+      case 'sheet':
         break;
       case 'placement': {
         const rec = (op.after ?? op.before)!;

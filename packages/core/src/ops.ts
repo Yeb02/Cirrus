@@ -1,5 +1,7 @@
 import { validAnchor } from './annotation.ts';
-import type { BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef } from './model.ts';
+import type {
+  AgendaEntryRec, BranchRec, ConnectionLayout, ConnectionRec, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, SheetRec, TagKeyDef,
+} from './model.ts';
 
 /**
  * Every change is a record-level operation carrying the record before and after (null = absent).
@@ -15,13 +17,15 @@ export type Op =
   | { t: 'connLayout'; before: ConnectionLayout | null; after: ConnectionLayout | null }
   | { t: 'phantom'; before: PhantomRec | null; after: PhantomRec | null }
   /** The base's single preamble record (null: never set, DEFAULT_PREAMBLE applies). */
-  | { t: 'preamble'; before: PreambleRec | null; after: PreambleRec | null };
+  | { t: 'preamble'; before: PreambleRec | null; after: PreambleRec | null }
+  | { t: 'agenda'; before: AgendaEntryRec | null; after: AgendaEntryRec | null }
+  | { t: 'sheet'; before: SheetRec | null; after: SheetRec | null };
 
 /** The two synchronised flows of spec 6.1 (analytics come later). */
 export type Flow = 'content' | 'layout';
 
 export function flowOf(op: Op): Flow {
-  return op.t === 'node' || op.t === 'connection' || op.t === 'plan' || op.t === 'tagKey' || op.t === 'preamble' ? 'content' : 'layout';
+  return op.t === 'placement' || op.t === 'branch' || op.t === 'connLayout' || op.t === 'phantom' ? 'layout' : 'content';
 }
 
 export function invertOp(op: Op): Op {
@@ -35,6 +39,8 @@ export function subjectOf(op: Op): Id {
     case 'connection':
     case 'plan':
     case 'phantom':
+    case 'agenda':
+    case 'sheet':
       return (op.after ?? op.before)!.id;
     case 'tagKey':
       return (op.after ?? op.before)!.key;
@@ -97,6 +103,9 @@ const list = (v: unknown, at: string, item: (x: unknown, at: string) => void): v
 const maybe = (o: Fields, k: string, check: (v: unknown, at: string) => unknown, at: string): void => { if (o[k] !== undefined) check(o[k], `${at}.${k}`); };
 const scalar = (v: unknown, at: string): void => { if (typeof v !== 'string') finite(v, at); };
 const vec2 = (v: unknown, at: string): void => { const o = fields(v, at, ['x', 'y']); finite(o.x, `${at}.x`); finite(o.y, `${at}.y`); };
+/** A colour as a placement keeps it (plan 6b, D1): `#rrggbb`, in lower case. */
+export const COLOR = /^#[0-9a-f]{6}$/;
+const color = (v: unknown, at: string): void => { if (!COLOR.test(text(v, at))) bad(`${at} n’est pas une couleur #rrggbb en minuscules`); };
 
 /**
  * How a tag key (a node's or a connection's, or a registry key) is judged (R32): bounded like an identifier, 1 to
@@ -161,10 +170,11 @@ function tagKeyRec(v: unknown, at: string, key: KeyCheck): Fields {
 }
 
 function placementRec(v: unknown, at: string): Fields {
-  const p = fields(v, at, ['plan', 'node', 'x', 'y', 'k']);
+  const p = fields(v, at, ['plan', 'node', 'x', 'y', 'k'], ['color']);
   ident(p.plan, `${at}.plan`);
   ident(p.node, `${at}.node`);
   for (const k of ['x', 'y', 'k']) finite(p[k], `${at}.${k}`);
+  maybe(p, 'color', color, at);
   return p;
 }
 
@@ -201,6 +211,44 @@ function preambleRec(v: unknown, at: string): Fields {
   return p;
 }
 
+/** The bounds of an agenda entry and a sheet (plan 6b, D1): those of their records in model.ts. */
+export const AGENDA_TITLE_CHARS = 200;
+export const AGENDA_TEXT_CHARS = 20_000;
+export const AGENDA_NODES = 50;
+export const SHEET_TEXT_CHARS = 100_000;
+
+/** `AAAA-MM-JJ`, a date of the calendar (2026-02-30 is not one). */
+function day(v: unknown, at: string): void {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text(v, at));
+  const [y, mo, dd] = m ? [Number(m[1]), Number(m[2]) - 1, Number(m[3])] : [0, 0, 0];
+  // setUTCFullYear, not Date.UTC, which reads the years 0 to 99 as 1900 to 1999. The date comes back as written.
+  const d = new Date(0);
+  d.setUTCFullYear(y, mo, dd);
+  if (!m || d.getUTCFullYear() !== y || d.getUTCMonth() !== mo || d.getUTCDate() !== dd) bad(`${at} n’est pas une date AAAA-MM-JJ du calendrier`);
+}
+
+function agendaRec(v: unknown, at: string): Fields {
+  const e = fields(v, at, ['id', 'day', 'title', 'text', 'nodes']);
+  ident(e.id, `${at}.id`);
+  day(e.day, `${at}.day`);
+  const title = text(e.title, `${at}.title`).trim().length;
+  if (title === 0 || title > AGENDA_TITLE_CHARS) bad(`${at}.title ne compte pas de 1 à ${AGENDA_TITLE_CHARS} caractères, espaces du bord ôtées`);
+  if (text(e.text, `${at}.text`).length > AGENDA_TEXT_CHARS) bad(`${at}.text compte plus de ${AGENDA_TEXT_CHARS} caractères`);
+  list(e.nodes, `${at}.nodes`, (x, a) => ident(x, a));
+  const nodes = e.nodes as string[];
+  if (nodes.length > AGENDA_NODES) bad(`${at}.nodes compte plus de ${AGENDA_NODES} nœuds`);
+  if (new Set(nodes).size !== nodes.length) bad(`${at}.nodes nomme un nœud deux fois`);
+  return e;
+}
+
+function sheetRec(v: unknown, at: string): Fields {
+  const sh = fields(v, at, ['id', 'createdAt', 'text']);
+  ident(sh.id, `${at}.id`);
+  if (!Number.isSafeInteger(sh.createdAt)) bad(`${at}.createdAt n’est pas un temps entier en ms`);
+  if (text(sh.text, `${at}.text`).length > SHEET_TEXT_CHARS) bad(`${at}.text compte plus de ${SHEET_TEXT_CHARS} caractères`);
+  return sh;
+}
+
 /**
  * A name that is one plain file of a folder: no separator, no stream (« : »), no device, nothing Windows would rewrite
  * (« . » and « .. » among them). The compiler links the node's files under such names only (plan 4b, D4); a file added
@@ -225,6 +273,8 @@ const RECORDS: Record<Exclude<Op['t'], 'branch'>, { check: (v: unknown, at: stri
   connLayout: { check: layoutRec, identity: ['plan', 'connection'] },
   phantom: { check: phantomRec, identity: ['id'] },
   preamble: { check: preambleRec, identity: [] },
+  agenda: { check: agendaRec, identity: ['id'] },
+  sheet: { check: sheetRec, identity: ['id'] },
 };
 
 /**

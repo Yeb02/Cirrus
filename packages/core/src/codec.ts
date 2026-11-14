@@ -1,20 +1,24 @@
 import { validAnchor } from './annotation.ts';
-import type { ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, TagKeyDef, TagValue } from './model.ts';
+import type {
+  AgendaEntryRec, ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, SheetRec, TagKeyDef, TagValue,
+} from './model.ts';
 import { dataOf, emptyState, type Indices, layoutKey, reindexRest, type State } from './state.ts';
 import { type ConnTable, EMPTY_TAGS, INCLUSION, KINDS, NO_RECORD, type Pool, type Rows, SOURCE, TARGET } from './tables.ts';
 
 // The state as one ArrayBuffer (plan 3c, decisions 4 and 5): the snapshot kept in the base and sent to the interface.
 // The tables go row for row (identifiers, reference counts, free lists, columns, pools packed); records as columns
 // that refer to rows and to one table of strings, UTF-8 and separated by \0; the rare irregular records, the plans, the
-// tag keys, the layouts and the preamble as JSON. Of the indices, the three that cost most to derive go as they are
-// (memberOf, placedIn, groupOf), the others are rebuilt (reindexRest). Layout, little-endian, every section 8-aligned:
+// tag keys, the layouts, the preamble, the agenda and the sheets as JSON. Of the indices, the three that cost most to
+// derive go as they are (memberOf, placedIn, groupOf), the others are rebuilt (reindexRest). Layout, little-endian, every
+// section 8-aligned:
 //   header (32 bytes): magic, version, total length, two checksum words over everything after the header, section count;
 //   directory: offset and length in bytes of each section, in the order of SECTION_NAMES;
 //   the sections, numeric first, then the strings, then the JSON.
 
 /**
  * The format's version: a snapshot of another version is not read (the base's tables are). Bump it with any change,
- * but for a JSON field whose absence decodes right in the snapshots written before it (the preamble, plan 4b).
+ * but for a JSON field whose absence decodes right in the snapshots written before it (the preamble, plan 4b; the agenda,
+ * the sheets and a placement's colour, plan 6b — a coloured placement is irregular: it goes in the JSON's placements).
  */
 export const SNAPSHOT_VERSION = 1;
 const MAGIC = 0x53524943; // 'CIRS'
@@ -66,6 +70,9 @@ interface JsonPart {
    * field existed, and one written before decodes without it, so the version stays.
    */
   preamble?: PreambleRec;
+  /** Absent when there are none (plan 6b, D1), as the preamble: the version stays. */
+  agenda?: AgendaEntryRec[];
+  sheets?: SheetRec[];
 }
 
 function align8(n: number): number {
@@ -209,6 +216,16 @@ function checksum(u: Uint32Array): [number, number] {
 const bytesOf = (a: ArrayBufferView) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
 const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
 
+/** Records of the JSON part kept by identifier (the agenda, the sheets): each an object with its own, once. */
+function byId<T extends { id: Id }>(list: T[] | undefined, into: Map<Id, T>, what: string): void {
+  if (list === undefined) return;
+  if (!Array.isArray(list)) throw corrupt(what);
+  for (const r of list) {
+    if (!isObject(r) || typeof r.id !== 'string' || into.has(r.id)) throw corrupt(what);
+    into.set(r.id, r);
+  }
+}
+
 /** The state as a snapshot (decodeState reads it back): O(base), one buffer. */
 export function encodeState(s: State): ArrayBuffer {
   const T = dataOf(s).tables, N = T.nodes, P = T.plans, C = T.conns;
@@ -219,6 +236,8 @@ export function encodeState(s: State): ArrayBuffer {
   const st = new StringTable(nodeEnd + planEnd + connEnd), lists = new Lists(st), empty = st.empty;
   const json: JsonPart = { plans: [], tagKeys: [...T.tagKeys.values()], layouts: [], placements: [], connTexts: [], strings: [], multi: [] };
   if (T.preamble) json.preamble = T.preamble;
+  if (T.agenda.size > 0) json.agenda = [...T.agenda.values()];
+  if (T.sheets.size > 0) json.sheets = [...T.sheets.values()];
   const nodeIndex = N.rows.row, planIndex = P.rows.row, connIndex = C.rows.row, planBase = nodeEnd, connBase = nodeEnd + planEnd;
   // A reference to an identifier that has a row is that row's string: on decoding, the same string as the row's.
   const nodeRef = (id: Id) => { const r = nodeIndex.get(id); return r === undefined ? st.of(id) : r; };
@@ -619,6 +638,8 @@ export function decodeState(buf: ArrayBuffer): State {
     if (!isObject(json.preamble) || typeof json.preamble.text !== 'string') throw corrupt('préambule');
     T.preamble = json.preamble;
   }
+  byId(json.agenda, T.agenda, 'agenda');
+  byId(json.sheets, T.sheets, 'feuillet');
   if (N.count !== counts.nodes || P.count !== counts.plans || C.count !== counts.connections || C.branchCount !== counts.branches) throw corrupt('comptes');
 
   // The indices kept: memberOf (connection rows with a record, per node row), placedIn (plan rows), groupOf. Each is

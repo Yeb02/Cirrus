@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   type Action, type Anchor, applyOps, canonical, type ConnectionLayout, connect, createAnnotation, createNode, createPlan, DEFAULT_PREAMBLE, deleteEverywhere, editNode,
-  emptyState, encodeState, fromSnapshot, type Id, invertAction, type NodeRec, OpConflictError, type PhantomRec, preambleText, reconcile, type RemoteUnit, removeFromPlan,
-  setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot, type Unit, uuidv7,
+  decodeState, emptyState, encodeState, fromSnapshot, type Id, invertAction, type NodeRec, OpConflictError, type PhantomRec, preambleText, reconcile, type RemoteUnit, removeFromPlan,
+  include, putAgendaEntry, putSheet, setGroupColor, setPreamble, SNAPSHOT_VERSION, type State, type TagKeyDef, toSnapshot, type Unit, uuidv7,
 } from '@cirrus/core';
 import { LocalStore, SCHEMA_VERSION } from '../src/localStore.ts';
 
@@ -20,6 +20,8 @@ const write = (store: LocalStore, s: State, a: Action): number => { const seq = 
 const same = (a: State, b: State) => expect(canonical(sorted(a))).toBe(canonical(sorted(b)));
 const sorted = (s: State) => Object.fromEntries(Object.entries(toSnapshot(s)).map(([k, v]) => [k, Array.isArray(v) ? v.map((x) => canonical(x)).sort() : canonical(v)]));
 
+/** What schema 5 added (plan 6b), taken away: the tables of the agenda and the sheets, for the bases of earlier plans. */
+const BEFORE_V5 = 'DROP TABLE agenda; DROP TABLE sheets;';
 /** What schema 4 added (plan 5a), taken away: the journal as schema 3 left it, for the bases of earlier plans. */
 const BEFORE_V4 = `DROP INDEX changes_unit; DROP INDEX changes_pending; ALTER TABLE changes DROP COLUMN unit; ALTER TABLE changes DROP COLUMN kind;
   ALTER TABLE changes DROP COLUMN superseded;`;
@@ -30,13 +32,15 @@ function withPlan(store: LocalStore, s: State): Id {
   return afterId(a, 'plan');
 }
 
-test('ouvrir crée la base au schéma courant, avec les tables de l’instantané et du préambule', () => {
+test('ouvrir crée la base au schéma courant, avec les tables de l’instantané, du préambule, de l’agenda et des feuillets', () => {
   LocalStore.open(dir, { pc: 'pc1' }).close();
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
-  for (const name of ['snapshot', 'preamble']) expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name), name).toBeDefined();
+  for (const name of ['snapshot', 'preamble', 'agenda', 'sheets']) {
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name), name).toBeDefined();
+  }
   db.close();
-  expect(SCHEMA_VERSION).toBe(4);
+  expect(SCHEMA_VERSION).toBe(5);
 });
 
 test('un fichier qui n’est pas une base : ouvrir échoue sans le garder ouvert (il s’efface aussitôt)', () => {
@@ -258,7 +262,7 @@ test('migration du schéma 1 au schéma 2 : additive, rien de perdu, sans instan
   store.close();
   // The base as plan 3b left it: schema 1, no snapshot table (nor the preamble's of schema 3).
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec(`${BEFORE_V4} DROP TABLE snapshot; DROP TABLE preamble; PRAGMA user_version = 1;`);
+  db.exec(`${BEFORE_V5} ${BEFORE_V4} DROP TABLE snapshot; DROP TABLE preamble; PRAGMA user_version = 1;`);
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' });
   same(again.loadState(), s);
@@ -295,7 +299,7 @@ test('migration du schéma 2 au schéma 3 : la table du préambule ajoutée, rie
   store.close();
   // The base as plan 4a left it: schema 2, its snapshot, no preamble table.
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec(`${BEFORE_V4} DROP TABLE preamble; PRAGMA user_version = 2;`);
+  db.exec(`${BEFORE_V5} ${BEFORE_V4} DROP TABLE preamble; PRAGMA user_version = 2;`);
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
   same(loaded, s);
@@ -336,7 +340,7 @@ test('migration du schéma 3 au schéma 4 : chaque ligne devient l’écriture d
   store.close();
   // The base as plan 4c left it: schema 3, a journal without units, kinds or replaced lines.
   const db = new DatabaseSync(join(dir, 'cirrus.db'));
-  db.exec(`${BEFORE_V4} PRAGMA user_version = 3;`);
+  db.exec(`${BEFORE_V5} ${BEFORE_V4} PRAGMA user_version = 3;`);
   db.close();
   const again = LocalStore.open(dir, { pc: 'pc1' });
   same(again.loadState(), s);
@@ -347,8 +351,69 @@ test('migration du schéma 3 au schéma 4 : chaque ligne devient l’écriture d
   expect(again.lastServerSeq()).toBe(0);
   again.close();
   const check = new DatabaseSync(join(dir, 'cirrus.db'));
-  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
   check.close();
+});
+
+// Plan 6b, D1: the agenda, the sheets and a placement's colour.
+
+const ENTRY = { id: 'a-1', day: '2026-11-14', title: 'Relire', text: 'Le chapitre 2.', nodes: [] as Id[] };
+const SHEET = { id: 'f-1', createdAt: T0, text: 'Une idée.' };
+
+/** A plan with group G holding M, G coloured in it. */
+function coloured(store: LocalStore, s: State, color: string): { plan: Id; G: Id; M: Id } {
+  const plan = withPlan(store, s);
+  const g = createNode(s, { plan, title: 'G', x: 0, y: 0, k: 0 });
+  write(store, s, g);
+  const m = createNode(s, { plan, title: 'M', x: 0, y: 0, k: 0 });
+  write(store, s, m);
+  const G = afterId(g, 'node'), M = afterId(m, 'node');
+  write(store, s, include(s, plan, M, G));
+  write(store, s, setGroupColor(s, plan, G, color));
+  return { plan, G, M };
+}
+
+test('agenda et feuillets survivent à une réouverture, avec la couleur d’un groupe ; leur historique ; les supprimer efface leur ligne', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const { plan, G, M } = coloured(store, s, '#3a7bd5');
+  const put = putAgendaEntry(s, { ...ENTRY, nodes: [M] });
+  write(store, s, put);
+  write(store, s, putSheet(s, SHEET));
+  store.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
+  same(loaded, s);
+  expect([...loaded.agenda.values()]).toEqual([{ ...ENTRY, nodes: [M] }]);
+  expect([...loaded.sheets.values()]).toEqual([SHEET]);
+  expect(loaded.placements.get(`${plan}|${G}`)?.color).toBe('#3a7bd5');
+  expect(again.historyOf(ENTRY.id).map((r) => [r.label, r.flow, r.op])).toEqual([['Agenda : « Relire »', 'content', put.ops[0]]]);
+  write(again, s, invertAction(put));
+  expect(again.loadState().agenda.size).toBe(0);
+  // A stale "before": refused, as for any record.
+  expect(() => again.commit({ id: 'x', label: 'x', ops: [{ t: 'sheet', before: { ...SHEET, text: 'autre' }, after: null }] })).toThrow(OpConflictError);
+  write(again, s, { id: 'del', label: 'del', ops: [{ t: 'sheet', before: SHEET, after: null }] });
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  expect([db.prepare('SELECT COUNT(*) AS n FROM agenda').get(), db.prepare('SELECT COUNT(*) AS n FROM sheets').get()]).toEqual([{ n: 0 }, { n: 0 }]);
+  db.close();
+  again.close();
+});
+
+test('migration du schéma 4 au schéma 5 : les tables de l’agenda et des feuillets ajoutées, rien de perdu', () => {
+  const store = LocalStore.open(dir, { pc: 'pc1' }), s = emptyState();
+  const plan = withPlan(store, s);
+  write(store, s, createNode(s, { plan, title: 'Ancien', x: 0, y: 0, k: 0 }));
+  store.writeSnapshot(encodeState(s), store.lastSeq());
+  store.close();
+  // The base as plan 9 left it: schema 4, its snapshot, no agenda nor sheets.
+  const db = new DatabaseSync(join(dir, 'cirrus.db'));
+  db.exec(`${BEFORE_V5} PRAGMA user_version = 4;`);
+  db.close();
+  const again = LocalStore.open(dir, { pc: 'pc1' }), loaded = again.loadState();
+  same(loaded, s);
+  expect([loaded.agenda.size, loaded.sheets.size]).toEqual([0, 0]);
+  expect(again.readSnapshot()!.seq).toBe(3);
+  write(again, s, putSheet(s, SHEET));
+  expect([...again.loadState().sheets.values()]).toEqual([SHEET]);
+  again.close();
 });
 
 test('commit : l’identifiant de l’écriture, son heure et son PC donnés ; pendingUnits rend les écritures en attente, dans l’ordre, bornées', () => {
@@ -547,6 +612,34 @@ test('isEmpty, au sens de D7 : ni nœud, ni connexion, ni placement, aucun plan 
   expect(P).toBeTruthy();
   other.close();
   store.close();
+});
+
+test('isEmpty est faux avec un seul feuillet, ou une seule entrée d’agenda (plan 6b, D1) ; importState refuse une telle base', () => {
+  const only: [string, (t: State) => Action][] = [['feuillet', (t) => putSheet(t, SHEET)], ['agenda', (t) => putAgendaEntry(t, ENTRY)]];
+  for (const [name, a] of only) {
+    const store = LocalStore.open(join(dir, name), { pc: 'pc1' }), t = emptyState();
+    write(store, t, createPlan(t, 'Lobby', 'lobby'));
+    expect(store.isEmpty()).toBe(true);
+    write(store, t, a(t));
+    expect(store.isEmpty(), name).toBe(false);
+    expect(() => store.importState(emptyState(), 0), name).toThrow(/tient déjà/);
+    store.close();
+  }
+});
+
+test('importState écrit l’agenda, les feuillets et un placement coloré en bloc', () => {
+  const from = LocalStore.open(join(dir, 'de'), { pc: 'pc1' }), s = emptyState();
+  coloured(from, s, '#00ff7f');
+  write(from, s, putAgendaEntry(s, ENTRY));
+  write(from, s, putSheet(s, SHEET));
+  const to = LocalStore.open(join(dir, 'vers'), { pc: 'pc2' });
+  to.importState(s, 0);
+  to.close();
+  const again = LocalStore.open(join(dir, 'vers'), { pc: 'pc2' });
+  same(again.loadState(), s);
+  expect(decodeState(again.readSnapshot()!.data).sheets.get(SHEET.id)).toEqual(SHEET);
+  again.close();
+  from.close();
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

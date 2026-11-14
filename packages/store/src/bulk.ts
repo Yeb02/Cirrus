@@ -28,6 +28,10 @@ export function insertState(db: DatabaseSync, s: State): void {
   const phantom = db.prepare('INSERT INTO phantoms (id, plan, json) VALUES (?, ?, ?)');
   for (const p of s.phantoms.values()) phantom.run(p.id, p.plan, j(p));
   if (s.preamble) db.prepare('INSERT INTO preamble (id, json) VALUES (1, ?)').run(j(s.preamble));
+  const entry = db.prepare('INSERT INTO agenda (id, json) VALUES (?, ?)');
+  for (const e of s.agenda.values()) entry.run(e.id, j(e));
+  const sheet = db.prepare('INSERT INTO sheets (id, json) VALUES (?, ?)');
+  for (const sh of s.sheets.values()) sheet.run(sh.id, j(sh));
 }
 
 /**

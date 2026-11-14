@@ -44,6 +44,10 @@ const MIGRATIONS: string[] = [
   CREATE INDEX changes_unit ON changes (unit);
   CREATE INDEX changes_pending ON changes (local_seq) WHERE kind = 'local' AND server_seq IS NULL AND superseded = 0;
   `,
+  /* v5 (plan 6b, D1): the agenda entries and the sheets; a placement's colour stays in its JSON, without a migration. */ `
+  CREATE TABLE agenda (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+  CREATE TABLE sheets (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

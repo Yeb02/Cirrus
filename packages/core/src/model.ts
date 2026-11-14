@@ -42,8 +42,11 @@ export interface ConnectionRec {
 
 export interface PlanRec { id: Id; name: string; type: PlanType }
 
-/** k: integer scale step (spec 8.1). */
-export interface Placement { plan: Id; node: Id; x: number; y: number; k: number }
+/**
+ * k: integer scale step (spec 8.1). color: a group's colour in this plan (spec 5.5, plan 6b, D1), `#rrggbb` in lower
+ * case; absent, « Automatique ».
+ */
+export interface Placement { plan: Id; node: Id; x: number; y: number; k: number; color?: string }
 
 /** A branch shown in a plan; when its node is not placed in that plan it is drawn as a stub (spec 11.3). */
 export interface BranchRec { plan: Id; connection: Id; node: Id }
@@ -80,3 +83,12 @@ export interface TagKeyDef {
 
 /** The global LaTeX preamble (spec 5.6), one per base; a base without one uses DEFAULT_PREAMBLE (plan 4b, D5). */
 export interface PreambleRec { text: string }
+
+/**
+ * An agenda entry (spec 5.6, plan 6b, D1): its day, `AAAA-MM-JJ`, a real date; its title, 1 to 200 characters once
+ * trimmed; its text, 20 000 at most; the nodes it names, 50 distinct identifiers at most (one may be gone since).
+ */
+export interface AgendaEntryRec { id: Id; day: string; title: string; text: string; nodes: Id[] }
+
+/** A sheet (spec 5.6, plan 6b, D1): a free text of 100 000 characters at most; createdAt, an integer time in ms. */
+export interface SheetRec { id: Id; createdAt: number; text: string }

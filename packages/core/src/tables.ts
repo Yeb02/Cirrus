@@ -1,8 +1,10 @@
-import type { ConnectionKind, ConnectionLayout, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, Role, TagKeyDef, TagValue } from './model.ts';
+import type {
+  AgendaEntryRec, ConnectionKind, ConnectionLayout, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, Role, SheetRec, TagKeyDef, TagValue,
+} from './model.ts';
 
 // The state's storage (plan 3c, decision 1): nodes, plans and connections get integer rows; connections, their members
-// and their branches live in columns and pools; nodes, plans, placements, phantoms, layouts, tag keys and the preamble
-// stay objects.
+// and their branches live in columns and pools; nodes, plans, placements, phantoms, layouts, tag keys, the preamble,
+// agenda entries and sheets stay objects.
 // Only state.ts writes here (applyOp), and codec.ts in bulk (decodeState); readers go through the façades or the
 // accessors of state.ts.
 
@@ -454,10 +456,13 @@ export interface Tables {
   readonly tagKeys: Map<string, TagKeyDef>;
   /** null: the base never set one. */
   preamble: PreambleRec | null;
+  readonly agenda: Map<Id, AgendaEntryRec>;
+  readonly sheets: Map<Id, SheetRec>;
 }
 
 export function emptyTables(): Tables {
   return {
     nodes: new NodeTable(), plans: new PlanTable(), conns: new ConnTable(), phantoms: new Map(), layouts: new Map(), tagKeys: new Map(), preamble: null,
+    agenda: new Map(), sheets: new Map(),
   };
 }
