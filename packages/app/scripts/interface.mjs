@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { bibFileName, editNode } from '@cirrus/core';
-import { storeBytes } from '@cirrus/store';
+import { LocalStore, storeBytes } from '@cirrus/store';
 import { appDir, launch, sleep } from './cdp.mjs';
 import { chipSays, closeSettings, localServer, pairThrough, serverField, TITLE_PROBE, virtualPc } from './serveur-local.mjs';
 
@@ -297,6 +297,25 @@ async function closeAsUser(app, ms = 20_000) {
 const looked = (rows) => rows.filter((r) => r.kind !== 'focus' && r.kind !== 'blur');
 /** The centre of the graph, where a jump frames its object. */
 const graphCentre = (page) => page.evaluate(`(() => { const r = document.querySelector('.graph canvas').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+
+// Plan 6b, D5: the links to nodes in a compiled summary, compiled by the bench's TinyTeX (as the captures are: never the
+// user's, never a download). Without it, the scenario is skipped, said.
+const TINYTEX = join(appDir, '..', '..', 'bench', 'latex', 'vendor', 'TinyTeX');
+/** The node « Introduction » (in « Article MDL » only) labelled « cible »; MDL's summary refers to it. */
+const LINK_TARGET = 'Introduction', LINK_FROM = 'Minimum Description Length Principle (MDL)';
+const NODE_LINK = '.node-popup .latex-snippet-box .pdf-links a';
+const LINK_PREVIEW = `document.querySelector('.link-preview .link-preview-title')?.textContent ?? null`;
+/** The test base changed before the launch, as make-fixture.ts writes it: actions committed to its journal. */
+function seedBase(data, edit) {
+  const store = LocalStore.open(data, { pc: 'fixture' });
+  try {
+    const s = store.loadState();
+    const byTitle = (t) => [...s.nodes.values()].find((n) => n.title === t && n.trashedAt === undefined).id;
+    for (const a of edit(s, byTitle)) store.commit(a);
+  } finally {
+    store.close();
+  }
+}
 
 const TWO_PCS = {
   name: 'synchronisation entre deux PC (plan 5a, tâche 7)',
@@ -2819,6 +2838,86 @@ const SCENARIOS = [
       await page.press('Escape', 'Escape', 27);
       if (!(await page.until(`!document.querySelector('aside.health')`))) throw new Error('Échap ne ferme pas le panneau');
     },
+  },  {
+    // Plan 6b, D5 (task 6, step 4): a link to a node in a compiled summary. « Introduction » (in « Article MDL » only) is
+    // labelled « cible », MDL's summary says \ref{cible}; the lobby is shown. Hovered linkPreviewDelayMs (400 ms), the link
+    // shows the node's preview, gone when the pointer leaves it, and when the pop-up that carries it closes; right-clicked,
+    // its menu, whose entry leaves that pop-up open; « Importer ici » puts the node down in the lobby by a click; Ctrl+Z.
+    name: 'liens d’un résumé compilé : aperçu au survol, parti à la sortie et à la fermeture du pop-up ; menu du clic droit ; « Importer ici », Ctrl+Z',
+    env: { CIRRUS_VIEW: '0,140,1', CIRRUS_TINYTEX: TINYTEX },
+    skip: () => (existsSync(TINYTEX) ? null : `pas de TinyTeX dans ${TINYTEX} (la TinyTeX du banc, bench/latex, compile les résumés)`),
+    prepare: (data) => seedBase(data, (s, byTitle) => {
+      const target = byTitle(LINK_TARGET);
+      const a = editNode(s, target, { tags: [...s.nodes.get(target).tags, { key: 'label', value: 'cible' }] });
+      return [a, editNode(s, byTitle(LINK_FROM), { summary: String.raw`Voir \ref{cible}, dans l’article.` })];
+    }),
+    async run(page, base) {
+      const centre = await graphCentre(page), mdl = { x: centre.x + 175, y: centre.y };
+      const lobby = base(`SELECT id FROM plans WHERE json_extract(json, '$.type') = 'lobby'`)[0].id;
+      const target = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = ${sql(LINK_TARGET)}`)[0].id;
+      const POPUP = `document.querySelector('.node-popup input.title')?.value === ${JSON.stringify(LINK_FROM)}`;
+      /** MDL's pop-up, its summary compiled (the first compilation of a launch takes seconds): the centre of its link. */
+      const openLink = async () => {
+        await openPopup(page, mdl, LINK_FROM);
+        if (!(await page.until(`!!document.querySelector('${NODE_LINK}')`, 90_000))) {
+          throw new Error(`le résumé compilé de MDL ne montre pas de lien : ${await page.evaluate(`document.querySelector('.node-popup .latex-snippet-box')?.textContent ?? '(pas de résumé compilé)'`)}`);
+        }
+        await page.evaluate(`document.querySelector('${NODE_LINK}').scrollIntoView({ block: 'center' })`);
+        await sleep(300);
+        return page.centre(NODE_LINK, '');
+      };
+      /** The pointer on the link: no preview before the delay; « Introduction »'s after it, with its plan. */
+      const hover = async (link, what) => {
+        const t0 = Date.now();
+        await page.move(link.x, link.y);
+        const early = await page.evaluate(LINK_PREVIEW), dt = Date.now() - t0;
+        if (early !== null && dt < 380) throw new Error(`${what} : l’aperçu paraît avant linkPreviewDelayMs (${dt} ms)`);
+        if (!(await page.until(`${LINK_PREVIEW} === ${JSON.stringify(LINK_TARGET)}`, 3000))) throw new Error(`${what} : pas d’aperçu « ${LINK_TARGET} » au survol du lien (${await page.evaluate(LINK_PREVIEW)})`);
+        const plans = await page.evaluate(`document.querySelector('.link-preview .link-preview-plans')?.textContent`);
+        if (plans !== 'Article MDL') throw new Error(`${what} : l’aperçu dit les plans « ${plans} »`);
+      };
+
+      // 1, 2. The preview after the delay; the pointer off the link (on the pop-up's title), it goes.
+      let link = await openLink();
+      await hover(link, 'au premier survol');
+      const title = await page.centre('.node-popup input.title', '');
+      await page.move(title.x, title.y);
+      if (!(await page.until(`${LINK_PREVIEW} === null`, 1000))) throw new Error('l’aperçu reste quand le pointeur quitte le lien');
+      // The pop-up closed while the preview shows, the pointer still where the link was: no press nor key (which hide a
+      // preview by themselves) — its × clicked by the page, as a closing from elsewhere would.
+      await hover(link, 'au second survol');
+      await page.evaluate(`document.querySelector('.node-popup > header .close').click()`);
+      if (!(await page.until(`!document.querySelector('.node-popup')`))) throw new Error('le pop-up de MDL ne se ferme pas');
+      if (!(await page.until(`${LINK_PREVIEW} === null`, 1000))) throw new Error('l’aperçu reste après la fermeture du pop-up qui porte le lien');
+
+      // 3. The right click: the link's menu, « Introduction » in « Article MDL » only; its entry leaves the pop-up open.
+      link = await openLink();
+      for (let i = 0; i < 5 && !(await page.until(`!!document.querySelector('.link-menu .context-menu')`, 1000)); i++) await page.click(link.x, link.y, 'right');
+      const menu = await page.evaluate(`[...document.querySelectorAll('.link-menu .context-menu button')].map((b) => b.textContent)`);
+      const MENU = ['Ouvrir le pop-up', 'Voir dans « Article MDL »', 'Importer ici'];
+      if (JSON.stringify(menu) !== JSON.stringify(MENU)) throw new Error(`le menu du lien : ${JSON.stringify(menu)}`);
+      if (await page.evaluate(LINK_PREVIEW) !== null) throw new Error('l’aperçu reste avec le menu du lien');
+      const item = await page.centre('.link-menu .context-menu button', '^Importer ici$');
+      await page.click(item.x, item.y);
+      if (!(await page.until(`!document.querySelector('.link-menu')`))) throw new Error('le menu du lien reste après « Importer ici »');
+      await sleep(300);
+      if (!(await page.evaluate(POPUP))) throw new Error('« Importer ici » ferme le pop-up qui porte le lien');
+
+      // 4. The title follows the cursor over the graph; a click in the lobby's free left puts « Introduction » down there.
+      const at = { x: centre.x - 650, y: centre.y + 300 };
+      await page.move(at.x - 40, at.y - 20);
+      await page.move(at.x, at.y);
+      if (!(await page.until(`document.querySelector('.ghost')?.textContent === ${JSON.stringify(LINK_TARGET)}`))) throw new Error(`le titre ne suit pas le curseur : ${await ghostText(page)}`);
+      if (placementOf(base, lobby, target) !== null) throw new Error('« Introduction » est dans le lobby avant le clic');
+      await page.click(at.x, at.y);
+      if (!(await until(() => placementOf(base, lobby, target) !== null))) throw new Error('le clic ne pose pas « Introduction » dans le lobby');
+      if (await page.evaluate(`!!document.querySelector('.ghost')`)) throw new Error('le fantôme reste après la pose');
+      const p = placementOf(base, lobby, target);
+      if (Math.abs(p.x + 650) > 40 || Math.abs(p.y - 440) > 40) throw new Error(`« Introduction » n’est pas posé au clic : ${JSON.stringify(p)}`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => placementOf(base, lobby, target) === null))) throw new Error('Ctrl+Z ne retire pas « Introduction » du lobby');
+      if (base(`SELECT 1 FROM placements WHERE node = '${target}'`).length !== 1) throw new Error('Ctrl+Z touche à la place de « Introduction » dans « Article MDL »');
+    },
   },
 ];
 
@@ -2867,6 +2966,12 @@ for (const s of chosen) {
     failed += await runSuite(s);
     continue;
   }
+  // `skip`: why the scenario cannot be played on this machine (TinyTeX absent), said instead of a failure.
+  const skip = s.skip?.();
+  if (skip) {
+    console.log(`saut ${s.name} : ${skip}`);
+    continue;
+  }
   total++;
   const data = mkdtempSync(join(tmpdir(), 'cirrus-interface-'));
   const profile = mkdtempSync(join(tmpdir(), 'cirrus-interface-profil-'));
@@ -2874,6 +2979,8 @@ for (const s of chosen) {
   try {
     // `empty`: a new base, its lobby only (the app makes it), instead of the test base.
     if (!s.empty) execFileSync(process.execPath, [join(appDir, '..', 'fixtures', 'scripts', 'make-fixture.ts'), data], { stdio: 'ignore' });
+    // `prepare`: the test base changed before the launch (seedBase).
+    s.prepare?.(data);
     if (s.settings) writeFileSync(join(data, 'settings.json'), JSON.stringify(s.settings), 'utf8');
     app = await launch(data, profile, s.env);
     await s.run(app.page, reader(data), data, app);
