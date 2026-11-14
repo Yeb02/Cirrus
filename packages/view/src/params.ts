@@ -38,6 +38,9 @@ export interface RenderParams {
   groupLightnessRange: Range;
   groupChroma: number;
   groupHues: number[];
+  /** The palette a group's colour is chosen in (plan 6b, D4): hues at groupLightness and groupPaletteChroma. */
+  groupPaletteHues: number[];
+  groupPaletteChroma: number;
   groupTitleOpenScale: number;
   groupTitleClosedScale: number;
   /** Fold range over which a group's title moves from the top of its envelope to its centre. */
@@ -384,6 +387,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   groupChroma: 0.09,
   // The maquette's blue (#34568f) and violet (#5a4690) first, then other cool hues.
   groupHues: [262, 295, 230, 320, 200, 275],
+  groupPaletteHues: [15, 45, 75, 105, 135, 165, 195, 225, 255, 285, 315, 345],
+  groupPaletteChroma: 0.12,
   groupTitleOpenScale: 0.95,
   groupTitleClosedScale: 1.2,
   groupTitleSwap: [0.45, 0.95],
@@ -614,6 +619,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   range('groupLightnessRange', 'Bornes de luminosité des groupes', A, 'Groupes', 0, 1, 0.01),
   num('groupChroma', 'Saturation des groupes (OKLCH)', A, 'Groupes', 0, 0.3, 0.005),
   { key: 'groupHues', label: 'Teintes des groupes de premier niveau (degrés)', section: A, group: 'Groupes', kind: 'list', min: 0, max: 360, step: 1 },
+  { key: 'groupPaletteHues', label: 'Teintes de la palette des couleurs de groupe (degrés)', section: A, group: 'Groupes', kind: 'list', min: 0, max: 360, step: 1 },
+  num('groupPaletteChroma', 'Saturation de la palette des couleurs de groupe (OKLCH)', A, 'Groupes', 0, 0.3, 0.005),
   num('groupTitleOpenScale', 'Taille du titre d’un groupe ouvert', A, 'Groupes', 0.3, 3, 0.05),
   num('groupTitleClosedScale', 'Taille du titre d’un groupe replié', A, 'Groupes', 0.3, 3, 0.05),
   range('groupTitleSwap', 'Passage du titre d’un groupe du haut au centre (repli de 0 à 1)', A, 'Groupes', 0, 1, 0.01),

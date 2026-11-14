@@ -1,11 +1,11 @@
 import {
-  type Action, type Anchor, connKind, connTrashed, type FileRef, type Id, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId,
-  type PlanRec, type State, subjectOf,
+  type Action, type Anchor, connKind, connTrashed, type FileRef, type Id, isGroupIn, KNOWLEDGE, memberOf, type NodeRec, nodeRow, placedIn, planId,
+  placementKey, type PlanRec, type State, subjectOf,
 } from '@cirrus/core';
 import type { RenderParams } from '@cirrus/view';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistorySummary } from '../../main/files.ts';
-import { type Build, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
+import { type Build, groupColorBuild, removeFileBuild, renameBuild, renameFileBuild, summaryBuild, tagsBuild } from '../actions.ts';
 import { type AnnotationEntry, type AnnotationIndex, type AnnotationSource, annotationSource, titleChars } from '../files/annotations.ts';
 import { type FileKind, fileKind, fileUrl, formatSize } from '../files/kind.ts';
 import { checkFileName, conflictOriginal } from '../files/merge.ts';
@@ -15,6 +15,7 @@ import {
 } from '../files/nodeFiles.ts';
 import type { LatexRegistry, Origin } from '../latex/registry.ts';
 import { ContextMenu } from './ContextMenu.tsx';
+import { ColorChoices } from './GroupColorPicker.tsx';
 import { LatexField } from './latex/LatexField.tsx';
 import { FloatingPanel, type Frame } from './panels/FloatingPanel.tsx';
 import { Tags } from './Tags.tsx';
@@ -346,6 +347,8 @@ export function NodePopup(props: {
   onEdit(build: Build): Promise<boolean>; onOpenPlan(plan: Id): void; files: NodeFiles; onOpenFile: OpenFile; onCompare(original: string, copy: string): void;
   registry: LatexRegistry | null; onNodeLink(node: Id): void; annotations: AnnotationIndex | null; onReveal: RevealAnnotation;
   onDeleteAnnotation(node: Id): void; onGoToNode?(): void;
+  /** The plan shown: a group's colour there is chosen in its pop-up (plan 6b, D4). */
+  plan?: Id;
 }) {
   const { id, found: n, state: s } = props;
   const latestProps = useRef(props);
@@ -407,6 +410,15 @@ export function NodePopup(props: {
         />
         <h4>Tags</h4>
         <Tags s={s} scope="node" tags={n.tags} suggested={props.params.tagSuggestions} onChange={(change) => props.onEdit(tagsBuild(id, change))} />
+        {props.plan !== undefined && isGroupIn(s, props.plan, id) && (
+          <>
+            <h4>Couleur dans ce plan</h4>
+            <ColorChoices
+              color={s.placements.get(placementKey(props.plan, id))?.color ?? null} params={props.params}
+              onPick={(c) => { void props.onEdit(groupColorBuild(props.plan!, id, c)); }}
+            />
+          </>
+        )}
         <h4>Métadonnées</h4>
         <dl className="meta">
           <dt>Créé le</dt><dd className={fresh(h?.created)}>{date(h?.created)}</dd>

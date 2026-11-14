@@ -147,6 +147,9 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
       jumps.moveTo({ ...e.renderer.camera, x: sc.items[dest].x, y: sc.items[dest].y });
       break;
     }
+    case 'groupColor':
+      if (clicked >= 0) graph.setColorPicker({ x: at.x, y: at.y, plan: sc.plan.id, node: sc.items[clicked].id });
+      break;
     case 'seeElsewhere': {
       // The plans it is shown in other than this one (plan 6a, D3): one, a jump there; several, a question lists them.
       const target = line !== null ? { kind: 'connection' as const, id: line } : clickedId !== null ? { kind: 'node' as const, id: clickedId } : null;

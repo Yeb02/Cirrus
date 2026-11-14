@@ -389,7 +389,7 @@ export function Panels(props: {
               onOpenFile={(name, how) => (how === 'full' ? props.onFullScreen(node, name) : openFile(node, name, p.rect))}
               onCompare={(original, copy) => props.onCompare(node, original, copy)}
               annotations={props.annotations} onReveal={(pdf, name, anchor) => openFile(pdf, name, p.rect, anchor)}
-              onDeleteAnnotation={props.onDeleteAnnotation}
+              onDeleteAnnotation={props.onDeleteAnnotation} plan={props.plan}
             />
           </PanelBoundary>
         );

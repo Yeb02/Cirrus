@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { chosenPalette, groupPalette, hexToRgb, mixRgb, oklchToRgb, rgbToHex, rgbToOklch } from '../src/color.ts';
+import { chosenPalette, groupPalette, paletteColors, hexToRgb, mixRgb, oklchToRgb, rgbToHex, rgbToOklch } from '../src/color.ts';
 import { DEFAULT_PARAMS } from '../src/params.ts';
 
 test('OKLCH : blanc, noir', () => {
@@ -76,5 +76,15 @@ test('chosenPalette (Review Focus 2) : noir, blanc et un vert saturé donnent de
     const L = [0, 1, 2, 3].map((d) => rgbToOklch(chosenPalette(color, d, p).closed).L);
     expect(rgbToHex(chosenPalette(color, 0, p).closed), color).toBe(color);
     for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) expect(Math.abs(L[i] - L[j]), `${color} ${i}/${j}`).toBeGreaterThanOrEqual(0.03);
+  }
+});
+
+test('paletteColors (D4) : 12 couleurs #rrggbb distinctes, à la luminosité des groupes', () => {
+  const c = paletteColors(DEFAULT_PARAMS);
+  expect(c).toHaveLength(12);
+  expect(new Set(c).size).toBe(12);
+  for (const x of c) {
+    expect(x).toMatch(/^#[0-9a-f]{6}$/);
+    expect(Math.abs(rgbToOklch(hexToRgb(x)).L - DEFAULT_PARAMS.groupLightness)).toBeLessThan(0.02);
   }
 });

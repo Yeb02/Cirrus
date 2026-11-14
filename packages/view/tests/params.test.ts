@@ -492,3 +492,11 @@ test('le délai sans progrès d’une mise à jour forcée : un réglage avancé
   expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')?.groups).toEqual(['Synchronisation', 'Mises à jour']);
   expect(withOverrides({ updateStallMs: 1 }).updateStallMs).toBe(10_000);
 });
+
+test('la palette des couleurs de groupe (plan 6b, D4) : 12 teintes et leur saturation, deux réglages avancés de « Groupes », qui en a 16 (la limite)', () => {
+  expect(DEFAULT_PARAMS.groupPaletteHues).toEqual([15, 45, 75, 105, 135, 165, 195, 225, 255, 285, 315, 345]);
+  expect(DEFAULT_PARAMS.groupPaletteChroma).toBe(0.12);
+  expect(PARAM_SPECS.find((s) => s.key === 'groupPaletteHues')).toEqual({ key: 'groupPaletteHues', label: 'Teintes de la palette des couleurs de groupe (degrés)', section: 'avancé', group: 'Groupes', kind: 'list', min: 0, max: 360, step: 1 });
+  expect(PARAM_SPECS.find((s) => s.key === 'groupPaletteChroma')).toEqual({ key: 'groupPaletteChroma', label: 'Saturation de la palette des couleurs de groupe (OKLCH)', section: 'avancé', group: 'Groupes', kind: 'number', min: 0, max: 0.3, step: 0.005 });
+  expect(PARAM_SPECS.filter((s) => s.group === 'Groupes')).toHaveLength(16);
+});

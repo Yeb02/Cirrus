@@ -98,7 +98,7 @@ const firstSource = (c: ConnectionRec | null): Id | undefined => c?.members.find
 /** A drawn box's own fields (a group's centre aside: it is derived). */
 const sameOwn = (a: SceneItem, b: SceneItem): boolean =>
   a.title === b.title && a.lines === b.lines && a.k === b.k && a.halfW === b.halfW && a.halfH === b.halfH && a.node === b.node && a.phantom === b.phantom
-  && a.connection === b.connection;
+  && a.connection === b.connection && a.color === b.color;
 
 const sameShape = (a: SceneItem, b: GroupShape): boolean =>
   a.x === b.x && a.y === b.y && a.pad === b.pad && a.maxChildK === b.maxChildK && a.hull!.length === b.hull.length
@@ -632,7 +632,7 @@ export function updateScene(prev: PlanScene, s: State, ops: readonly Op[], measu
         came.push(r);
       } else if (!sameOwn(u.items[slot], fresh) || (u.items[slot].kind === 'node' && (u.items[slot].x !== fresh.x || u.items[slot].y !== fresh.y))) {
         const it = u.mut(slot);
-        it.title = fresh.title; it.lines = fresh.lines; it.k = fresh.k; it.halfW = fresh.halfW; it.halfH = fresh.halfH;
+        it.title = fresh.title; it.lines = fresh.lines; it.k = fresh.k; it.halfW = fresh.halfW; it.halfH = fresh.halfH; it.color = fresh.color;
         if (it.kind === 'node') { it.x = fresh.x; it.y = fresh.y; }
         reshaped.add(slot);
       }

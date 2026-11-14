@@ -71,7 +71,16 @@ test('une connexion disposée à la main peut retrouver sa disposition automatiq
 
 test('clic droit sur le fond d’un groupe ouvert : le menu de ce groupe, puis de quoi créer ou coller (spec 9.1, I11 de la relecture 3b)', () => {
   const m = actions(menuFor(s, sc, { kind: 'background' }, emptySelection(), true, ids.nodes.groupeML));
-  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'hide', 'delete', 'newNode', 'paste', 'importPublication', 'importBib', 'trash', 'tagRegistry']);
+  // A group's menu has « Couleur… » (plan 6b, D4).
+  expect(m).toEqual(['connect', 'scaleDown', 'scaleUp', 'rename', 'groupColor', 'hide', 'delete', 'newNode', 'paste', 'importPublication', 'importBib', 'trash', 'tagRegistry']);
+});
+
+test('« Couleur… » (plan 6b, D4) : au menu d’un groupe seulement, ni d’un nœud simple ni d’une connexion', () => {
+  const group = menuFor(s, sc, item(sc, ids.nodes.groupeML), emptySelection(), false);
+  expect(group.find((x) => x.action === 'groupColor')?.label).toBe('Couleur…');
+  expect(actions(menuFor(s, sc, item(sc, ids.nodes.mdl), emptySelection(), false))).not.toContain('groupColor');
+  const line = { kind: 'connection' as const, conn: -1, key: null, id: ids.connections.twoToTwo, part: 'main' as const };
+  expect(actions(menuFor(s, sc, line, emptySelection(), false))).not.toContain('groupColor');
 });
 
 test('« Voir dans un autre plan » (plan 6a, D3) : proposé à un nœud ou à une connexion seulement s’il est dans un autre plan — le lobby compte —, libellé en français', () => {

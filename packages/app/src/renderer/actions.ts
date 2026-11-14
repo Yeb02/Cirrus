@@ -1,7 +1,7 @@
 import {
   type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
   editConnection, editNode, exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
-  removeMember, renameEnumValue, renameTagKey, restoreConnection, restoreNode, type Role, setBranches, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef,
+  removeMember, renameEnumValue, renameTagKey, restoreConnection, restoreNode, type Role, setBranches, setGroupColor, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef,
   type TagValue, truncateLabel, type Vec2,
 } from '@cirrus/core';
 import {
@@ -641,6 +641,11 @@ export function removeFileBuild(node: Id, name: string): Build {
 /** A connection's layout in this plan (spec 8.5): set by its handles, or null for the automatic one. */
 export function layoutBuild(plan: Id, connection: Id, layout: Layout | null): Build {
   return (st) => setLayout(st, plan, connection, layout);
+}
+
+/** A group's colour in this plan (plan 6b, D4): `#rrggbb`, or null for « Automatique ». */
+export function groupColorBuild(plan: Id, node: Id, color: string | null): Build {
+  return (st) => setGroupColor(st, plan, node, color);
 }
 
 /**

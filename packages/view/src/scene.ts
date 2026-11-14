@@ -56,6 +56,8 @@ export interface SceneItem {
   pad?: number;
   /** Group: largest member step, which drives its fold (spec 8.2). */
   maxChildK?: number;
+  /** The colour its placement carries in this plan (plan 6b, D4): a group shows it, its subgroups its shades. */
+  color?: string;
 }
 
 interface SceneEnd { item: number; role: Role; key: Id; dashed: boolean }
@@ -388,7 +390,7 @@ export function nodeItem(n: NodeRec, pl: Placement, linesOf: (t: string) => numb
   const l = linesOf(n.title), s = scaleOf(pl.k, p);
   return {
     id: n.id, kind: 'node', node: n.id, title: n.title, lines: l, x: pl.x, y: pl.y, k: pl.k, halfW: halfWidth(s, p), halfH: halfHeight(l, s, p), parent: -1, children: [],
-    depth: 0, badge: false,
+    depth: 0, badge: false, color: pl.color,
   };
 }
 

@@ -727,3 +727,14 @@ button, input, select { font: inherit; color: var(--ink); }
 .trash .item .title { display: block; font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
 .trash .item .meta { display: block; margin: 0; font-size: 12px; }
 .trash .item .restore { flex: none; padding: 3px 8px; font-size: 12.5px; }
+
+/* A group's colour (plan 6b, D4): the palette's swatches, « Automatique », « Autre… » (the system's picker). */
+.color-choices { display: flex; flex-direction: column; gap: 6px; }
+.color-choices .swatches { display: grid; grid-template-columns: repeat(6, 22px); gap: 5px; }
+.color-choices .swatch { width: 22px; height: 22px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.color-choices .swatch.on { border-color: var(--ink); }
+.color-choices .auto, .color-choices .other { align-self: flex-start; padding: 3px 8px; border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 6px; background: none; cursor: pointer; }
+.color-choices .auto.on, .color-choices .other.on { border-color: rgba(143, 184, 255, 0.75); }
+.color-choices .other { position: relative; }
+.color-choices .other input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.color-picker { padding: 8px; }

@@ -783,6 +783,41 @@ const SCENARIOS = [
     },
   },
   {
+    // Plan 6b, D4: a group's colour in this plan, from its menu. The background of « Complexité et induction », near MDL (a
+    // member, 175 px right of the centre), opens the group's menu first; « Couleur… », the third swatch: its placement
+    // carries it; « Automatique » takes it away; Ctrl+Z gives it back.
+    name: 'couleur d’un groupe : « Couleur… », une pastille, « Automatique », Ctrl+Z',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page, base) {
+      const { lobby } = idsOf(base);
+      const complexite = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Complexité et induction'`)[0].id;
+      const centre = await graphCentre(page), mdl = { x: centre.x + 175, y: centre.y };
+      await openPopup(page, mdl, 'Minimum Description Length Principle (MDL)');
+      await page.press('Escape', 'Escape', 27);
+      const items = () => page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      let found = false;
+      for (const dy of [45, -45, 70, -70, 95]) {
+        await page.click(mdl.x, mdl.y + dy, 'right');
+        if ((await page.until(`!!document.querySelector('.context-menu')`, 1500)) && (await items()).includes('Couleur…')) { found = true; break; }
+        await page.press('Escape', 'Escape', 27);
+      }
+      if (!found) throw new Error('aucun clic droit autour de MDL n’ouvre le menu de son groupe avec « Couleur… »');
+      const entry = await page.centre('.context-menu button', '^Couleur…$');
+      await page.click(entry.x, entry.y);
+      if (!(await page.until(`document.querySelectorAll('.color-picker .swatch').length === 12`))) throw new Error('le sélecteur n’a pas ses 12 pastilles');
+      const third = await page.evaluate(`document.querySelectorAll('.color-picker .swatch')[2].title`);
+      await page.evaluate(`document.querySelectorAll('.color-picker .swatch')[2].click()`);
+      if (!(await until(() => placementOf(base, lobby, complexite)?.color === third))) throw new Error(`le placement du groupe ne porte pas ${third} : ${JSON.stringify(placementOf(base, lobby, complexite))}`);
+      await page.evaluate(`[...document.querySelectorAll('.color-picker button')].find((b) => b.textContent === 'Automatique').click()`);
+      if (!(await until(() => placementOf(base, lobby, complexite) && placementOf(base, lobby, complexite).color === undefined))) throw new Error('« Automatique » ne retire pas la couleur');
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('.color-picker')`))) throw new Error('Échap ne ferme pas le sélecteur');
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => placementOf(base, lobby, complexite)?.color === third))) throw new Error('Ctrl+Z ne rend pas la couleur');
+    },
+  },
+  {
     // Point 8 of 2026-11-11: « Tout réinitialiser » asks first. « Non » has the focus, Entrée gives it; Échap gives up too;
     // « Oui, tout réinitialiser » brings every default back (the factor, 3 in the test's settings, is no longer written).
     name: 'réglages : « Tout réinitialiser » demande confirmation ; Entrée et Échap disent non ; « Oui » réinitialise',

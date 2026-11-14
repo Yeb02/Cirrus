@@ -6,7 +6,7 @@ import type { Selection } from './selection.ts';
 
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
-  | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'importBib' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection' | 'seeElsewhere' | 'trash' | 'tagRegistry';
+  | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'importBib' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection' | 'seeElsewhere' | 'trash' | 'tagRegistry' | 'groupColor';
 
 export interface MenuItem { action: MenuAction; label: string }
 
@@ -34,6 +34,7 @@ const LABELS: Record<MenuAction, string> = {
   seeElsewhere: 'Voir dans un autre plan',
   trash: 'Corbeille…',
   tagRegistry: 'Registre des tags…',
+  groupColor: 'Couleur…',
 };
 
 /**
@@ -77,7 +78,10 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
   if (sel.items.has(it.id) && sel.items.size > 1) return make(['copy', 'hide', 'scaleDown', 'scaleUp', 'delete']);
   const actions: MenuAction[] = ['connect'];
   if (it.parent >= 0) actions.push('exclude');
-  actions.push('scaleDown', 'scaleUp', 'rename', 'hide', 'delete');
+  actions.push('scaleDown', 'scaleUp', 'rename');
+  // A group's colour in this plan (plan 6b, D4).
+  if (it.kind === 'group') actions.push('groupColor');
+  actions.push('hide', 'delete');
   const lobby = [...s.plans.values()].find((p) => p.type === 'lobby');
   if (lobby && scene.plan.type !== 'lobby' && !s.placements.has(placementKey(lobby.id, it.id))) actions.push('addToLobby');
   if (plansShowing(s, 'node', it.id).some((p) => p !== scene.plan.id)) actions.push('seeElsewhere');

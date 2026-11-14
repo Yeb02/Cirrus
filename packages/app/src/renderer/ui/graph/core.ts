@@ -20,6 +20,9 @@ export interface Engine { gl: Gl; renderer: PlanRenderer; font: FontData }
 /** The title editor over the graph (spec 12), at a screen point: `done` gets the title typed, null if given up. */
 export interface Editor { x: number; y: number; width: number; initial: string; done(title: string | null): void }
 
+/** A group's colour being chosen (plan 6b, D4): where the chooser is, and the group in its plan. */
+export interface ColorPicking { x: number; y: number; plan: Id; node: Id }
+
 /** The visible set of a renderer that has drawn nothing yet: a preview's split made for it is built whole. */
 export const NOTHING_SHOWN: VisibleSet = { items: [], groups: [], connections: [], signature: '' };
 export const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -43,6 +46,8 @@ export interface Graph {
   selectionRef: RefObject<Selection>;
   setSelection: Dispatch<SetStateAction<Selection>>;
   setEditor: Dispatch<SetStateAction<Editor | null>>;
+  /** A group's colour chooser at a point of the graph (« Couleur… », plan 6b, D4); null closes it. */
+  setColorPicker: Dispatch<SetStateAction<ColorPicking | null>>;
   gestures: RefObject<GestureMachine>;
   /** Whether items are being dragged (spec 9.1): GraphView's drag, previewed by its drawing loop. */
   dragging(): boolean;

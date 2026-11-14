@@ -1,7 +1,7 @@
 import type { ConnectionLayout, Id, Vec2 } from '@cirrus/core';
 import Flatbush from 'flatbush';
 import type { Camera } from './camera.ts';
-import { groupPalette } from './color.ts';
+import { chosenPalette, groupPalette } from './color.ts';
 import type { FloatList, IntList } from './geometry/arrays.ts';
 import { type BundleEnd, type BundleGeometry, bundleGeometry } from './geometry/bundle.ts';
 import { NO_PARENT } from './geometry/envelope.ts';
@@ -15,10 +15,15 @@ import { placeTitle, type Rect, type TitleSide } from './titles.ts';
 import type { VisibleConnection, VisibleSet } from './visibility.ts';
 
 /**
- * A group's colours (spec 8.4): top-level groups take groupHues in their order of creation (the scene's hue ranks),
- * their subgroups the same hue with a lightness offset per level.
+ * A group's colours (spec 8.4): the colour chosen in this plan by the nearest group carrying one, itself included, in
+ * its shade for the levels between them (plan 6b, D4); without one, top-level groups take groupHues in their order of
+ * creation (the scene's hue ranks), their subgroups the same hue with a lightness offset per level.
  */
 export function groupColors(scene: PlanScene, g: number, p: RenderParams): { open: Rgb; closed: Rgb } {
+  for (let a = g, d = 0; a >= 0; a = scene.items[a].parent, d++) {
+    const c = scene.items[a].color;
+    if (c !== undefined) return chosenPalette(c, d, p);
+  }
   let root = g;
   while (scene.items[root].parent >= 0) root = scene.items[root].parent;
   const hue = p.groupHues[(scene.hues.get(root) ?? 0) % p.groupHues.length];

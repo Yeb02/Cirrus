@@ -80,3 +80,8 @@ export function chosenPalette(color: string, depth: number, p: RenderParams): { 
   const [lo, hi] = p.groupLightnessRange;
   return opened(oklchToRgb(bounced(Math.min(hi, Math.max(lo, L)), depth, p), C, h), p);
 }
+
+/** The palette a group's colour is chosen in (plan 6b, D4): one `#rrggbb` per groupPaletteHues, at groupLightness and groupPaletteChroma. */
+export function paletteColors(p: RenderParams): string[] {
+  return p.groupPaletteHues.map((h) => rgbToHex(oklchToRgb(p.groupLightness, p.groupPaletteChroma, h)));
+}

@@ -1,13 +1,14 @@
-import type { State } from '@cirrus/core';
+import { applyOps, setGroupColor, type State } from '@cirrus/core';
 import type { FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { groupPalette } from '../src/color.ts';
+import { chosenPalette, groupPalette, hexToRgb } from '../src/color.ts';
 import { groupColors } from '../src/frame.ts';
 import { offsetPolygon } from '../src/geometry/hull.ts';
 import { sampleBranch } from '../src/geometry/ribbon.ts';
 import { simpleBranches } from '../src/geometry/simple.ts';
 import { CURVE_AT, CURVE_FLOATS, SIMPLE_INTS, simpleEnds } from '../src/instances.ts';
 import { buildScene, type PlanScene } from '../src/scene.ts';
+import { updateScene } from '../src/sceneUpdate.ts';
 import { placeTitle } from '../src/titles.ts';
 import { fixture, frameAt, measure, P } from './helpers.ts';
 
@@ -113,4 +114,36 @@ test('le titre d’un groupe ouvert se touche comme le groupe : on le clique, on
   const size = P.baseFontPx * P.factor ** g.k * P.groupTitleOpenScale;
   const y = top - size * P.groupTitleOffset;
   expect(hits.hit(g.x, y, cam.zoom)).toEqual({ kind: 'item', item: sc.byId.get(ids.nodes.groupeML), id: ids.nodes.groupeML });
+});
+
+test('la couleur choisie d’un groupe (plan 6b, D4) : il la montre exacte, ses sous-groupes ses nuances ; un sous-groupe coloré l’emporte et transmet la sienne ; sans couleur, rien ne change', () => {
+  const { s: st, ids: id } = fixture();
+  const lobby = id.plans.lobby, before = buildScene(st, lobby, measure, P);
+  const at = (scene: PlanScene, x: string) => scene.byId.get(x)!;
+  const depth = (scene: PlanScene, x: string) => scene.items[at(scene, x)].depth;
+  applyOps(st, setGroupColor(st, lobby, id.nodes.groupeTheorie, '#3a7bd5').ops);
+  const one = buildScene(st, lobby, measure, P);
+  expect(groupColors(one, at(one, id.nodes.groupeTheorie), P).closed).toEqual(hexToRgb('#3a7bd5'));
+  const d = depth(one, id.nodes.groupeInduction) - depth(one, id.nodes.groupeTheorie);
+  expect(groupColors(one, at(one, id.nodes.groupeInduction), P)).toEqual(chosenPalette('#3a7bd5', d, P));
+  // Another top-level group keeps its own.
+  expect(groupColors(one, at(one, id.nodes.groupeML), P)).toEqual(groupColors(before, at(before, id.nodes.groupeML), P));
+  applyOps(st, setGroupColor(st, lobby, id.nodes.groupeInduction, '#d5503a').ops);
+  const two = buildScene(st, lobby, measure, P);
+  expect(groupColors(two, at(two, id.nodes.groupeInduction), P).closed).toEqual(hexToRgb('#d5503a'));
+  applyOps(st, setGroupColor(st, lobby, id.nodes.groupeTheorie, null).ops);
+  applyOps(st, setGroupColor(st, lobby, id.nodes.groupeInduction, null).ops);
+  const none = buildScene(st, lobby, measure, P);
+  for (const g of [id.nodes.groupeTheorie, id.nodes.groupeInduction, id.nodes.groupeML]) expect(groupColors(none, at(none, g), P)).toEqual(groupColors(before, at(before, g), P));
+});
+
+test('la couleur d’un groupe suit l’action dans la scène tenue à jour : l’élément est redessiné (reshaped)', () => {
+  const { s: st, ids: id } = fixture();
+  const lobby = id.plans.lobby, scene = buildScene(st, lobby, measure, P), g = scene.byId.get(id.nodes.groupeTheorie)!;
+  const ops = setGroupColor(st, lobby, id.nodes.groupeTheorie, '#3a7bd5').ops;
+  applyOps(st, ops);
+  const u = updateScene(scene, st, ops, measure, P);
+  expect(u.scene.items[u.scene.byId.get(id.nodes.groupeTheorie)!].color).toBe('#3a7bd5');
+  expect(groupColors(u.scene, u.scene.byId.get(id.nodes.groupeTheorie)!, P).closed).toEqual(hexToRgb('#3a7bd5'));
+  expect(u.changes.items).toContain(g);
 });

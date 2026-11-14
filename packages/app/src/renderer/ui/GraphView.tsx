@@ -1,4 +1,4 @@
-import type { Action, Id, State, Vec2 } from '@cirrus/core';
+import { type Action, type Id, placementKey, type State, type Vec2 } from '@cirrus/core';
 import {
   type Bounds, type Camera, emptySelection, fitBounds, fitItem, GestureMachine, type Hit, type Input, inRectangle, type Intent, navigate,
   type NavInput,
@@ -17,15 +17,16 @@ import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
-import { absentBuild, ALREADY_HERE, type Build } from '../actions.ts';
+import { absentBuild, ALREADY_HERE, type Build, groupColorBuild } from '../actions.ts';
 import { ContextMenu, Ghost, TitleEditor } from './ContextMenu.tsx';
+import { GroupColorPicker } from './GroupColorPicker.tsx';
 import { AskDialog } from './Dialogs.tsx';
 import { nodeOpenedBy, popupOf } from './panels/Panels.tsx';
 import type { Refusal } from '../files/nodeFiles.ts';
 import { PublicationDialog } from './PublicationDialog.tsx';
 import { BIB_WAITING, useBibImport } from './graph/bibImport.ts';
 import { useCopyPaste } from './graph/copyPaste.ts';
-import { type Editor, type Engine, type Graph, NOTHING_SHOWN } from './graph/core.ts';
+import { type ColorPicking, type Editor, type Engine, type Graph, NOTHING_SHOWN } from './graph/core.ts';
 import { useGraphDrop } from './graph/drop.ts';
 import { useHover } from './graph/hover.ts';
 import { ignored, measuring, replayPointer } from './graph/launch.ts';
@@ -164,6 +165,7 @@ export function GraphView(props: {
   const graphPress = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; hit: Hit; items: MenuItem[] } | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [colorPicker, setColorPicker] = useState<ColorPicking | null>(null);
   /** A stub being dragged to a place of its own (spec 8.5). */
   const stubDrag = useRef<{ connection: Id; node: Id; title: string } | null>(null);
   /**
@@ -282,7 +284,7 @@ export function GraphView(props: {
 
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
-    root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, gestures,
+    root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, setColorPicker, gestures,
     dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, onTrash: props.onTrash, redraw, notify, edit, indexOf, hitAt, local,
     restoreScene, moveCamera, feed,
     busy, busyReason, tabsRef,
@@ -911,6 +913,13 @@ export function GraphView(props: {
       <Tooltip tip={tip} />
       {placement.ghost && <Ghost x={placement.ghost.x} y={placement.ghost.y} text={placement.ghost.text} box={placement.ghost.box} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} onPick={(a) => pickMenuAction(graph, a, menu.hit, { x: menu.x, y: menu.y })} />}
+      {colorPicker && (
+        <GroupColorPicker
+          x={colorPicker.x} y={colorPicker.y} params={props.params}
+          color={stateRef.current.placements.get(placementKey(colorPicker.plan, colorPicker.node))?.color ?? null}
+          onPick={(c) => { void edit(groupColorBuild(colorPicker.plan, colorPicker.node, c)); }} onClose={() => setColorPicker(null)}
+        />
+      )}
       {editor && <TitleEditor x={editor.x} y={editor.y} width={editor.width} initial={editor.initial} onDone={(t) => { setEditor(null); editor.done(t); root.current?.focus(); }} />}
       {placement.line && <svg className="connect-line"><line x1={placement.line.x1} y1={placement.line.y1} x2={placement.line.x2} y2={placement.line.y2} /></svg>}
       {questions.question && <AskDialog q={questions.question} onClose={() => { questions.setQuestion(null); root.current?.focus(); }} />}

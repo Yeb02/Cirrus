@@ -601,6 +601,9 @@ export function setLayout(s: State, plan: Id, connection: Id, layout: Omit<Conne
 /** setGroupColor's refusal of a node that has no members in the plan. */
 export const NOT_A_GROUP = 'Ce nœud n’est pas un groupe dans ce plan.';
 
+/** Whether `node` is a group in `plan` (it has members there): what setGroupColor asks, for the interface to ask first. */
+export const isGroupIn = (s: State, plan: Id, node: Id): boolean => hasMembers(s, plan, node);
+
 /**
  * An operation held to its record's bounds before the draft writes it (plan 6b, D1): parseOp's check, the one the
  * server and the sending make; its refusal, a CommandError.
