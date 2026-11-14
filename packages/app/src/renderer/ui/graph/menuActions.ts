@@ -14,7 +14,7 @@ import { OBJECT_GONE } from './jumps.ts';
  */
 export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: { x: number; y: number }): void {
   const {
-    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, onTagRegistry, onTrash, onAgenda, onSheets, redraw, notify, edit, tabsRef,
+    root, engine, sceneRef, paramsRef, stateRef, selectionRef, setSelection, setEditor, gestures, onOpenPlan, onTagRegistry, onTrash, onHealth, onAgenda, onSheets, redraw, notify, edit, tabsRef,
   } = graph;
   const { placement, copyPaste, questions, bib, publication, jumps } = graph;
   root.current?.focus({ preventScroll: true });
@@ -44,6 +44,9 @@ export function pickMenuAction(graph: Graph, action: MenuAction, hit: Hit, at: {
       break;
     case 'tagRegistry':
       onTagRegistry();
+      break;
+    case 'health':
+      onHealth();
       break;
     case 'trash':
       onTrash();

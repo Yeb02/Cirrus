@@ -38,9 +38,10 @@ export function fullDraft(t: FullTarget | null): ConsultationDraft | null {
 }
 
 /**
- * What App opens over the graph: the settings panel (`panel`), the tag registry's (`registryOpen`, plan 6a, D4) or the trash's
- * (`trashOpen`, D5) — one or the other, `openRegistry` and `openTrash` —, a file in full screen (`full`; a .tex's workbench,
- * plan 4b, D6; or a .tex compared with its conflict copy, plan 5b, D7), the preamble's full screen (`preambleOpen`, D5);
+ * What App opens over the graph: the settings panel (`panel`), the tag registry's (`registryOpen`, plan 6a, D4), the trash's
+ * (`trashOpen`, D5) or the graph's health (`healthOpen`, plan 6b, D8) — one of the three, `openRegistry`, `openTrash`,
+ * `openHealth` —, a file in full screen (`full`; a .tex's workbench, plan 4b, D6; or a .tex compared with its conflict
+ * copy, plan 5b, D7), the preamble's full screen (`preambleOpen`, D5);
  * and the steps made in a file's full screen, the only ones its Ctrl+Z and Ctrl+Y undo and redo (`fullSteps`, plan
  * 4c). A comparison makes none: its save is one action, made as it closes, and undone by Ctrl+Z in the graph.
  */
@@ -50,8 +51,11 @@ export function useScreens() {
   const [registryOpen, setRegistryOpen] = useState(false);
   /** The trash's panel (plan 6a, D5), opened from the same menu, in the registry's place: one of the two at a time. */
   const [trashOpen, setTrashOpen] = useState(false);
-  const openRegistry = () => { setTrashOpen(false); setRegistryOpen(true); };
-  const openTrash = () => { setRegistryOpen(false); setTrashOpen(true); };
+  /** The graph's health (plan 6b, D8), opened from the same menu, in their place: one of the three at a time. */
+  const [healthOpen, setHealthOpen] = useState(false);
+  const openRegistry = () => { setTrashOpen(false); setHealthOpen(false); setRegistryOpen(true); };
+  const openTrash = () => { setRegistryOpen(false); setHealthOpen(false); setTrashOpen(true); };
+  const openHealth = () => { setRegistryOpen(false); setTrashOpen(false); setHealthOpen(true); };
   /** The file in full screen, if any, by its name (a comparison: both): closed once it is gone (resolveFull). */
   const [full, setFull] = useState<FullTarget | null>(null);
   const fullRef = useRef(full);
@@ -95,7 +99,7 @@ export function useScreens() {
     return fullNow;
   };
   return {
-    panel, setPanel, registryOpen, setRegistryOpen, openRegistry, trashOpen, setTrashOpen, openTrash, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen,
-    preambleRef, fullSteps, fullIn,
+    panel, setPanel, registryOpen, setRegistryOpen, openRegistry, trashOpen, setTrashOpen, openTrash, healthOpen, setHealthOpen, openHealth, full, setFull, fullRef, workbench,
+    preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn,
   };
 }

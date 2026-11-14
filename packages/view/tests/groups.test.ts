@@ -1,7 +1,7 @@
 import { applyOps, type State } from '@cirrus/core';
 import { buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { beforeAll, expect, test } from 'vitest';
-import { dropEffects, dropTarget, intruders, visibleIntruders } from '../src/edit.ts';
+import { dropEffects, dropTarget, intruders, intrudersByGroup, visibleIntruders } from '../src/edit.ts';
 import { insidePolygon, offsetPolygon } from '../src/geometry/hull.ts';
 import { buildScene, isLive, type PlanScene, sceneWith } from '../src/scene.ts';
 import { updateScene } from '../src/sceneUpdate.ts';
@@ -118,6 +118,14 @@ test('intrus : nœud étranger recouvert par une enveloppe, jamais un membre', (
   expect(found.has(at(ids.nodes.mdl))).toBe(false);
   expect(found.has(at(ids.nodes.groupeInduction))).toBe(false);
   expect(found.has(at(ids.nodes.monde))).toBe(false);
+});
+
+test('intrus, une enveloppe à la fois (plan 6b, D8) : un pas par groupe, puis la même table que intruders', () => {
+  const steps = intrudersByGroup(sc);
+  let n = 0, r = steps.next();
+  for (; !r.done; r = steps.next()) n++;
+  expect(n).toBe(sc.items.filter((it, i) => isLive(sc, i) && it.kind === 'group').length);
+  expect([...r.value]).toEqual([...intruders(sc)]);
 });
 
 /** Every drawn item against every drawn envelope: each covered item with the deepest such group, the first by slot among equals. */

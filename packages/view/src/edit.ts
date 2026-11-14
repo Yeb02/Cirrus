@@ -105,6 +105,17 @@ export function dropTarget(scene: PlanScene, at: Vec2, dragged: number[], zoom: 
  * are never pushed away; they get a sign and appear in the graph's health.
  */
 export function intruders(scene: PlanScene): Map<number, number> {
+  const steps = intrudersByGroup(scene);
+  let r = steps.next();
+  while (!r.done) r = steps.next();
+  return r.value;
+}
+
+/**
+ * `intruders`, one envelope at a time (plan 6b, D8: the graph's health computes them in idle slices): each `next()` but the
+ * last looks at one more group, after a first that indexes the centres; the last gives the map.
+ */
+export function* intrudersByGroup(scene: PlanScene): Generator<undefined, Map<number, number>, undefined> {
   const out = new Map<number, number>();
   const items = scene.items;
   const live = items.flatMap((_it, i) => (isLive(scene, i) ? [i] : []));
@@ -114,9 +125,10 @@ export function intruders(scene: PlanScene): Map<number, number> {
   const centres = new Flatbush(live.length);
   for (const i of live) centres.add(items[i].x, items[i].y, items[i].x, items[i].y);
   centres.finish();
-  live.forEach((gi) => {
+  for (const gi of live) {
     const g = items[gi];
-    if (g.kind !== 'group') return;
+    if (g.kind !== 'group') continue;
+    yield;
     const poly = offsetPolygon(g.hull!, g.pad!);
     const xs = poly.map((q) => q.x), ys = poly.map((q) => q.y);
     for (const j of centres.search(Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys))) {
@@ -125,7 +137,7 @@ export function intruders(scene: PlanScene): Map<number, number> {
       const known = out.get(i);
       if (known === undefined || items[known].depth < g.depth) out.set(i, gi);
     }
-  });
+  }
   return out;
 }
 

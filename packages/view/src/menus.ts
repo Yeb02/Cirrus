@@ -7,7 +7,7 @@ import type { Selection } from './selection.ts';
 export type MenuAction =
   | 'connect' | 'exclude' | 'scaleDown' | 'scaleUp' | 'rename' | 'hide' | 'delete' | 'addToLobby'
   | 'copy' | 'paste' | 'newNode' | 'importPublication' | 'importBib' | 'teleport' | 'joinArm' | 'importNode' | 'splitArm' | 'layout' | 'resetLayout' | 'deleteConnection' | 'seeElsewhere' | 'trash' | 'tagRegistry' | 'groupColor'
-  | 'agenda' | 'sheets';
+  | 'agenda' | 'sheets' | 'health';
 
 export interface MenuItem { action: MenuAction; label: string }
 
@@ -38,15 +38,16 @@ const LABELS: Record<MenuAction, string> = {
   groupColor: 'Couleur…',
   agenda: 'Agenda',
   sheets: 'Feuillets',
+  health: 'Santé du graphe…',
 };
 
 /**
  * The context menu of what is under the cursor (spec 9.1, 8.5, 11.3): a right click on an element of a selection of
  * several opens the selection menu (copy, hide, − and +); a phantom offers to teleport to its original and to join
  * the arm back; a stub, to import its node; the background, to create a node, paste, import a publication by its
- * identifier (plan 4c, D5) or a whole .bib (D9), open the agenda's or the sheets' tab (plan 6b, D6), or open the trash
- * (plan 6a, D5) or the tag registry (D4), after the menu of the open group
- * `under` the cursor if any. On a
+ * identifier (plan 4c, D5) or a whole .bib (D9), open the agenda's or the sheets' tab (plan 6b, D6), or open the graph's
+ * health (plan 6b, D8), the trash (plan 6a, D5) or the tag registry (D4), after the menu of the open group `under` the
+ * cursor if any. On a
  * connection: split the branch clicked if it leads to a node placed here, join the arm back on its far side; a line
  * standing for several connections (a closed group) has no menu. A node's or a connection's menu ends with « Voir dans
  * un autre plan » when it is shown in a plan other than this one, the lobby counting (plan 6a, D3).
@@ -55,7 +56,7 @@ export function menuFor(s: State, scene: PlanScene, hit: Hit, sel: Selection, ca
   const make = (actions: MenuAction[]) => actions.map((action) => ({ action, label: LABELS[action] }));
   if (hit.kind === 'background') {
     const own = make([
-      'newNode', ...(canPaste ? ['paste' as const] : []), 'importPublication', 'importBib', 'agenda', 'sheets', 'trash', 'tagRegistry',
+      'newNode', ...(canPaste ? ['paste' as const] : []), 'importPublication', 'importBib', 'agenda', 'sheets', 'health', 'trash', 'tagRegistry',
     ]);
     // The background of an open group: that group's menu, then what the background offers (spec 9.1, I11 of the review).
     const g = under === undefined ? undefined : scene.byId.get(under);

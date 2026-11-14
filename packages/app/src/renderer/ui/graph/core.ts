@@ -57,6 +57,8 @@ export interface Graph {
   onTagRegistry(): void;
   /** Opens the trash's panel (plan 6a, D5): GraphView's onTrash, as of this render. */
   onTrash(): void;
+  /** Opens the graph's health (plan 6b, D8): GraphView's onHealth, as of this render. */
+  onHealth(): void;
   /** Opens the agenda's or the sheets' tab (plan 6b, D6): GraphView's onAgenda and onSheets, as of this render. */
   onAgenda(): void;
   onSheets(): void;

@@ -2,6 +2,7 @@ import type { Id, Vec2 } from '@cirrus/core';
 import { type Camera, type ConnectTarget, connectTarget, fitItem, type Intent, type Mode, otherPlans, type PlanScene, screenToWorld, worldToScreen } from '@cirrus/view';
 import { useRef, useState } from 'react';
 import { connectBuild, createBuild, importBuild, placeInPlanBuild, restoreBuild, sheetToNodeBuild, splitBuild } from '../../actions.ts';
+import { skippedPlans } from '../../health.ts';
 import { BIB_WAITING } from './bibImport.ts';
 import type { Engine, Graph } from './core.ts';
 
@@ -201,8 +202,13 @@ export function usePlacement(graph: Graph) {
     if (what?.kind === 'connect') endConnect();
     // A .bib's block (D9): nothing is made, its .bib no longer stored.
     if (what?.kind === 'bib') graph.bib.dropBib();
-    // Escape leaves this plan as it is; the next one opens (spec 10).
-    if (what?.kind === 'repercussion') graph.repercussion.nextRepercussion();
+    // Escape leaves this plan as it is, kept in the graph's health (plan 6b, D8); the next one opens (spec 10). Given up
+    // because another plan was shown, the repercussion is over already, and kept so (planShown).
+    if (what?.kind === 'repercussion') {
+      const plan = sceneRef.current?.plan.id;
+      if (plan !== undefined && graph.repercussion.queued()) skippedPlans.add([{ node: what.node, plan, why: 'escape' }]);
+      graph.repercussion.nextRepercussion();
+    }
     if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
   };
   return { placing, ghost, setGhost, line, pendingPlace, startPlacing, aimLine, aimTarget, startPending, followCursor, place, enter, cancelPlacing };

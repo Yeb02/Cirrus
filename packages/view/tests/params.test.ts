@@ -487,7 +487,7 @@ test('l’envoi des consultations au serveur (plan 6b, D7, tâche 8) : toutes le
   expect(PARAM_SPECS.find((s) => s.key === 'consultationsSendMs')).toEqual({
     key: 'consultationsSendMs', label: 'Délai entre deux envois des consultations au serveur (ms)', section: 'avancé', group: 'Consultations', kind: 'number', min: 10_000, max: 3_600_000, step: 1000,
   });
-  expect(PARAM_SPECS.filter((s) => s.group === 'Consultations').map((s) => s.key)).toEqual(['consultationsRecord', 'consultationsFlushMs', 'consultationsSendMs']);
+  expect(PARAM_SPECS.filter((s) => s.group === 'Consultations').map((s) => s.key).slice(0, 3)).toEqual(['consultationsRecord', 'consultationsFlushMs', 'consultationsSendMs']);
   expect(withOverrides({ consultationsSendMs: 5 })).toMatchObject({ consultationsSendMs: 10_000 });
   expect(withOverrides({ consultationsSendMs: 1e12 })).toMatchObject({ consultationsSendMs: 3_600_000 });
 });
@@ -532,4 +532,18 @@ test('la pause de frappe d’un feuillet (plan 6b, D6) : 800 ms, réglage avanc�
   });
   expect(PARAM_RUBRICS.find((r) => r.title === 'Fenêtres')!.groups).toEqual(['Pop-ups', 'Dialogues et notifications', 'Agenda et feuillets']);
   expect(withOverrides({ sheetTypingPauseMs: 5 }).sheetTypingPauseMs).toBe(100);
+});
+
+test('la santé du graphe (plan 6b, D8, tâche 9) : « jamais revu » après 30 jours, au groupe « Consultations » ; 100 lignes d’abord par section, au groupe « Pop-ups » ; deux réglages avancés', () => {
+  expect(DEFAULT_PARAMS.healthUnseenDays).toBe(30);
+  expect(PARAM_SPECS.find((s) => s.key === 'healthUnseenDays')).toEqual({
+    key: 'healthUnseenDays', label: 'Jours sans consultation après lesquels un nœud est « jamais revu » (santé du graphe)', section: 'avancé', group: 'Consultations', kind: 'number', min: 1, max: 3650, step: 1,
+  });
+  expect(DEFAULT_PARAMS.healthRowsShown).toBe(100);
+  expect(PARAM_SPECS.find((s) => s.key === 'healthRowsShown')).toEqual({
+    key: 'healthRowsShown', label: 'Lignes montrées d’abord par section de « Santé du graphe »', section: 'avancé', group: 'Pop-ups', kind: 'number', min: 10, max: 2000, step: 10,
+  });
+  expect(PARAM_SPECS.filter((s) => s.group === 'Consultations').map((s) => s.key)).toEqual(['consultationsRecord', 'consultationsFlushMs', 'consultationsSendMs', 'healthUnseenDays']);
+  expect(withOverrides({ healthUnseenDays: 0, healthRowsShown: 1 })).toMatchObject({ healthUnseenDays: 1, healthRowsShown: 10 });
+  expect(withOverrides({ healthUnseenDays: 1e9, healthRowsShown: 1e9 })).toMatchObject({ healthUnseenDays: 3650, healthRowsShown: 2000 });
 });

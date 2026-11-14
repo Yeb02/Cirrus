@@ -2,6 +2,7 @@ import type { Id, Vec2 } from '@cirrus/core';
 import { dropScenes, dropTarget, type PlanScene, repercussion, sceneParamsKey } from '@cirrus/view';
 import { useRef } from 'react';
 import { type Build, dropBuild, dropMemberships, withRepercussion } from '../../actions.ts';
+import { skippedOf, skippedPlans } from '../../health.ts';
 import type { Graph } from './core.ts';
 
 /**
@@ -40,7 +41,9 @@ export function useRepercussion(graph: Graph) {
     const sceneOf = dropScenes(s, measure, p, (q) => (current ? cache.byPlan.get(q)?.scene : undefined));
     const reps = moves.map((m) => ({ ...m, r: repercussion(s, plan, m.node, m.from, m.to, sceneOf) }));
     const changed = reps.flatMap((x) => x.r.changed.map((c) => ({ ...c, node: x.node })));
-    if (changed.length === 0) { void edit(build, restore); return; }
+    // The plans a third group or a loop leaves alone, kept in the graph's health once the drop is written (plan 6b, D8).
+    const skipped = skippedOf(reps);
+    if (changed.length === 0) { void edit(build, restore).then((r) => { if (r?.ok) skippedPlans.add(skipped); }); return; }
     const names = (ids: Id[]) => [...new Set(ids)].map((id) => `« ${s.plans.get(id)?.name ?? '?'} »`).join(', ');
     const plans = new Set(changed.map((c) => c.plan)), manual = changed.filter((c) => c.manual);
     const third = reps.flatMap((x) => x.r.third), loops = reps.flatMap((x) => x.r.loops);
@@ -58,6 +61,7 @@ export function useRepercussion(graph: Graph) {
         if (v === null) { restore(); return; }
         if (v === 'here') { void edit(build, restore); return; }
         void edit(withRepercussion(build, changed.filter((c) => !c.manual)), restore).then((r) => {
+          if (r?.ok) skippedPlans.add(skipped);
           if (r?.ok && manual.length > 0) {
             repQueue.current = { extend: r.action.id, home: plan, items: manual.map((c) => ({ plan: c.plan, node: c.node, to: c.to })), expected: plan };
             nextRepercussion();
@@ -92,7 +96,13 @@ export function useRepercussion(graph: Graph) {
     if (q && plan !== q.expected) {
       // The user went elsewhere: the repercussion stops there (I8 of the review); what was placed stays.
       repQueue.current = null;
-      const left = q.items.length + (graph.placement.placing.current?.kind === 'repercussion' ? 1 : 0);
+      const placing = graph.placement.placing.current;
+      const left = q.items.length + (placing?.kind === 'repercussion' ? 1 : 0);
+      // What is left unplaced is kept in the graph's health (plan 6b, D8): the plan being placed, then the others.
+      skippedPlans.add([
+        ...(placing?.kind === 'repercussion' ? [{ node: placing.node, plan: q.expected, why: 'interrupted' as const }] : []),
+        ...q.items.map((item) => ({ node: item.node, plan: item.plan, why: 'interrupted' as const })),
+      ]);
       notify(`Répercussion interrompue : ${left} plan${left > 1 ? 's' : ''} non placé${left > 1 ? 's' : ''} à la main.`);
     }
   };

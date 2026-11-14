@@ -366,6 +366,11 @@ export interface RenderParams {
   consultationsFlushMs: number;
   /** How long between two sendings of this PC's consultations to a server paired (plan 6b, D7), while connected. */
   consultationsSendMs: number;
+  // The graph's health (plan 6b, D8)
+  /** A live node made more than this many days ago (its uuidv7) and looked at on no PC is « jamais revu ». */
+  healthUnseenDays: number;
+  /** The rows a section of the panel shows before « N de plus » (a section may hold the whole base). */
+  healthRowsShown: number;
 }
 
 export const DEFAULT_PARAMS: RenderParams = {
@@ -570,6 +575,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   consultationsRecord: 'yes',
   consultationsFlushMs: 10_000,
   consultationsSendMs: 60_000,
+  healthUnseenDays: 30,
+  healthRowsShown: 100,
 };
 
 /**
@@ -734,6 +741,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('bibNoticeMs', 'Durée d’affichage de la notification d’un .bib importé, qu’un clic ou Échap ferme (ms)', A, 'Publications', 2000, 600_000, 500),
   num('popupWidthPx', 'Largeur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('linkPreviewDelayMs', 'Survol d’un lien avant l’aperçu de son nœud (ms)', A, 'Pop-ups', 0, 3000, 50),
+  num('healthRowsShown', 'Lignes montrées d’abord par section de « Santé du graphe »', A, 'Pop-ups', 10, 2000, 10),
   num('popupHeightPx', 'Hauteur d’un pop-up à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
   num('previewWidthPx', 'Largeur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 200, 1600, 1),
   num('previewHeightPx', 'Hauteur d’un aperçu de fichier à son ouverture (px)', A, 'Pop-ups', 160, 1400, 1),
@@ -818,6 +826,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   },
   num('consultationsFlushMs', 'Délai entre deux enregistrements des consultations sur le disque (ms)', A, 'Consultations', 1000, 600_000, 1000),
   num('consultationsSendMs', 'Délai entre deux envois des consultations au serveur (ms)', A, 'Consultations', 10_000, 3_600_000, 1000),
+  num('healthUnseenDays', 'Jours sans consultation après lesquels un nœud est « jamais revu » (santé du graphe)', A, 'Consultations', 1, 3650, 1),
 ];
 
 /**

@@ -2763,6 +2763,63 @@ const SCENARIOS = [
       if (!(await until(() => titledIn(base, 'Idée').length === 0 && sheets()[0]?.text === 'Idée'))) throw new Error('Ctrl+Z ne rend pas le feuillet');
     },
   },
+  {
+    // Plan 6b, D8: the graph's health. « Santé du graphe… », before « Corbeille… » in the background's menu, opens the panel:
+    // its eight sections in their order; the test base's orphans (its groups, the thesis's chapter, the document's parts);
+    // its intruder « Théorème d’invariance », found by slices. A click on a line frames its node: another plan shown, then
+    // the lobby at another camera; from the sheets' tab too, the graph coming back. Échap closes the panel.
+    name: 'santé du graphe : menu du fond → « Santé du graphe… », les orphelins de la base de test, l’intrus ; un clic sur une ligne cadre son nœud, depuis les feuillets aussi ; Échap ferme',
+    async run(page, base) {
+      const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
+      const idOf = (title) => base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = ${sql(title)}`)[0].id;
+      const CHAPTER_2 = 'Chapitre 2 : compression et généralisation', INDUCTION = 'Induction universelle';
+      const ORPHAN = (id) => `.health [data-section="orphans"] .item[data-id="${id}"] .row`;
+      if (!(await page.until(`!!document.querySelector('.graph canvas')`, 15000))) throw new Error('le graphe ne s’ouvre pas');
+      await onTab(page, 'Lobby', 'au départ');
+
+      for (let i = 0; i < 10 && !(await page.until(`!!document.querySelector('.context-menu')`, 1000)); i++) await page.click(SKY.x, SKY.y, 'right');
+      const menu = await page.evaluate(`[...document.querySelectorAll('.context-menu button')].map((b) => b.textContent)`);
+      if (JSON.stringify(menu.slice(-3)) !== JSON.stringify(['Santé du graphe…', 'Corbeille…', 'Registre des tags…'])) throw new Error(`le menu du fond : ${JSON.stringify(menu)}`);
+      await click('.context-menu button', '^Santé du graphe…$');
+      if (!(await page.until(`!!document.querySelector('aside.health')`))) throw new Error('le panneau de la santé du graphe ne s’ouvre pas');
+      const sections = await page.evaluate(`[...document.querySelectorAll('.health .health-section > .fold .name')].map((n) => n.textContent.slice(2))`);
+      const SECTIONS = ['Références cassées', 'Labels et clés BibTeX en double', 'Conflits de .tex', 'Tags obligatoires non renseignés', 'Nœuds orphelins', 'Jamais revus', 'Intrus dans une enveloppe', 'Plans ignorés lors d’une répercussion'];
+      if (JSON.stringify(sections) !== JSON.stringify(SECTIONS)) throw new Error(`les sections : ${JSON.stringify(sections)}`);
+
+      // The orphans: ten nodes of the test base, the thesis's chapter and a group of the lobby among them, each with its plan.
+      const orphans = await page.evaluate(`[...document.querySelectorAll('.health [data-section="orphans"] .item')].map((li) => [li.querySelector('.title').textContent, li.querySelector('.meta').textContent])`);
+      const count = await page.evaluate(`document.querySelector('.health [data-section="orphans"] > .fold .count').textContent`);
+      if (count !== '10' || orphans.length !== 10) throw new Error(`les orphelins (${count}) : ${JSON.stringify(orphans)}`);
+      for (const [title, plan] of [[CHAPTER_2, 'Thèse'], [INDUCTION, 'Lobby']]) {
+        if (!orphans.some(([t, meta]) => t === title && meta === `aucune connexion de connaissance · plan « ${plan} »`)) throw new Error(`« ${title} » n’est pas listé dans « ${plan} » : ${JSON.stringify(orphans)}`);
+      }
+      // The intruders, by slices in the idle moments: « Théorème d’invariance » in an envelope of the lobby.
+      if (!(await page.until(`[...document.querySelectorAll('.health [data-section="intruders"] .item .title')].some((t) => t.textContent === 'Théorème d’invariance')`, 10000))) {
+        throw new Error(`l’intrus n’est pas listé : ${await page.evaluate(`document.querySelector('.health [data-section="intruders"]').textContent`)}`);
+      }
+
+      // A click on a line frames its node: the chapter, in the thesis; then the group, back in the lobby, at another camera.
+      const lobbyView = await viewImage(page);
+      await click(ORPHAN(idOf(CHAPTER_2)));
+      await onTab(page, 'Thèse', 'un clic sur « Chapitre 2 »');
+      await click(ORPHAN(idOf(INDUCTION)));
+      await onTab(page, 'Lobby', `un clic sur « ${INDUCTION} »`);
+      const diff = await imageDiff(page, await viewImage(page), lobbyView);
+      if (diff < 1) throw new Error(`le lobby n’est pas cadré sur « ${INDUCTION} » (${diff.toFixed(3)} % des pixels diffèrent)`);
+      if (!(await page.evaluate(`!!document.querySelector('aside.health')`))) throw new Error('le panneau se ferme après un saut');
+
+      // From the sheets' tab (Ctrl+Maj+N), a click brings the graph back, framed.
+      for (let i = 0; i < 10 && !(await page.until(`document.querySelector('.tabs .tab.on')?.dataset.tab === '@feuillets'`, 1000)); i++) await page.press('N', 'KeyN', 78, 2 | 8);
+      if (!(await page.evaluate(`getComputedStyle(document.querySelector('.graph')).display === 'none'`))) throw new Error('les feuillets ne cachent pas le graphe');
+      await click(ORPHAN(idOf(CHAPTER_2)));
+      await onTab(page, 'Thèse', 'un clic depuis les feuillets');
+      if (!(await page.until(`getComputedStyle(document.querySelector('.graph')).display !== 'none'`))) throw new Error('le graphe ne revient pas');
+
+      // Échap closes the panel.
+      await page.press('Escape', 'Escape', 27);
+      if (!(await page.until(`!document.querySelector('aside.health')`))) throw new Error('Échap ne ferme pas le panneau');
+    },
+  },
 ];
 
 const reason = (e) => (e instanceof Error ? e.message : String(e));

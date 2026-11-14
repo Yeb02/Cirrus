@@ -10,6 +10,7 @@ import { inputProbe, runIdleSlices } from './search/idle.ts';
 import { SearchBuild, type SearchHit, SearchIndex, type SearchWhere } from './search/index.ts';
 import { pickWithoutPlan } from './search/pick.ts';
 import { restoreNotice } from './trash.ts';
+import { healthJump, type HealthRow } from './health.ts';
 import { anchorRefusal, AnnotationIndex, titleChars } from './files/annotations.ts';
 import { addImported, type NodeFiles, openNotice, type Refusal, refusesStrayDrop } from './files/nodeFiles.ts';
 import { loading } from './files/read.ts';
@@ -42,6 +43,7 @@ import { SettingsPanel } from './ui/SettingsPanel.tsx';
 import { SheetsView } from './ui/SheetsView.tsx';
 import { TagRegistryPanel } from './ui/TagRegistryPanel.tsx';
 import { TrashPanel } from './ui/TrashPanel.tsx';
+import { HealthPanel } from './ui/HealthPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
 import { SyncVeil } from './ui/SyncVeil.tsx';
 import { UpdateScreen } from './ui/UpdateScreen.tsx';
@@ -149,8 +151,8 @@ export function App() {
   };
   /** What is open over the graph: the settings, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
   const {
-    panel, setPanel, registryOpen, setRegistryOpen, openRegistry, trashOpen, setTrashOpen, openTrash, full, setFull, fullRef, workbench, preambleOpen, setPreambleOpen,
-    preambleRef, fullSteps, fullIn,
+    panel, setPanel, registryOpen, setRegistryOpen, openRegistry, trashOpen, setTrashOpen, openTrash, healthOpen, setHealthOpen, openHealth, full, setFull, fullRef,
+    workbench, preambleOpen, setPreambleOpen, preambleRef, fullSteps, fullIn,
   } = useScreens();
   /** The synchronisation (plan 5a): what it shows (the veil, the chip), the server paired, and its session. */
   const sync = useSync(toast, paramsRef);
@@ -591,13 +593,31 @@ export function App() {
     closeSearch();
     if (hit.plan === null) {
       const r = pickWithoutPlan(state, hit);
-      if ('say' in r) { toast(r.say); return; }
-      const box = document.querySelector('.graph')?.getBoundingClientRect();
-      panels.current?.openNode(r.popup, box ? { x: box.left + box.width / 2 - 190, y: box.top + 80 } : { x: 200, y: 120 });
+      if ('say' in r) toast(r.say); else popupOverGraph(r.popup);
       return;
     }
     showGraph();
     if (!graph.current?.reveal({ plan: hit.plan, id: hit.id, kind: hit.kind })) toast(OBJECT_GONE);
+  };
+  /** The pop-up of a node in no plan (an annotation), near the top of the graph's area. */
+  const popupOverGraph = (node: Id) => {
+    const box = document.querySelector('.graph')?.getBoundingClientRect();
+    panels.current?.openNode(node, box ? { x: box.left + box.width / 2 - 190, y: box.top + 80 } : { x: 200, y: 120 });
+  };
+  /**
+   * A line of the graph's health clicked (plan 6b, D8; healthJump): a conflict's copy compared with its original; else a
+   * jump to its object, the graph shown again from the agenda or the sheets; in no plan, an annotation's pop-up, or why
+   * not. The panel stays open, for the next line.
+   */
+  const healthGo = (row: HealthRow) => {
+    const to = healthJump(state, row, active, tabs);
+    if ('compare' in to) setFull({ kind: 'compare', ...to.compare });
+    else if ('say' in to) toast(to.say);
+    else if ('popup' in to) popupOverGraph(to.popup);
+    else {
+      showGraph();
+      if (!graph.current?.reveal(to.reveal)) toast(OBJECT_GONE);
+    }
   };
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
   const edit = (build: Build): Promise<boolean> => (build ? session.current!.run(build).then((r) => { report(r); return r.ok; }) : Promise.resolve(true));
@@ -694,7 +714,7 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={openRegistry} onTrash={openTrash}
-            onAgenda={() => openView('agenda')} onSheets={() => openView('sheets')} hidden={view !== 'graph'}
+            onHealth={openHealth} onAgenda={() => openView('agenda')} onSheets={() => openView('sheets')} hidden={view !== 'graph'}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onOpenConnection={(id, at) => panels.current?.openConnection(id, at)}
             onClickAway={clickAway} onOverlay={dropSearch} onDropFiles={files.importInto} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
@@ -730,6 +750,12 @@ export function App() {
         {trashOpen && (
           <TrashPanel
             state={state} rev={shown.rev} onRestoreConnection={restoreConnection} onRestoreNode={(node) => graph.current?.restore(node)} onClose={closeTrash}
+          />
+        )}
+        {healthOpen && (
+          <HealthPanel
+            state={state} rev={shown.rev} registry={registry} params={params} here={active} tabs={tabs} sceneOf={(plan) => graph.current?.sceneOf(plan) ?? null}
+            onJump={healthGo} onClose={() => setHealthOpen(false)}
           />
         )}
         <LinkLayer

@@ -222,6 +222,16 @@ export class LatexRegistry {
     return this.citersIndex().keys.get(key) ?? [];
   }
 
+  /**
+   * Every label and every key that a source cites, with the sources citing it, by name (plan 6b, D8: the graph's health
+   * reads the broken ones there). Copies: the index itself is handed on to the next registry, which corrects it.
+   */
+  citedNames(): { labels: [string, Origin[]][]; keys: [string, Origin[]][] } {
+    const c = this.citersIndex();
+    const sorted = (index: Map<string, Origin[]>) => [...index].map(([name, list]): [string, Origin[]] => [name, [...list]]).sort((a, b) => compare(a[0], b[0]));
+    return { labels: sorted(c.labels), keys: sorted(c.keys) };
+  }
+
   /** The short citation of the node `id`, if it holds a key: as it was at the build. */
   citationOf(id: Id): string | undefined {
     const n = this.cited.get(id);
