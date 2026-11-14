@@ -13,6 +13,7 @@ import type { UpdateFlow, UpdateWord } from '../src/main/sync/protocol.ts';
 import { chipOf } from '../src/renderer/sync/syncSession.ts';
 import { passesKey, updateScreenOf } from '../src/renderer/sync/updateScreen.ts';
 import { closeStep } from '../src/main/windowClose.ts';
+import { runVariant } from '../src/main/identity.ts';
 import { AppPc } from './support/appPc.ts';
 import { Lab, until } from './support/virtualPc.ts';
 
@@ -159,6 +160,16 @@ test('updateKeyOf : la clé de test (CIRRUS_UPDATE_PUBLIC_KEY) seulement sur une
   expect(devUpdatesOf({ ...env, CIRRUS_DATA: 'C:\\essai', CIRRUS_UPDATE_DEV: '1' }, false)).toBe(false);
   expect(devUpdatesOf({ ...test, ...env }, false)).toBe(false);
   expect(devUpdatesOf({ ...test, ...env, CIRRUS_UPDATE_DEV: 'oui' }, false)).toBe(false);
+});
+
+test('une app lancée depuis le dépôt est « Cirrus Dev » : la clé d’essai seule n’y cherche aucune mise à jour, CIRRUS_UPDATE_DEV=1 avec elle si (interface.mjs, maj-essai.mjs)', () => {
+  // identity.ts (2026-11-12): any unpackaged run takes « Cirrus Dev », whatever its package says — so the end-to-end checks
+  // that expect the update screen (scripts/interface.mjs) must give CIRRUS_UPDATE_DEV=1 beside the test key.
+  const dev = runVariant('official', false) === 'dev';
+  expect(dev).toBe(true);
+  const test = { CIRRUS_DATA: 'C:\\essai', CIRRUS_BACKGROUND: '1', CIRRUS_UPDATE_PUBLIC_KEY: key.pub };
+  expect(updateModeOf(test, false, dev)).toEqual({ publicKey: key.pub, dev: true, neverInstall: true });
+  expect(updateModeOf({ ...test, CIRRUS_UPDATE_DEV: '1' }, false, dev)).toEqual({ publicKey: key.pub, dev: false, neverInstall: true });
 });
 
 // ——— The updater ———

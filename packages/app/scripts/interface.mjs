@@ -1404,7 +1404,9 @@ const SCENARIOS = [
   },
   {
     // Plan 4c, D4 (task 3): the PDF's pop-up lists its annotations, as the margin; one dragged from there onto the PDF's
-    // simple node enters it, the node becoming a group above it (plan 3's rules); Ctrl+Z gives the plan back.
+    // simple node enters it, the node becoming a group that keeps its step, the annotation taking groupOffsetSteps (2)
+    // fewer than the readable one (spec 8.1, « Fixé le 2026-11-11 »: placeDroppedBuild, enteringSteps); Ctrl+Z gives the
+    // plan back.
     name: 'poser une annotation depuis le pop-up sur le nœud du PDF, qui devient un groupe ; Ctrl+Z',
     env: PUBLICATION.env, settings: { popupHeightPx: 720 },
     async run(page, base) {
@@ -1422,7 +1424,7 @@ const SCENARIOS = [
       const placed = placementOf(base, lobby, page2), group = groupIn(base, lobby, page2), k = placementOf(base, lobby, publication).k;
       console.log(`     posée ${JSON.stringify(placed)} ; groupe ${group === publication ? 'la publication' : group} ; cran de la publication ${before.k} → ${k}`);
       if (group !== publication) throw new Error('l’annotation n’est pas entrée dans le nœud du PDF');
-      if (placed.k !== 0 || k !== 2) throw new Error('les crans ne sont pas le cran lisible et celui d’un groupe au-dessus de son membre');
+      if (placed.k !== before.k - 2 || k !== before.k) throw new Error('les crans ne sont pas celui du nœud gardé et deux de moins pour l’annotation entrée');
       if (!(await page.until(`[...document.querySelectorAll('.node-popup .annotation-list li')].some((li) => /p\\. 2.*Lobby/.test(li.textContent))`))) {
         throw new Error('la liste ne dit pas le plan où l’annotation est posée');
       }
@@ -2648,9 +2650,11 @@ const SCENARIOS = [
     // checks it and puts up its screen; run unpackaged, electron-updater is inactive, so the screen says the failure and
     // offers to go on — no installer anywhere. Meanwhile the keys are held (Ctrl+K opens nothing, Échap closes nothing)
     // and the pointer stops on the screen; Entrée on « Continuer sans mettre à jour » takes it away, and the keys work again.
+    // Run from the repository, the app is « Cirrus Dev » (identity.ts: runVariant, 2026-11-12), which looks for updates
+    // only with CIRRUS_UPDATE_DEV=1 beside the test key (key.ts: devUpdatesOf), as maj-essai.mjs gives it.
     name: 'mise à jour forcée : l’écran bloque l’app dès le manifeste signé ; un échec offre « Continuer sans mettre à jour »',
     empty: true,
-    env: { CIRRUS_UPDATE_PUBLIC_KEY: UPDATE_KEY.pub },
+    env: { CIRRUS_UPDATE_PUBLIC_KEY: UPDATE_KEY.pub, CIRRUS_UPDATE_DEV: '1' },
     async run(page) {
       const server = await localServer();
       try {
