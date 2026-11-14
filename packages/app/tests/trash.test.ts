@@ -100,23 +100,26 @@ test('la liste suit l’état : une restauration, son Ctrl+Z, une écriture reç
   expect(trashRows(s).map((r) => r.id).sort()).toEqual([A, B].sort());
 });
 
-test('trashRows : une connexion réduite à un nœud est listée mais non restaurable — le cœur la refuserait toujours — ; une connexion de deux nœuds et un nœud le sont', async () => {
+test('trashRows : une connexion sans nœud est listée mais non restaurable — le cœur la refuserait toujours — ; une connexion d’un nœud (plan 6b, D2), de deux, et un nœud le sont', async () => {
   const { s, plan, mk, session } = world();
   const A = mk('A'), B = mk('B'), X = mk('X'), Y = mk('Y');
   const ab = idOf(run(s, connect(s, { plan, members: [{ node: A, role: 'source' }, { node: B, role: 'target' }] })), 'connection');
   const xy = idOf(run(s, connect(s, { plan, members: [{ node: X, role: 'source' }, { node: Y, role: 'target' }] })), 'connection');
   run(s, deleteConnection(s, ab));
-  // X deleted everywhere takes its connection with it, which keeps Y alone.
+  // X deleted everywhere takes its connection with it, which keeps Y alone: it may come back, with Y.
   run(s, deleteEverywhere(s, X));
   expect(s.connections.get(xy)!.members.map((m) => m.node)).toEqual([Y]);
   const row = (id: Id) => trashRows(s).find((r) => r.id === id);
-  expect(row(xy)).toMatchObject({ kind: 'connection', restorable: false });
+  expect(row(xy)).toMatchObject({ kind: 'connection', restorable: true });
   expect(row(ab)).toMatchObject({ kind: 'connection', restorable: true });
   expect(row(X)).toMatchObject({ kind: 'node', restorable: true });
+  // Y deleted everywhere too: it has no node left.
+  run(s, deleteEverywhere(s, Y));
+  expect(row(xy)).toMatchObject({ kind: 'connection', restorable: false });
   // The reason shown is the core's own refusal, word for word.
   expect(await session.run(restoreConnectionBuild(xy)!)).toEqual({ ok: false, message: RESTORE_CONNECTION_LOST });
-  expect(RESTORE_CONNECTION_LOST).toBe('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
-  // Two members, one of them still in the trash: it will come back once the node does (« restaure-les d’abord »).
+  expect(RESTORE_CONNECTION_LOST).toBe('Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir.');
+  // B thrown away: it leaves the connection, which may still come back, with A.
   run(s, deleteEverywhere(s, B));
   expect(row(ab)).toMatchObject({ restorable: true });
 });
@@ -209,9 +212,10 @@ test('restoreConnectionBuild : la connexion revient avec ses branches là où se
   expect((await session.undo()).ok).toBe(true);
   expect(s.connections.get(ab)!.trashedAt).toBeDefined();
   expect(branchesOf(s, ab)).toEqual([]);
-  // A node of it thrown away meanwhile: refused, said in French.
+  // Its nodes thrown away meanwhile, which leave it (plan 6b, D2): refused, the core's message.
+  run(s, deleteEverywhere(s, A));
   run(s, deleteEverywhere(s, B));
-  expect(await session.run(restoreConnectionBuild(ab)!)).toEqual({ ok: false, message: 'Ses nœuds sont à la corbeille : restaure-les d’abord.' });
+  expect(await session.run(restoreConnectionBuild(ab)!)).toEqual({ ok: false, message: RESTORE_CONNECTION_LOST });
 });
 
 test('restoreNotice : une connexion rendue sans branche — ses nœuds ne partagent aucun plan — le dit ; avec une branche, rien', async () => {

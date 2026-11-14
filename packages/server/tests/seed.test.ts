@@ -116,9 +116,9 @@ test('R19 : une base qui porte déjà une violation des règles du graphe s’en
   const { url } = await start();
   const a = await paired(url, 'pc-a');
   const { store, s } = pcBase('pc-a');
-  // A connection of one member, written as an older version of the app could have (commit checks records, not rules).
-  const one = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [{ node: [...s.nodes.keys()][0], role: 'source' as const }] };
-  const odd: Action = { id: 'a-seule', label: 'Connexion d’un seul membre', ops: [{ t: 'connection', before: null, after: one }] };
+  // A connection without member, written as an older version of the app could have (commit checks records, not rules).
+  const one = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [] };
+  const odd: Action = { id: 'a-seule', label: 'Connexion sans membre', ops: [{ t: 'connection', before: null, after: one }] };
   store.commit(odd);
   applyOps(s, odd.ops);
   const rows = store.changesSince(0);

@@ -1,6 +1,7 @@
 import type { ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanRec, TagKeyDef, TagValue } from './model.ts';
 import type { Op } from './ops.ts';
-import { canonical, layoutKey, placementOf, type State } from './state.ts';
+import { branchesOf, canonical, connId, connKind, layoutKey, memberOf, nodeRow, phantomsOf, placementOf, type State } from './state.ts';
+import { KNOWLEDGE } from './tables.ts';
 import type { RemoteUnit, Unit } from './sync.ts';
 
 // The merge of a pending write with what the server made meanwhile (plan 5a, D4; spec 6.2): record by record, field by
@@ -106,15 +107,15 @@ function fieldTexts(t: Op['t'], rec: unknown): Map<string, string> {
 /**
  * What the received writes did, read once per reconciliation (cached by their array): per record and per field, the
  * stamp of the last received write that changed it; per node or connection, the last received write that deleted it
- * (to the trash, or away).
+ * (to the trash, or away); which of those are nodes.
  */
-interface Received { stamps: Map<string, Map<string, Stamp>>; deletedBy: Map<Id, RemoteUnit> }
+interface Received { stamps: Map<string, Map<string, Stamp>>; deletedBy: Map<Id, RemoteUnit>; nodes: Set<Id> }
 const received = new WeakMap<readonly RemoteUnit[], Received>();
 
 function receivedOf(remote: readonly RemoteUnit[]): Received {
   let r = received.get(remote);
   if (r) return r;
-  r = { stamps: new Map(), deletedBy: new Map() };
+  r = { stamps: new Map(), deletedBy: new Map(), nodes: new Set() };
   for (const u of remote) {
     const stamp: Stamp = { at: u.at, pc: u.pc };
     for (const op of u.ops) {
@@ -126,7 +127,10 @@ function receivedOf(remote: readonly RemoteUnit[]): Received {
         if (!fields) r.stamps.set(key, (fields = new Map()));
         fields.set(f, stamp);
       }
-      if ((op.t === 'node' || op.t === 'connection') && !deleted(op.before) && deleted(op.after)) r.deletedBy.set(op.before!.id, u);
+      if ((op.t === 'node' || op.t === 'connection') && !deleted(op.before) && deleted(op.after)) {
+        r.deletedBy.set(op.before!.id, u);
+        if (op.t === 'node') r.nodes.add(op.before!.id);
+      }
     }
   }
   received.set(remote, r);
@@ -350,6 +354,135 @@ function withoutTrash<T extends { trashedAt?: number }>(r: T): T {
 }
 
 /**
+ * A node on its way to the trash leaves its knowledge connections, whatever was done to them meanwhile (plan 6b, D3):
+ * the departure wins. In a write replayed (rebaseUnit), the nodes leaving are those this write throws away (still in
+ * the trash once merged) and those a received write threw away (still there). Each knowledge connection that holds one
+ * — in the state, for a node of this write's, as leaveConnections would have found it there; in this write's records,
+ * for a node of a received write's, which took it out of the others — loses it, with its branches and phantoms (the
+ * state's and this write's); a live one that held one, left with one node or none, goes to the trash, with every
+ * branch and phantom, at the time the node went (the latest, for several): the time leaveConnections gives it. The
+ * entries are changed in place, and those the write did not have are added, read from the state, for rebaseUnit to
+ * write them. Only the trash counts: a node gone altogether (an undone creation) leaves nothing.
+ *
+ * It converges with departuresAfter, which the server applies to a write that could not see the other: whichever the
+ * server took first, the connection ends with the members both kept, less the nodes leaving, its time in the trash
+ * the node's (merged by the same stamps on both sides).
+ */
+function departures(s: State, rx: Received, entries: Map<string, Entry>, c: Ctx): void {
+  const entryOf = (t: string, ...key: string[]) => entries.get([t, ...key].join(SEP));
+  const trashedAt = (n: unknown): number | undefined => (n as NodeRec | null | undefined)?.trashedAt;
+  /** Each node leaving, with its time in the trash. */
+  const leaving = new Map<Id, number>();
+  /** Whether `id` leaves: thrown away by this write (found first), or by a received one and still in the trash. */
+  const leaves = (id: Id): boolean => {
+    if (leaving.has(id)) return true;
+    if (!rx.nodes.has(id) || c.back.has(id)) return false;
+    const e = entryOf('node', id), at = trashedAt(e ? e.merged : s.nodes.get(id));
+    if (at === undefined) return false;
+    leaving.set(id, at);
+    return true;
+  };
+  const candidates = new Set<Id>();
+  for (const e of entries.values()) {
+    const at = trashedAt(e.merged);
+    if (e.op.t !== 'node' || deleted(e.base) || !deleted(e.mine) || at === undefined) continue;
+    const id = (e.op.after ?? e.op.before)!.id, row = nodeRow(s, id);
+    leaving.set(id, at);
+    if (row >= 0) for (const r of memberOf(s, row)) if (connKind(s, r) === KNOWLEDGE) candidates.add(connId(s, r));
+  }
+  /** This write's branches and phantoms, by connection, each with its node. */
+  const shown = new Map<Id, { e: Entry; node: Id }[]>();
+  for (const e of entries.values()) {
+    const op = e.op;
+    let conn: Id, node: Id;
+    if (op.t === 'connection') {
+      for (const r of [e.base, e.theirs, e.mine, e.merged] as (ConnectionRec | null)[]) if (r?.members.some((m) => leaves(m.node))) candidates.add((op.after ?? op.before)!.id);
+      continue;
+    } else if (op.t === 'branch') ({ connection: conn, node } = op.key);
+    else if (op.t === 'phantom') ({ connection: conn, of: { node } } = (op.after ?? op.before)!);
+    else continue;
+    shown.set(conn, [...(shown.get(conn) ?? []), { e, node }]);
+    if (leaves(node)) candidates.add(conn);
+  }
+
+  /** The entry of a record this write did not touch: what the state holds, for rebaseUnit to write `merged`. */
+  const add = (op: Op, theirs: unknown, merged: unknown) => {
+    entries.set(recordKey(op), { op, only: null, base: theirs, mine: merged, theirs, merged });
+  };
+  for (const id of candidates) {
+    const e = entryOf('connection', id), now = (e ? e.merged : s.connections.get(id) ?? null) as ConnectionRec | null;
+    if (now === null || now.kind !== 'knowledge') continue;
+    let at = -Infinity;
+    for (const r of (e ? [e.base, e.theirs, e.mine, now] : [now]) as (ConnectionRec | null)[]) {
+      for (const m of r?.members ?? []) if (leaves(m.node)) at = Math.max(at, leaving.get(m.node)!);
+    }
+    const members = now.members.filter((m) => !leaving.has(m.node)), trash = at > -Infinity && now.trashedAt === undefined && members.length < 2;
+    const after = trash ? { ...now, members, trashedAt: at } : members.length < now.members.length ? { ...now, members } : now;
+    if (after !== now) {
+      if (e) e.merged = after;
+      else add({ t: 'connection', before: now, after }, now, after);
+    }
+    const goes = (node: Id) => trash || leaving.has(node);
+    for (const { e: x, node } of shown.get(id) ?? []) if (goes(node)) x.merged = x.op.t === 'branch' ? false : null;
+    for (const key of branchesOf(s, id)) {
+      const op: Op = { t: 'branch', key, before: true, after: false };
+      if (goes(key.node) && !entries.has(recordKey(op))) add(op, true, false);
+    }
+    for (const ph of phantomsOf(s, id)) {
+      const rec = s.phantoms.get(ph)!;
+      if (goes(rec.of.node) && !entryOf('phantom', ph)) add({ t: 'phantom', before: rec, after: null }, rec, null);
+    }
+  }
+}
+
+/**
+ * What the server adds to a write it accepts (plan 6b, D3), `ops` applied to `s`: the departures the write could not
+ * see, the server's state holding a write it was not made on. Two cases, both of a write that crossed another that
+ * changed none of its records — the other's change still stands, and the write's "befores" all hold: a node this write
+ * throws away (to the trash) that a knowledge connection still holds, its own or one in the trash; a node in the trash
+ * this write adds to a live knowledge connection. Each such connection loses the node, with its branches and phantoms,
+ * and goes to the trash at the node's time when it is left with one node or none and was alive (leaveConnections).
+ * Nothing for a write made on all the server holds, as commands make them: its departures are in it already
+ * (leaveConnections, departures). A connection brought back with a member in the trash (a base of an older version)
+ * is not touched: the member was there before. The operations to apply after `ops`, and to add to the write.
+ */
+export function departuresAfter(s: State, ops: readonly Op[]): Op[] {
+  const leaving = new Map<Id, number>(), candidates = new Set<Id>();
+  for (const op of ops) {
+    if (op.t === 'node') {
+      if (op.before === null || op.before.trashedAt !== undefined || op.after?.trashedAt === undefined) continue;
+      const at = s.nodes.get(op.before.id)?.trashedAt, row = nodeRow(s, op.before.id);
+      if (at === undefined) continue;
+      leaving.set(op.before.id, at);
+      if (row >= 0) for (const r of memberOf(s, row)) if (connKind(s, r) === KNOWLEDGE) candidates.add(connId(s, r));
+    } else if (op.t === 'connection' && op.after && op.after.kind === 'knowledge' && op.after.trashedAt === undefined) {
+      for (const m of op.after.members) {
+        const at = s.nodes.get(m.node)?.trashedAt;
+        if (at === undefined || op.before?.members.some((x) => x.node === m.node)) continue;
+        leaving.set(m.node, at);
+        candidates.add(op.after.id);
+      }
+    }
+  }
+  const out: Op[] = [];
+  for (const id of candidates) {
+    const now = s.connections.get(id);
+    if (!now || now.kind !== 'knowledge') continue;
+    const gone = now.members.filter((m) => leaving.has(m.node));
+    if (gone.length === 0) continue;
+    const members = now.members.filter((m) => !leaving.has(m.node)), trash = now.trashedAt === undefined && members.length < 2;
+    const goes = (node: Id) => trash || leaving.has(node);
+    for (const key of branchesOf(s, id)) if (goes(key.node)) out.push({ t: 'branch', key, before: true, after: false });
+    for (const ph of phantomsOf(s, id)) {
+      const rec = s.phantoms.get(ph)!;
+      if (goes(rec.of.node)) out.push({ t: 'phantom', before: rec, after: null });
+    }
+    out.push({ t: 'connection', before: now, after: trash ? { ...now, members, trashedAt: Math.max(...gone.map((m) => leaving.get(m.node)!)) } : { ...now, members } });
+  }
+  return out;
+}
+
+/**
  * A pending write replayed on the state as it is now (D4): `u`'s operations grouped by record (its first "before", its
  * last "after"), each record merged with the state's, and written from the state's — the write as it would be made now.
  * `remote`: the received writes applied since `u` was made or last replayed (their times decide the conflicts, and they
@@ -441,6 +574,8 @@ export function rebaseUnit(s: State, u: Unit, remote: readonly RemoteUnit[], gon
         e.merged = whole(e.base, e.theirs, e.mine, c);
     }
   }
+
+  departures(s, rx, entries, c);
 
   // What comes back takes back the placements and branches its deletion took (that write's), where they still make sense.
   const extra: Op[] = [], extraKeys = new Set<string>();

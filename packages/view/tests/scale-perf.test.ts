@@ -542,11 +542,14 @@ test('base de référence : updateScene coûte ce que l’action touche, pas la 
   // The brief's thresholds, for the action and for its undo alike; a node deleted everywhere (no threshold in the brief:
   // three times its measure, 2.4–2.7 ms) so that neither falls into a scan of the plan unseen.
   const limits: Record<string, number> = {
-    déplacement: 1, renommage: 1, création: 2, connexion: 2, inclusion: 5, [`suppression d’un groupe de ${content.length} éléments`]: 20, 'suppression partout': 8,
+    // Since plan 6b (D2), the nodes leaving their last plan take their connections with them: here some 3,500 to the
+    // trash and 4,300 branches out of the scene, the action measured 16.6 ms before, 40–48 ms since (its undo 20.8, then
+    // 44). Its gate is three times the best measure (R24), the brief's 20 ms staying the target in the registry.
+    déplacement: 1, renommage: 1, création: 2, connexion: 2, inclusion: 5, [`suppression d’un groupe de ${content.length} éléments`]: 120, 'suppression partout': 8,
   };
-  // Two undos sit near the brief's threshold on a loaded machine (connection 1.6–1.8 ms, group 14.7–19.1 ms): their
-  // gate is three times the best measure (R24), the threshold stays the target in the registry.
-  const undoLimits: Record<string, number> = { ...limits, connexion: 5, [`suppression d’un groupe de ${content.length} éléments`]: 45 };
+  // An undo sits near the brief's threshold on a loaded machine (connection 1.6–1.8 ms): its gate is three times the
+  // best measure (R24), the threshold stays the target in the registry.
+  const undoLimits: Record<string, number> = { ...limits, connexion: 5 };
   for (const [name, limit] of Object.entries(limits)) {
     expect(costs[name], name).toBeLessThanOrEqual(limit);
     expect(undos[name], `annulation : ${name}`).toBeLessThanOrEqual(undoLimits[name]);

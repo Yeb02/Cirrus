@@ -2,13 +2,13 @@ import { ANNOTATION_TITLE_CHARS, annotationTitle, validAnchor } from './annotati
 import { uuidv7 } from './ids.ts';
 import { checkState, groupOf, touchedBy, type Violation } from './invariants.ts';
 import type {
-  AgendaEntryRec, Anchor, BranchRec, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role,
+  AgendaEntryRec, Anchor, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role,
   SheetRec, TagKeyDef, TagValue,
 } from './model.ts';
 import { MAX_ID_CHARS, type Op, parseOp, SyncFormatError, truncateLabel } from './ops.ts';
 import { normalizeTag, PROTECTED_TAG_KEYS, TagError, type TagKeyShape, tagValueFits, tagValuesFit } from './registry.ts';
 import {
-  applyKnown, applyOp, canonical, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn,
+  applyKnown, applyOp, branchesOf, canonical, connectionOfRow, connId, connKind, dataOf, isCurrentConnection, layoutKey, memberOf, nodeRow, OpConflictError, phantomsIn,
   phantomsOf, placedIn, placementOf, planId, preambleText, rollback, type State, taggedWith,
 } from './state.ts';
 import { INCLUSION, KNOWLEDGE } from './tables.ts';
@@ -135,13 +135,31 @@ class Draft {
   }
   /**
    * A connection goes to the trash with what only shows it: its branches and phantoms in every plan. `c` must be its
-   * current record (OpConflictError otherwise); `members`: those it keeps there.
+   * current record (OpConflictError otherwise); `members`: those it keeps there; `at`: its time there.
    */
-  trashConnection(c: ConnectionRec, members: Member[]): void {
+  trashConnection(c: ConnectionRec, members: Member[], at = Date.now()): void {
     if (!isCurrentConnection(this.s, c)) throw stale('La connexion');
     for (const b of branchesOf(this.s, c.id)) this.write({ t: 'branch', key: b, before: true, after: false });
     this.dropPhantoms(c.id);
-    this.write({ t: 'connection', before: c, after: { ...c, members, trashedAt: Date.now() } });
+    this.write({ t: 'connection', before: c, after: { ...c, members, trashedAt: at } });
+  }
+  /**
+   * A node on its way to the trash, at time `at`, leaves its knowledge connections (D2), alive or in the trash: out of
+   * their members, with its branches and phantoms; a live one left with one node or none goes to the trash with it, at
+   * the same time, keeping the members it has left (connectionsLeaving). Group links and a document's structure are the
+   * callers'. Its node record is the caller's too.
+   */
+  leaveConnections(node: Id, at: number): void {
+    for (const c of connectionsOf(this.s, node, KNOWLEDGE)) {
+      const members = c.members.filter((m) => m.node !== node);
+      if (c.trashedAt === undefined && members.length < 2) {
+        this.trashConnection(c, members, at);
+        continue;
+      }
+      for (const b of branchesOf(this.s, c.id)) if (b.node === node) this.branch(b.plan, c.id, node, false);
+      this.dropPhantoms(c.id, node);
+      this.connection(c.id, { ...c, members });
+    }
   }
   /** Whether `a` was finished inside this transaction and its operations are still applied. */
   private made(a: Action): boolean {
@@ -213,14 +231,6 @@ const liveNodeOf = (s: State, id: Id) => {
 };
 const placementIn = (s: State, plan: Id, node: Id, message: string) => need(placementOf(s, plan, node), message);
 const connectionOf = (s: State, id: Id) => need(s.connections.get(id), 'Connexion introuvable.');
-/** Every branch of a connection, in every plan, from its row. */
-const branchesOf = (s: State, connection: Id): BranchRec[] => {
-  const T = dataOf(s).tables, c = T.conns.rows.get(connection), out: BranchRec[] = [];
-  if (c < 0) return out;
-  const v = T.conns.branches.view(c), plans = T.plans.rows.ids, nodes = T.nodes.rows.ids;
-  for (let i = 0; i < v.length; i += 2) out.push({ plan: plans[v[i]], connection, node: nodes[v[i + 1]] });
-  return out;
-};
 /** The connections a node is a member of (trash included), of one kind (INCLUSION…) or all, from the index. */
 const connectionsOf = (s: State, node: Id, kind?: number): ConnectionRec[] => {
   const n = nodeRow(s, node), out: ConnectionRec[] = [];
@@ -330,8 +340,9 @@ const hasMembers = (s: State, plan: Id, group: Id): boolean =>
  * "Here only" removal (spec 7): the node leaves this plan; its knowledge branches stay and are drawn as stubs. A group
  * keeps its links, hidden, so that its members show in their nearest ancestor present in the plan; a node with no
  * members leaves its group, and so do the hidden groups this leaves empty. Leaving its last plan sends it to the trash,
- * except a PDF annotation (plan 4c, D1: born in no plan, kept under its PDF; controller's ruling, task 3): it stays,
- * in no plan, listed under its PDF; « Supprimer partout » (deleteEverywhere) trashes it.
+ * out of its knowledge connections (D2: leaveConnections; its group links stay, hidden), except a PDF annotation (plan
+ * 4c, D1: born in no plan, kept under its PDF; controller's ruling, task 3): it stays, in no plan, listed under its PDF,
+ * with its connections; « Supprimer partout » (deleteEverywhere) trashes it.
  */
 export function removeFromPlan(s: State, plan: Id, node: Id): Action {
   const n = nodeOf(s, node);
@@ -343,38 +354,56 @@ export function removeFromPlan(s: State, plan: Id, node: Id): Action {
       leaveGroup(d, plan, x);
       x = parent;
     }
-    if (placementsOf(s, node).length === 0 && n.anchor === undefined) d.node(node, { ...n, trashedAt: Date.now() });
+    if (placementsOf(s, node).length === 0 && n.anchor === undefined) {
+      const at = Date.now();
+      d.leaveConnections(node, at);
+      d.node(node, { ...n, trashedAt: at });
+    }
     return d.finish(`Retirer « ${n.title} » de ce plan`);
   });
 }
 
-/** "Everywhere" deletion: out of every plan and every connection; connections left with fewer than two members go to the trash. */
+/**
+ * "Everywhere" deletion: out of every plan and every connection (D2: leaveConnections, the trash's included); its group
+ * links and a document's structure go to the trash, with the members they have left.
+ */
 export function deleteEverywhere(s: State, node: Id): Action {
   const n = nodeOf(s, node);
   return transact(s, (d) => {
+    const at = Date.now();
     // Found while the node is still a member of its connections (memberOf).
     const phantoms = phantomsFor(s, node);
     for (const p of placementsOf(s, node)) d.placement(p.plan, node, null);
+    d.leaveConnections(node, at);
     for (const c of connectionsOf(s, node)) {
-      if (c.trashedAt !== undefined) continue;
-      const members = c.members.filter((m) => m.node !== node);
-      if (c.kind !== 'knowledge' || members.length < 2) d.trashConnection(c, members);
-      else {
-        for (const b of branchesOf(s, c.id)) if (b.node === node) d.branch(b.plan, c.id, node, false);
-        d.connection(c.id, { ...c, members });
-      }
+      if (c.trashedAt !== undefined || c.kind === 'knowledge') continue;
+      d.trashConnection(c, c.members.filter((m) => m.node !== node), at);
     }
-    // Those of the connections it stays in (the others went with their connection to the trash).
+    // Any left (the others went with their connection, or with the node's arm).
     for (const ph of phantoms) if (s.phantoms.get(ph.id) === ph) d.dropPhantom(ph);
-    d.node(node, { ...n, trashedAt: Date.now() });
+    d.node(node, { ...n, trashedAt: at });
     return d.finish(`Supprimer « ${n.title} » partout`);
   });
 }
 
+/**
+ * The live knowledge connections that these nodes, on their way to the trash together, would take with them (D2,
+ * leaveConnections): those left with one node or none. What the app's warnings count.
+ */
+export function connectionsLeaving(s: State, nodes: readonly Id[]): Id[] {
+  const leaving = new Set(nodes), out = new Set<Id>();
+  for (const node of leaving) {
+    for (const c of connectionsOf(s, node, KNOWLEDGE)) {
+      if (c.trashedAt === undefined && c.members.filter((m) => !leaving.has(m.node)).length < 2) out.add(c.id);
+    }
+  }
+  return [...out];
+}
+
 /** restoreNode's refusal of a node that is not in the trash; the app tells it as well, before a restoring node follows the cursor. */
 export const RESTORE_NODE_NOT_IN_TRASH = 'Ce nœud n’est pas à la corbeille.';
-/** restoreConnection's refusal of a connection left with fewer than two members; the reason the app's « Restaurer » is off. */
-export const RESTORE_CONNECTION_LOST = 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.';
+/** restoreConnection's refusal of a connection left with no member; the reason the app's « Restaurer » is off. */
+export const RESTORE_CONNECTION_LOST = 'Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir.';
 
 /**
  * A node out of the trash, put down in `plan` (plan 6a, D5: the plan shown, whatever plan it left — that one may be gone).
@@ -420,14 +449,18 @@ export function addMember(s: State, plan: Id, connection: Id, member: Member): A
   });
 }
 
-/** Removes a member everywhere; a connection left with fewer than two members goes to the trash. */
+/**
+ * Removes a member everywhere (D2): a knowledge connection keeps going while it has one; without one it goes to the
+ * trash, keeping that last member in its list, for a restoration. A group link or a structure left with fewer than two
+ * goes to the trash.
+ */
 export function removeMember(s: State, connection: Id, node: Id): Action {
   const c = connectionOf(s, connection);
   return transact(s, (d) => {
     const members = c.members.filter((m) => m.node !== node);
     for (const b of branchesOf(s, connection)) if (b.node === node) d.branch(b.plan, connection, node, false);
     d.dropPhantoms(connection, node);
-    if (members.length < 2) d.trashConnection(c, members);
+    if (c.kind === 'knowledge' ? members.length === 0 : members.length < 2) d.trashConnection(c, c.kind === 'knowledge' ? c.members : members);
     else d.connection(connection, { ...c, members });
     return d.finish('Retirer un nœud de la connexion');
   });
@@ -949,19 +982,21 @@ export function trashedItems(s: State): TrashedItem[] {
 
 /**
  * A connection out of the trash (D5), in one action: its record alive again, its members as they are, and its branches
- * given back in every plan where at least two of its members are placed, one for each member placed there — documents
- * aside, which draw structure only, as « partout » shows a new connection (otherPlans); no stub, no phantom. A member
- * still in the trash stays a member, shown nowhere (it is placed nowhere: rule trashedPlaced). Refused: a connection not
- * in the trash; a group link or a document's structure; one left with fewer than two members — its deletion took them,
- * and what a deletion took does not come back (spec 6.2) —; one with fewer than two members alive, to restore first.
+ * given back in every plan where at least two of its members are placed — or its only one alive (plan 6b, D2) —, one
+ * for each member placed there; documents aside, which draw structure only, as « partout » shows a new connection
+ * (otherPlans); no stub, no phantom. A member still in the trash (a base of an older version: D2 takes a node out of
+ * its connections) stays a member, shown nowhere (it is placed nowhere: rule trashedPlaced). Refused: a connection not
+ * in the trash; a group link or a document's structure; one left with no member — the nodes' departures took them, and
+ * what a deletion took does not come back (spec 6.2) —; one with no member alive, to restore first.
  */
 export function restoreConnection(s: State, id: Id): Action {
   const c = connectionOf(s, id);
   if (c.trashedAt === undefined) throw new CommandError('Cette connexion n’est pas à la corbeille.');
   if (c.kind !== 'knowledge') throw new CommandError('Seules les connexions de connaissance se restaurent.');
-  if (c.members.length < 2) throw new CommandError(RESTORE_CONNECTION_LOST);
+  if (c.members.length === 0) throw new CommandError(RESTORE_CONNECTION_LOST);
   const alive = c.members.filter((m) => { const n = s.nodes.get(m.node); return n !== undefined && n.trashedAt === undefined; });
-  if (alive.length < 2) throw new CommandError('Ses nœuds sont à la corbeille : restaure-les d’abord.');
+  if (alive.length === 0) throw new CommandError('Ses nœuds sont à la corbeille : restaure-les d’abord.');
+  const enough = Math.min(2, alive.length);
   // The members placed in each plan (placed: alive), by plan row, in the members' order.
   const plans = dataOf(s).tables.plans.recs, placed = new Map<number, Id[]>();
   for (const m of alive) {
@@ -975,7 +1010,7 @@ export function restoreConnection(s: State, id: Id): Action {
   return transact(s, (d) => {
     const { trashedAt: _trashed, ...rest } = c;
     d.connection(id, rest);
-    for (const [p, nodes] of placed) if (nodes.length >= 2) for (const node of nodes) d.branch(planId(s, p), id, node, true);
+    for (const [p, nodes] of placed) if (nodes.length >= enough) for (const node of nodes) d.branch(planId(s, p), id, node, true);
     return d.finish(`Restaurer ${connectionName(s, c)}`);
   });
 }

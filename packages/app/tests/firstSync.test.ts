@@ -392,10 +392,10 @@ test('R19, R20 : une ligne au libellé trop long (écrite avant la borne) et une
   const l = (lab = await Lab.start());
   const a = await app(l, 'pc-a');
   const { X } = await fill(a);
-  // As an older version wrote them: a label past the bound, a connection of one member (commit checks records, not rules).
+  // As an older version wrote them: a label past the bound, a connection without member (commit checks records, not rules).
   await run(a, (s) => ({ ...editNode(s, X, { summary: 'Un résumé.' }), label: 'L'.repeat(800) }));
-  const lone = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [{ node: X, role: 'source' as const }] };
-  await run(a, () => ({ id: 'a-seule', label: 'Connexion d’un seul membre', ops: [{ t: 'connection', before: null, after: lone }] }));
+  const lone = { id: 'c-seule', kind: 'knowledge' as const, title: '', relation: '', tags: [], members: [] };
+  await run(a, () => ({ id: 'a-seule', label: 'Connexion sans membre', ops: [{ t: 'connection', before: null, after: lone }] }));
   expect(await a.sync.pair(l.url, l.code('Portable'), 'Portable')).toMatchObject({ offer: { kind: 'seed' } });
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   expect(await a.sync.first('seed')).toEqual({ ok: true });

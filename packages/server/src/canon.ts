@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import {
-  addedViolation, applyOps, decodeState, encodeState, invertOp, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
+  addedViolation, applyOps, decodeState, departuresAfter, encodeState, invertOp, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
   SyncFormatError, type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
@@ -154,6 +154,8 @@ export class Canon {
    * 3. a write accepted already (its answer lost, D5): accepted with its number, nothing applied again;
    * 4. every file it adds to a node, and every anchor's PDF, in the server's store: refused otherwise (D6);
    * 5. applied to the state, each "before" checked (applyOps): stale otherwise, with the number to have received first;
+   *    then the departures it could not see (departuresAfter, plan 6b, D3: a node to the trash leaves its connections,
+   *    even one added meanwhile elsewhere), applied and added to it: the PC receives it as the server holds it;
    * 6. no violation added (addedViolation): refused otherwise, the state put back;
    * 7. written to the base, numbered, with the time, PC and identifiers received (a failure puts the state back, and is thrown);
    * 8. relayed to every open stream.
@@ -177,6 +179,11 @@ export class Canon {
       if (e instanceof OpConflictError) return { stale: this.last };
       // Not a "before" that no longer holds: a write that can never apply (applyOps has left the state as it was).
       return { refused: e instanceof Error ? e.message : String(e) };
+    }
+    const departures = departuresAfter(this.s, u.ops);
+    if (departures.length > 0) {
+      applyOps(this.s, departures);
+      u = { ...u, ops: [...u.ops, ...departures] };
     }
     const v = addedViolation(this.s, u.ops);
     if (v) {

@@ -38,10 +38,13 @@ function inclusion(s: State, member: Id, group: Id, plan: Id): void {
 
 const codes = (s: State) => checkState(s).map((v) => v.code);
 
-test('connexion à un seul membre refusée', () => {
+test('connexion sans membre refusée ; d’un seul membre, admise (plan 6b, D2)', () => {
   const s = base();
-  connection(s, { id: 'c', kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: 'A', role: 'source' }] }, 'p1');
-  expect(codes(s)).toContain('members');
+  connection(s, { id: 'c', kind: 'knowledge', title: '', relation: '', tags: [], members: [] }, 'p1');
+  expect(codes(s)).toEqual(['members']);
+  const one = base();
+  connection(one, { id: 'c', kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: 'A', role: 'source' }] }, 'p1');
+  expect(codes(one)).toEqual([]);
 });
 
 test('second groupe direct dans le même plan refusé (Review Focus 4)', () => {
@@ -102,7 +105,7 @@ const NODES = Array.from({ length: 12 }, (_, i) => `n${i}`);
 
 /**
  * Twelve nodes in P, some in Q and in the document D, and every rule broken somewhere, written without commands: a
- * connection of one member, a member twice, a branch to a non-member, two groups (P), a loop (Q), a trashed node still
+ * connection without member, a member twice, a branch to a non-member, two groups (P), a loop (Q), a trashed node still
  * placed, a structure outside a document, an enumeration value unknown. A structure in D and a connection tagged with a
  * valid value wait for a plan or a tag key to change.
  */
@@ -120,7 +123,7 @@ function broken(): State {
     applyOp(s, { t: 'connection', before: null, after: { id, kind, title: '', relation: '', tags, members: members.map(([n, role]) => ({ node: n, role })) } });
     for (const n of new Set(shown)) applyOp(s, { t: 'branch', key: { plan, connection: id, node: n }, before: false, after: true });
   };
-  raw('solo', 'knowledge', [['n0', 'source']], 'P');
+  raw('solo', 'knowledge', [], 'P');
   raw('dup', 'knowledge', [['n1', 'source'], ['n1', 'target'], ['n2', 'target']], 'P');
   raw('k23', 'knowledge', [['n2', 'source'], ['n3', 'target']], 'P', ['n2', 'n3', 'n4'], [{ key: 'e', value: 'un' }]);
   raw('i56', 'inclusion', [['n5', 'source'], ['n6', 'target']], 'P');

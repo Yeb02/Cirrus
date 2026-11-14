@@ -6,6 +6,7 @@ import {
 import { uuidv7 } from '../src/ids.ts';
 import { checkState, groupOf } from '../src/invariants.ts';
 import type { Id, Role, TagValue } from '../src/model.ts';
+import { departuresAfter } from '../src/merge.ts';
 import { invertOp, type Op } from '../src/ops.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
 import { applyOp, applyOps, canonical, emptyState, OpConflictError, type State } from '../src/state.ts';
@@ -302,7 +303,7 @@ class Sequencer {
   }
 
   private accept(x: unknown): Result {
-    const u = parseUnit(x);
+    let u = parseUnit(x);
     const known = this.known.get(u.unit);
     if (known !== undefined) return { accepted: known };
     try {
@@ -311,6 +312,10 @@ class Sequencer {
       if (e instanceof OpConflictError) return { stale: this.seq };
       throw e;
     }
+    // The departures it could not see (canon.ts, plan 6b, D3).
+    const departures = departuresAfter(this.s, u.ops);
+    applyOps(this.s, departures);
+    u = { ...u, ops: [...u.ops, ...departures] };
     const v = addedViolation(this.s, u.ops);
     if (v) {
       applyOps(this.s, [...u.ops].reverse().map(invertOp));

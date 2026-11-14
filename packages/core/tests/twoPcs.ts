@@ -2,6 +2,7 @@ import { expect } from 'vitest';
 import { type Action, addedViolation } from '../src/commands.ts';
 import { uuidv7 } from '../src/ids.ts';
 import { checkState } from '../src/invariants.ts';
+import { departuresAfter } from '../src/merge.ts';
 import type { Id } from '../src/model.ts';
 import { invertOp } from '../src/ops.ts';
 import { fromSnapshot, toSnapshot } from '../src/snapshot.ts';
@@ -20,15 +21,18 @@ const T0 = Date.UTC(2026, 10, 10, 9);
 
 export type Answer = 'accepted' | 'stale' | { refused: string };
 
-/** POST /units for one write, as the server takes it: parseUnit, the "befores", no violation added. */
+/** POST /units for one write, as the server takes it (canon.ts): parseUnit, the "befores", the departures it could not see, no violation added. */
 export function accept(server: State, journal: RemoteUnit[], u: Unit): Answer {
-  const unit = parseUnit(wire(u));
+  let unit = parseUnit(wire(u));
   try {
     applyOps(server, unit.ops);
   } catch (e) {
     if (e instanceof OpConflictError) return 'stale';
     throw e;
   }
+  const departures = departuresAfter(server, unit.ops);
+  applyOps(server, departures);
+  unit = { ...unit, ops: [...unit.ops, ...departures] };
   const v = addedViolation(server, unit.ops);
   if (v) {
     applyOps(server, [...unit.ops].reverse().map(invertOp));
@@ -83,4 +87,30 @@ export function crossed(s0: State, mine: (s: State) => Action, theirs: (s: State
   }
   expect(checkState(server)).toEqual([]);
   return { server, dropped: pcs.flatMap((pc) => pc.dropped) };
+}
+
+/**
+ * The same two writes, the second PC informed (plan 6b, D3): the server takes the first one (`order`); the other PC
+ * receives it before sending its own, replayed on it (reconcile), which the server must then take as it is — what the
+ * write's departures change in it already, nothing for departuresAfter to add. Both PCs then hold the server's state.
+ */
+export function informed(s0: State, mine: (s: State) => Action, theirs: (s: State) => Action, order: 'mine first' | 'theirs first', at: { mine: number; theirs: number }) {
+  const server = copy(s0), journal: RemoteUnit[] = [];
+  const pcs = [copy(s0), copy(s0)];
+  const units = [unitOf(run(pcs[0], mine(pcs[0])), 'pc-a', T0 + at.mine), unitOf(run(pcs[1], theirs(pcs[1])), 'pc-b', T0 + at.theirs)];
+  const [first, second] = order === 'mine first' ? [0, 1] : [1, 0];
+  expect(accept(server, journal, units[first])).toBe('accepted');
+  const r = reconcile(pcs[second], [units[second]], journal.map(wire), []);
+  expect(r.dropped).toEqual([]);
+  for (const u of r.rebased) {
+    expect(accept(server, journal, u)).toBe('accepted');
+    expect(journal.at(-1)!.ops, 'ajouté par le serveur').toEqual(wire(u.ops));
+  }
+  reconcile(pcs[first], [units[first]], journal.map(wire), []);
+  reconcile(pcs[second], r.rebased, journal.slice(1).map(wire), []);
+  for (const [i, s] of pcs.entries()) {
+    expect(image(s), `PC ${i}`).toBe(image(server));
+    expect(checkState(s), `PC ${i}`).toEqual([]);
+  }
+  return server;
 }

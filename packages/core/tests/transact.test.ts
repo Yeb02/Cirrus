@@ -282,11 +282,10 @@ test('transact : le brouillon écrit sur l’état même, une commande imbriqué
 
 test('une violation déjà là ne refuse pas une action ; une violation ajoutée la refuse, état intact', () => {
   const { s, P, A, B } = world();
-  // A knowledge connection with a single member, written without a command.
-  applyOp(s, { t: 'connection', before: null, after: { id: 'seule', kind: 'knowledge', title: '', relation: '', tags: [], members: [{ node: A, role: 'source' }] } });
-  applyOp(s, { t: 'branch', key: { plan: P, connection: 'seule', node: A }, before: false, after: true });
+  // A knowledge connection without member (plan 6b, D2: one is enough), written without a command.
+  applyOp(s, { t: 'connection', before: null, after: { id: 'seule', kind: 'knowledge', title: '', relation: '', tags: [], members: [] } });
   const before = image(s);
-  expect(editConnection(s, 'seule', { title: 'toujours seule' }).ops).toHaveLength(1);
+  expect(editConnection(s, 'seule', { title: 'toujours vide' }).ops).toHaveLength(1);
   expect(image(s)).toBe(before);
   expect(() => removeMember(s, 'seule', A)).not.toThrow(); // to the trash: no rule applies there
   // Two members of which one is the same node twice: added by this action, refused.

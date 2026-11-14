@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import {
-  type Action, CommandError, connect, createAnnotation, createNode, createPlan, deleteConnection, deleteEverywhere, include, placeAbsent, placeNode, removeFromPlan,
+  type Action, addMember, CommandError, connect, createAnnotation, createNode, createPlan, deleteConnection, deleteEverywhere, include, placeAbsent, placeNode, removeFromPlan,
   restoreConnection, restoreNode, setBranches,
 } from '../src/commands.ts';
 import { invertAction, UndoStack } from '../src/history.ts';
@@ -11,7 +11,7 @@ import type { Anchor, Id, PlanType } from '../src/model.ts';
 import { applyOps, emptyState, placementKey, type State } from '../src/state.ts';
 import { parseUnit, type Unit } from '../src/sync.ts';
 import { created } from './helpers.ts';
-import { crossed } from './twoPcs.ts';
+import { crossed, image, informed } from './twoPcs.ts';
 
 // The trash (plan 6a, task 4, D5): what it holds, a node put back by placing it in a plan, a connection restored with its
 // branches; each one action, checked, that an undo gives back and the sync carries.
@@ -65,23 +65,24 @@ test('trashedItems : les nœuds, les annotations et les connexions de connaissan
   const { s, plan, mk, link } = world();
   const A = mk('A'), B = mk('B'), C = mk('C'), G = mk('G'), X = mk('X');
   run(s, include(s, plan.P, B, G));
-  const implies = link('P', [A, B], 'Implique'), bc = link('P', [B, C]), xa = link('P', [X, A]);
+  const implies = link('P', [A, B], 'Implique'), bc = link('P', [B, C]), xa = link('P', [X, A]), ab = link('P', [A, B]);
   const note = created(run(s, createAnnotation(s, anchor(A), 'Un passage')), 'node');
   at(T0 + 1, () => run(s, deleteConnection(s, implies)));
   at(T0 + 2, () => run(s, deleteEverywhere(s, note)));
-  // C leaves its last plan: to the trash, its connection with B alive.
+  // C leaves its last plan: to the trash, with its connection with B, left with one node (plan 6b, D2).
   at(T0 + 3, () => run(s, removeFromPlan(s, plan.P, C)));
   // G deleted everywhere: its group link goes to the trash too, and is not listed.
   at(T0 + 4, () => run(s, deleteEverywhere(s, G)));
-  at(T0 + 5, () => run(s, deleteConnection(s, bc)));
+  at(T0 + 5, () => run(s, deleteConnection(s, ab)));
   // X deleted everywhere: its connection with A, left with one member, goes at the same time; the node first.
   at(T0 + 6, () => run(s, deleteEverywhere(s, X)));
   expect(core.trashedItems(s)).toEqual([
     { id: X, kind: 'node', title: 'X', at: T0 + 6 },
     { id: xa, kind: 'connection', title: 'la connexion de « A »', at: T0 + 6 },
-    { id: bc, kind: 'connection', title: 'la connexion entre « B » et « C »', at: T0 + 5 },
+    { id: ab, kind: 'connection', title: 'la connexion entre « A » et « B »', at: T0 + 5 },
     { id: G, kind: 'node', title: 'G', at: T0 + 4 },
     { id: C, kind: 'node', title: 'C', at: T0 + 3 },
+    { id: bc, kind: 'connection', title: 'la connexion de « B »', at: T0 + 3 },
     { id: note, kind: 'node', title: 'Un passage', at: T0 + 2 },
     { id: implies, kind: 'connection', title: '« Implique »', at: T0 + 1 },
   ]);
@@ -111,7 +112,9 @@ test('restoreNode : posé dans un autre plan que celui d’où il est parti, mê
   run(s, setBranches(s, c, [{ plan: plan.Q, node: X }, { plan: plan.Q, node: Y }], true));
   run(s, placeAbsent(s, plan.Q, c, X, 300, 40, 1));
   run(s, removeFromPlan(s, plan.P, X));
-  run(s, removeFromPlan(s, R, X));
+  // Out of R, its last plan, by an older version: to the trash without leaving its connections (since plan 6b, D2,
+  // removeFromPlan takes it out of them, its phantoms with it).
+  applyOps(s, [{ t: 'placement', before: s.placements.get(placementKey(R, X))!, after: null }, { t: 'node', before: s.nodes.get(X)!, after: { ...s.nodes.get(X)!, trashedAt: T0 } }]);
   expect(s.nodes.get(X)!.trashedAt).toBeDefined();
   // The plan it left last is gone (its creation undone, or another PC's).
   const gone = s.plans.get(R)!;
@@ -175,40 +178,51 @@ test('restoreConnection : ses branches dans chaque plan où deux de ses membres 
   expect(checkState(s)).toEqual([]);
 });
 
-test('restoreConnection : un membre encore jeté reste membre, sans branche ; avec moins de deux membres vivants, refusé « Ses nœuds sont à la corbeille : restaure-les d’abord. » ; restaurés, la connexion revient', () => {
+test('restoreConnection : un nœud jeté quitte aussi la connexion à la corbeille, qui revient sans lui, à un nœud s’il ne lui en reste qu’un ; deux membres vivants dans deux plans, elle ne s’affiche nulle part ; un membre jeté par une version ancienne reste membre, sans branche', () => {
   const { s, plan, mk, link } = world();
-  const A = mk('A'), B = mk('B'), C = mk('C');
+  const A = mk('A'), B = mk('B'), C = mk('C'), D = mk('D', ['Q']), E = mk('E'), F = mk('F');
   const c = link('P', [A, B, C]);
   run(s, deleteConnection(s, c));
-  // C deleted everywhere while the connection is in the trash: it stays one of its members.
+  // C deleted everywhere while the connection is in the trash: it leaves it (plan 6b, D2).
   run(s, deleteEverywhere(s, C));
-  expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([A, B, C]);
+  expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([A, B]);
   const back = run(s, restoreConnection(s, c));
-  expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([A, B, C]);
+  expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([A, B]);
   expect(branchesOf(s, c)).toEqual([`${plan.P}|${A}`, `${plan.P}|${B}`].sort());
   expect(checkState(s)).toEqual([]);
   run(s, invertAction(back));
-  // B deleted everywhere too: one member alive, refused, nothing written.
+  // B deleted everywhere too: the connection comes back with A alone, in A's plan.
   run(s, deleteEverywhere(s, B));
-  const before = JSON.stringify(s.connections.get(c));
-  expect(refusal(() => restoreConnection(s, c))).toBe('Ses nœuds sont à la corbeille : restaure-les d’abord.');
-  expect(JSON.stringify(s.connections.get(c))).toBe(before);
-  // B put back, in Q: the connection comes back, shown nowhere — A is in P, B in Q, no plan has two of its members.
-  run(s, restoreNode(s, B, plan.Q, 0, 0, 0));
   run(s, restoreConnection(s, c));
-  expect(s.connections.get(c)!.trashedAt).toBeUndefined();
-  expect(branchesOf(s, c)).toEqual([]);
+  expect(s.connections.get(c)!.members.map((m) => m.node)).toEqual([A]);
+  expect(branchesOf(s, c)).toEqual([`${plan.P}|${A}`]);
+  expect(checkState(s)).toEqual([]);
+  // A in P, D in Q: no plan has two of its members, it comes back shown nowhere.
+  const ad = link('P', [A, D]);
+  run(s, deleteConnection(s, ad));
+  run(s, restoreConnection(s, ad));
+  expect(s.connections.get(ad)!.trashedAt).toBeUndefined();
+  expect(branchesOf(s, ad)).toEqual([]);
+  // F thrown away by an older version, without leaving its connection: still a member, shown nowhere.
+  const aef = link('P', [A, E, F]);
+  run(s, deleteConnection(s, aef));
+  applyOps(s, [{ t: 'placement', before: s.placements.get(placementKey(plan.P, F))!, after: null }, { t: 'node', before: s.nodes.get(F)!, after: { ...s.nodes.get(F)!, trashedAt: T0 } }]);
+  run(s, restoreConnection(s, aef));
+  expect(s.connections.get(aef)!.members.map((m) => m.node)).toEqual([A, E, F]);
+  expect(branchesOf(s, aef)).toEqual([`${plan.P}|${A}`, `${plan.P}|${E}`].sort());
   expect(checkState(s)).toEqual([]);
 });
 
-test('restoreConnection : une connexion réduite à un nœud ne revient pas ; refusée hors de la corbeille, inconnue, ou d’un autre genre que la connaissance', () => {
+test('restoreConnection : une connexion sans nœud ne revient pas ; refusée hors de la corbeille, inconnue, ou d’un autre genre que la connaissance', () => {
   const { s, plan, mk, link } = world();
   const A = mk('A'), B = mk('B'), G = mk('G'), X = mk('X'), Y = mk('Y');
-  // X deleted everywhere: its connection with Y goes to the trash with Y alone.
+  // X deleted everywhere: its connection with Y goes to the trash with Y alone; Y deleted everywhere, it has none left.
   const xy = link('P', [X, Y]);
   run(s, deleteEverywhere(s, X));
   expect(s.connections.get(xy)!.members.map((m) => m.node)).toEqual([Y]);
-  expect(refusal(() => restoreConnection(s, xy))).toBe('Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.');
+  run(s, deleteEverywhere(s, Y));
+  expect(s.connections.get(xy)!.members).toEqual([]);
+  expect(refusal(() => restoreConnection(s, xy))).toBe('Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir.');
   const ab = link('P', [A, B]);
   expect(refusal(() => restoreConnection(s, ab))).toBe('Cette connexion n’est pas à la corbeille.');
   expect(refusal(() => restoreConnection(s, 'inconnue'))).toBe('Connexion introuvable.');
@@ -221,32 +235,77 @@ test('restoreConnection : une connexion réduite à un nœud ne revient pas ; re
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// The sync (Review Focus 4): a connection restored on one PC while another throws one of its members away.
+// The sync (plan 6b, D3): a node thrown away on one PC — deleted everywhere, or out of its last plan — while another
+// restores a connection that held it, or adds it to one. The departure wins: the connection merged has neither the
+// node, nor its branches, nor its phantoms, and goes to the trash when it is left with one node.
 
-test.each([
+const ORDERS = [
   { order: 'mine first', at: { mine: 1, theirs: 2 } },
   { order: 'mine first', at: { mine: 2, theirs: 1 } },
   { order: 'theirs first', at: { mine: 1, theirs: 2 } },
   { order: 'theirs first', at: { mine: 2, theirs: 1 } },
-] as const)('synchro : une connexion restaurée sur un PC pendant qu’un autre jette partout un de ses membres ($order, la mienne à $at.mine) : tout converge, sans violation, rien n’est écarté', ({ order, at: when }) => {
-  for (const three of [false, true]) {
-    const { s, plan, mk, link } = world();
-    const X = mk('X'), Y = mk('Y'), Z = mk('Z');
-    const c = link('P', three ? [X, Y, Z] : [X, Y]);
+] as const;
+const DEPARTURES = [
+  { how: 'supprimé partout', go: (s: State, _p: Id, X: Id) => deleteEverywhere(s, X) },
+  { how: 'retiré de son dernier plan', go: (s: State, p: Id, X: Id) => removeFromPlan(s, p, X) },
+] as const;
+const OTHERS = [
+  // The connection [X, Y(, Z)] in the trash, restored.
+  { what: 'la restauration de la connexion', make: (link: (nodes: Id[]) => Id, s: State, X: Id, rest: Id[]) => {
+    const c = link([X, ...rest]);
     run(s, deleteConnection(s, c));
-    const { server, dropped } = crossed(s, (x) => restoreConnection(x, c), (x) => deleteEverywhere(x, X), order, when);
-    expect(dropped, `${three}`).toEqual([]);
-    // The restore stands, the deletion too: X in the trash, out of its plans, still a member of the connection (it was
-    // in the trash when X was thrown away), its branch a stub — as a connection drawn on one PC while another throws a
-    // member away. Drawn only where two members are placed.
-    const conn = server.connections.get(c)!;
-    expect(conn.trashedAt, `${three}`).toBeUndefined();
-    expect(conn.members.map((m) => m.node), `${three}`).toEqual(three ? [X, Y, Z] : [X, Y]);
-    expect(server.nodes.get(X)!.trashedAt, `${three}`).toBeDefined();
-    expect(server.placements.has(placementKey(plan.P, X)), `${three}`).toBe(false);
-    expect(branchesOf(server, c), `${three}`).toEqual((three ? [X, Y, Z] : [X, Y]).map((n) => `${plan.P}|${n}`).sort());
-  }
-});
+    return { c, other: (x: State, _p: Id) => restoreConnection(x, c) };
+  } },
+  // The connection [Y(, Z)] alive, X added.
+  { what: 'l’ajout du nœud à la connexion', make: (link: (nodes: Id[]) => Id, _s: State, X: Id, rest: Id[]) => {
+    const c = link(rest);
+    return { c, other: (x: State, p: Id) => addMember(x, p, c, { node: X, role: 'target' }) };
+  } },
+] as const;
+
+test.each(ORDERS.flatMap((o) => DEPARTURES.flatMap((d) => OTHERS.map((w) => ({ ...o, ...d, ...w })))))(
+  'synchro : un nœud $how sur un PC, croisé avec $what sur l’autre ($order, la mienne à $at.mine) : son départ l’emporte, rien n’est écarté, les deux PC égaux',
+  ({ order, at: when, go, make }) => {
+    for (const three of [false, true]) {
+      const { s, plan, mk, link } = world();
+      const X = mk('X'), Y = mk('Y'), Z = mk('Z');
+      const { c, other } = make((nodes) => link('P', nodes), s, X, three ? [Y, Z] : [Y]);
+      // Mine: the other change; theirs: the departure (crossed checks that both PCs end in the server's state).
+      const { server, dropped } = crossed(s, (x) => other(x, plan.P), (x) => go(x, plan.P, X), order, when);
+      const tag = `${three ? 'trois' : 'deux'}`;
+      expect(dropped, tag).toEqual([]);
+      expect(server.nodes.get(X)!.trashedAt, tag).toBeDefined();
+      expect(server.placements.has(placementKey(plan.P, X)), tag).toBe(false);
+      const conn = server.connections.get(c)!;
+      expect(conn.members.map((m) => m.node), tag).toEqual(three ? [Y, Z] : [Y]);
+      expect([...server.branches].some((b) => b.node === X), tag).toBe(false);
+      expect([...server.phantoms.values()].some((p) => p.of.node === X), tag).toBe(false);
+      if (three) {
+        expect(conn.trashedAt, tag).toBeUndefined();
+        expect(branchesOf(server, c), tag).toEqual([`${plan.P}|${Y}`, `${plan.P}|${Z}`].sort());
+      } else {
+        // With X: its time in the trash.
+        expect(conn.trashedAt, tag).toBe(server.nodes.get(X)!.trashedAt);
+        expect(branchesOf(server, c), tag).toEqual([]);
+      }
+    }
+  },
+);
+
+test.each(ORDERS.flatMap((o) => DEPARTURES.flatMap((d) => OTHERS.map((w) => ({ ...o, ...d, ...w })))))(
+  'synchro : un nœud $how, croisé avec $what ($order, la mienne à $at.mine) : le PC qui reçoit l’autre écriture avant d’envoyer la sienne la rejoue jusqu’au même état que celui où le serveur complète',
+  ({ order, at: when, go, make }) => {
+    // One time for every command: the states compare whole, times in the trash included.
+    vi.spyOn(Date, 'now').mockReturnValue(T0 + 10);
+    for (const three of [false, true]) {
+      const { s, plan, mk, link } = world();
+      const X = mk('X'), Y = mk('Y'), Z = mk('Z');
+      const { other } = make((nodes) => link('P', nodes), s, X, three ? [Y, Z] : [Y]);
+      const mine = (x: State) => other(x, plan.P), theirs = (x: State) => go(x, plan.P, X);
+      expect(image(informed(s, mine, theirs, order, when)), three ? 'trois' : 'deux').toBe(image(crossed(s, mine, theirs, order, when).server));
+    }
+  },
+);
 
 test.each(['mine first', 'theirs first'] as const)('synchro : la même connexion restaurée sur deux PC (%s) converge, une seule fois', (order) => {
   const { s, plan, mk, link } = world();

@@ -114,8 +114,8 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
 
   for (const c of pick(s.connections)) {
     if (c.trashedAt !== undefined) continue;
-    if (c.kind === 'knowledge' && c.members.length < 2) {
-      out.push({ code: 'members', subject: c.id, message: 'Une connexion doit relier au moins deux nœuds.' });
+    if (c.kind === 'knowledge' && c.members.length === 0) {
+      out.push({ code: 'members', subject: c.id, message: 'Une connexion doit relier au moins un nœud.' });
     }
     if (new Set(c.members.map((m) => m.node)).size !== c.members.length) {
       out.push({ code: 'duplicateMember', subject: c.id, message: 'Un nœud ne peut figurer qu’une fois dans une connexion.' });

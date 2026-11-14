@@ -9,7 +9,7 @@ const sameRow = (a: { row: TrashRow; onRestore: unknown }, b: { row: TrashRow; o
 
 /**
  * An object of the trash: its kind, its title, when it was thrown away, and « Restaurer » — off, its reason as its title,
- * for a connection left with fewer than two nodes, which the core refuses for good.
+ * for a connection left with no node (plan 6b, D2), which the core refuses for good.
  */
 const Row = memo(function Row({ row, onRestore }: { row: TrashRow; onRestore(row: TrashRow): void }) {
   return (

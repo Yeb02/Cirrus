@@ -155,6 +155,14 @@ export function branchNodes(s: State, c: number, p: number): number[] {
   for (let i = 0; i < v.length; i += 2) if (v[i] === p) out.push(v[i + 1]);
   return out;
 }
+/** Every branch of a connection, in every plan, from its row: a new list. */
+export function branchesOf(s: State, connection: Id): BranchRec[] {
+  const T = dataOf(s).tables, c = T.conns.rows.get(connection), out: BranchRec[] = [];
+  if (c < 0) return out;
+  const v = T.conns.branches.view(c), plans = T.plans.rows.ids, nodes = T.nodes.rows.ids;
+  for (let i = 0; i < v.length; i += 2) out.push({ plan: plans[v[i]], connection, node: nodes[v[i + 1]] });
+  return out;
+}
 /** The connection rows node row `row` is a member of, as a copy. */
 export const memberOf = (s: State, row: number): Int32Array => dataOf(s).index.memberOf.view(row).slice();
 /** Without a copy, for hot loops: how many connections node row `row` is a member of, and the `i`-th one's row. */

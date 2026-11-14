@@ -2,6 +2,7 @@ import { validAnchor } from './annotation.ts';
 import type {
   AgendaEntryRec, ConnectionLayout, FileRef, Id, NodeRec, PhantomRec, Placement, PlanRec, PreambleRec, SheetRec, TagKeyDef, TagValue,
 } from './model.ts';
+import { recordFits } from './ops.ts';
 import { dataOf, emptyState, type Indices, layoutKey, reindexRest, type State } from './state.ts';
 import { type ConnTable, EMPTY_TAGS, INCLUSION, KINDS, NO_RECORD, type Pool, type Rows, SOURCE, TARGET } from './tables.ts';
 
@@ -216,12 +217,15 @@ function checksum(u: Uint32Array): [number, number] {
 const bytesOf = (a: ArrayBufferView) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
 const isWellFormed = (s: string): boolean => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
 
-/** Records of the JSON part kept by identifier (the agenda, the sheets): each an object with its own, once. */
-function byId<T extends { id: Id }>(list: T[] | undefined, into: Map<Id, T>, what: string): void {
+/**
+ * Records of the JSON part kept by identifier (the agenda, the sheets): each one as a write's is checked (recordFits,
+ * review of task 1), with its own identifier, once.
+ */
+function byId<T extends { id: Id }>(list: T[] | undefined, into: Map<Id, T>, t: 'agenda' | 'sheet', what: string): void {
   if (list === undefined) return;
   if (!Array.isArray(list)) throw corrupt(what);
   for (const r of list) {
-    if (!isObject(r) || typeof r.id !== 'string' || into.has(r.id)) throw corrupt(what);
+    if (!recordFits(t, r) || into.has(r.id)) throw corrupt(what);
     into.set(r.id, r);
   }
 }
@@ -638,8 +642,8 @@ export function decodeState(buf: ArrayBuffer): State {
     if (!isObject(json.preamble) || typeof json.preamble.text !== 'string') throw corrupt('préambule');
     T.preamble = json.preamble;
   }
-  byId(json.agenda, T.agenda, 'agenda');
-  byId(json.sheets, T.sheets, 'feuillet');
+  byId(json.agenda, T.agenda, 'agenda', 'agenda');
+  byId(json.sheets, T.sheets, 'sheet', 'feuillet');
   if (N.count !== counts.nodes || P.count !== counts.plans || C.count !== counts.connections || C.branchCount !== counts.branches) throw corrupt('comptes');
 
   // The indices kept: memberOf (connection rows with a record, per node row), placedIn (plan rows), groupOf. Each is

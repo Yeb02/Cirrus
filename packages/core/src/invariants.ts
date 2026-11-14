@@ -119,8 +119,8 @@ export function checkState(s: State, touched?: Set<Id>): Violation[] {
   for (const c of conns) {
     if (!Number.isNaN(C.trashedAt[c])) continue;
     const id = C.rows.ids[c], members = C.members.view(c);
-    if (C.kind[c] === KNOWLEDGE && members.length < 2) {
-      out.push({ code: 'members', subject: id, message: 'Une connexion doit relier au moins deux nœuds.' });
+    if (C.kind[c] === KNOWLEDGE && members.length === 0) {
+      out.push({ code: 'members', subject: id, message: 'Une connexion doit relier au moins un nœud.' });
     }
     if (new Set(Array.from(members, memberNode)).size !== members.length) {
       out.push({ code: 'duplicateMember', subject: id, message: 'Un nœud ne peut figurer qu’une fois dans une connexion.' });

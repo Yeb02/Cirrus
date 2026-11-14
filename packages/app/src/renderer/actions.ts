@@ -1,5 +1,5 @@
 import {
-  type Action, addMember, combine, CommandError, conflictName, connect, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
+  type Action, addMember, combine, CommandError, conflictName, connect, connectionsLeaving, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
   editConnection, editNode, exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
   removeMember, renameEnumValue, renameTagKey, restoreConnection, restoreNode, type Role, setBranches, setGroupColor, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef,
   type TagValue, truncateLabel, type Vec2,
@@ -149,6 +149,22 @@ export function hideBuild(scene: PlanScene, ids: Id[], withContent = false): Bui
  */
 export function lastPlanNodes(s: State, scene: PlanScene, ids: Id[], withContent: boolean): Id[] {
   return deleteSummary(s, nodesOf(scene, ids, withContent)).last.filter((id) => s.nodes.get(id)?.anchor === undefined);
+}
+
+/** Node titles for a question: « A », « B » et 2 autres. */
+export function nodeTitles(s: State, ids: Id[]): string {
+  const t = ids.slice(0, 2).map((id) => `« ${s.nodes.get(id)?.title ?? '?'} »`).join(', ');
+  return ids.length > 2 ? `${t} et ${ids.length - 2} autre${ids.length > 3 ? 's' : ''}` : t;
+}
+
+/**
+ * What goes to the trash, said for a question (spec 7): nothing, or these nodes, this plan being their last, with the
+ * connections they take with them (plan 6b, D2: those left with one node or none, connectionsLeaving).
+ */
+export function trashNote(s: State, last: Id[]): string {
+  if (last.length === 0) return 'rien ne part à la corbeille';
+  const n = connectionsLeaving(s, last).length, taken = n === 0 ? '' : `, avec ${n} connexion${n > 1 ? 's' : ''}`;
+  return `${nodeTitles(s, last)} ${last.length === 1 ? 'ira' : 'iront'} à la corbeille (dernier plan)${taken}`;
 }
 
 /**

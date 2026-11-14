@@ -231,14 +231,30 @@ function agendaRec(v: unknown, at: string): Fields {
   const e = fields(v, at, ['id', 'day', 'title', 'text', 'nodes']);
   ident(e.id, `${at}.id`);
   day(e.day, `${at}.day`);
-  const title = text(e.title, `${at}.title`).trim().length;
+  const raw = text(e.title, `${at}.title`), title = raw.trim().length;
   if (title === 0 || title > AGENDA_TITLE_CHARS) bad(`${at}.title ne compte pas de 1 à ${AGENDA_TITLE_CHARS} caractères, espaces du bord ôtées`);
+  // Its edge spaces bounded too (review of task 1): twice the title's bound, room enough for any typing.
+  if (raw.length > 2 * AGENDA_TITLE_CHARS) bad(`${at}.title compte plus de ${2 * AGENDA_TITLE_CHARS} caractères, espaces comprises`);
   if (text(e.text, `${at}.text`).length > AGENDA_TEXT_CHARS) bad(`${at}.text compte plus de ${AGENDA_TEXT_CHARS} caractères`);
   list(e.nodes, `${at}.nodes`, (x, a) => ident(x, a));
   const nodes = e.nodes as string[];
   if (nodes.length > AGENDA_NODES) bad(`${at}.nodes compte plus de ${AGENDA_NODES} nœuds`);
   if (new Set(nodes).size !== nodes.length) bad(`${at}.nodes nomme un nœud deux fois`);
   return e;
+}
+
+/**
+ * Whether `v` is an agenda entry or a sheet as parseOp accepts one (review of task 1): what a snapshot holds of them is
+ * checked as a write's would be (codec.ts), so that a seed cannot plant a malformed one.
+ */
+export function recordFits(t: 'agenda' | 'sheet', v: unknown): boolean {
+  try {
+    (t === 'agenda' ? agendaRec : sheetRec)(v, t);
+    return true;
+  } catch (e) {
+    if (e instanceof SyncFormatError) return false;
+    throw e;
+  }
 }
 
 function sheetRec(v: unknown, at: string): Fields {

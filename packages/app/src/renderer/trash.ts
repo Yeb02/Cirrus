@@ -8,7 +8,7 @@ import { foldedWords } from './search/index.ts';
  * An object of the trash as the panel shows it: its kind in French (an annotation is a node with an anchor), its title
  * (« Sans titre » for a node without one; a connection named by connectionName), when it was thrown away (`at`, and
  * `when` in French, short), and its title as the filter reads it (`folded`). `restorable`: false for a connection left with
- * fewer than two nodes, which the core refuses for good (RESTORE_CONNECTION_LOST); the row stays listed, its button off.
+ * no node (plan 6b, D2), which the core refuses for good (RESTORE_CONNECTION_LOST); the row stays listed, its button off.
  */
 export interface TrashRow { id: Id; kind: 'node' | 'connection'; label: 'nœud' | 'connexion' | 'annotation'; title: string; at: number; when: string; folded: string; restorable: boolean }
 
@@ -30,7 +30,7 @@ const NO_ROWS: ReadonlyMap<Id, TrashRow> = new Map();
 export function trashRows(s: State, previous: ReadonlyMap<Id, TrashRow> = NO_ROWS): TrashRow[] {
   return trashedItems(s).map((item) => {
     const title = item.title === '' ? 'Sans titre' : item.title;
-    const restorable = item.kind === 'node' || memberCount(s, connRow(s, item.id)) >= 2;
+    const restorable = item.kind === 'node' || memberCount(s, connRow(s, item.id)) >= 1;
     const old = previous.get(item.id);
     if (old !== undefined && old.kind === item.kind && old.at === item.at && old.title === title && old.restorable === restorable) return old;
     const label = item.kind === 'connection' ? 'connexion' : s.nodes.get(item.id)?.anchor !== undefined ? 'annotation' : 'nœud';

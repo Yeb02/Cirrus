@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  applyOp, applyOps, CommandError, deleteEverywhere, groupOf, invertAction, layoutKey, moveNodes, placementKey, setLayout, type State, type Vec2,
+  applyOp, applyOps, CommandError, connect, createNode, deleteEverywhere, groupOf, invertAction, layoutKey, moveNodes, placementKey, setLayout, type State, type Vec2,
 } from '@cirrus/core';
 import { buildFixture, buildLargeState, type FixtureIds } from '@cirrus/fixtures';
 import { LocalStore } from '@cirrus/store';
@@ -13,7 +13,7 @@ import { beforeEach, expect, test } from 'vitest';
 import {
   absentBuild, addMemberBuild, ALREADY_HERE, connectBuild, createBuild, deleteBuild, deleteConnectionBuild, filesBuild, groupAt, hideBuild, importBuild, joinBuild,
   lobbyConnectionBuild, dropBuild, dropMemberships, lastPlanNodes, layoutBuild, pasteBuild, placeDroppedBuild, placeInPlanBuild, removeFileBuild, removeMemberBuild,
-  renameBuild, renameFileBuild, roleBuild,
+  renameBuild, renameFileBuild, roleBuild, trashNote,
   scaleBuild, splitBuild,
   withRepercussion,
 } from '../src/renderer/actions.ts';
@@ -264,6 +264,26 @@ test('cacher ou supprimer un groupe ici : l’avertissement du dernier plan comp
   run(deleteBuild(sc, [nodes.groupeInduction], false, true));
   expect(s.placements.has(placementKey(plans.lobby, nodes.solomonoff))).toBe(false);
   expect(s.placements.has(placementKey(plans.article, nodes.solomonoff))).toBe(true);
+});
+
+test('cacher un nœud de son dernier plan : l’avertissement compte les connexions qui partent avec lui, celles qu’il laisse à un nœud ou à aucun (plan 6b, D2)', () => {
+  const { nodes, plans } = ids;
+  const lobby = plans.lobby;
+  const A = (run(() => createNode(s, { plan: lobby, title: 'A', x: 0, y: 0, k: 0 })).ops[0].after as { id: string }).id;
+  const link = (members: string[]) => (run(() => connect(s, { plan: lobby, members: members.map((node) => ({ node, role: 'target' as const })) })).ops[0].after as { id: string }).id;
+  const alone = link([A]), two = link([A, nodes.mdl]), three = link([A, nodes.mdl, nodes.occam]);
+  const scene = buildScene(s, lobby, measure, P);
+  expect(lastPlanNodes(s, scene, [A], false)).toEqual([A]);
+  expect(trashNote(s, [A])).toBe('« A » ira à la corbeille (dernier plan), avec 2 connexions');
+  expect(trashNote(s, [])).toBe('rien ne part à la corbeille');
+  // What « Cacher » then does: those two to the trash, the third kept, without A.
+  run(hideBuild(scene, [A]));
+  expect([alone, two, three].map((c) => s.connections.get(c)!.trashedAt !== undefined)).toEqual([true, true, false]);
+  expect(s.connections.get(three)!.members.map((m) => m.node)).toEqual([nodes.mdl, nodes.occam]);
+  // One connection: in the singular.
+  const B = (run(() => createNode(s, { plan: lobby, title: 'B', x: 0, y: 0, k: 0 })).ops[0].after as { id: string }).id;
+  link([B, nodes.mdl]);
+  expect(trashNote(s, [B])).toBe('« B » ira à la corbeille (dernier plan), avec 1 connexion');
 });
 
 /** A point inside a group's padded envelope but on none of its boxes: halfway into the padding ring, at its top. */

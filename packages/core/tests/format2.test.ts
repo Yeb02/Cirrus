@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import {
   type Action, type AgendaEntryRec, applyOps, CommandError, createNode, createPlan, decodeState, deleteAgendaEntry, deleteSheet, emptyState, encodeState,
   type Id, include, invertAction, moveNodes, NOT_A_GROUP, parseOp, placementOf, putAgendaEntry, putSheet, setGroupColor, type SheetRec, SNAPSHOT_VERSION,
-  type State, SYNC_PROTOCOL_VERSION, toSnapshot,
+  type Op, SnapshotError, type State, SYNC_PROTOCOL_VERSION, toSnapshot,
 } from '../src/index.ts';
 import { created } from './helpers.ts';
 import { crossed } from './twoPcs.ts';
@@ -156,4 +156,25 @@ test.each([
 
 test('les versions', () => {
   expect(SYNC_PROTOCOL_VERSION).toBe(2);
+});
+
+test('revue de la tâche 1 : le titre d’une entrée de l’agenda est borné aussi avant qu’on ôte ses espaces du bord', () => {
+  const s = emptyState(), pad = ' '.repeat(100);
+  expect(() => putAgendaEntry(s, { ...ENTRY, title: `${pad}${'x'.repeat(200)}${pad}` })).not.toThrow();
+  const long = { ...ENTRY, title: `${' '.repeat(400)}x` };
+  expect(() => putAgendaEntry(s, long)).toThrow(CommandError);
+  expect(() => parseOp({ t: 'agenda', before: null, after: long })).toThrow(/title/);
+});
+
+test('revue de la tâche 1 : une entrée de l’agenda ou un feuillet mal formé dans un instantané le rend illisible', () => {
+  const bad: [string, Record<string, unknown>][] = [
+    ['agenda', { ...ENTRY, day: '2026-02-30' }], ['agenda', { ...ENTRY, extra: 1 }], ['agenda', { id: 'a-2' }],
+    ['sheet', { ...SHEET, createdAt: 1.5 }], ['sheet', { id: 'f-2', text: 'Sans date.' }],
+  ];
+  for (const [t, rec] of bad) {
+    const s = emptyState();
+    // Written without a check (a seed, a damaged file): the snapshot reads it back as damaged.
+    applyOps(s, [{ t, before: null, after: rec } as unknown as Op]);
+    expect(() => decodeState(encodeState(s)), JSON.stringify(rec)).toThrow(SnapshotError);
+  }
 });

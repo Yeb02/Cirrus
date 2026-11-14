@@ -1,7 +1,9 @@
 import type { Id } from '@cirrus/core';
 import { deleteSummary, otherPlans, type PlanScene } from '@cirrus/view';
 import { useRef, useState } from 'react';
-import { addMemberBuild, deleteBuild, deleteConnectionBuild, hideBuild, lastPlanNodes, removeMemberBuild } from '../../actions.ts';
+import {
+  addMemberBuild, deleteBuild, deleteConnectionBuild, hideBuild, lastPlanNodes, nodeTitles, removeMemberBuild, trashNote as trashNoteOf,
+} from '../../actions.ts';
 import type { Question } from '../Dialogs.tsx';
 import { type Graph, plural } from './core.ts';
 import { connectionElsewhere, connectionPlans, memberElsewhere, memberPlans, nodesElsewhere } from './where.ts';
@@ -70,13 +72,9 @@ export function useQuestions(graph: Graph) {
     });
   };
   /** Node titles for a question: « A », « B » et 2 autres. */
-  const titles = (ids: Id[]): string => {
-    const t = ids.slice(0, 2).map((id) => `« ${stateRef.current.nodes.get(id)?.title ?? '?'} »`).join(', ');
-    return ids.length > 2 ? `${t} et ${ids.length - 2} autre${ids.length > 3 ? 's' : ''}` : t;
-  };
-  /** What goes to the trash, said for a question: nothing, or these nodes, this plan being their last (spec 7). */
-  const trashNote = (last: Id[]) => (last.length === 0 ? 'rien ne part à la corbeille'
-    : `${titles(last)} ${plural(last.length, 'ira', 'iront')} à la corbeille (dernier plan)`);
+  const titles = (ids: Id[]): string => nodeTitles(stateRef.current, ids);
+  /** What goes to the trash, said for a question: nothing, or these nodes, this plan being their last, with their connections (spec 7, D2). */
+  const trashNote = (last: Id[]) => trashNoteOf(stateRef.current, last);
   /**
    * « Cacher » (spec 7): a group asks whether its content follows; what would leave its last plan is announced, for each
    * answer, content included (I12 of the plan 3b review).
