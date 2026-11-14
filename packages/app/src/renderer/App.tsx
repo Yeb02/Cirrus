@@ -3,7 +3,7 @@ import { withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { ImportResult } from '../main/files.ts';
-import { type Build, deleteAnnotationBuild, deleteSheetBuild, preambleBuild, restoreConnectionBuild, sheetBuild } from './actions.ts';
+import { type Build, deleteAnnotationBuild, deleteSheetBuild, preambleBuild, restoreConnectionBuild, sheetBuild, sheetTextBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { inputProbe, runIdleSlices } from './search/idle.ts';
@@ -250,6 +250,12 @@ export function App() {
 
   // The focus asked for a new sheet is spent once the sheets are left: back to them later, none is taken again.
   useEffect(() => { if (view !== 'sheets') setSheetFocus(null); }, [view]);
+  // The search box stands over the graph: another tab shown closes it, and its ring (fix round 1, minor 3).
+  useEffect(() => {
+    if (view === 'graph') return;
+    setSearchBox(null);
+    setSearchFound(NOTHING_FOUND);
+  }, [view]);
 
   // A full screen opened (a file's from a pop-up, the preamble's from the settings) closes the search: it is modal, and
   // the box stands over the notifications, which stand over it.
@@ -529,7 +535,8 @@ export function App() {
   const saveSheet = (sheet: SheetRec, text: string, typing: string): Promise<boolean> => {
     const why = sheetRefusal(text);
     if (why) { toast(why); return Promise.resolve(false); }
-    const build = sheetBuild(session.current!.state, { ...sheet, text });
+    // Gone meanwhile (deleted elsewhere, its creation undone), it is not made again: refused, said (sheetTextBuild).
+    const build = sheetTextBuild(session.current!.state, sheet.id, text);
     if (!build) return Promise.resolve(true);
     return session.current!.run(build, { merge: typing }).then((r) => { report(r); return r.ok; });
   };

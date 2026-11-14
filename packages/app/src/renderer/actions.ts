@@ -386,6 +386,22 @@ export function sheetBuild(s: State, sheet: SheetRec): Build {
   return (st) => putSheet(st, sheet);
 }
 
+/** A sheet's text saved while it is gone (deleted elsewhere, its creation undone): refused, never made again. */
+export const SHEET_GONE = 'Ce feuillet n’existe plus : ce qui y était tapé n’est pas gardé.';
+
+/**
+ * What is typed in a sheet saved (D6): null when the state has that text already; refused (SHEET_GONE) when the sheet is
+ * gone by the time it runs — a write of it would make it again (fix round 1, minor 2).
+ */
+export function sheetTextBuild(s: State, id: Id, text: string): Build {
+  if (s.sheets.get(id)?.text === text) return null;
+  return (st) => {
+    const sh = st.sheets.get(id);
+    if (!sh) throw new CommandError(SHEET_GONE);
+    return putSheet(st, { ...sh, text });
+  };
+}
+
 /** A sheet deleted (D6), by its « Supprimer ». */
 export const deleteSheetBuild = (id: Id): Build => (st) => deleteSheet(st, id);
 

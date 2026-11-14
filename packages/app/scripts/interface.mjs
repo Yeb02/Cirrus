@@ -2681,6 +2681,13 @@ const SCENARIOS = [
       const entries = () => base('SELECT json FROM agenda').map((r) => JSON.parse(r.json));
       const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       if (!(await page.until(`!!document.querySelector('.graph canvas')`, 15000))) throw new Error('le graphe ne s’ouvre pas');
+      // The view a jump to « Monde algorithmique » gives from the graph (by the search); then the view moved away, so that the
+      // jump from the agenda, at the end, has to frame it again (fix round 1, Important 1: the hidden graph keeps its size).
+      await searchJump(page, 'monde algo', 'Monde algorithmique');
+      const framed = await viewImage(page);
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      for (let i = 0; i < 4; i++) await page.press('ArrowLeft', 'ArrowLeft', 37);
+      if ((await imageDiff(page, await viewImage(page), framed)) < 1) throw new Error('les flèches ne déplacent pas la vue');
       await click('.tabs .add > button', '\\+');
       await click('.tabs .menu button', '^Agenda$');
       if (!(await page.until(`!!document.querySelector('.page-view.agenda .today-line') && document.querySelector('.tabs .tab.on')?.dataset.tab === '@agenda'`))) {
@@ -2718,6 +2725,7 @@ const SCENARIOS = [
       if (!(await page.until(`getComputedStyle(document.querySelector('.graph')).display !== 'none' && !document.querySelector('.page-view')`))) {
         throw new Error('un clic sur le nœud lié ne ramène pas le graphe');
       }
+      await sameView(page, framed, 'le saut depuis l’agenda ne cadre pas le nœud comme le même saut depuis le graphe');
       if (!(await page.until(`!!document.querySelector('.tabs [data-tab="@agenda"]') && document.querySelector('.tabs .tab.on')?.dataset.tab !== '@agenda'`))) {
         throw new Error('l’onglet de l’agenda disparaît, ou reste celui qu’on montre');
       }

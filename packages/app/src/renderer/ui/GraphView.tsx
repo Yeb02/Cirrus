@@ -143,6 +143,9 @@ export function GraphView(props: {
   /** Asks for a frame: the loop only runs while there is something to draw. */
   const redraw = () => { dirty.current = true; wake.current(); };
   const firstPending = useRef(true);
+  /** Another tab is shown (plan 6b, D6): the drawing loop waits. */
+  const hiddenRef = useRef(false);
+  hiddenRef.current = props.hidden === true;
   /** The bench waits for frames of the drawing loop: each is called after a drawn frame until `until()` holds. */
   const frameWaiters = useRef<{ until(): boolean; done(f: { ms: number; end: number; preview: boolean }): void }[]>([]);
   const gestures = useRef(new GestureMachine(props.params));
@@ -426,7 +429,14 @@ export function GraphView(props: {
       }
       // The host resizes with the window and without it (the settings panel opening): a resized canvas is cleared,
       // so it is drawn again even if its CSS size (the camera's) did not change (C2).
-      resizeObserver = new ResizeObserver(() => { g?.resize(); redraw(); });
+      // A host of no size is a hidden view (another tab shown, plan 6b, D6): the last real size is kept, so that the camera
+      // stays valid — a jump or a plan opened as it comes back frames at the size it is shown at (fix round 1, Important 1).
+      resizeObserver = new ResizeObserver(() => {
+        const h = host.current;
+        if (!h || h.clientWidth === 0 || h.clientHeight === 0) return;
+        g?.resize();
+        redraw();
+      });
       resizeObserver.observe(host.current!);
       for (const layer of (window.cirrus.launch.hide ?? '').split(',').filter(Boolean)) renderer.hidden.add(layer);
       renderer.onUpdate = () => { redraw(); };
@@ -444,7 +454,9 @@ export function GraphView(props: {
       // of the plan 3 review): it is reported.
       const unpaused = measuring();
       let stopped = false, scheduled = false;
-      const paused = () => !unpaused && !firstPending.current && renderPaused({ hidden: document.hidden, focused: document.hasFocus() }, paramsRef.current);
+      // Nothing is drawn while the view is hidden (plan 6b, D6), bench and captures included; its first frame always is.
+      const paused = () => !firstPending.current
+        && (hiddenRef.current || (!unpaused && renderPaused({ hidden: document.hidden, focused: document.hasFocus() }, paramsRef.current)));
       const schedule = () => {
         if (scheduled || stopped || paused()) return;
         scheduled = true;
@@ -572,13 +584,16 @@ export function GraphView(props: {
   // Another tab than a plan's shown (plan 6b, D6): as for another plan, the gesture in progress, a question, the menu and
   // a dragged handle do not follow it under the hidden view, whose keys they would still take.
   useEffect(() => {
-    if (!props.hidden) return;
+    // Shown again: drawn again, what changed meanwhile included.
+    if (!props.hidden) { redraw(); return; }
     settleWheel();
     handles.dropHandle(false);
     questions.setQuestion(null);
     feed({ t: 'cancel' });
     setMenu(null);
     setColorPicker(null);
+    // A title being typed is given up (a node not yet named is not made), as by Escape.
+    setEditor(null);
   }, [props.hidden]);
 
   // The ring of what was found (plan 6a, D1, D2): a jump's object while it blinks, else what the search box found here.

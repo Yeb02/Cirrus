@@ -1,4 +1,4 @@
-import { type Id, SHEET_TEXT_CHARS, type SheetRec, type State } from '@cirrus/core';
+import type { Id, SheetRec, State } from '@cirrus/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ageOf } from '../agenda.ts';
 import { typedFields } from '../quit.ts';
@@ -61,7 +61,7 @@ function SheetItem(props: {
   return (
     <li className="sheet" data-id={sheet.id}>
       <textarea
-        ref={field} className="sheet-text" rows={Math.min(12, Math.max(3, text.split('\n').length + 1))} maxLength={SHEET_TEXT_CHARS}
+        ref={field} className="sheet-text" rows={Math.min(12, Math.max(3, text.split('\n').length + 1))}
         placeholder="Une idée, une note…" aria-label="Texte du feuillet" value={text} spellCheck
         onFocus={() => { typing.current++; }}
         onChange={(e) => {

@@ -51,6 +51,12 @@ Plan : `docs/superpowers/plans/2026-11-14-cirrus-saisie-interface.md` (écrit le
 - Ruling: **Entrée dans la date ou le titre enregistre l’entrée (sur keydown, pas la soumission implicite du formulaire, qu’un Entrée sans caractère ne déclenche pas) ; Entrée dans le champ des nœuds ajoute le premier trouvé.** Le champ demande l’index de Ctrl+K à son focus (bancs et scénarios ne le bâtissent qu’à la demande) — coût si faux : nul.
 - Ruling: **« Supprimer » une entrée d’agenda agit sans question** (Ctrl+Z la rend) — coût si faux : une question.
 - Ruling: **les milliers des messages de bornes sont séparés par une espace insécable écrite à la main** (« 20 000 »), pas `toLocaleString`, qui dépend du système — coût si faux : nul.
+- Ruling (relecture, I1) : **le graphe caché garde sa dernière taille réelle (l’observateur ignore un hôte de taille nulle) et ne dessine rien** ; un saut depuis l’agenda cadre donc comme depuis le graphe (le scénario `agenda` compare les deux images) — coût si faux : nul.
+- Ruling (relecture, mineur 2) : **la frappe en attente d’un feuillet disparu entre-temps (supprimé ailleurs, création annulée) ne le refait pas : refus dit, « Ce feuillet n’existe plus : ce qui y était tapé n’est pas gardé. »** (`sheetTextBuild`) — coût si faux : un texte tapé perdu, dit.
+- Ruling (relecture, mineurs 3 et 6) : **cacher le graphe ferme aussi la recherche et l’éditeur de titre ; les champs de texte n’ont plus de `maxLength`**, la borne parle à l’enregistrement (notification pour un feuillet, à chaque tentative ; ligne du formulaire pour l’agenda) — coût si faux : nul.
+- Ruling (relecture, mineur 4) : **revenir de l’agenda au même plan n’enregistre pas de `plan_shown`** : le temps passé sur l’agenda compte pour ce plan — coût si faux : une consultation à ajouter.
+- Ruling (relecture, mineur 5) : **« aujourd’hui » se calcule à chaque rendu** ; la frise ouverte à minuit ne bouge sa ligne qu’au rendu suivant — coût si faux : nul.
+- Ruling (relecture, mineur 7) : **le résumé échappé d’un feuillet n’a pas de borne au cœur** (un nœud n’en a pas ; au pire 100 000 caractères × 16) — coût si faux : une borne à ajouter.
 
 ## Tâche 8 : l’envoi des consultations (D7)
 

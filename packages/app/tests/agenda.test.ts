@@ -1,7 +1,7 @@
-import { applyOps, createNode, createPlan, deleteEverywhere, emptyState, type Id, putAgendaEntry, type State } from '@cirrus/core';
+import { applyOps, CommandError, createNode, createPlan, deleteEverywhere, deleteSheet, emptyState, type Id, putAgendaEntry, type State } from '@cirrus/core';
 import { expect, test } from 'vitest';
 import { agendaMonths, agendaRefusal, dayOf } from '../src/renderer/agenda.ts';
-import { agendaBuild, sheetBuild } from '../src/renderer/actions.ts';
+import { agendaBuild, SHEET_GONE, sheetBuild, sheetTextBuild } from '../src/renderer/actions.ts';
 import { AGENDA_TAB, liveTabs, SHEETS_TAB } from '../src/renderer/tabs.ts';
 
 const created = (ops: readonly { t: string; after?: unknown }[], t: string) => (ops.find((o) => o.t === t)!.after as { id: Id }).id;
@@ -87,4 +87,16 @@ test('liveTabs garde @agenda et @feuillets et écarte un identifiant inconnu', (
   expect(liveTabs(s.plans, open, plan)).toEqual({ open: [AGENDA_TAB, plan, SHEETS_TAB], active: plan });
   const kept = [AGENDA_TAB, plan, SHEETS_TAB];
   expect(liveTabs(s.plans, kept, plan).open).toBe(kept);
+});
+
+test('relecture, mineur 2 : la frappe d’un feuillet disparu entre-temps ne le refait pas', () => {
+  const { s } = world();
+  applyOps(s, sheetBuild(s, { id: 'f1', createdAt: 5, text: '' })!(s).ops);
+  expect(sheetTextBuild(s, 'f1', '')).toBeNull();
+  const typed = sheetTextBuild(s, 'f1', 'Idée')!;
+  applyOps(s, deleteSheet(s, 'f1').ops);
+  expect(() => typed(s)).toThrow(CommandError);
+  expect(() => typed(s)).toThrow(SHEET_GONE);
+  expect(() => sheetTextBuild(s, 'f1', 'Idée')!(s)).toThrow(SHEET_GONE);
+  expect(s.sheets.has('f1')).toBe(false);
 });

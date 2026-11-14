@@ -1,4 +1,4 @@
-import { AGENDA_NODES, AGENDA_TEXT_CHARS, type AgendaEntryRec, type Id, type State, uuidv7 } from '@cirrus/core';
+import { AGENDA_NODES, type AgendaEntryRec, type Id, type State, uuidv7 } from '@cirrus/core';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { agendaBuild, type Build, deleteAgendaBuild } from '../actions.ts';
 import { agendaMonths, agendaRefusal, dayLabel, dayOf, linkedNode, type LinkedNode } from '../agenda.ts';
@@ -62,7 +62,7 @@ function EntryForm(props: {
         <input type="text" className="title" autoFocus value={e.title} onChange={(ev) => setE({ ...e, title: ev.target.value })} />
       </label>
       <label className="field"><span>Texte</span>
-        <textarea className="text" rows={3} maxLength={AGENDA_TEXT_CHARS} value={e.text} onChange={(ev) => setE({ ...e, text: ev.target.value })} />
+        <textarea className="text" rows={3} value={e.text} onChange={(ev) => setE({ ...e, text: ev.target.value })} />
       </label>
       <div className="field"><span>Nœuds liés</span>
         {e.nodes.length > 0 && (
