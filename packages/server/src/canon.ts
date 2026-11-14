@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import {
-  addedViolation, applyOps, decodeState, departuresAfter, encodeState, invertOp, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
+  addedViolation, applyOps, decodeState, departuresAfter, encodeState, invertOp, MAX_OPS_PER_UNIT, type Op, OpConflictError, parseUnit, type RemoteUnit, SNAPSHOT_VERSION, type State,
   SyncFormatError, type Unit, type UnitResult, uuidv7,
 } from '@cirrus/core';
 import { type ChangeRow, filePath, LocalStore } from '@cirrus/store';
@@ -33,6 +33,28 @@ function load(store: LocalStore): { s: State; snapshotSeq: number } {
   }
   if (snap) store.dropSnapshot();
   return { s: store.loadState(), snapshotSeq: -1 };
+}
+
+/**
+ * A write whose operations were just applied to `s`, completed by the departures it could not see (departuresAfter,
+ * plan 6b, D3), applied too: the write as the server keeps and relays it — the same object when there are none. Refused,
+ * the departures left out of `s` and the write's own operations left to the caller to undo, when they would take it past
+ * `max` operations (every PC would then refuse to read it, parseRemoteUnit, and stay behind it), or should they not
+ * apply (never expected: they are read from the state just now).
+ */
+export function withDepartures(s: State, u: Unit, max = MAX_OPS_PER_UNIT): Unit | { refused: string } {
+  let departures: Op[];
+  try {
+    departures = departuresAfter(s, u.ops);
+    if (departures.length === 0) return u;
+    if (u.ops.length + departures.length > max) {
+      return { refused: `Avec les connexions que ses nœuds quittent, cette écriture compterait plus de ${max} opérations : elle est refusée.` };
+    }
+    applyOps(s, departures);
+  } catch (e) {
+    return { refused: `Les connexions que cette écriture fait quitter à ses nœuds ne s’écrivent pas : ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return { ...u, ops: [...u.ops, ...departures] };
 }
 
 export class Canon {
@@ -155,7 +177,8 @@ export class Canon {
    * 4. every file it adds to a node, and every anchor's PDF, in the server's store: refused otherwise (D6);
    * 5. applied to the state, each "before" checked (applyOps): stale otherwise, with the number to have received first;
    *    then the departures it could not see (departuresAfter, plan 6b, D3: a node to the trash leaves its connections,
-   *    even one added meanwhile elsewhere), applied and added to it: the PC receives it as the server holds it;
+   *    even one added meanwhile elsewhere), applied and added to it: the PC receives it as the server holds it
+   *    (withDepartures: refused, the state put back, past MAX_OPS_PER_UNIT operations);
    * 6. no violation added (addedViolation): refused otherwise, the state put back;
    * 7. written to the base, numbered, with the time, PC and identifiers received (a failure puts the state back, and is thrown);
    * 8. relayed to every open stream.
@@ -180,11 +203,12 @@ export class Canon {
       // Not a "before" that no longer holds: a write that can never apply (applyOps has left the state as it was).
       return { refused: e instanceof Error ? e.message : String(e) };
     }
-    const departures = departuresAfter(this.s, u.ops);
-    if (departures.length > 0) {
-      applyOps(this.s, departures);
-      u = { ...u, ops: [...u.ops, ...departures] };
+    const completed = withDepartures(this.s, u);
+    if ('refused' in completed) {
+      this.undo(u.ops);
+      return completed;
     }
+    u = completed;
     const v = addedViolation(this.s, u.ops);
     if (v) {
       this.undo(u.ops);

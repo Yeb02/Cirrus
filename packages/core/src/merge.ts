@@ -401,7 +401,9 @@ function departures(s: State, rx: Received, entries: Map<string, Entry>, c: Ctx)
     } else if (op.t === 'branch') ({ connection: conn, node } = op.key);
     else if (op.t === 'phantom') ({ connection: conn, of: { node } } = (op.after ?? op.before)!);
     else continue;
-    shown.set(conn, [...(shown.get(conn) ?? []), { e, node }]);
+    const list = shown.get(conn);
+    if (list) list.push({ e, node });
+    else shown.set(conn, [{ e, node }]);
     if (leaves(node)) candidates.add(conn);
   }
 
