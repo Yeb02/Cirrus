@@ -10,6 +10,11 @@ const GONE = { trash: '(à la corbeille)', missing: '(disparu)' } as const;
 
 /** What the search of Ctrl+K gives the linked-node field (App's): its index, null while it is being built. */
 export interface AgendaSearch { index: SearchIndex | null; where: SearchWhere | null; max: number; want(): void }
+/**
+ * The form open (App's, so that its draft outlives the tab: final review of plan 6b, M3): a new entry's (`fresh`), or the
+ * one of the entry being changed, with what is typed in it so far (`draft`).
+ */
+export interface AgendaForm { draft: AgendaEntryRec; fresh: boolean }
 
 /** A node linked by an entry: a button that goes to it (App's goToNode); a node gone, struck and said. */
 function NodeLink({ node, onGo }: { node: LinkedNode; onGo(id: Id): void }) {
@@ -23,9 +28,9 @@ function NodeLink({ node, onGo }: { node: LinkedNode; onGo(id: Id): void }) {
  * before the core is asked (agendaRefusal); a form that changes nothing writes nothing (agendaBuild).
  */
 function EntryForm(props: {
-  state: State; initial: AgendaEntryRec; search: AgendaSearch; onSave(e: AgendaEntryRec): Promise<boolean>; onCancel(): void;
+  state: State; value: AgendaEntryRec; onChange(e: AgendaEntryRec): void; search: AgendaSearch; onSave(e: AgendaEntryRec): Promise<boolean>; onCancel(): void;
 }) {
-  const [e, setE] = useState(props.initial);
+  const e = props.value, setE = props.onChange;
   const [query, setQuery] = useState('');
   const [refusal, setRefusal] = useState<string | null>(null);
   const { index, where, max } = props.search;
@@ -104,15 +109,16 @@ function EntryForm(props: {
  * grouped by month; a line marks today, and the view is placed on it when it opens. Each entry shows its date, its title,
  * its text and its linked nodes — a click goes to one as « Aller au nœud » does (`onGoToNode`); one in the trash or gone
  * is struck and said. « Nouvelle entrée » opens a form; each entry is changed (« Modifier ») and deleted (« Supprimer »)
- * from its line, each one action. No reminder.
+ * from its line, each one action. No reminder. The form open and its draft are App's (`form`, `onForm`): the tab left and
+ * shown again, they are there as they were.
  */
 export function AgendaView(props: {
   state: State; rev: number; search: AgendaSearch; onEdit(build: Build): Promise<boolean>; onGoToNode(node: Id): void;
+  form: AgendaForm | null; onForm(f: AgendaForm | null): void;
 }) {
   const today = dayOf(Date.now());
   const months = useMemo(() => agendaMonths(props.state, today), [props.state, props.rev, today]);
-  /** The form open: a new entry's, or the one of the entry being changed. */
-  const [form, setForm] = useState<{ entry: AgendaEntryRec; fresh: boolean } | null>(null);
+  const { form, onForm: setForm } = props;
   const line = useRef<HTMLLIElement>(null);
   useEffect(() => { line.current?.scrollIntoView({ block: 'center' }); }, []);
   const save = async (e: AgendaEntryRec): Promise<boolean> => {
@@ -121,15 +127,18 @@ export function AgendaView(props: {
     if (ok) setForm(null);
     return ok;
   };
-  const formOf = (f: { entry: AgendaEntryRec }) => (
-    <EntryForm key={f.entry.id} state={props.state} initial={f.entry} search={props.search} onSave={save} onCancel={() => setForm(null)} />
+  const formOf = (f: AgendaForm) => (
+    <EntryForm
+      key={f.draft.id} state={props.state} value={f.draft} onChange={(draft) => setForm({ ...f, draft })} search={props.search} onSave={save}
+      onCancel={() => setForm(null)}
+    />
   );
   return (
     <section className="page-view agenda" aria-label="Agenda">
       <header>
         <h2>Agenda</h2>
         <button
-          className="act new" onClick={() => setForm({ entry: { id: uuidv7(), day: today, title: '', text: '', nodes: [] }, fresh: true })}
+          className="act new" onClick={() => setForm({ draft: { id: uuidv7(), day: today, title: '', text: '', nodes: [] }, fresh: true })}
         >
           Nouvelle entrée
         </button>
@@ -143,7 +152,7 @@ export function AgendaView(props: {
               {m.rows.map((r) => {
                 if (r.kind === 'today') return <li key="today" ref={line} className="today-line"><span>Aujourd’hui</span></li>;
                 const e = r.entry;
-                if (form && !form.fresh && form.entry.id === e.id) return <li key={e.id} className="entry editing">{formOf(form)}</li>;
+                if (form && !form.fresh && form.draft.id === e.id) return <li key={e.id} className="entry editing">{formOf(form)}</li>;
                 return (
                   <li key={e.id} className={`entry${e.day < today ? ' past' : ''}`} data-id={e.id}>
                     <div className="when">{dayLabel(e.day)}</div>
@@ -155,7 +164,7 @@ export function AgendaView(props: {
                       )}
                     </div>
                     <div className="actions">
-                      <button className="act" onClick={() => setForm({ entry: e, fresh: false })}>Modifier</button>
+                      <button className="act" onClick={() => setForm({ draft: e, fresh: false })}>Modifier</button>
                       <button className="act" onClick={() => void props.onEdit(deleteAgendaBuild(e.id))}>Supprimer</button>
                     </div>
                   </li>

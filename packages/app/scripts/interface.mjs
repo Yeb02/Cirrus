@@ -2693,9 +2693,10 @@ const SCENARIOS = [
   {
     // Plan 6b, D6 (task 7): the agenda's tab, from the tabs' « + »; « Nouvelle entrée », its title typed, Entrée: the base has
     // the entry of today, the timeline shows it; Ctrl+Z takes it away. Then an entry linking « Monde algorithmique », found
-    // by the field of its nodes (the titles of Ctrl+K's index): a click on it goes to the node, the graph shown again.
-    name: 'agenda : « + » → « Agenda », une entrée du jour, Ctrl+Z la retire ; un nœud lié, un clic y va',
-    async run(page, base) {
+    // by the field of its nodes (the titles of Ctrl+K's index): a click on it goes to the node, the graph shown again. The
+    // form's draft outlives the tab left and shown again; a draft open when the window closes is written (final review, M3).
+    name: 'agenda : « + » → « Agenda », une entrée du jour, Ctrl+Z la retire ; un nœud lié, un clic y va ; le brouillon survit à l’onglet quitté et à la fermeture',
+    async run(page, base, data, app) {
       const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
       const entries = () => base('SELECT json FROM agenda').map((r) => JSON.parse(r.json));
       const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -2737,6 +2738,12 @@ const SCENARIOS = [
         throw new Error(`le champ des nœuds ne trouve pas « Monde algorithmique » : ${await page.evaluate(`document.querySelector('.entry-form')?.textContent`)}`);
       }
       await click('.entry-form .hits button', '^Monde algorithmique$');
+      // The tab left for the lobby's and shown again: the form is there, as it was (final review, M3).
+      await click('.tabs .tab', '^Lobby');
+      if (!(await page.until(`!document.querySelector('.page-view') && getComputedStyle(document.querySelector('.graph')).display !== 'none'`))) throw new Error('l’onglet du lobby ne montre pas le graphe');
+      await click('.tabs [data-tab="@agenda"]');
+      const KEPT = `document.querySelector('.entry-form input.title')?.value === 'Lecture' && [...document.querySelectorAll('.entry-form .linked li')].some((li) => li.textContent.startsWith('Monde algorithmique'))`;
+      if (!(await page.until(KEPT))) throw new Error(`le formulaire perd son brouillon quand on quitte l’onglet : ${await page.evaluate(`document.querySelector('.page-view.agenda')?.textContent`)}`);
       await click('.entry-form button', '^Enregistrer$');
       const monde = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Monde algorithmique'`)[0].id;
       if (!(await until(() => entries().length === 1 && entries()[0].nodes.join() === monde))) throw new Error(`l’entrée liée : ${JSON.stringify(entries())}`);
@@ -2748,6 +2755,14 @@ const SCENARIOS = [
       if (!(await page.until(`!!document.querySelector('.tabs [data-tab="@agenda"]') && document.querySelector('.tabs .tab.on')?.dataset.tab !== '@agenda'`))) {
         throw new Error('l’onglet de l’agenda disparaît, ou reste celui qu’on montre');
       }
+
+      // A draft open when the window closes is written, as « Enregistrer » would (final review, M3).
+      await click('.tabs [data-tab="@agenda"]');
+      await click('.agenda button', '^Nouvelle entrée$');
+      if (!(await page.until(`document.activeElement?.matches('.entry-form input.title') === true`))) throw new Error('le titre du brouillon n’a pas le focus');
+      await page.type('Brouillon');
+      if (!(await closeAsUser(app))) throw new Error('la fenêtre ne se ferme pas d’elle-même');
+      if (!entries().some((x) => x.title === 'Brouillon' && x.day === today)) throw new Error(`le brouillon ouvert à la fermeture est perdu : ${JSON.stringify(entries())}`);
     },
   },
   {
@@ -2917,6 +2932,30 @@ const SCENARIOS = [
       await page.press('z', 'KeyZ', 90, 2);
       if (!(await until(() => placementOf(base, lobby, target) === null))) throw new Error('Ctrl+Z ne retire pas « Introduction » du lobby');
       if (base(`SELECT 1 FROM placements WHERE node = '${target}'`).length !== 1) throw new Error('Ctrl+Z touche à la place de « Introduction » dans « Article MDL »');
+
+      // 5. From the agenda's tab, MDL's pop-up pinned over it (final review, I1): « Importer ici » brings the graph back, the
+      // title following the cursor there; a click puts it down in the lobby.
+      link = await openLink();
+      await page.evaluate(`document.querySelector('.node-popup .pin:not(.on)')?.click()`);
+      if (!(await page.until(`!!document.querySelector('.node-popup .pin.on')`))) throw new Error('le pop-up de MDL ne s’épingle pas');
+      for (const [selector, text] of [['.tabs .add > button', '\\+'],['.tabs .menu button', '^Agenda$']]) {
+        const b = await page.centre(selector, text);
+        await page.click(b.x, b.y);
+      }
+      if (!(await page.until(`!!document.querySelector('.page-view.agenda') && getComputedStyle(document.querySelector('.graph')).display === 'none'`))) throw new Error('l’agenda ne s’ouvre pas sur le graphe caché');
+      if (!(await page.evaluate(POPUP))) throw new Error('le pop-up épinglé de MDL ne reste pas sur l’agenda');
+      link = await page.centre(NODE_LINK, '');
+      for (let i = 0; i < 5 && !(await page.until(`!!document.querySelector('.link-menu .context-menu')`, 1000)); i++) await page.click(link.x, link.y, 'right');
+      const fromAgenda = await page.centre('.link-menu .context-menu button', '^Importer ici$');
+      await page.click(fromAgenda.x, fromAgenda.y);
+      if (!(await page.until(`getComputedStyle(document.querySelector('.graph')).display !== 'none' && !document.querySelector('.page-view') && document.querySelector('.tabs .tab.on')?.dataset.tab !== '@agenda'`))) {
+        throw new Error('« Importer ici » depuis l’agenda ne ramène pas le graphe');
+      }
+      await page.move(at.x - 40, at.y - 20);
+      await page.move(at.x, at.y);
+      if (!(await page.until(`document.querySelector('.ghost')?.textContent === ${JSON.stringify(LINK_TARGET)}`))) throw new Error(`depuis l’agenda, le titre ne suit pas le curseur : ${await ghostText(page)}`);
+      await page.click(at.x, at.y);
+      if (!(await until(() => placementOf(base, lobby, target) !== null))) throw new Error('depuis l’agenda, le clic ne pose pas « Introduction » dans le lobby');
     },
   },
 ];

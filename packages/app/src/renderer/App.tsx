@@ -3,7 +3,8 @@ import { withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { ImportResult } from '../main/files.ts';
-import { type Build, deleteAnnotationBuild, deleteSheetBuild, preambleBuild, restoreConnectionBuild, sheetBuild, sheetTextBuild } from './actions.ts';
+import { agendaBuild, type Build, deleteAnnotationBuild, deleteSheetBuild, preambleBuild, restoreConnectionBuild, sheetBuild, sheetTextBuild } from './actions.ts';
+import { agendaRefusal } from './agenda.ts';
 import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { inputProbe, runIdleSlices } from './search/idle.ts';
@@ -21,8 +22,9 @@ import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { withSetting } from './settingChanges.ts';
 import { sheetRefusal } from './sheets.ts';
+import { stepNotice, type View } from './stepNotice.ts';
 import { AGENDA_TAB, isViewTab, liveTabs, loadTabs, saveTabs, SHEETS_TAB } from './tabs.ts';
-import { AgendaView } from './ui/AgendaView.tsx';
+import { type AgendaForm, AgendaView } from './ui/AgendaView.tsx';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { LatexNotice } from './ui/latex/LatexNotice.tsx';
@@ -55,8 +57,6 @@ import { useSettings } from './useSettings.ts';
 import { replayLaunch } from './visualChecks.ts';
 
 const NODE_GONE = 'Ce nœud n’existe plus.';
-/** What the main area shows (plan 6b, D6): the graph of the plan `active`, or the agenda's or the sheets' tab. */
-type View = 'graph' | 'agenda' | 'sheets';
 const VIEW_OF_TAB: Record<string, View> = { [AGENDA_TAB]: 'agenda', [SHEETS_TAB]: 'sheets' };
 const TAB_OF_VIEW: Record<Exclude<View, 'graph'>, Id> = { agenda: AGENDA_TAB, sheets: SHEETS_TAB };
 const NOTHING_FOUND: Id[] = [];
@@ -107,6 +107,10 @@ export function App() {
   const [view, setView] = useState<View>('graph');
   const viewRef = useRef<View>('graph');
   viewRef.current = view;
+  /** The agenda's form open and its draft (AgendaView): kept here, so that leaving the tab does not lose it (final review, M3). */
+  const [agendaForm, setAgendaForm] = useState<AgendaForm | null>(null);
+  const agendaFormRef = useRef(agendaForm);
+  agendaFormRef.current = agendaForm;
   /** The sheet Ctrl+Maj+N made, to be given the focus once listed; `asked` counts them. */
   const [sheetFocus, setSheetFocus] = useState<{ sheet: Id; asked: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -140,14 +144,15 @@ export function App() {
 
   /** Notifications (ui/Toasts.tsx): `toast(text, closable)`. */
   const { toasts, toast, closeToast } = useToasts(paramsRef);
-  /** Reports a refused edit, or names the plan an undone step changed if it is not the one on screen (spec 6.4). */
+  /**
+   * Reports a refused edit, or says where an undone or redone step acted if that is not on screen (spec 6.4): another
+   * plan, the agenda, the sheets (stepNotice).
+   */
   const report = (r: Result, verb?: string) => {
     if (!r.ok) { toast(r.message); return; }
-    const elsewhere = r.plans.filter((p) => p !== activeRef.current);
-    if (verb && elsewhere.length > 0 && !r.plans.includes(activeRef.current!)) {
-      const names = elsewhere.map((p) => `« ${session.current!.state.plans.get(p)?.name ?? '?'} »`).join(', ');
-      toast(`${verb} dans ${elsewhere.length > 1 ? 'les plans' : 'le plan'} ${names} : ${r.action.label}`);
-    }
+    if (!verb) return;
+    const notice = stepNotice(verb, r.action, r.plans, activeRef.current, viewRef.current, (p) => session.current!.state.plans.get(p)?.name ?? '?');
+    if (notice !== null) toast(notice);
   };
   /** What is open over the graph: the settings, a file's full screen and its own steps, the preamble's (ui/screens.ts). */
   const {
@@ -266,6 +271,24 @@ export function App() {
     setSearchBox(null);
     setSearchFound(NOTHING_FOUND);
   }, [full, preambleOpen]);
+
+  // The agenda's form open: what is typed in it is written before the window closes (typedFields), as Enregistrer would —
+  // unless refused (no title, a date not valid…), which cannot be asked then: said in the console, the draft lost; nor an
+  // entry deleted meanwhile, which is not made again (final review, M3).
+  const agendaFormOpen = agendaForm !== null;
+  useEffect(() => {
+    if (!agendaFormOpen) return;
+    return typedFields.hold(async () => {
+      const f = agendaFormRef.current, s = session.current;
+      if (!f || !s || (!f.fresh && !s.state.agenda.has(f.draft.id))) return;
+      const why = agendaRefusal(f.draft);
+      if (why) { console.warn(`Entrée d’agenda non enregistrée à la fermeture : ${why}`); return; }
+      const build = agendaBuild(s.state, f.draft);
+      if (!build) return;
+      const r = await s.run(build);
+      if (!r.ok) console.error(`Entrée d’agenda non enregistrée à la fermeture : ${r.message}`);
+    });
+  }, [agendaFormOpen]);
 
   // A click whose press closed a context menu is swallowed, wherever it lands (clickGuard.ts).
   useEffect(() => guardClicks(window), []);
@@ -599,10 +622,14 @@ export function App() {
     showGraph();
     if (!graph.current?.reveal({ plan: hit.plan, id: hit.id, kind: hit.kind })) toast(OBJECT_GONE);
   };
-  /** The pop-up of a node in no plan (an annotation), near the top of the graph's area. */
+  /**
+   * The pop-up of a node in no plan (an annotation), near the top of the graph's area; the graph hidden (the agenda's or
+   * the sheets' tab shown: its box is 0 × 0), of the main area's (final review, M1).
+   */
   const popupOverGraph = (node: Id) => {
-    const box = document.querySelector('.graph')?.getBoundingClientRect();
-    panels.current?.openNode(node, box ? { x: box.left + box.width / 2 - 190, y: box.top + 80 } : { x: 200, y: 120 });
+    const graphBox = document.querySelector('.graph')?.getBoundingClientRect();
+    const box = graphBox && graphBox.width > 0 ? graphBox : document.querySelector('.main')?.getBoundingClientRect();
+    panels.current?.openNode(node, box && box.width > 0 ? { x: box.left + box.width / 2 - paramsRef.current.popupWidthPx / 2, y: box.top + 80 } : { x: 200, y: 120 });
   };
   /**
    * A line of the graph's health clicked (plan 6b, D8; healthJump): a conflict's copy compared with its original; else a
@@ -728,7 +755,7 @@ export function App() {
         </GraphBoundary>
         {view === 'agenda' && (
           <AgendaView
-            state={state} rev={shown.rev} onEdit={edit} onGoToNode={goToNode}
+            state={state} rev={shown.rev} onEdit={edit} onGoToNode={goToNode} form={agendaForm} onForm={setAgendaForm}
             search={{ index: searchIndex, where: searchWhere, max: params.searchMaxResults, want: () => setSearchWanted(true) }}
           />
         )}
@@ -760,7 +787,9 @@ export function App() {
         )}
         <LinkLayer
           state={state} params={params} registry={registry} here={active} tabs={tabs} onOpen={nodeLink} onShowIn={showIn}
-          onImport={(node) => graph.current?.importHere(node)}
+          // The graph shown first (final review, I1): from the agenda or the sheets, under a pinned pop-up, the gesture
+          // would begin on the hidden graph.
+          onImport={(node) => { showGraph(); graph.current?.importHere(node); }}
         >
           <Panels
             ref={panels} state={state} rev={shown.rev} action={shown.action} params={params} onEdit={edit} onShowIn={showIn} onGoToNode={goToNode} files={files}
