@@ -36,6 +36,12 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 
 /** The shortest pause between two periodic checks, whatever updateCheckMs says (its own floor is 300 000). */
 const MIN_CHECK_MS = 60_000;
+/** The delay without progress a download is given up after when updateStallMs is unusable (its setting's minimum). */
+const MIN_STALL_MS = 10_000;
+
+/** A delay as the failure says it: « 2 min » when whole minutes, « 45 s » otherwise. */
+const duration = (ms: number) => (ms >= 60_000 && ms % 60_000 === 0
+  ? `${ms / 60_000} min` : `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s`);
 
 /** The most characters of a failure's message the screen is told (electron-updater's may carry a whole response). */
 const MAX_MESSAGE_CHARS = 300;
@@ -48,6 +54,11 @@ export interface LatestFile { url: string; sha512: string; size?: number; isAdmi
 /** latest.yml, as electron-updater read it at its check (UpdateInfo): what it would download. */
 export interface LatestInfo { version: string; files: LatestFile[] }
 
+/** What stops a download under way: builder-util-runtime's CancellationToken, as much of it as the updater uses. */
+export interface Cancellable {
+  cancel(): void;
+}
+
 /** electron-updater's autoUpdater (NsisUpdater), as much of it as the updater drives. */
 export interface FeedUpdater {
   autoDownload: boolean;
@@ -58,7 +69,8 @@ export interface FeedUpdater {
   requestHeaders: OutgoingHttpHeaders | null;
   setFeedURL(options: { provider: 'generic'; url: string }): void;
   checkForUpdates(): Promise<{ isUpdateAvailable: boolean; updateInfo: LatestInfo } | null>;
-  downloadUpdate(): Promise<unknown>;
+  /** The download; `token` (builder-util-runtime's CancellationToken) stops it when cancelled. */
+  downloadUpdate(token?: Cancellable): Promise<unknown>;
   install(isSilent?: boolean, isForceRunAfter?: boolean): boolean;
   on(event: 'update-downloaded', listener: (e: Downloaded) => void): unknown;
   /** Its progress while it downloads (said only to a listener already there when the download starts). */
@@ -109,7 +121,9 @@ export interface UpdaterDeps {
   server(): { url: string; token: string } | null;
   /** Whether a connection to the server is open: the periodic check runs only then. */
   connected(): boolean;
-  params(): { updateCheckMs: number; syncRetryMaxMs: number };
+  params(): { updateCheckMs: number; syncRetryMaxMs: number; updateStallMs: number };
+  /** A token to stop a download that brings nothing (updateStallMs); none: the download is only left, not stopped. */
+  downloadToken?(): Cancellable | Promise<Cancellable>;
   /** electron-updater's autoUpdater, loaded the first time an update is to be downloaded. */
   updater(): FeedUpdater | Promise<FeedUpdater>;
   /** The screen, the chip and the notification (SyncHost.updateWord): the whole word each time. */
@@ -165,6 +179,8 @@ export class Updater {
   /** The installer's check under way, once electron-updater has downloaded it. */
   private verifying: Promise<void> | null = null;
   private feed: FeedUpdater | null = null;
+  /** The download's watchdog re-armed (download): at each of its progress events; null outside a download. */
+  private alive: (() => void) | null = null;
   private refusalSaid = false;
   private keySaid = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -379,7 +395,7 @@ export class Updater {
     }
     if (!found.isUpdateAvailable) return this.fail('electron-updater ne voit pas de version plus récente');
     try {
-      await feed.downloadUpdate();
+      await this.download(feed);
     } catch (e) {
       // latest.yml pinned to the manifest, but other bytes served: electron-updater's own check failed. Refused for this
       // manifest, rather than downloaded again at each check; any other failure is the network's, tried again later.
@@ -388,6 +404,37 @@ export class Updater {
       return this.refuse('l’installateur servi n’a pas l’empreinte du manifeste signé');
     }
     await this.verifying;
+  }
+
+  /**
+   * electron-updater's download, given up once nothing came for updateStallMs (read at its start; each progress event
+   * re-arms it): a compromised server holding a true signed manifest must not keep the screen up by a trickle (review of
+   * the forced update, 2026-11-11). Given up, the download is cancelled and the failure says why; the next check runs it
+   * all again.
+   */
+  private async download(feed: FeedUpdater): Promise<void> {
+    const raw = this.deps.params().updateStallMs;
+    const ms = Number.isFinite(raw) && raw > 0 ? raw : MIN_STALL_MS;
+    const token = await this.deps.downloadToken?.();
+    let timer: ReturnType<typeof setTimeout> | null = null, giveUp: () => void = () => {};
+    const stalled = new Promise<'stalled'>((resolve) => { giveUp = () => resolve('stalled'); });
+    const arm = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(giveUp, ms);
+    };
+    this.alive = arm;
+    arm();
+    try {
+      const done = feed.downloadUpdate(token);
+      if (await Promise.race([done.then(() => 'done' as const), stalled]) === 'stalled') {
+        done.catch(() => {});
+        token?.cancel();
+        throw new Error(`aucune donnée depuis ${duration(ms)}`);
+      }
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+      this.alive = null;
+    }
   }
 
   /** A file of the server's versions/, its text; null when it has none (nothing published), or sends too much. */
@@ -409,7 +456,10 @@ export class Updater {
     const feed = await this.deps.updater();
     if (this.feed) return this.feed;
     feed.on('update-downloaded', (e) => this.downloaded(feed, e));
-    feed.on('download-progress', (p) => this.progress(p.percent));
+    feed.on('download-progress', (p) => {
+      this.alive?.();
+      this.progress(p.percent);
+    });
     this.feed = feed;
     return feed;
   }

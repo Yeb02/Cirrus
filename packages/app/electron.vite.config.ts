@@ -7,8 +7,9 @@ import type { Plugin } from 'vite';
 
 // The workspace packages are TypeScript sources: bundle them instead of leaving them to Electron's Node. electron-updater
 // too (plan 9, D4): the packaged app carries no node_modules (electron-builder.yml); it lands in a chunk of its own,
-// loaded only once an update is to be downloaded (update/wire.ts).
-const bundled = { exclude: ['@cirrus/core', '@cirrus/sources', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures', 'electron-updater'] };
+// loaded only once an update is to be downloaded (update/wire.ts). builder-util-runtime, its own dependency, for the
+// CancellationToken that stops a stalled download (plan 6b, D9).
+const bundled = { exclude: ['@cirrus/core', '@cirrus/sources', '@cirrus/store', '@cirrus/view', '@cirrus/fixtures', 'electron-updater', 'builder-util-runtime'] };
 
 const PDFJS = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
 /**

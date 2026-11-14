@@ -306,6 +306,8 @@ export interface RenderParams {
   syncReceiveMaxUnits: number;
   /** The server asked this often whether a newer Cirrus is out (plan 9, D4). */
   updateCheckMs: number;
+  /** A forced update's download given up once nothing came for this long (plan 6b, D9). */
+  updateStallMs: number;
   // Background (spec 8.6)
   background: 'stars' | 'grid';
   backgroundOpacity: number;
@@ -513,6 +515,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   syncStreamSilenceMs: 40_000,
   syncReceiveMaxUnits: 500,
   updateCheckMs: 3_600_000,
+  updateStallMs: 120_000,
   background: 'stars',
   backgroundOpacity: 1,
   starCellWorld: 40,
@@ -743,11 +746,12 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('downloadAllReserveMb', 'Espace à garder libre sur ce disque après « Télécharger tous les PDF… » (Mo)', A, 'Synchronisation', 0, 100_000, 64),
   num('serverStatusSamples', 'Mesures dont la latence et le débit du serveur sont la médiane', A, 'Synchronisation', 1, 50, 1),
   num('throughputMinMb', 'Taille minimale d’un transfert compté dans le débit du serveur (Mo)', A, 'Synchronisation', 0.1, 100, 0.1),
-  // Plan 9, task 2: the group is full with these (16 entries, the panel's limit): a setting more splits it.
+  // Plan 9, task 2: the group was full (16 entries, the panel's limit); plan 6b moved updateCheckMs to « Mises à jour ».
   num('syncRequestTimeoutMs', 'Attente maximale d’une réponse du serveur, ou d’un transfert de fichier immobile (ms)', A, 'Synchronisation', 5000, 600_000, 1000),
   num('syncStreamSilenceMs', 'Silence du flux du serveur au-delà duquel la connexion est tenue pour coupée (ms)', A, 'Synchronisation', 20_000, 600_000, 1000),
   num('syncReceiveMaxUnits', 'Écritures reçues appliquées au plus en un lot', A, 'Synchronisation', 50, 10_000, 10),
-  num('updateCheckMs', 'Intervalle entre deux recherches d’une mise à jour de Cirrus (ms)', A, 'Synchronisation', 300_000, 86_400_000, 60_000),
+  num('updateCheckMs', 'Intervalle entre deux recherches d’une mise à jour de Cirrus (ms)', A, 'Mises à jour', 300_000, 86_400_000, 60_000),
+  num('updateStallMs', 'Attente maximale de données pendant le téléchargement d’une mise à jour (ms)', A, 'Mises à jour', 10_000, 3_600_000, 1000),
   {
     key: 'background', label: 'Fond', section: G, group: 'Fond', kind: 'choice',
     choices: [{ value: 'stars', label: 'Ciel étoilé' }, { value: 'grid', label: 'Grille fractale' }],
@@ -801,7 +805,7 @@ export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
   { title: 'Performances et base', groups: ['Rendu', 'Base', 'Consultations'] },
-  { title: 'Serveur', groups: ['Synchronisation'] },
+  { title: 'Serveur', groups: ['Synchronisation', 'Mises à jour'] },
 ];
 
 const SPEC_BY_KEY = new Map(PARAM_SPECS.map((s) => [s.key, s]));

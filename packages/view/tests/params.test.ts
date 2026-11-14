@@ -369,12 +369,13 @@ test('synchronisation : écritures par requête, téléchargements, reconnexion,
     expect(DEFAULT_PARAMS[key], key).toBe(value);
     expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: S, kind: 'number', min, max, step });
   }
-  // Plan 5b, task 7 and its review: four more of the group; plan 9, task 2: four more (the tests below).
+  // Plan 5b, task 7 and its review: four more of the group; plan 9, task 2: four more (the tests below), of which
+  // updateCheckMs left for « Mises à jour » (plan 6b, D9).
   expect(PARAM_SPECS.filter((s) => s.group === S).map((s) => s.key).sort()).toEqual([
     ...specs.map(([key]) => key), 'serverStatusPollMs', 'downloadAllReserveMb', 'serverStatusSamples', 'throughputMinMb',
-    'syncRequestTimeoutMs', 'syncStreamSilenceMs', 'syncReceiveMaxUnits', 'updateCheckMs',
+    'syncRequestTimeoutMs', 'syncStreamSilenceMs', 'syncReceiveMaxUnits',
   ].sort());
-  expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S]);
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')!.groups).toEqual([S, 'Mises à jour']);
   expect(withOverrides({ syncBatchUnits: 1000, syncDownloads: 0, syncRetryMinMs: 1, syncConnectTimeoutMs: 0, syncSuspendFlushMs: 1e9 }))
     .toMatchObject({ syncBatchUnits: 100, syncDownloads: 1, syncRetryMinMs: 100, syncConnectTimeoutMs: 500, syncSuspendFlushMs: 10_000 });
 });
@@ -416,7 +417,9 @@ test('la synchro sur un réseau réel et les mises à jour : quatre réglages av
   ];
   for (const [key, value, label, min, max, step] of specs) {
     expect(DEFAULT_PARAMS[key], key).toBe(value);
-    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group: 'Synchronisation', kind: 'number', min, max, step });
+    // updateCheckMs left « Synchronisation » for « Mises à jour » (plan 6b, D9).
+    const group = key === 'updateCheckMs' ? 'Mises à jour' : 'Synchronisation';
+    expect(PARAM_SPECS.find((s) => s.key === key)).toEqual({ key, label, section: 'avancé', group, kind: 'number', min, max, step });
   }
   // The silence held as a cut: two of the server's pings missed (15 s each), and a margin.
   expect(DEFAULT_PARAMS.syncStreamSilenceMs).toBeGreaterThan(2 * 15_000);
@@ -477,4 +480,15 @@ test('les consultations (plan 6a, D6, tâche 5) : l’interrupteur est un choix 
   expect(withOverrides({})).toMatchObject({ consultationsRecord: 'yes' });
   expect(PARAM_SPECS.filter((s) => s.invalid !== undefined).map((s) => s.key)).toEqual(['consultationsRecord']);
   expect(settingValue('consultationsRecord', 'oui')).toBeUndefined();
+});
+
+test('le délai sans progrès d’une mise à jour forcée : un réglage avancé du groupe « Mises à jour », avec la recherche des mises à jour, sous « Serveur » (plan 6b, D9)', () => {
+  expect(DEFAULT_PARAMS.updateStallMs).toBe(120_000);
+  expect(PARAM_SPECS.find((s) => s.key === 'updateStallMs')).toEqual({
+    key: 'updateStallMs', label: 'Attente maximale de données pendant le téléchargement d’une mise à jour (ms)', section: 'avancé', group: 'Mises à jour', kind: 'number', min: 10_000, max: 3_600_000, step: 1000,
+  });
+  expect(PARAM_SPECS.filter((s) => s.group === 'Mises à jour').map((s) => s.key)).toEqual(['updateCheckMs', 'updateStallMs']);
+  expect(PARAM_SPECS.filter((s) => s.group === 'Synchronisation')).toHaveLength(15);
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Serveur')?.groups).toEqual(['Synchronisation', 'Mises à jour']);
+  expect(withOverrides({ updateStallMs: 1 }).updateStallMs).toBe(10_000);
 });

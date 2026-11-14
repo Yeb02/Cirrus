@@ -197,6 +197,15 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
   downloadFails: Error | null = null;
   /** The percentages a download says ('download-progress'), before it ends. */
   progress: number[] = [];
+  /** A download that never ends by itself (a server sending nothing, or a trickle: `say` its progress by hand). */
+  hangs = false;
+  /** The token each download was given. */
+  readonly tokens: unknown[] = [];
+
+  /** A progress event of the download under way (a hanging one). */
+  say(percent: number): void {
+    this.emit('download-progress', { percent });
+  }
 
   setFeedURL(options: unknown): void {
     this.feeds.push(options);
@@ -214,8 +223,10 @@ class FakeFeed extends EventEmitter implements FeedUpdater {
     return { isUpdateAvailable: compareVersions(String(updateInfo.version), '0.1.1') > 0, updateInfo };
   }
 
-  async downloadUpdate(): Promise<string[]> {
+  async downloadUpdate(token?: unknown): Promise<string[]> {
     this.downloads++;
+    this.tokens.push(token);
+    if (this.hangs) return new Promise(() => {});
     if (this.downloadFails) throw this.downloadFails;
     const d = this.download;
     if (!d) return [];
@@ -248,7 +259,7 @@ function updater(o: Partial<UpdaterDeps> & { files?: Record<string, string | num
   /** The file of the app's folder that keeps the version whose install was started; and when it was written, the installs made. */
   const tried = { value: o.triedBefore ?? null as string | null, writtenAtInstalls: [] as number[] };
   const u = new Updater({
-    version: '0.1.1', dev: false, packaged: true, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000 }), server: () => SERVER,
+    version: '0.1.1', dev: false, packaged: true, publicKey: key.pub, connected: () => true, params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000, updateStallMs: 120_000 }), server: () => SERVER,
     tried: {
       read: () => tried.value,
       write: (v) => { tried.value = v; tried.writtenAtInstalls.push(feed.installs.length); },
@@ -651,7 +662,7 @@ test('Updater : toutes les updateCheckMs tant que la connexion est ouverte ; rie
   setUp();
   vi.useFakeTimers();
   let connected = false;
-  const { u, asked, told, warned } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000, syncRetryMaxMs: 30_000 }) });
+  const { u, asked, told, warned } = updater({ files: { 'version.json': manifestText({ version: '0.1.1' }), 'version.json.sig': signed(manifestText({ version: '0.1.1' }), key.priv) }, connected: () => connected, params: () => ({ updateCheckMs: 600_000, syncRetryMaxMs: 30_000, updateStallMs: 120_000 }) });
   await vi.advanceTimersByTimeAsync(600_000);
   expect(asked).toEqual([]);
   connected = true;
@@ -988,4 +999,44 @@ test('cle-de-signature.mjs (D4 ; revue, M4) : la clé publique écrite dans key.
   expect(readFileSync(copy, 'utf8')).not.toContain(pub!);
   // The repository's key.ts never touched by these runs.
   expect(readFileSync(original, 'utf8')).toBe(before);
+});
+
+test('Updater (plan 6b, D9) : un téléchargement qui n’apporte rien est abandonné après updateStallMs ; son jeton annulé, l’échec le dit', async () => {
+  setUp();
+  vi.useFakeTimers();
+  let cancelled = 0;
+  const token = { cancel: () => { cancelled++; } };
+  const { u, feed, told } = updater({ files: published(), downloadToken: () => token });
+  feed.download = { version: '0.1.2', file: installer.path };
+  feed.hangs = true;
+  const heard = u.heard('0.1.2').catch(() => {});
+  await vi.advanceTimersByTimeAsync(119_000);
+  expect(stepsOf(told)).toEqual(['downloading']);
+  expect(cancelled).toBe(0);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await heard;
+  expect(feed.tokens).toEqual([token]);
+  expect(cancelled).toBe(1);
+  expect(told.at(-1)).toEqual({ updateFlow: flow('failed', { message: 'aucune donnée depuis 2 min' }) });
+  u.dispose();
+});
+
+test('Updater (plan 6b, D9) : chaque progrès réarme le délai ; sans jeton, le téléchargement est laissé, et l’échec dit le délai en secondes', async () => {
+  setUp();
+  vi.useFakeTimers();
+  const { u, feed, told } = updater({ files: published(), params: () => ({ updateCheckMs: 3_600_000, syncRetryMaxMs: 30_000, updateStallMs: 45_000 }) });
+  feed.download = { version: '0.1.2', file: installer.path };
+  feed.hangs = true;
+  const heard = u.heard('0.1.2').catch(() => {});
+  await vi.advanceTimersByTimeAsync(40_000);
+  feed.say(10);
+  await vi.advanceTimersByTimeAsync(40_000);
+  feed.say(10.5);
+  await vi.advanceTimersByTimeAsync(44_000);
+  expect(stepsOf(told)).toEqual(['downloading', 'downloading']);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await heard;
+  expect(feed.tokens).toEqual([undefined]);
+  expect(told.at(-1)).toEqual({ updateFlow: flow('failed', { message: 'aucune donnée depuis 45 s' }) });
+  u.dispose();
 });

@@ -61,6 +61,8 @@ export function wireUpdater(o: {
       if (!(autoUpdater instanceof NsisUpdater)) throw new Error('les mises à jour ne se font que sous Windows (NSIS)');
       return autoUpdater;
     },
+    // builder-util-runtime is electron-updater's own, bundled with it (electron.vite.config.ts).
+    downloadToken: async () => new (await import('builder-util-runtime')).CancellationToken(),
     tell: (word) => host.updateWord(word),
     // The forced update armed: the window closed as the user would close it (window.ts: cirrus:quit, the interface's
     // last saves), then the app quits (index.ts: window-all-closed) and its « quit » runs the installer.
