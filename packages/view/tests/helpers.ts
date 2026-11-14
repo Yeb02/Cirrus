@@ -363,7 +363,8 @@ export function bruteVisible(sc: PlanScene, cam: Camera, p: RenderParams = P): {
       if (inView(center)) seen = true;
     }
     const extra = (sc.stubs.get(c)?.length ?? 0) + (center >= 0 ? 1 : 0);
-    if (seen && drawnEnds.size + extra >= 2) keyed.push([L === ROOT ? 0 : rank[L], c]);
+    const single = sc.endCount[c] === 1 && extra === 0; // a connection of one member (plan 6b, D2)
+    if (seen && (single || drawnEnds.size + extra >= 2)) keyed.push([L === ROOT ? 0 : rank[L], c]);
   }
   keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return { items, groups, parts: keyed.map(([, c]) => c) };

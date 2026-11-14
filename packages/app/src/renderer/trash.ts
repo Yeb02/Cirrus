@@ -12,8 +12,8 @@ import { foldedWords } from './search/index.ts';
  */
 export interface TrashRow { id: Id; kind: 'node' | 'connection'; label: 'nœud' | 'connexion' | 'annotation'; title: string; at: number; when: string; folded: string; restorable: boolean }
 
-/** What a connection restored with no branch written is told: its nodes share no plan, so it appears in none. */
-export const RESTORED_WITHOUT_BRANCH = 'Connexion restaurée ; aucun plan ne réunit deux de ses nœuds.';
+/** What a connection restored with no branch written is told: no plan holds enough of its nodes, so it appears in none. */
+export const RESTORED_WITHOUT_BRANCH = 'Connexion restaurée ; aucun plan ne montre ses nœuds.';
 
 const WHEN = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
 /** A moment as the panel says it: the French short date and time, in this PC's time — « 10/11/2026 10:05 ». */
@@ -48,9 +48,9 @@ export function filterTrash(rows: TrashRow[], text: string): TrashRow[] {
 }
 
 /**
- * What a connection just restored is told (D5): restoreConnection gives branches in the plans where two of its nodes are
- * placed; when it wrote none, the connection is alive but drawn in no plan — said, not silent. Read from the action's
- * operations, the command is not changed. Null when a branch was written.
+ * What a connection just restored is told (D5): restoreConnection gives branches in the plans where min(2, alive) of its
+ * nodes are placed (plan 6b, D2); when it wrote none, the connection is alive but drawn in no plan — said, not silent.
+ * Read from the action's operations, the command is not changed. Null when a branch was written.
  */
 export function restoreNotice(restored: Action): string | null {
   return restored.ops.some((o) => o.t === 'branch' && o.after) ? null : RESTORED_WITHOUT_BRANCH;

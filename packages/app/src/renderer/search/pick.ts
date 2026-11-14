@@ -3,8 +3,8 @@ import { objectAlive } from '@cirrus/view';
 import { OBJECT_GONE } from '../ui/graph/jumps.ts';
 import type { SearchHit } from './index.ts';
 
-/** What a live connection that no plan shows is told when its result is chosen: restored (or left) with no two members in a plan. */
-export const CONNECTION_NO_PLAN = 'Cette connexion n’est dans aucun plan : aucun plan ne réunit deux de ses nœuds.';
+/** What a live connection that no plan shows is told when its result is chosen: restored (or left) with no plan holding its nodes. */
+export const CONNECTION_NO_PLAN = 'Cette connexion n’est dans aucun plan.';
 
 /** What choosing a result with no plan does: the pop-up of an annotation opens; otherwise a notice says why nothing is shown. */
 export type NoPlanPick = { popup: Id } | { say: string };

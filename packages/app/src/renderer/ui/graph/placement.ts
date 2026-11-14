@@ -43,6 +43,8 @@ export function usePlacement(graph: Graph) {
   const [line, setLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   /** A gesture to begin once another plan is shown (« ajouter au lobby », a repercussion's plans); `frame`: the item to frame. */
   const pendingPlace = useRef<{ plan: Id; what: Placing; text: string; at: { x: number; y: number }; frame?: Id } | null>(null);
+  /** The valid target aimed at by the connection being drawn, as the cursor last moved (Entrée ends it alone without one). */
+  const aimed = useRef<ConnectTarget | null>(null);
 
   /** A gesture without a held button begins (spec 9.1): `text` follows the cursor, if any. */
   const startPlacing = (what: Placing, text: string | null, at: { x: number; y: number }) => {
@@ -74,12 +76,14 @@ export function usePlacement(graph: Graph) {
     const t = from === undefined ? null : connectTarget(stateRef.current, sc, from, hitAt(sx, sy), vc ? vc.part : null);
     e.renderer.setDropTarget(t?.kind === 'node' ? t.item : null);
     e.renderer.setHover(t?.kind === 'connection' ? m : null);
+    aimed.current = t;
     redraw();
     return t;
   };
   const endConnect = () => {
     const r = engine.current?.renderer;
     setLine(null);
+    aimed.current = null;
     r?.setCoresShown(false);
     r?.setDropTarget(null);
     r?.setHover(null);
@@ -99,6 +103,28 @@ export function usePlacement(graph: Graph) {
     setGhost((g) => (g ? { ...g, x: sx, y: sy } : g));
     if (placing.current?.kind === 'connect') { aimLine(sx, sy); aimTarget(sx, sy); }
   };
+  /**
+   * The connection being drawn ends alone (plan 6b, D2): a connection of `node` only, a source, its marker pinned at `at`
+   * in this plan, or where it goes by default (Entrée). « Partout » asks about the other plans where the node is.
+   */
+  const connectAlone = (sc: PlanScene, node: Id, at?: Vec2) => {
+    placing.current = null;
+    endConnect();
+    const from = sc.byId.get(node);
+    if (from === undefined) return;
+    graph.questions.askWhere('Montrer aussi cette connexion dans les autres plans où ce nœud est présent ?',
+      otherPlans(stateRef.current, sc.plan.id, [node]), (everywhere) => edit(connectBuild(sc, from, { kind: 'alone', ...(at ? { at } : {}) }, everywhere)));
+  };
+  /**
+   * Entrée during a gesture without a held button (plan 6b, D2): a connection being drawn ends alone, its marker where it
+   * goes by default, unless a target is aimed at (the line goes on); any other gesture goes on.
+   */
+  const enter = (sc: PlanScene) => {
+    const what = placing.current;
+    if (!what) return;
+    if (what.kind === 'connect' && aimed.current === null) { connectAlone(sc, what.node); return; }
+    gestures.current.start(MODE[what.kind]);
+  };
   /** The click that puts down what is placed, at `intent.at` in the scene `sc` (spec 9.1); a split's first step jumps to its second. */
   const place = (e: Engine, sc: PlanScene, intent: Extract<Intent, { t: 'place' }>) => {
     const what = placing.current;
@@ -107,7 +133,9 @@ export function usePlacement(graph: Graph) {
     const sp = worldToScreen(e.renderer.camera, intent.at.x, intent.at.y);
     if (what.kind === 'connect') {
       const t = aimTarget(sp.x, sp.y);
-      // Elsewhere than on a valid target, the line keeps following the cursor.
+      // On the background, the connection ends alone, its marker pinned there (plan 6b, D2); elsewhere than on a valid
+      // target, the line keeps following the cursor.
+      if (!t && intent.hit.kind === 'background') { connectAlone(sc, what.node, intent.at); return; }
       if (!t) { gestures.current.start('connect'); return; }
       placing.current = null;
       endConnect();
@@ -173,7 +201,7 @@ export function usePlacement(graph: Graph) {
     if (what?.kind === 'repercussion') graph.repercussion.nextRepercussion();
     if (what?.kind === 'split' && what.step === 2) moveCamera({ ...what.home, widthPx: e.renderer.camera.widthPx, heightPx: e.renderer.camera.heightPx });
   };
-  return { placing, ghost, setGhost, line, pendingPlace, startPlacing, aimLine, startPending, followCursor, place, cancelPlacing };
+  return { placing, ghost, setGhost, line, pendingPlace, startPlacing, aimLine, startPending, followCursor, place, enter, cancelPlacing };
 }
 
 export type PlacementPart = ReturnType<typeof usePlacement>;

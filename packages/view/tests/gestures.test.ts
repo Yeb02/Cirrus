@@ -124,3 +124,11 @@ test('un second bouton pressé pendant un geste n’arrive qu’en mouvement : o
   expect(newlyPressed(3, 1)).toEqual([]);
   expect(newlyPressed(1, 5)).toEqual([1]); // middle
 });
+
+test('Entrée pendant un geste sans bouton le termine sur place (plan 6b, D2 : la connexion seule) ; hors geste, rien', () => {
+  const g = new GestureMachine(P);
+  g.start('connect');
+  expect(g.feed({ t: 'key', key: 'Enter' }, cam)).toEqual([{ t: 'placeEnter', mode: 'connect' }]);
+  expect(g.busy).toBe(false);
+  expect(g.feed({ t: 'key', key: 'Enter' }, cam)).toEqual([]);
+});

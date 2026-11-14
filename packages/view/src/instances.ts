@@ -127,7 +127,8 @@ for (const [f, size] of CURVE_FIELDS) { curveStarts[f] = curveFloats; curveFloat
 export const CURVE_AT: Readonly<Record<CurveField, number>> = curveStarts;
 export const CURVE_FLOATS = curveFloats;
 
-interface MarkerAt extends CoreAt { multi: boolean; masks: number[] }
+/** `drawn`: the marker is drawn always — a bundle of several members, or of one (plan 6b, D2) —, not only while a connection is drawn. */
+interface MarkerAt extends CoreAt { drawn: boolean; masks: number[] }
 
 /** A part's layout standing in for the plan's own (a handle being dragged, spec 8.5), by part slot. */
 export type LayoutOverrides = ReadonlyMap<number, Omit<ConnectionLayout, 'plan' | 'connection'>>;
@@ -400,9 +401,9 @@ export function placeTitlesAnew(inst: Instances, scene: PlanScene, visible: Visi
 }
 
 /**
- * The cores drawn as markers (spec 8.5, 11.1), relative to the origin: the complex bundles' with several members, and
- * with `all` (while a connection is drawn) every core, a simple connection's midway between its boxes where the GPU
- * draws it at `zoom`. `scene` is the one the instances were built for: their slots are its own (a scene updated since,
+ * The cores drawn as markers (spec 8.5, 11.1), relative to the origin: the complex bundles' with several members or one
+ * (plan 6b, D2), and with `all` (while a connection is drawn) every core, a simple connection's midway between its boxes
+ * where the GPU draws it at `zoom`. `scene` is the one the instances were built for: their slots are its own (a scene updated since,
  * compacted, holds others).
  */
 export function markerCores(
@@ -410,7 +411,7 @@ export function markerCores(
 ): { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number>; maskAt: number }[] {
   // Its masks: MASKS from maskAt in `masks` (a simple connection's in its instance: no view made per core, M4 of the review).
   const out: { x: number; y: number; kMax: number; conn: number; masks: ArrayLike<number>; maskAt: number }[] = [];
-  for (const m of inst.markers) if (m.multi || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn, masks: m.masks, maskAt: 0 });
+  for (const m of inst.markers) if (m.drawn || all) out.push({ x: m.pos.x, y: m.pos.y, kMax: m.kMax, conn: m.conn, masks: m.masks, maskAt: 0 });
   if (!all) return out;
   const s = inst.simple.view(), o = inst.origin, items = scene.items;
   for (let q = 0; q < s.length; q += SIMPLE_INTS) {
@@ -571,7 +572,7 @@ function writeComplex(inst: Instances, w: Work, ci: number, c: Complex, row = -1
   appendBundleGlyphs(inst.glyphs, open, { end0: [e0.x, e0.y, e0.e], end1: [e1.x, e1.y, e1.e], fade: mode, foldK, conn: ci, masks }, w.p,
     row >= 0 ? b[r + 3] : undefined);
   const markerMasks = [...masksOf(vc, -1)];
-  const marker = { conn: ci, pos: open.marker, kMax: open.kMax, multi: open.multi, masks: markerMasks };
+  const marker = { conn: ci, pos: open.marker, kMax: open.kMax, drawn: open.multi || open.single, masks: markerMasks };
   if (row >= 0) inst.markers[b[r + 5]] = marker;
   else inst.markers.push(marker);
   let si = 0;

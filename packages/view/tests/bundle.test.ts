@@ -94,6 +94,8 @@ const degenerate: [string, BundleInput][] = [
   ['un membre et une amorce', { ends: [src(0, 0)], stubs: [{ role: 'target' }] }],
   ['associés seuls au même point', { ends: [end(1, 1, 'associate'), end(1, 1, 'associate')], stubs: [] }],
   ['deux sources sans cible', { ends: [src(0, 0), src(0, 0)], stubs: [{ role: 'associate' }] }],
+  ['un seul membre (plan 6b, D2)', { ends: [tgt(3, 4)], stubs: [] }],
+  ['un seul membre, son marqueur épinglé sur lui', { ends: [src(0, 0)], stubs: [], layout: { marker: { x: 0, y: 0 }, handles: {} } }],
 ];
 
 test.each(degenerate)('géométrie dégénérée sans NaN : %s (Review Focus 4)', (_name, input) => {

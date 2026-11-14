@@ -15,7 +15,7 @@ export interface Clip {
   nodes: { id: Id; x: number; y: number; k: number; parents: Id[] }[];
   /** Where those groups were drawn in the plan of origin: a group already in the plan pasted into anchors its new members. */
   groups: Record<Id, Vec2>;
-  /** Connections with at least two nodes copied, with every member they show in the plan of origin. */
+  /** Connections with at least two nodes copied (one of one, plan 6b, D2), with every member they show in the plan of origin. */
   connections: { id: Id; nodes: Id[] }[];
 }
 
@@ -54,7 +54,8 @@ export function copyClip(s: State, scene: PlanScene, items: number[], zoom: numb
     const split = new Set<Id>();
     for (const id of phantomsOf(s, c.id)) { const ph = s.phantoms.get(id)!; if (ph.plan === plan && ph.of.kind !== 'absent') split.add(ph.of.node); }
     const shown = c.members.map((m) => m.node).filter((n) => s.branches.has({ plan, connection: c.id, node: n }) || split.has(n));
-    if (shown.filter((n) => ids.has(n)).length >= 2) connections.push({ id: c.id, nodes: shown });
+    // Two of its nodes copied; one, for a connection of one member (plan 6b, D2).
+    if (shown.filter((n) => ids.has(n)).length >= Math.min(2, c.members.length)) connections.push({ id: c.id, nodes: shown });
   }
   return { plan, zoom, center, nodes, groups, connections };
 }

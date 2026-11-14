@@ -25,6 +25,16 @@ Plan : `docs/superpowers/plans/2026-11-14-cirrus-saisie-interface.md` (écrit le
 - Ruling: **revue de la tâche 1 : le titre d’une entrée d’agenda est borné brut à 2 × `AGENDA_TITLE_CHARS` (400), espaces comprises**, assez pour toute frappe ; **l’agenda et les feuillets d’un instantané passent par `recordFits` (les contrôles de `parseOp`)**, une entrée mal formée le rend illisible (`SnapshotError`) — coût si faux : nul.
 - Ruling (relecture de la tâche 3) : **une écriture que ses départs mèneraient au-delà de `MAX_OPS_PER_UNIT` est refusée par le serveur, l’état remis (`withDepartures`)**, comme une écriture qui ne s’applique pas : journalisée, aucun PC ne pourrait la lire (`parseRemoteUnit`) et tous resteraient derrière elle. Une écriture complétée par le serveur revient au PC qui l’a faite ; `Session.reconcile` l’oublie alors de la pile d’annulation — coût si faux : un refus rarissime (200 000 opérations).
 
+## Tâche 4 : connexions à un membre, le dessin et le geste (D2)
+
+- Ruling: **le marqueur par défaut se mesure depuis le bout du bras côté nœud (le bord de la boîte plus `anchorGap`)** : le bras dessiné fait exactement `singleArmLength · f^k` — coût si faux : un écart de quelques unités.
+- Ruling: **le bras est droit (points de contrôle aux tiers), courbable par ses deux poignées de Bézier ; pas de poignée de rotation, l’angle d’une disposition n’est pas lu (`BundleGeometry.single`)** : la direction du bras est celle du marqueur — coût si faux : une poignée à rendre.
+- Ruling: **une cible a son nœud en `p3` (flèche entrante), une source et un associé en `p0`** : `appendBundleGlyphs` oriente la flèche par le bout côté nœud, aucun changement de glyphe ni de shader — coût si faux : nul.
+- Ruling: **le champ `multi` des marqueurs d’instances devient `drawn` (plusieurs membres, ou un seul)** : seul `markerCores` le lisait — coût si faux : nul.
+- Ruling: **Entrée passe par la machine des gestes (`placeEnter`, l’état revient au repos) ; l’app reprend tout autre geste, et le tracé d’une connexion quand une cible est visée (Entrée n’y fait rien)** — coût si faux : une touche à rebrancher.
+- Ruling: **la question du retrait d’un membre ne parle de corbeille que pour le dernier (« C’est son dernier nœud : « partout » met la connexion à la corbeille. »)** ; `TrashPanel.tsx` n’avait plus rien à changer (tâche 3) — coût si faux : un texte.
+- Ruling: **le scénario de la corbeille restaure désormais la connexion restée à un nœud, puis Ctrl+Z**, au lieu de son bouton éteint (le refus `RESTORE_CONNECTION_LOST` reste couvert par `trash.test.ts`) — coût si faux : nul.
+
 ## Tâche 8 : l’envoi des consultations (D7)
 
 - Ruling: **la forme des consultations passe au cœur (`core/src/consultations.ts`) : leurs sortes, `parseConsultations`, `parseSentConsultations` (le lot d’un PC, avec `seq` ≥ 1 strictement croissant), `SEEN_KINDS`, et les bornes `MAX_CONSULTATIONS_PER_REQUEST` (1 000) et `MAX_CONSULTATIONS_BODY_BYTES` (1 Mio)**, que `bounds.ts` du serveur réexporte comme les autres bornes du cœur ; le rendu les réexporte pour ne rien changer à ses importations — coût si faux : nul.

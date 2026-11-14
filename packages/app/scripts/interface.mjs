@@ -783,6 +783,60 @@ const SCENARIOS = [
     },
   },
   {
+    // Plan 6b, D2: « Ajouter une connexion » from MDL's menu (175 px right of the view's centre), ended by a click on the
+    // background (the sky at the left, over no node nor envelope): a connection of MDL alone, a source, its marker pinned
+    // where the click was; Ctrl+Z takes it away. Then ended by Entrée: its marker where it goes by default (no layout).
+    name: 'connexion à un seul nœud : un clic sur le fond ou Entrée termine « Ajouter une connexion » ; Ctrl+Z',
+    env: { CIRRUS_VIEW: '0,140,1' },
+    async run(page, base) {
+      const { lobby } = idsOf(base);
+      const mdl = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Minimum Description Length Principle (MDL)'`)[0].id;
+      const centre = await graphCentre(page), from = { x: centre.x + 175, y: centre.y }, sky = { x: 60, y: 800 };
+      /** MDL's live connections of one member. */
+      const alone = () => base(`SELECT id, json FROM connections WHERE trashed = 0 AND kind = 'knowledge'`).map((r) => ({ id: r.id, ...JSON.parse(r.json) }))
+        .filter((c) => c.members.length === 1 && c.members[0].node === mdl);
+      const layoutOf = (id) => base(`SELECT json FROM conn_layouts WHERE plan = ${sql(lobby)} AND connection = ${sql(id)}`).map((r) => JSON.parse(r.json))[0] ?? null;
+      const begin = async () => {
+        for (let i = 0; i < 10 && !(await page.until(`[...document.querySelectorAll('.context-menu button')].some((b) => b.textContent === 'Ajouter une connexion')`, 1000)); i++) {
+          await page.press('Escape', 'Escape', 27);
+          await page.click(from.x, from.y, 'right');
+        }
+        const item = await page.centre('.context-menu button', '^Ajouter une connexion$');
+        await page.click(item.x, item.y);
+      };
+      /** « Ici seulement », if MDL's other plans are asked about. */
+      const here = async () => {
+        if (!(await page.until(`!!document.querySelector('.ask')`, 1000))) return;
+        const b = await page.centre('.ask button', '^Ici seulement$');
+        await page.click(b.x, b.y);
+      };
+      if (alone().length !== 0) throw new Error('MDL a déjà une connexion à lui seul');
+
+      await begin();
+      await page.move(sky.x, sky.y);
+      await page.click(sky.x, sky.y);
+      await here();
+      if (!(await until(() => alone().length === 1))) throw new Error(`pas de connexion de MDL seul après le clic sur le fond ; ${await toastsText(page)}`);
+      const [made] = alone(), marker = layoutOf(made.id)?.marker;
+      if (made.members[0].role !== 'source') throw new Error(`MDL n’est pas source : ${JSON.stringify(made.members)}`);
+      // At zoom 1, the world point under the click: the view's centre (0, 140) plus the click's offset from the graph's centre.
+      const want = { x: sky.x - centre.x, y: 140 + sky.y - centre.y };
+      if (!marker || Math.abs(marker.x - want.x) > 2 || Math.abs(marker.y - want.y) > 2) throw new Error(`le marqueur n’est pas épinglé au clic : ${JSON.stringify([marker, want])}`);
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => alone().length === 0))) throw new Error('Ctrl+Z ne retire pas la connexion de MDL seul');
+
+      await begin();
+      await page.press('Enter', 'Enter', 13);
+      await here();
+      if (!(await until(() => alone().length === 1))) throw new Error(`Entrée ne termine pas la connexion seule ; ${await toastsText(page)}`);
+      if (layoutOf(alone()[0].id) !== null) throw new Error('par Entrée, le marqueur a été épinglé au lieu de prendre sa place par défaut');
+      await page.evaluate(`document.querySelector('.graph').focus()`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => alone().length === 0))) throw new Error('Ctrl+Z ne retire pas la connexion faite par Entrée');
+    },
+  },
+  {
     // Plan 6b, D4: a group's colour in this plan, from its menu. The background of « Complexité et induction », near MDL (a
     // member, 175 px right of the centre), opens the group's menu first; « Couleur… », the third swatch: its placement
     // carries it; « Automatique » takes it away; Ctrl+Z gives it back.
@@ -2439,10 +2493,10 @@ const SCENARIOS = [
     // Plan 6a, D5 (task 4): « Monde algorithmique » deleted everywhere, its connection with « Universalité algorithmique »
     // left with one member and thrown away with it; the trash opened from the background's menu lists both, the most
     // recent first, before the test base's draft note; « Restaurer » the node makes its title follow the cursor, a click puts
-    // it down in the plan shown, Ctrl+Z sends it back; Échap gives up a restore under way, the panel staying; the connection
-    // can never come back, its button is off with the reason, the row listed; closing the panel (Échap in its filter, ×) gives up a
-    // restore under way; the filter; Échap closes the panel.
-    name: 'corbeille : un nœud supprimé partout, restauré par la pose dans le plan, Ctrl+Z ; Échap abandonne la pose ; une connexion qui ne revient pas, éteinte ; fermer le panneau abandonne la pose ; le filtre',
+    // it down in the plan shown, Ctrl+Z sends it back; Échap gives up a restore under way, the panel staying; the connection,
+    // left with « Universalité algorithmique » alone (plan 6b, D2), comes back with it, Ctrl+Z sends it back; closing the
+    // panel (Échap in its filter, ×) gives up a restore under way; the filter; Échap closes the panel.
+    name: 'corbeille : un nœud supprimé partout, restauré par la pose dans le plan, Ctrl+Z ; Échap abandonne la pose ; une connexion restée à un nœud revient avec lui, Ctrl+Z ; fermer le panneau abandonne la pose ; le filtre',
     async run(page, base) {
       const TITLE = 'Monde algorithmique';
       const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
@@ -2504,15 +2558,23 @@ const SCENARIOS = [
       if (!(await page.evaluate(`!!document.querySelector('aside.trash')`))) throw new Error('Échap ferme le panneau au lieu d’abandonner la pose');
       if (!trashed() || !(await listed(id))) throw new Error('la pose abandonnée a écrit quelque chose');
 
-      // The connection, left with one member, can never come back: its button is off, the core's own refusal is its reason
-      // (its title), the row stays listed; a click on it says nothing.
-      const NEVER = 'Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir.';
-      const off = await page.evaluate(`(() => { const b = document.querySelector('.trash .item[data-kind="connection"] .restore'); return b ? [b.disabled, b.title] : null; })()`);
-      if (JSON.stringify(off) !== JSON.stringify([true, NEVER])) throw new Error(`le bouton « Restaurer » de la connexion : ${JSON.stringify(off)}`);
-      if (await page.evaluate(`document.querySelector('.trash .item[data-kind="node"] .restore').disabled`)) throw new Error('le bouton « Restaurer » d’un nœud est éteint');
-      await click('.trash .item[data-kind="connection"] .restore');
-      if (await toastSays(page, NEVER, 800)) throw new Error('un clic sur le bouton éteint a dit le refus');
-      if (!(await page.evaluate(`!!document.querySelector('.trash .item[data-kind="connection"]')`))) throw new Error('la connexion qui ne revient pas n’est plus listée');
+      // The connection, left with « Universalité algorithmique » alone (plan 6b, D2), may come back: its button is on; a click
+      // gives it back, alive with that one node, drawn in the lobby where it is placed; Ctrl+Z sends it back to the trash.
+      const conn = await page.evaluate(`[...document.querySelectorAll('.trash .item[data-kind="connection"]')].find((li) => li.querySelector('.title').textContent === 'la connexion de « Universalité algorithmique »')?.dataset.id ?? null`);
+      if (conn === null) throw new Error('la connexion de « Universalité algorithmique » n’est pas listée');
+      const connTrashed = () => base(`SELECT trashed FROM connections WHERE id = ${sql(conn)}`)[0].trashed === 1;
+      const on = await page.evaluate(`(() => { const b = document.querySelector('.trash .item[data-id="${conn}"] .restore'); return [b.disabled, b.title]; })()`);
+      if (JSON.stringify(on) !== JSON.stringify([false, 'La rendre aux plans où ses nœuds sont'])) throw new Error(`le bouton « Restaurer » de la connexion : ${JSON.stringify(on)}`);
+      await click(`.trash .item[data-id="${conn}"] .restore`);
+      if (!(await until(() => !connTrashed()))) throw new Error(`la connexion restée à un nœud ne revient pas ; ${await toastsText(page)}`);
+      const back = JSON.parse(base(`SELECT json FROM connections WHERE id = ${sql(conn)}`)[0].json).members;
+      if (back.length !== 1 || base(`SELECT 1 FROM branches WHERE plan = ${sql(lobby)} AND connection = ${sql(conn)}`).length !== 1) {
+        throw new Error(`la connexion revenue : ${JSON.stringify(back)}, sans sa branche dans le lobby`);
+      }
+      if (!(await page.until(`!document.querySelector('.trash .item[data-id="${conn}"]')`))) throw new Error('le panneau ne suit pas la restauration de la connexion');
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(connTrashed))) throw new Error('Ctrl+Z ne rend pas la connexion à la corbeille');
+      if (!(await page.until(`!!document.querySelector('.trash .item[data-id="${conn}"]')`))) throw new Error('le panneau ne suit pas l’annulation de la connexion');
 
       // Closing the panel gives up a restore under way (the graph has lost the focus, so its own Escape is out of reach): by
       // Escape typed in the filter, then by the ×; nothing is written, the node stays in the trash.

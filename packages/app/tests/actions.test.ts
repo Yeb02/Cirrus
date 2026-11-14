@@ -73,6 +73,26 @@ test('tracer vers un nœud crée la connexion, montrée « partout » où ses de
   expect(shown(plans.lobby, connections.twoToTwo, nodes.mdl)).toBe(true);
 });
 
+test('tracer vers le fond crée une connexion d’un seul nœud, source, son marqueur épinglé au clic ; par Entrée, à sa place par défaut ; « partout » (plan 6b, D2)', () => {
+  const { nodes, plans } = ids;
+  const from = sc.byId.get(nodes.mdl)!;
+  const a = run(connectBuild(sc, from, { kind: 'alone', at: { x: 700, y: -300 } }, [plans.these]));
+  expect(a.label).toBe('Créer une connexion');
+  const c = newConnection(a);
+  expect(s.connections.get(c)!.members).toEqual([{ node: nodes.mdl, role: 'source' }]);
+  expect(shown(plans.lobby, c, nodes.mdl) && shown(plans.these, c, nodes.mdl)).toBe(true);
+  expect(s.connLayouts.get(layoutKey(plans.lobby, c))).toEqual({ plan: plans.lobby, connection: c, marker: { x: 700, y: -300 }, handles: {} });
+  expect(s.connLayouts.has(layoutKey(plans.these, c))).toBe(false);
+  const d = newConnection(run(connectBuild(sc, from, { kind: 'alone' }, [])));
+  expect(s.connections.get(d)!.members).toEqual([{ node: nodes.mdl, role: 'source' }]);
+  expect(s.connLayouts.has(layoutKey(plans.lobby, d))).toBe(false);
+  expect(shown(plans.these, d, nodes.mdl)).toBe(false);
+  // Its pinned marker follows its node moved (layoutsFollowing: its one end moves).
+  const scene = buildScene(s, plans.lobby, measure, P), mdl = scene.byId.get(nodes.mdl)!;
+  run(dropBuild(scene, [mdl], 100, 50, target(scene, [mdl], { x: 9000, y: 9000 }), false, P));
+  expect(s.connLayouts.get(layoutKey(plans.lobby, c))!.marker).toEqual({ x: 800, y: -250 });
+});
+
 test('scinder un bras : le fantôme près du faisceau au cran lisible à ce zoom, le centre au cran du nœud lointain ; réunir les retire (I14)', () => {
   const { nodes, plans, connections } = ids;
   const before = s.phantoms.size;

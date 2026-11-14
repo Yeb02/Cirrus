@@ -28,7 +28,9 @@ export type Intent =
   | { t: 'rectCancel' }
   | { t: 'placeMove'; at: Vec2; sx: number; sy: number }
   | { t: 'place'; mode: Mode; at: Vec2; hit: Hit }
-  | { t: 'placeCancel'; mode: Mode };
+  | { t: 'placeCancel'; mode: Mode }
+  /** Entrée during a gesture without a held button: it ends there, as its owner says (a connection: alone, plan 6b, D2). */
+  | { t: 'placeEnter'; mode: Mode };
 
 type State =
   | { s: 'idle' }
@@ -78,6 +80,7 @@ export class GestureMachine {
     if (st.s === 'mode') {
       if (cancelling) { this.st = input.t === 'down' ? { s: 'swallow' } : { s: 'idle' }; return [{ t: 'placeCancel', mode: st.mode }]; }
       if (input.t === 'move') return [{ t: 'placeMove', at: world(input.sx, input.sy), sx: input.sx, sy: input.sy }];
+      if (input.t === 'key' && input.key === 'Enter') { this.st = { s: 'idle' }; return [{ t: 'placeEnter', mode: st.mode }]; }
       if (input.t === 'down' && input.button === 0) {
         this.st = { s: 'swallow' };
         return [{ t: 'place', mode: st.mode, at: world(input.sx, input.sy), hit: input.hit }];

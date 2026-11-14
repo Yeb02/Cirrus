@@ -67,6 +67,9 @@ export interface RenderParams {
   markerRingPx: number;
   stubLength: number;
   stubAngle: number;
+  /** A connection of one member (plan 6b, D2): its arm's length at step 0, and its direction (degrees, the screen's y down). */
+  singleArmLength: number;
+  singleArmAngle: number;
   dashPx: Range;
   curveTolerancePx: number;
   curveZoomHeadroom: number;
@@ -413,6 +416,8 @@ export const DEFAULT_PARAMS: RenderParams = {
   markerRingPx: 1.5,
   stubLength: 150,
   stubAngle: 0.6,
+  singleArmLength: 80,
+  singleArmAngle: -45,
   dashPx: [4, 5],
   curveTolerancePx: 0.2,
   curveZoomHeadroom: 2,
@@ -655,6 +660,8 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('hoverBoostPx', 'Élargissement d’une connexion survolée (px)', A, 'Connexions', 0, 4, 0.1),
   num('handleRadiusPx', 'Rayon des poignées de disposition (px)', A, 'Connexions', 2, 15, 0.5),
   num('rotationHandlePx', 'Distance de la poignée de rotation au tronc (px)', A, 'Connexions', 10, 120, 1),
+  num('singleArmLength', 'Longueur du bras d’une connexion d’un seul nœud', A, 'Connexions', 10, 600, 5),
+  num('singleArmAngle', 'Direction du bras d’une connexion d’un seul nœud (degrés, 0 : vers la droite, −90 : vers le haut)', A, 'Connexions', -180, 180, 5),
   num('centerRadius', 'Rayon d’un fantôme de centre', A, 'Fantômes et signes', 2, 40, 0.5),
   num('badgeRadiusPx', 'Rayon du badge des connexions absentes (px)', A, 'Fantômes et signes', 1, 8, 0.5),
   num('phantomFillAlpha', 'Opacité du fond d’un fantôme', A, 'Fantômes et signes', 0, 1, 0.01),

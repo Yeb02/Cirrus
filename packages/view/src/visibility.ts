@@ -790,7 +790,8 @@ export function computeVisible(scene: PlanScene, index: SceneIndex, cam: Camera,
     const ctr = center[pi];
     const stubs = noStubs ? NO_STUBS : scene.stubs.get(pi) ?? NO_STUBS;
     const extra = stubs.length + (ctr >= 0 ? 1 : 0);
-    if (!(ne === 2 && ends[0].item !== ends[1].item) && distinctEnds(ends) + extra < 2) continue;
+    // One end alone, without stub nor centre: a connection of one member (the scene makes no other, plan 6b, D2).
+    if (!(ne === 2 && ends[0].item !== ends[1].item) && !(ne === 1 && extra === 0) && distinctEnds(ends) + extra < 2) continue;
     // Internal to a folding group (its common group or one above it): it fades out with that group.
     let fade = -1;
     if (capped) for (let a = L; a !== ROOT; a = parent[a]) if (st(a) === 2) { fade = a; break; }

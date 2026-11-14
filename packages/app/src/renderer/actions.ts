@@ -277,17 +277,25 @@ const branchesIn = (plans: Id[], nodes: Id[]) => plans.flatMap((plan) => nodes.m
 
 /**
  * A connection drawn from a node (spec 11.1): to another node, a new connection leaving `from`; to the core of a
- * connection, `from` joins it as a source. `everywhere`: the other plans where it is shown too (« partout »).
+ * connection, `from` joins it as a source; ended alone (plan 6b, D2: a click on the background, Entrée), a connection of
+ * `from` only, a source, its marker pinned at `at` in this plan when given. `everywhere`: the other plans where it is
+ * shown too (« partout »).
  */
-export function connectBuild(scene: PlanScene, from: number, target: ConnectTarget, everywhere: Id[]): Build {
+export function connectBuild(scene: PlanScene, from: number, target: ConnectTarget | { kind: 'alone'; at?: Vec2 }, everywhere: Id[]): Build {
   const plan = scene.plan.id, source = scene.items[from].node;
   if (target.kind === 'connection') return addMemberBuild(plan, scene.ids[target.conn], source, everywhere, 'source');
-  const to = scene.items[target.item].node;
+  const nodes = target.kind === 'node' ? [source, scene.items[target.item].node] : [source];
+  const at = target.kind === 'alone' ? target.at : undefined;
   return (st) => {
     let id = '';
     return combine(st, 'Créer une connexion', [
-      (x) => { const a = connect(x, { plan, members: [{ node: source, role: 'source' }, { node: to, role: 'target' }] }); id = createdConnection(a); return a; },
-      ...(everywhere.length > 0 ? [(x: State) => setBranches(x, id, branchesIn(everywhere, [source, to]), true)] : []),
+      (x) => {
+        const a = connect(x, { plan, members: nodes.map((node, i) => ({ node, role: i === 0 ? 'source' : 'target' })) });
+        id = createdConnection(a);
+        return a;
+      },
+      ...(at !== undefined ? [(x: State) => setLayout(x, plan, id, { marker: at, handles: {} })] : []),
+      ...(everywhere.length > 0 ? [(x: State) => setBranches(x, id, branchesIn(everywhere, nodes), true)] : []),
     ]);
   };
 }

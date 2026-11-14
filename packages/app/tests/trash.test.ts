@@ -232,7 +232,7 @@ test('restoreNotice : une connexion rendue sans branche — ses nœuds ne partag
   expect(alone.ok).toBe(true);
   expect(branchesOf(s, ab)).toEqual([]);
   expect(alone.ok && restoreNotice(alone.action)).toBe(RESTORED_WITHOUT_BRANCH);
-  expect(RESTORED_WITHOUT_BRANCH).toBe('Connexion restaurée ; aucun plan ne réunit deux de ses nœuds.');
+  expect(RESTORED_WITHOUT_BRANCH).toBe('Connexion restaurée ; aucun plan ne montre ses nœuds.');
   const shown = await session.run(restoreConnectionBuild(bc)!);
   expect(branchesOf(s, bc)).toEqual([`${plan}|${B}`, `${plan}|${C}`].sort());
   expect(shown.ok && restoreNotice(shown.action)).toBeNull();

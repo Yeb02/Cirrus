@@ -740,6 +740,9 @@ export function GraphView(props: {
       case 'place':
         placement.place(e, sc, intent);
         break;
+      case 'placeEnter':
+        placement.enter(sc);
+        break;
       case 'placeCancel':
         placement.cancelPlacing(e);
         break;
@@ -882,6 +885,8 @@ export function GraphView(props: {
           if (handles.held()) handles.dropHandle(false); else feed({ t: 'key', key: 'Escape' });
           return;
         }
+        // Entrée during a gesture without a held button (plan 6b, D2: a connection being drawn ends alone).
+        if (ev.key === 'Enter' && gestures.current.mode !== null) { ev.preventDefault(); feed({ t: 'key', key: 'Enter' }); return; }
         const sc = sceneRef.current;
         // Ctrl+C, Ctrl+V and Suppr (spec 7), outside a gesture in progress.
         if (sc && !gestures.current.busy) {

@@ -33,7 +33,7 @@ test('les instances contiennent les enveloppes, les connexions, les marqueurs et
   expect(inst.envelopes.alpha.length).toBeGreaterThan(0);
   expect(inst.simple.length).toBeGreaterThan(0);
   expect(inst.curves.length).toBeGreaterThan(0);
-  expect(inst.markers.some((m) => m.multi)).toBe(true);
+  expect(inst.markers.some((m) => m.drawn)).toBe(true);
   expect(inst.titles.map((t) => t.text)).toContain('Déduction jointe');
   const drawn = new Set<number>();
   for (let o = 0; o < inst.simple.length; o += SIMPLE_INTS) drawn.add(inst.simple.view()[o + 3]);

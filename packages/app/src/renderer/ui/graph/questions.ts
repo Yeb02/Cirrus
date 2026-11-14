@@ -57,7 +57,8 @@ export function useQuestions(graph: Graph) {
     if (!c || !plan) return;
     if (!memberElsewhere(s, plan, connection, node)) { edit(removeMemberBuild(plan, connection, node, true)); return; }
     const shownIn = memberPlans(s, connection, node);
-    const last = c.members.length <= 2;
+    // Its last member (plan 6b, D2: a connection of one node lives on): « partout » puts it in the trash.
+    const last = c.members.length <= 1;
     const choices = [
       ...(shownIn.includes(plan) ? [{ value: 'here', label: 'Ici seulement' }] : []),
       { value: 'everywhere', label: last ? 'Partout (supprime la connexion)' : 'Partout' },
@@ -66,7 +67,7 @@ export function useQuestions(graph: Graph) {
     const n = shownIn.length;
     setQuestion({
       text: `Retirer « ${s.nodes.get(node)?.title ?? '?'} » de la connexion ?`,
-      detail: `Ce membre est affiché dans ${n} plan${n > 1 ? 's' : ''}.${last ? ' La connexion n’aurait plus qu’un membre : « partout » la met à la corbeille.' : ''}`,
+      detail: `Ce membre est affiché dans ${n} plan${n > 1 ? 's' : ''}.${last ? ' C’est son dernier nœud : « partout » met la connexion à la corbeille.' : ''}`,
       choices,
       answer: (v) => { if (v !== null) edit(removeMemberBuild(plan, connection, node, v === 'everywhere')); },
     });

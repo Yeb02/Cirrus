@@ -43,7 +43,11 @@ export interface Branch {
   key: Id | null;
 }
 
-export interface BundleGeometry { marker: Vec2; u: Vec2; kMax: number; trunk: [Vec2, Vec2] | null; branches: Branch[]; multi: boolean }
+/**
+ * `multi`: several members, a trunk between A and B; `single`: one member (plan 6b, D2), its one arm from the node's edge
+ * to the marker. Either way the marker is drawn (instances.ts, markerCores).
+ */
+export interface BundleGeometry { marker: Vec2; u: Vec2; kMax: number; trunk: [Vec2, Vec2] | null; branches: Branch[]; multi: boolean; single: boolean }
 
 /**
  * Below this share of its distance to the marker, an associate counts as on the axis (plan 3c task 8: with two
@@ -91,6 +95,7 @@ const NO_OFFSET: { b1: Vec2; b2: Vec2 } = Object.freeze({ b1: Object.freeze({ x:
  */
 export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeometry {
   const { ends, stubs } = input;
+  if (ends.length === 1 && stubs.length === 0 && input.centre === undefined) return singleArm(ends[0], input.layout, p);
   const pairNeu = ends.length === 2 && stubs.length === 0 && ends.every((e) => e.role === 'associate');
   // The ends by role, in their order.
   let S: BundleEnd[], T: BundleEnd[], N: BundleEnd[];
@@ -171,5 +176,31 @@ export function bundleGeometry(input: BundleInput, p: RenderParams): BundleGeome
       sideways(end, end, NO_OFFSET, of, true, key);
     }
   }
-  return { marker: M, u, kMax, trunk: multi ? [A, B] : null, branches, multi };
+  return { marker: M, u, kMax, trunk: multi ? [A, B] : null, branches, multi, single: false };
+}
+
+/**
+ * A connection of one member (plan 6b, D2): a straight arm from the node's edge to the marker M — the pinned one, else
+ * singleArmLength · f^k beyond the edge, toward singleArmAngle. The glyph is at the node end as in a bundle: a source's
+ * arm leaves the node (node at p0, the arrow pointing out), a target's reaches it (node at p3, pointing in), an associate's
+ * leaves it (a dot). Its Bézier offsets bend it; no rotation: `u` is the arm's direction, the layout's angle is not read.
+ */
+function singleArm(e: BundleEnd, layout: BundleInput['layout'], p: RenderParams): BundleGeometry {
+  let M = layout?.marker, a: Vec2;
+  if (M === undefined) {
+    const r = (p.singleArmAngle * Math.PI) / 180, dx = Math.cos(r), dy = Math.sin(r);
+    // A point surely beyond the box and its gap along the direction, where anchor finds the edge (it stops at `toward`).
+    const far = 2 * (e.halfW + e.halfH + p.anchorGap * stepScale(e.k, p)) + 1;
+    a = anchor(e, { x: e.pos.x + dx * far, y: e.pos.y + dy * far }, p);
+    const L = p.singleArmLength * p.factor ** e.k;
+    M = { x: a.x + dx * L, y: a.y + dy * L };
+  } else a = anchor(e, M, p);
+  const u = norm(sub(M, a)), o = layout?.handles?.[e.key] ?? NO_OFFSET;
+  const inward = e.role === 'target';
+  const p0 = inward ? M : a, p3 = inward ? a : M, dx = p3.x - p0.x, dy = p3.y - p0.y;
+  const arm: Branch = {
+    p0, b1: { x: p0.x + dx / 3 + o.b1.x, y: p0.y + dy / 3 + o.b1.y }, b2: { x: p0.x + (2 * dx) / 3 + o.b2.x, y: p0.y + (2 * dy) / 3 + o.b2.y }, p3,
+    nodeEnd: inward ? 'p3' : 'p0', role: e.role, kNode: e.k, kMarker: e.k, dashed: e.dashed, stub: false, key: e.key,
+  };
+  return { marker: M, u, kMax: e.k, trunk: null, branches: [arm], multi: false, single: true };
 }

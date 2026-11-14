@@ -22,7 +22,8 @@ export function layoutHandles(g: BundleGeometry, zoom: number, p: RenderParams):
     out.push({ handle: { kind: 'bezier', key: b.key, which: 'b2' }, at: b.b2, from: b.p3 });
   }
   const B = g.trunk ? g.trunk[1] : g.marker;
-  out.push({ handle: { kind: 'rotation' }, at: add(B, mul(g.u, p.rotationHandlePx / zoom)), from: g.marker });
+  // A connection of one member has no rotation (plan 6b, D2): its arm goes where its marker is.
+  if (!g.single) out.push({ handle: { kind: 'rotation' }, at: add(B, mul(g.u, p.rotationHandlePx / zoom)), from: g.marker });
   out.push({ handle: { kind: 'marker' }, at: g.marker });
   return out;
 }

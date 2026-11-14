@@ -497,8 +497,8 @@ const farEnds = new Int32Array(3);
  * The parts of connection row `c` in a plan (spec 8.5, 11.3), given to `sink`; returns how many. `shown`: the node rows
  * with a branch there; `phantoms`: its phantoms there, by identifier. The main part has the members shown, in member
  * order — placed, by an absent member's phantom (dashed), else a stub — then the far nodes' phantoms; it is drawn with
- * two solid ends at least. Each centre phantom whose node is placed makes a far part. Nothing for a connection of
- * another kind, or in the trash.
+ * two solid ends at least, or the one of a connection of one member (plan 6b, D2). Each centre phantom whose node is
+ * placed makes a far part. Nothing for a connection of another kind, or in the trash.
  *
  * `seen` (buildScene): for a knowledge connection, each placed member that sees it here is counted — shown in it when
  * it is drawn here, or its arm split here (badgeOf's rule, spec 11.3).
@@ -524,10 +524,12 @@ function emitParts(L: SceneLookup, c: number, shown: ArrayLike<number>, phantoms
   if (mainEnds.length < 3 * (n + phantoms.length)) mainEnds = new Int32Array(6 * (n + phantoms.length));
   if (shownPlaced.length < n) shownPlaced = new Int32Array(2 * n);
   const ends = mainEnds;
-  let count = 0, solid = 0, parts = 0, placed = 0, stubs: SceneStub[] | null = null;
+  let count = 0, solid = 0, parts = 0, placed = 0, distinct = 0, stubs: SceneStub[] | null = null;
   for (let k = 0; k < n; k++) {
     const m = ms[k], r = m >> 2, role = m & 3;
-    if (repeated(ms, k, r) || !includes(shown, r)) continue;
+    if (repeated(ms, k, r)) continue;
+    distinct++;
+    if (!includes(shown, r)) continue;
     const it = r < itemOfNode.length ? itemOfNode[r] : -1;
     if (it >= 0) { count = putEnd(ends, count, it, r, role); solid++; shownPlaced[placed++] = r; continue; }
     let absent = -1;
@@ -544,7 +546,8 @@ function emitParts(L: SceneLookup, c: number, shown: ArrayLike<number>, phantoms
       }
     }
   }
-  if (solid >= 2) { sink(false, -1, ends, count, stubs, L.layoutOf(c), title); parts++; }
+  // Two solid ends, or the one of a connection of one member (plan 6b, D2): one of two shown alone stays masked.
+  if (solid >= 2 || (distinct === 1 && solid === 1)) { sink(false, -1, ends, count, stubs, L.layoutOf(c), title); parts++; }
   for (let x = 0; x < phantoms.length; x++) {
     const r = rows[x], it = r >= 0 && r < itemOfNode.length ? itemOfNode[r] : -1;
     if (phantoms[x].of.kind !== 'center' || it < 0) continue;

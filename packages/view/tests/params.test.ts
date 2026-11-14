@@ -510,3 +510,17 @@ test('la palette des couleurs de groupe (plan 6b, D4) : 12 teintes et leur satur
   expect(PARAM_SPECS.find((s) => s.key === 'groupPaletteChroma')).toEqual({ key: 'groupPaletteChroma', label: 'Saturation de la palette des couleurs de groupe (OKLCH)', section: 'avancé', group: 'Groupes', kind: 'number', min: 0, max: 0.3, step: 0.005 });
   expect(PARAM_SPECS.filter((s) => s.group === 'Groupes')).toHaveLength(16);
 });
+
+test('le bras d’une connexion d’un membre (plan 6b, D2) : 80 de long, à −45° ; deux réglages avancés de « Connexions », qui en a 15', () => {
+  expect(DEFAULT_PARAMS.singleArmLength).toBe(80);
+  expect(DEFAULT_PARAMS.singleArmAngle).toBe(-45);
+  expect(PARAM_SPECS.find((s) => s.key === 'singleArmLength')).toEqual({
+    key: 'singleArmLength', label: 'Longueur du bras d’une connexion d’un seul nœud', section: 'avancé', group: 'Connexions', kind: 'number', min: 10, max: 600, step: 5,
+  });
+  expect(PARAM_SPECS.find((s) => s.key === 'singleArmAngle')).toEqual({
+    key: 'singleArmAngle', label: 'Direction du bras d’une connexion d’un seul nœud (degrés, 0 : vers la droite, −90 : vers le haut)', section: 'avancé', group: 'Connexions', kind: 'number', min: -180, max: 180, step: 5,
+  });
+  expect(PARAM_SPECS.filter((s) => s.group === 'Connexions')).toHaveLength(15);
+  // Geometry, not the scene: changing them does not rebuild it.
+  expect(sceneParamsKey({ ...DEFAULT_PARAMS, singleArmLength: 200, singleArmAngle: 30 })).toBe(sceneParamsKey(DEFAULT_PARAMS));
+});

@@ -35,7 +35,7 @@ test('pickWithoutPlan : une connexion vivante que aucun plan ne montre le dit, a
   const hits = found(s, lobby, 'zorglub');
   expect(hits.map((h) => [h.id, h.kind, h.plan])).toEqual([[link, 'connection', null]]);
   expect(pickWithoutPlan(s, hits[0])).toEqual({ say: CONNECTION_NO_PLAN });
-  expect(CONNECTION_NO_PLAN).toBe('Cette connexion n’est dans aucun plan : aucun plan ne réunit deux de ses nœuds.');
+  expect(CONNECTION_NO_PLAN).toBe('Cette connexion n’est dans aucun plan.');
   expect(CONNECTION_NO_PLAN).not.toBe(OBJECT_GONE);
 });
 
