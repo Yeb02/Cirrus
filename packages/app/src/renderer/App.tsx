@@ -1,8 +1,9 @@
-import { type Action, type Anchor, annotationTitle, createAnnotation, type Id, type State } from '@cirrus/core';
+import { type Action, type Anchor, annotationTitle, createAnnotation, type Id, type SheetRec, type State, uuidv7 } from '@cirrus/core';
 import { withOverrides } from '@cirrus/view';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { ImportResult } from '../main/files.ts';
-import { type Build, deleteAnnotationBuild, preambleBuild, restoreConnectionBuild } from './actions.ts';
+import { type Build, deleteAnnotationBuild, deleteSheetBuild, preambleBuild, restoreConnectionBuild, sheetBuild } from './actions.ts';
 import { mark } from './bench.ts';
 import { configureConsultations, consultations, consultationSettings, FocusTracker, planShownDraft } from './consultations.ts';
 import { inputProbe, runIdleSlices } from './search/idle.ts';
@@ -18,7 +19,9 @@ import { destination, historyButtonFor, historyCommandFor, historyKeyFor, type H
 import { useLatexRegistry, useLatexStatus } from './latex/useLatex.ts';
 import { quitInOrder, typedFields } from './quit.ts';
 import { withSetting } from './settingChanges.ts';
-import { liveTabs, loadTabs, saveTabs } from './tabs.ts';
+import { sheetRefusal } from './sheets.ts';
+import { AGENDA_TAB, isViewTab, liveTabs, loadTabs, saveTabs, SHEETS_TAB } from './tabs.ts';
+import { AgendaView } from './ui/AgendaView.tsx';
 import { guardClicks } from './ui/clickGuard.ts';
 import { FullScreen, FullScreenFailed } from './ui/FullScreen.tsx';
 import { LatexNotice } from './ui/latex/LatexNotice.tsx';
@@ -36,6 +39,7 @@ import { useScreens } from './ui/screens.ts';
 import { keepOpenViews } from './ui/viewers/common.tsx';
 import { SearchBox } from './ui/SearchBox.tsx';
 import { SettingsPanel } from './ui/SettingsPanel.tsx';
+import { SheetsView } from './ui/SheetsView.tsx';
 import { TagRegistryPanel } from './ui/TagRegistryPanel.tsx';
 import { TrashPanel } from './ui/TrashPanel.tsx';
 import { SyncChip } from './ui/SyncChip.tsx';
@@ -49,6 +53,10 @@ import { useSettings } from './useSettings.ts';
 import { replayLaunch } from './visualChecks.ts';
 
 const NODE_GONE = 'Ce nœud n’existe plus.';
+/** What the main area shows (plan 6b, D6): the graph of the plan `active`, or the agenda's or the sheets' tab. */
+type View = 'graph' | 'agenda' | 'sheets';
+const VIEW_OF_TAB: Record<string, View> = { [AGENDA_TAB]: 'agenda', [SHEETS_TAB]: 'sheets' };
+const TAB_OF_VIEW: Record<Exclude<View, 'graph'>, Id> = { agenda: AGENDA_TAB, sheets: SHEETS_TAB };
 const NOTHING_FOUND: Id[] = [];
 /**
  * The search index's builds by slices take the idle moments (plan 6a, D1), searchBuildSliceMs at most each slice; a moment
@@ -90,6 +98,15 @@ export function App() {
   const { params, setParams, paramsRef, firstSettings } = useSettings(state);
   const [tabs, setTabs] = useState<Id[]>([]);
   const [active, setActive] = useState<Id | null>(null);
+  /**
+   * The tab shown (plan 6b, D6): the graph, or the agenda's or the sheets' — apart from `active`, which stays the last plan
+   * shown; the graph stays mounted, hidden, its camera and its scenes kept.
+   */
+  const [view, setView] = useState<View>('graph');
+  const viewRef = useRef<View>('graph');
+  viewRef.current = view;
+  /** The sheet Ctrl+Maj+N made, to be given the focus once listed; `asked` counts them. */
+  const [sheetFocus, setSheetFocus] = useState<{ sheet: Id; asked: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const readySent = useRef(false);
   const session = useRef<EditSession | null>(null);
@@ -174,6 +191,8 @@ export function App() {
       if (!session.current || fullRef.current || preambleRef.current || document.querySelector('.ask')) return;
       if (e.target instanceof Element && e.target.closest('.search-box, .cm-editor')) return;
       e.preventDefault();
+      // The box stands over the graph: from the agenda or the sheets, the graph comes back with it.
+      setView('graph');
       setSearchWanted(true);
       setSearchBox((b) => ({ asked: (b?.asked ?? 0) + 1 }));
     };
@@ -186,7 +205,10 @@ export function App() {
   // code editor has the keys (historyKeyFor, historyButtonFor, historyCommandFor), nor over a full screen, which is modal.
   // The graph does not take a side button for a left press.
   useEffect(() => {
-    const go = (dir: HistoryMove) => { if (session.current && !fullRef.current && !preambleRef.current && !updating.current) graph.current?.[dir](); };
+    // Their jumps are the graph's: not while another tab is shown (plan 6b, D6).
+    const go = (dir: HistoryMove) => {
+      if (session.current && !fullRef.current && !preambleRef.current && !updating.current && viewRef.current === 'graph') graph.current?.[dir]();
+    };
     const onKey = (e: KeyboardEvent) => {
       const dir = historyKeyFor(e, e.target instanceof Element ? (e.target as HTMLElement) : null);
       if (dir === null) return;
@@ -209,6 +231,25 @@ export function App() {
     window.addEventListener('mouseup', onMouse, true);
     return () => { off(); window.removeEventListener('keydown', onKey); window.removeEventListener('mouseup', onMouse, true); };
   }, []);
+
+  // Ctrl+Maj+N makes an empty sheet (plan 6b, D6) from anywhere — a text field included —, opens the sheets' tab and gives
+  // it the focus; not over a full screen or a question, which are modal, nor in a code editor (CodeMirror), as Ctrl+K.
+  // Heard first (capture), as Ctrl+K.
+  const newSheetRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyN') return;
+      if (!session.current || fullRef.current || preambleRef.current || updating.current || document.querySelector('.ask')) return;
+      if (e.target instanceof Element && e.target.closest('.cm-editor')) return;
+      e.preventDefault();
+      newSheetRef.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // The focus asked for a new sheet is spent once the sheets are left: back to them later, none is taken again.
+  useEffect(() => { if (view !== 'sheets') setSheetFocus(null); }, [view]);
 
   // A full screen opened (a file's from a pop-up, the preamble's from the settings) closes the search: it is modal, and
   // the box stands over the notifications, which stand over it.
@@ -305,7 +346,7 @@ export function App() {
         const s = opened.state;
         const plans = [...s.plans.values()];
         const lobby = plans.find((p) => p.type === 'lobby')!;
-        let open = loadTabs().filter((id) => s.plans.has(id) && id !== lobby.id);
+        let open = loadTabs().filter((id) => (s.plans.has(id) || isViewTab(id)) && id !== lobby.id);
         let current = lobby.id;
         const wanted = window.cirrus.launch.plan && plans.find((p) => p.name === window.cirrus.launch.plan);
         if (wanted) {
@@ -448,7 +489,55 @@ export function App() {
   const fullNow = fullIn(state);
   if (fullNow === undefined) return null;
   // The lobby has its own tab, always there: only another plan is added to the open ones.
-  const openPlan = (id: Id) => { if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id])); setActive(id); };
+  const openPlan = (id: Id) => {
+    if (state.plans.get(id)?.type !== 'lobby') setTabs((t) => (t.includes(id) ? t : [...t, id]));
+    setActive(id);
+    setView('graph');
+  };
+  /**
+   * The graph shown again, at once (plan 6b, D6): before a jump, a pose or a search reaches it, so that it measures and
+   * takes the focus as shown.
+   */
+  const showGraph = () => { if (viewRef.current !== 'graph') flushSync(() => setView('graph')); };
+  /** The agenda's or the sheets' tab opened and shown (« + », the background's menu, Ctrl+Maj+N). */
+  const openView = (v: Exclude<View, 'graph'>) => {
+    const id = TAB_OF_VIEW[v];
+    setTabs((t) => (t.includes(id) ? t : [...t, id]));
+    setView(v);
+  };
+  /** A tab chosen: a plan's shows the graph; the agenda's or the sheets', their view. */
+  const selectTab = (id: Id) => {
+    const v = VIEW_OF_TAB[id];
+    if (v) { setView(v); return; }
+    setActive(id);
+    setView('graph');
+  };
+  /** Ctrl+Maj+N, « Nouveau feuillet » (D6): an empty sheet, one action; the sheets' tab shown, the focus in it once listed. */
+  const newSheet = () => {
+    const sheet: SheetRec = { id: uuidv7(), createdAt: Date.now(), text: '' };
+    void session.current!.run(sheetBuild(session.current!.state, sheet)!).then((r) => {
+      report(r);
+      if (r.ok) setSheetFocus((f) => ({ sheet: sheet.id, asked: (f?.asked ?? 0) + 1 }));
+    });
+    openView('sheets');
+  };
+  newSheetRef.current = newSheet;
+  /**
+   * A sheet's text saved (D6): its bound said in plain French first; a save that changes nothing writes nothing; the saves
+   * of one typing (`typing`) are one undo step. False when refused (what is typed stays in the field).
+   */
+  const saveSheet = (sheet: SheetRec, text: string, typing: string): Promise<boolean> => {
+    const why = sheetRefusal(text);
+    if (why) { toast(why); return Promise.resolve(false); }
+    const build = sheetBuild(session.current!.state, { ...sheet, text });
+    if (!build) return Promise.resolve(true);
+    return session.current!.run(build, { merge: typing }).then((r) => { report(r); return r.ok; });
+  };
+  /** « En faire un nœud » (D6): the last plan shown comes back, the sheet's title following the cursor until a click. */
+  const placeSheet = (sheet: Id) => {
+    showGraph();
+    graph.current?.placeSheet(sheet);
+  };
   /**
    * A link to a node clicked in a summary, a relation or a PDF (plan 4b, D7): the node's pop-up, loose, beside the
    * panel `near` it was clicked in, or in front if it is open (openLinked); a node gone, or in the trash, says so.
@@ -462,11 +551,12 @@ export function App() {
    * plan opens as before. « Aller au nœud », in the pop-up a link opened: this plan if the node is in it, else the lobby or
    * the first plan it is in (destination); in none, or gone since, it says so.
    */
-  const showIn = (node: Id, plan: Id) => showNodeIn({ reveal: (t) => graph.current?.reveal(t) ?? false }, openPlan, plan, node);
+  const showIn = (node: Id, plan: Id) => { showGraph(); showNodeIn({ reveal: (t) => graph.current?.reveal(t) ?? false }, openPlan, plan, node); };
   const goToNode = (node: Id) => {
     const plan = destination(state, 'node', node, active, tabs);
-    if (plan === null) toast('Ce nœud n’est dans aucun plan.');
-    else if (!graph.current?.reveal({ plan, id: node, kind: 'node' })) toast(OBJECT_GONE);
+    if (plan === null) { toast('Ce nœud n’est dans aucun plan.'); return; }
+    showGraph();
+    if (!graph.current?.reveal({ plan, id: node, kind: 'node' })) toast(OBJECT_GONE);
   };
   /** The search box gone, and what it ringed with it; the focus stays where it is. */
   const dropSearch = () => {
@@ -499,6 +589,7 @@ export function App() {
       panels.current?.openNode(r.popup, box ? { x: box.left + box.width / 2 - 190, y: box.top + 80 } : { x: 200, y: 120 });
       return;
     }
+    showGraph();
     if (!graph.current?.reveal({ plan: hit.plan, id: hit.id, kind: hit.kind })) toast(OBJECT_GONE);
   };
   /** An edit from a pop-up, through the session like the graph's: a refusal is reported, and the pop-up told (false). */
@@ -578,11 +669,13 @@ export function App() {
       <Tabs
         plans={[...state.plans.values()]}
         open={tabs}
-        active={active}
-        onSelect={setActive}
-        onOpen={(id) => { setTabs((t) => [...t, id]); setActive(id); }}
+        active={view === 'graph' ? active : TAB_OF_VIEW[view]}
+        onSelect={selectTab}
+        onOpen={(id) => { setTabs((t) => [...t, id]); selectTab(id); }}
         onClose={(id) => {
           setTabs((t) => t.filter((x) => x !== id));
+          // The agenda or the sheets closed while shown: the last plan shown comes back.
+          if (VIEW_OF_TAB[id] === view) setView('graph');
           if (active === id) setActive([...state.plans.values()].find((p) => p.type === 'lobby')!.id);
         }}
         settingsOpen={panel}
@@ -594,6 +687,7 @@ export function App() {
           <GraphView
             state={state} rev={shown.rev} action={shown.action} plan={active} params={params} onFirstFrame={firstFrame} session={session.current}
             onResult={(r) => report(r)} onLongNotice={(text) => toast(text, true)} onOpenPlan={openPlan} onTagRegistry={openRegistry} onTrash={openTrash}
+            onAgenda={() => openView('agenda')} onSheets={() => openView('sheets')} hidden={view !== 'graph'}
             onOpenNode={(id, at) => panels.current?.openNode(id, at)} onOpenConnection={(id, at) => panels.current?.openConnection(id, at)}
             onClickAway={clickAway} onOverlay={dropSearch} onDropFiles={files.importInto} tabs={tabs} ref={graph}
             found={searchBox ? searchFound : NOTHING_FOUND}
@@ -605,6 +699,18 @@ export function App() {
             )}
           />
         </GraphBoundary>
+        {view === 'agenda' && (
+          <AgendaView
+            state={state} rev={shown.rev} onEdit={edit} onGoToNode={goToNode}
+            search={{ index: searchIndex, where: searchWhere, max: params.searchMaxResults, want: () => setSearchWanted(true) }}
+          />
+        )}
+        {view === 'sheets' && (
+          <SheetsView
+            state={state} rev={shown.rev} pauseMs={params.sheetTypingPauseMs} focus={sheetFocus} onSave={saveSheet} onToNode={placeSheet}
+            onDelete={(id) => void edit(deleteSheetBuild(id))} onNew={newSheet}
+          />
+        )}
         {panel && (
           <SettingsPanel
             // Key by key, from the latest settings (review of task 6, Important 1); « Tout réinitialiser »: every default.

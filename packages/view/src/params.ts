@@ -102,6 +102,8 @@ export interface RenderParams {
   fitMarginPx: number;
   settingsSaveDelayMs: number;
   toastMs: number;
+  /** A sheet is saved after this pause in its typing (plan 6b, D6), and when it loses the focus. */
+  sheetTypingPauseMs: number;
   /** The answer a « partout ou ici seulement » dialog proposes first (spec 19). */
   defaultAnswer: 'here' | 'everywhere';
   /** When drawing stops: window hidden only, or also without the focus (battery). */
@@ -444,6 +446,7 @@ export const DEFAULT_PARAMS: RenderParams = {
   fitMarginPx: 60,
   settingsSaveDelayMs: 300,
   toastMs: 4000,
+  sheetTypingPauseMs: 800,
   defaultAnswer: 'here',
   backgroundPause: 'unfocused',
   cachedPlans: 4,
@@ -679,6 +682,7 @@ export const PARAM_SPECS: ParamSpec[] = [
   num('fitMarginPx', 'Marge du cadrage (px)', A, 'Zoom et déplacement', 0, 300, 5),
   num('settingsSaveDelayMs', 'Délai avant d’enregistrer les réglages (ms)', A, 'Base', 0, 5000, 50),
   num('toastMs', 'Durée d’affichage des notifications (ms)', A, 'Dialogues et notifications', 500, 20000, 100),
+  num('sheetTypingPauseMs', 'Pause de frappe après laquelle un feuillet s’enregistre (ms)', A, 'Agenda et feuillets', 100, 10_000, 50),
   {
     key: 'defaultAnswer', label: 'Réponse proposée par les dialogues « partout ou ici seulement »', section: A, group: 'Dialogues et notifications', kind: 'choice',
     choices: [{ value: 'here', label: 'Ici seulement' }, { value: 'everywhere', label: 'Partout' }],
@@ -823,7 +827,7 @@ export const PARAM_SPECS: ParamSpec[] = [
 export const PARAM_RUBRICS: { title: string; groups: string[] }[] = [
   { title: 'Apparence', groups: ['Couleurs', 'Fond', 'Nœuds', 'Groupes', 'Connexions', 'Flèches et marqueurs', 'Amorces', 'Fantômes et signes', 'Sélection et dépôt'] },
   { title: 'Navigation', groups: ['Échelles', 'Niveaux de détail', 'Zoom et déplacement', 'Pointeur', 'Recherche'] },
-  { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications'] },
+  { title: 'Fenêtres', groups: ['Pop-ups', 'Dialogues et notifications', 'Agenda et feuillets'] },
   { title: 'Fichiers', groups: ['Fichiers', 'Textes et tableaux', 'Images et vignettes', 'PDF', 'Annotations', 'Publications'] },
   { title: 'LaTeX', groups: ['Résumé compilé', 'Compilation', 'Éditeur LaTeX', 'Paquets et installation'] },
   { title: 'Performances et base', groups: ['Rendu', 'Base', 'Consultations'] },

@@ -35,6 +35,23 @@ Plan : `docs/superpowers/plans/2026-11-14-cirrus-saisie-interface.md` (écrit le
 - Ruling: **la question du retrait d’un membre ne parle de corbeille que pour le dernier (« C’est son dernier nœud : « partout » met la connexion à la corbeille. »)** ; `TrashPanel.tsx` n’avait plus rien à changer (tâche 3) — coût si faux : un texte.
 - Ruling: **le scénario de la corbeille restaure désormais la connexion restée à un nœud, puis Ctrl+Z**, au lieu de son bouton éteint (le refus `RESTORE_CONNECTION_LOST` reste couvert par `trash.test.ts`) — coût si faux : nul.
 
+## Tâche 7 : l’agenda et les feuillets (D6)
+
+- Ruling: **`sheetNode` vit dans le cœur (`commands.ts`), à côté de `sheetToNode` qui l’applique ; `renderer/sheets.ts` le réexporte** (le fantôme montre le titre par la même fonction). L’échappement est `texEscape` (`latex.ts`), les seuls caractères spéciaux de TeX, sans les lettres grecques ni les « ? » de `titleToTex` — coût si faux : nul.
+- Ruling: **ce qu’une première ligne a au-delà de 200 caractères ouvre le résumé** : rien du feuillet ne se perd — coût si faux : une ligne.
+- Ruling: **le menu du fond offre « Agenda » et « Feuillets » avant « Corbeille… » et « Registre des tags… »** (les scénarios lisent ces deux-là en dernier) ; **le « + » les offre après les plans fermés, sous un trait, s’ils ne sont pas ouverts** — coût si faux : un ordre.
+- Ruling: **fermer l’onglet de l’agenda ou des feuillets pendant qu’il est montré ramène le dernier plan montré** (pas le lobby : `active` n’a pas changé) — coût si faux : une ligne.
+- Ruling: **Ctrl+K depuis l’agenda ou les feuillets ramène le graphe (la boîte est la sienne) ; Alt+←/→ et les boutons latéraux n’y font rien** ; aller au nœud, un résultat, « Voir dans » ramènent le graphe (`showGraph`, `flushSync`, pour qu’il mesure et prenne le focus) — coût si faux : un geste.
+- Ruling: **cacher le graphe abandonne le geste en cours, la question, le menu, comme un changement de plan** : une question cachée garderait ses touches et bloquerait Ctrl+K, Ctrl+Maj+N — coût si faux : un geste perdu en changeant d’onglet.
+- Ruling: **un feuillet a « Supprimer » (une action) et l’onglet « Nouveau feuillet »** ; « rien ne s’efface seul » n’interdit pas d’effacer. **La création est son propre pas ; les enregistrements d’une même frappe (une prise de focus : `feuillet:<id>:<n>`) en font un** ; ce qui attend est enregistré à la perte du focus, en quittant l’onglet et à la fermeture (`typedFields`) — coût si faux : un pas d’annulation de plus ou de moins.
+- Ruling: **les entrées d’un même jour suivent leur ordre de création (identifiants uuidv7) ; la ligne d’aujourd’hui précède les entrées du jour**, et son mois existe même vide — coût si faux : un ordre.
+- Ruling: **un nœud lié jeté ou disparu n’est pas cliquable ; un nœud disparu, sans titre connu, s’écrit « Nœud » barré, « (disparu) »** — coût si faux : un texte.
+- Ruling: **l’âge des feuillets se relit chaque minute (60 s, pas un réglage : c’est l’unité de ce qu’il dit) et à chaque action** — coût si faux : une constante à déplacer.
+- Ruling: **`sheetTypingPauseMs` ouvre un groupe « Agenda et feuillets » dans la rubrique « Fenêtres »** (un réglage) — coût si faux : un déplacement.
+- Ruling: **Entrée dans la date ou le titre enregistre l’entrée (sur keydown, pas la soumission implicite du formulaire, qu’un Entrée sans caractère ne déclenche pas) ; Entrée dans le champ des nœuds ajoute le premier trouvé.** Le champ demande l’index de Ctrl+K à son focus (bancs et scénarios ne le bâtissent qu’à la demande) — coût si faux : nul.
+- Ruling: **« Supprimer » une entrée d’agenda agit sans question** (Ctrl+Z la rend) — coût si faux : une question.
+- Ruling: **les milliers des messages de bornes sont séparés par une espace insécable écrite à la main** (« 20 000 »), pas `toLocaleString`, qui dépend du système — coût si faux : nul.
+
 ## Tâche 8 : l’envoi des consultations (D7)
 
 - Ruling: **la forme des consultations passe au cœur (`core/src/consultations.ts`) : leurs sortes, `parseConsultations`, `parseSentConsultations` (le lot d’un PC, avec `seq` ≥ 1 strictement croissant), `SEEN_KINDS`, et les bornes `MAX_CONSULTATIONS_PER_REQUEST` (1 000) et `MAX_CONSULTATIONS_BODY_BYTES` (1 Mio)**, que `bounds.ts` du serveur réexporte comme les autres bornes du cœur ; le rendu les réexporte pour ne rien changer à ses importations — coût si faux : nul.

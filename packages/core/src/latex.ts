@@ -33,6 +33,12 @@ const SPECIALS = new Map([
   ['~', '\\textasciitilde{}'], ['^', '\\textasciicircum{}'],
 ]);
 
+/**
+ * A free text as LaTeX source that reads it as written (plan 6b, D6: a sheet made a node's summary): TeX's special
+ * characters (`\ { } % $ & # _ ^ ~`) as text, everything else as it is — a free text must not break a compilation.
+ */
+export const texEscape = (text: string): string => text.replace(/[\\{}%$&#_^~]/g, (ch) => SPECIALS.get(ch)!);
+
 /** Typographic punctuation that pdfLaTeX reads as text, most of it beyond U+017F. */
 const KEPT = new Set('‘’“”«»–—…·');
 /** The letters of Latin Extended-A that LaTeX's UTF-8 input does not set up (measured under DEFAULT_PREAMBLE): an error. */

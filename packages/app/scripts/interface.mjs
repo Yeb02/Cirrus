@@ -2671,6 +2671,90 @@ const SCENARIOS = [
     },
   },
   TWO_PCS,
+  {
+    // Plan 6b, D6 (task 7): the agenda's tab, from the tabs' « + »; « Nouvelle entrée », its title typed, Entrée: the base has
+    // the entry of today, the timeline shows it; Ctrl+Z takes it away. Then an entry linking « Monde algorithmique », found
+    // by the field of its nodes (the titles of Ctrl+K's index): a click on it goes to the node, the graph shown again.
+    name: 'agenda : « + » → « Agenda », une entrée du jour, Ctrl+Z la retire ; un nœud lié, un clic y va',
+    async run(page, base) {
+      const click = async (selector, text = '') => { const at = await page.centre(selector, text); await page.click(at.x, at.y); };
+      const entries = () => base('SELECT json FROM agenda').map((r) => JSON.parse(r.json));
+      const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!(await page.until(`!!document.querySelector('.graph canvas')`, 15000))) throw new Error('le graphe ne s’ouvre pas');
+      await click('.tabs .add > button', '\\+');
+      await click('.tabs .menu button', '^Agenda$');
+      if (!(await page.until(`!!document.querySelector('.page-view.agenda .today-line') && document.querySelector('.tabs .tab.on')?.dataset.tab === '@agenda'`))) {
+        throw new Error('l’onglet de l’agenda ne s’ouvre pas, ou sans la ligne d’aujourd’hui');
+      }
+      if (!(await page.evaluate(`getComputedStyle(document.querySelector('.graph')).display === 'none'`))) throw new Error('le graphe reste affiché sous l’agenda');
+      await click('.agenda button', '^Nouvelle entrée$');
+      if (!(await page.until(`document.activeElement?.matches('.entry-form input.title') === true`))) throw new Error('le titre de l’entrée n’a pas le focus');
+      await page.type('Réunion');
+      await page.press('Enter', 'Enter', 13);
+      if (!(await until(() => entries().length === 1))) throw new Error('l’entrée n’est pas dans la base');
+      const [e] = entries();
+      if (e.title !== 'Réunion' || e.day !== today || e.text !== '' || e.nodes.length !== 0) throw new Error(`l’entrée : ${JSON.stringify(e)}`);
+      if (!(await page.until(`[...document.querySelectorAll('.agenda .entry .title')].some((t) => t.textContent === 'Réunion') && !document.querySelector('.entry-form')`))) {
+        throw new Error('la frise ne montre pas l’entrée, ou le formulaire reste');
+      }
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => entries().length === 0))) throw new Error('Ctrl+Z ne retire pas l’entrée');
+      if (!(await page.until(`!document.querySelector('.agenda .entry')`))) throw new Error('la frise garde l’entrée annulée');
+
+      // A linked node, by the field of its nodes; saved by « Enregistrer »; a click on it goes to it.
+      await click('.agenda button', '^Nouvelle entrée$');
+      if (!(await page.until(`document.activeElement?.matches('.entry-form input.title') === true`))) throw new Error('le titre de la seconde entrée n’a pas le focus');
+      await page.type('Lecture');
+      await click('.entry-form input.node-search');
+      await page.type('monde algo');
+      if (!(await page.until(`[...document.querySelectorAll('.entry-form .hits button')].some((b) => b.textContent === 'Monde algorithmique')`, 15000))) {
+        throw new Error(`le champ des nœuds ne trouve pas « Monde algorithmique » : ${await page.evaluate(`document.querySelector('.entry-form')?.textContent`)}`);
+      }
+      await click('.entry-form .hits button', '^Monde algorithmique$');
+      await click('.entry-form button', '^Enregistrer$');
+      const monde = base(`SELECT id FROM nodes WHERE json_extract(json, '$.title') = 'Monde algorithmique'`)[0].id;
+      if (!(await until(() => entries().length === 1 && entries()[0].nodes.join() === monde))) throw new Error(`l’entrée liée : ${JSON.stringify(entries())}`);
+      await click('.agenda .node-link', '^Monde algorithmique$');
+      if (!(await page.until(`getComputedStyle(document.querySelector('.graph')).display !== 'none' && !document.querySelector('.page-view')`))) {
+        throw new Error('un clic sur le nœud lié ne ramène pas le graphe');
+      }
+      if (!(await page.until(`!!document.querySelector('.tabs [data-tab="@agenda"]') && document.querySelector('.tabs .tab.on')?.dataset.tab !== '@agenda'`))) {
+        throw new Error('l’onglet de l’agenda disparaît, ou reste celui qu’on montre');
+      }
+    },
+  },
+  {
+    // Plan 6b, D6 (task 7): Ctrl+Maj+N makes a sheet, opens its tab and gives it the focus; « Idée » typed is saved after the
+    // pause. « En faire un nœud »: the graph comes back, the title follows the cursor, a click puts the node « Idée » down in
+    // the lobby, and the sheet is gone; Ctrl+Z gives the sheet back.
+    name: 'feuillets : Ctrl+Maj+N, la frappe enregistrée après la pause ; « En faire un nœud », un clic le pose, le feuillet disparaît ; Ctrl+Z',
+    async run(page, base) {
+      const sheets = () => base('SELECT json FROM sheets').map((r) => JSON.parse(r.json));
+      const lobby = idsOf(base).lobby;
+      if (!(await page.until(`!!document.querySelector('.graph canvas')`, 15000))) throw new Error('le graphe ne s’ouvre pas');
+      const FIELD = `document.activeElement?.matches('.sheets .sheet-text') === true`;
+      for (let i = 0; i < 10 && !(await page.until(FIELD, 1000)); i++) await page.press('N', 'KeyN', 78, 2 | 8);
+      if (!(await page.evaluate(FIELD))) throw new Error('Ctrl+Maj+N n’ouvre pas les feuillets, ou le nouveau feuillet n’a pas le focus');
+      if (sheets().length !== 1) throw new Error(`les feuillets : ${JSON.stringify(sheets())}`);
+      await page.type('Idée');
+      // Not at once: after the pause (800 ms).
+      if (sheets()[0].text !== '') throw new Error('la frappe est enregistrée sans attendre la pause');
+      if (!(await until(() => sheets()[0]?.text === 'Idée'))) throw new Error(`le feuillet n’a pas son texte : ${JSON.stringify(sheets())}`);
+      if (!(await page.evaluate(`document.querySelector('.sheets .sheet .age')?.textContent === 'à l’instant'`))) throw new Error('l’âge du feuillet n’est pas « à l’instant »');
+      const at = await page.centre('.sheets .sheet .to-node', 'En faire un nœud');
+      await page.click(at.x, at.y);
+      if (!(await page.until(`!document.querySelector('.page-view') && document.querySelector('.ghost')?.textContent === 'Idée'`))) {
+        throw new Error('« En faire un nœud » ne ramène pas le graphe, ou sans le fantôme « Idée »');
+      }
+      const here = await graphCentre(page);
+      await page.move(here.x, here.y);
+      await page.click(here.x, here.y);
+      const placed = () => titledIn(base, 'Idée').filter((n) => placementOf(base, lobby, n.id) !== null);
+      if (!(await until(() => placed().length === 1 && sheets().length === 0))) throw new Error(`le nœud n’est pas posé, ou le feuillet reste ; ${await toastsText(page)}`);
+      await page.press('z', 'KeyZ', 90, 2);
+      if (!(await until(() => titledIn(base, 'Idée').length === 0 && sheets()[0]?.text === 'Idée'))) throw new Error('Ctrl+Z ne rend pas le feuillet');
+    },
+  },
 ];
 
 const reason = (e) => (e instanceof Error ? e.message : String(e));

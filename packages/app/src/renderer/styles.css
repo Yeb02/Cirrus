@@ -738,3 +738,63 @@ button, input, select { font: inherit; color: var(--ink); }
 .color-choices .other { position: relative; }
 .color-choices .other input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .color-picker { padding: 8px; }
+
+/*
+ * The agenda's and the sheets' tabs (plan 6b, D6): in place of the graph, a column of the registry's colours and fields,
+ * centred, scrolling by itself.
+ */
+.menu .sep { height: 1px; margin: 4px 6px; background: rgba(143, 184, 255, 0.2); }
+.page-view { flex: 1; min-width: 0; box-sizing: border-box; overflow: auto; padding: 16px 24px 48px; user-select: text; background: var(--sky1); }
+.page-view > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+.page-view header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.page-view h2 { font-size: 17px; margin: 0; font-weight: 600; }
+.page-view .none, .page-view .status { margin: 10px 0; font-size: 12.5px; color: var(--muted); }
+.page-view button.act { padding: 4px 10px; border-radius: 6px; cursor: pointer; background: var(--sky2); border: 1px solid var(--edge); font-size: 12.5px; }
+.page-view button.act:hover { border-color: var(--accent); }
+.page-view button.act.primary { border-color: var(--accent); }
+.page-view button.act.cancel { background: none; border-color: transparent; color: var(--muted); }
+.page-view input[type=text], .page-view input[type=search], .page-view input[type=date], .page-view textarea {
+  box-sizing: border-box; width: 100%; background: var(--sky0); border: 1px solid rgba(143, 184, 255, 0.25); border-radius: 5px; padding: 4px 8px;
+  color: var(--ink); font: inherit;
+}
+.page-view input[type=date] { width: auto; color-scheme: dark; }
+.page-view textarea { resize: vertical; }
+.page-view .refusal { margin: 6px 0; font-size: 12.5px; color: var(--warn); }
+
+/* The agenda: the months, then their entries on a vertical line; the line of today across it. */
+.agenda .month { margin: 22px 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: capitalize; }
+.agenda .entries { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid rgba(143, 184, 255, 0.25); }
+.agenda .entry { display: flex; gap: 12px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; }
+.agenda .entry:hover { background: rgba(143, 184, 255, 0.08); }
+.agenda .entry.past { opacity: 0.75; }
+.agenda .entry.editing { display: block; }
+.agenda .entry .when { flex: none; width: 92px; font-size: 12.5px; color: var(--muted); }
+.agenda .entry .body { flex: 1; min-width: 0; }
+.agenda .entry .title { font-weight: 600; overflow-wrap: anywhere; }
+.agenda .entry .text { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.agenda .entry .actions { flex: none; display: flex; gap: 4px; opacity: 0; }
+.agenda .entry:hover .actions, .agenda .entry:focus-within .actions { opacity: 1; }
+.agenda .links { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0 0; padding: 0; font-size: 12.5px; }
+.agenda .node-link { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
+.agenda .node-link:hover { text-decoration: underline; }
+.agenda .node-link.gone { color: var(--muted); cursor: default; }
+.agenda .today-line { position: relative; margin: 8px 0 8px -15px; border-top: 2px solid var(--accent); height: 0; }
+.agenda .today-line span { position: absolute; left: 10px; top: -10px; padding: 0 6px; font-size: 11.5px; color: var(--accent); background: var(--sky1); }
+.agenda .entry-form { margin: 12px 0; padding: 10px 12px; border: 1px solid rgba(143, 184, 255, 0.3); border-radius: 8px; background: var(--panel); }
+.agenda .entry-form .field { display: block; margin: 6px 0; font-size: 12.5px; }
+.agenda .entry-form .field > span { display: block; margin-bottom: 3px; color: var(--muted); }
+.agenda .entry-form .linked { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 4px; padding: 0; }
+.agenda .entry-form .linked li { display: flex; align-items: center; gap: 2px; padding: 1px 4px 1px 8px; border-radius: 10px; background: var(--sky2); }
+.agenda .entry-form .unlink { border: none; background: none; padding: 0 3px; color: var(--muted); cursor: pointer; }
+.agenda .entry-form .hits { list-style: none; margin: 4px 0 0; padding: 0; max-height: 200px; overflow: auto; }
+.agenda .entry-form .hits button { display: block; width: 100%; text-align: left; padding: 3px 8px; border: none; border-radius: 5px; background: none; cursor: pointer; }
+.agenda .entry-form .hits button:hover { background: rgba(143, 184, 255, 0.14); }
+.agenda .entry-form .actions { display: flex; gap: 6px; margin-top: 10px; }
+
+/* The sheets: one card each, its text in a field, its age and its actions under it. */
+.sheets .sheet-list { list-style: none; margin: 12px auto 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.sheets .sheet { padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid rgba(143, 184, 255, 0.18); }
+.sheets .sheet-text { background: transparent; border-color: transparent; }
+.sheets .sheet-text:focus { border-color: rgba(143, 184, 255, 0.4); outline: none; }
+.sheets .sheet .meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.sheets .sheet .meta .spacer { flex: 1; }

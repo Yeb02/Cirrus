@@ -178,3 +178,22 @@ test('revue de la tâche 1 : une entrée de l’agenda ou un feuillet mal formé
     expect(() => decodeState(encodeState(s)), JSON.stringify(rec)).toThrow(SnapshotError);
   }
 });
+
+test('sheetToNode crée le nœud et retire le feuillet en une action', async () => {
+  const { sheetToNode } = await import('../src/commands.ts');
+  const { s, plan } = world();
+  run(s, putSheet(s, { ...SHEET, text: '\n  Idée  \nsuite 50% & co_x' }));
+  const a = run(s, sheetToNode(s, SHEET.id, plan, 12, -7, -1));
+  const node = s.nodes.get(created(a, 'node'))!;
+  expect([node.title, node.summary]).toEqual(['Idée', 'suite 50\\% \\& co\\_x']);
+  expect(placementOf(s, plan, node.id)).toEqual({ plan, node: node.id, x: 12, y: -7, k: -1 });
+  expect(s.sheets.has(SHEET.id)).toBe(false);
+  expect(a.label).toBe('Faire un nœud du feuillet « Idée »');
+  // Ctrl+Z gives the sheet back, and takes the node away.
+  run(s, invertAction(a));
+  expect(s.sheets.get(SHEET.id)!.text).toBe('\n  Idée  \nsuite 50% & co_x');
+  expect(s.nodes.has(node.id)).toBe(false);
+  // A sheet gone meanwhile (deleted elsewhere): refused, nothing made.
+  run(s, deleteSheet(s, SHEET.id));
+  expect(() => sheetToNode(s, SHEET.id, plan, 0, 0, 0)).toThrow(CommandError);
+});

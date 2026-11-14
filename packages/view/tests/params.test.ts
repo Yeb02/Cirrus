@@ -524,3 +524,12 @@ test('le bras d’une connexion d’un membre (plan 6b, D2) : 80 de long, à −
   // Geometry, not the scene: changing them does not rebuild it.
   expect(sceneParamsKey({ ...DEFAULT_PARAMS, singleArmLength: 200, singleArmAngle: 30 })).toBe(sceneParamsKey(DEFAULT_PARAMS));
 });
+
+test('la pause de frappe d’un feuillet (plan 6b, D6) : 800 ms, réglage avancé du groupe « Agenda et feuillets », rubrique « Fenêtres »', () => {
+  expect(DEFAULT_PARAMS.sheetTypingPauseMs).toBe(800);
+  expect(PARAM_SPECS.find((s) => s.key === 'sheetTypingPauseMs')).toEqual({
+    key: 'sheetTypingPauseMs', label: 'Pause de frappe après laquelle un feuillet s’enregistre (ms)', section: 'avancé', group: 'Agenda et feuillets', kind: 'number', min: 100, max: 10_000, step: 50,
+  });
+  expect(PARAM_RUBRICS.find((r) => r.title === 'Fenêtres')!.groups).toEqual(['Pop-ups', 'Dialogues et notifications', 'Agenda et feuillets']);
+  expect(withOverrides({ sheetTypingPauseMs: 5 }).sheetTypingPauseMs).toBe(100);
+});

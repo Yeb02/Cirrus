@@ -5,6 +5,7 @@ import type {
   AgendaEntryRec, Anchor, ConnectionKind, ConnectionLayout, ConnectionRec, FileRef, Id, Member, NodeRec, PhantomRec, Placement, PlanType, Role,
   SheetRec, TagKeyDef, TagValue,
 } from './model.ts';
+import { texEscape } from './latex.ts';
 import { MAX_ID_CHARS, type Op, parseOp, SyncFormatError, truncateLabel } from './ops.ts';
 import { normalizeTag, PROTECTED_TAG_KEYS, TagError, type TagKeyShape, tagValueFits, tagValuesFit } from './registry.ts';
 import {
@@ -697,6 +698,37 @@ export function deleteSheet(s: State, id: Id): Action {
     d.push({ t: 'sheet', before: sh, after: null });
     return d.finish('Supprimer un feuillet');
   });
+}
+
+/** A sheet's node's title is cut there (plan 6b, D6). */
+export const SHEET_TITLE_CHARS = 200;
+
+/**
+ * The node a sheet becomes (plan 6b, D6): its title the first line that is not blank, its edge spaces taken off, cut at
+ * SHEET_TITLE_CHARS characters (« Feuillet » for a blank text); its summary the rest — what the cut left of that line,
+ * then the lines after it —, its edge blanks taken off and TeX's special characters escaped (texEscape). Nothing of the
+ * text is lost.
+ */
+export function sheetNode(text: string): { title: string; summary: string } {
+  const lines = text.split(/\r?\n/);
+  const at = lines.findIndex((l) => l.trim() !== '');
+  if (at < 0) return { title: 'Feuillet', summary: '' };
+  const first = [...lines[at].trim()];
+  const rest = [first.slice(SHEET_TITLE_CHARS).join(''), ...lines.slice(at + 1)].join('\n').trim();
+  return { title: first.slice(0, SHEET_TITLE_CHARS).join('').trimEnd(), summary: texEscape(rest) };
+}
+
+/**
+ * « En faire un nœud » (plan 6b, D6): the sheet's node (sheetNode) placed in `plan` at (x, y), step k, and the sheet
+ * deleted, as one action — one Ctrl+Z gives the sheet back. Refused when the sheet is gone.
+ */
+export function sheetToNode(s: State, sheet: Id, plan: Id, x: number, y: number, k: number): Action {
+  const sh = need(s.sheets.get(sheet), 'Ce feuillet n’existe plus.');
+  const { title, summary } = sheetNode(sh.text);
+  return combine(s, `Faire un nœud du feuillet « ${title} »`, [
+    (x0) => createNode(x0, { plan, title, summary, x, y, k }),
+    (x0) => deleteSheet(x0, sheet),
+  ]);
 }
 
 /**

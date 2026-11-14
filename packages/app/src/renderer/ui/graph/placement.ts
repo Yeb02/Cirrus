@@ -1,7 +1,7 @@
 import type { Id, Vec2 } from '@cirrus/core';
 import { type Camera, type ConnectTarget, connectTarget, fitItem, type Intent, type Mode, otherPlans, type PlanScene, screenToWorld, worldToScreen } from '@cirrus/view';
 import { useRef, useState } from 'react';
-import { connectBuild, createBuild, importBuild, placeInPlanBuild, restoreBuild, splitBuild } from '../../actions.ts';
+import { connectBuild, createBuild, importBuild, placeInPlanBuild, restoreBuild, sheetToNodeBuild, splitBuild } from '../../actions.ts';
 import { BIB_WAITING } from './bibImport.ts';
 import type { Engine, Graph } from './core.ts';
 
@@ -25,9 +25,12 @@ type Placing =
    * A node out of the trash (plan 6a, D5), « Restaurer » in its panel: put down in this plan by restoreNode — not
    * `import`, whose placeNode refuses a node in the trash.
    */
-  | { kind: 'restore'; node: Id };
+  | { kind: 'restore'; node: Id }
+  /** A sheet made a node (plan 6b, D6), « En faire un nœud » in its tab: put down by sheetToNode, the sheet deleted with it. */
+  | { kind: 'sheet'; sheet: Id };
 const MODE: Record<Placing['kind'], Mode> = {
   newNode: 'place', exclude: 'exclude', connect: 'connect', import: 'place', paste: 'paste', split: 'split', repercussion: 'place', bib: 'paste', restore: 'place',
+  sheet: 'place',
 };
 
 /**
@@ -174,6 +177,7 @@ export function usePlacement(graph: Graph) {
     setGhost(null);
     if (what.kind === 'import') edit(importBuild(sc, what.node, intent.at, zoom, p, what.label, indexOf(sc)));
     else if (what.kind === 'restore') edit(restoreBuild(sc, what.node, intent.at, zoom, p, indexOf(sc)));
+    else if (what.kind === 'sheet') edit(sheetToNodeBuild(sc, what.sheet, intent.at, zoom, p, indexOf(sc)));
     else if (what.kind === 'repercussion') {
       // Put down here, it takes its new group in this plan; the whole stays one undo step.
       void edit(placeInPlanBuild(sc, what.node, intent.at, what.to), undefined, what.extend).then(() => graph.repercussion.nextRepercussion());

@@ -14,6 +14,7 @@ import { navKeyOf, sideButton } from '../navigation.ts';
 import { loadFont } from '../render/font.ts';
 import { overlayClosesSearch, type Overlays } from '../search/overlay.ts';
 import { restoreRefusal, trashCloseGivesUp } from '../trash.ts';
+import { sheetNode } from '../sheets.ts';
 import { PlanRenderer } from '../render/PlanRenderer.ts';
 import { HierarchyCorner, Tooltip } from './Overlays.tsx';
 import type { EditSession, Result } from '../session.ts';
@@ -58,6 +59,11 @@ export interface GraphHandle {
   restore(node: Id): void;
   /** « Importer ici » (plan 6b, D5): the node placed in this plan by a click, its title following the cursor. */
   importHere(node: Id): void;
+  /**
+   * « En faire un nœud » (plan 6b, D6): the sheet's title follows the cursor in the plan shown until a click puts its node
+   * down (sheetToNodeBuild) or Escape gives it up, the sheet staying. False when it cannot begin (said).
+   */
+  placeSheet(sheet: Id): boolean;
   cancelRestore(): void;
   addMember(connection: Id, node: Id): void;
   removeMember(connection: Id, node: Id): void;
@@ -95,6 +101,14 @@ export function GraphView(props: {
   onTagRegistry(): void;
   /** Opens the trash's panel, from the background's menu (plan 6a, D5: App's). */
   onTrash(): void;
+  /** Opens the agenda's or the sheets' tab, from the background's menu (plan 6b, D6: App's). */
+  onAgenda(): void;
+  onSheets(): void;
+  /**
+   * Another tab than a plan's is shown (plan 6b, D6): the view stays mounted, hidden (`display: none`), its camera and its
+   * scenes kept for the way back.
+   */
+  hidden?: boolean;
   /**
    * A double click without Ctrl on a node or a group, or on a far node's phantom (spec 8.5), opens that node's pop-up
    * there, in window coordinates (plan 4a, D7; a double click since 2026-11-11, a single click only selects).
@@ -285,7 +299,7 @@ export function GraphView(props: {
   /** The view as its parts see it (graph/core.ts): the parts, made just below, are read once a handler runs. */
   const graph: Graph = {
     root, engine, sceneRef, paramsRef, stateRef, sessionRef, onResultRef, onLongNoticeRef, selectionRef, setSelection, setEditor, setColorPicker, gestures,
-    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, onTrash: props.onTrash, redraw, notify, edit, indexOf, hitAt, local,
+    dragging: () => dragging.current !== null, onOpenPlan: props.onOpenPlan, onTagRegistry: props.onTagRegistry, onTrash: props.onTrash, onAgenda: props.onAgenda, onSheets: props.onSheets, redraw, notify, edit, indexOf, hitAt, local,
     restoreScene, moveCamera, feed,
     busy, busyReason, tabsRef,
     get jumps() { return jumps.current!; },
@@ -551,6 +565,18 @@ export function GraphView(props: {
     placement.startPending();
   }, [scene]);
 
+  // Another tab than a plan's shown (plan 6b, D6): as for another plan, the gesture in progress, a question, the menu and
+  // a dragged handle do not follow it under the hidden view, whose keys they would still take.
+  useEffect(() => {
+    if (!props.hidden) return;
+    settleWheel();
+    handles.dropHandle(false);
+    questions.setQuestion(null);
+    feed({ t: 'cancel' });
+    setMenu(null);
+    setColorPicker(null);
+  }, [props.hidden]);
+
   // The ring of what was found (plan 6a, D1, D2): a jump's object while it blinks, else what the search box found here.
   const ring = flash ?? props.found ?? NOTHING_FOUND, ringKey = ring.join('|');
   useEffect(() => {
@@ -617,6 +643,18 @@ export function GraphView(props: {
       placement.startPlacing({ kind: 'import', node, label: 'Importer ici' }, n.title || 'Sans titre', lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
       el.focus({ preventScroll: true });
       redraw();
+    },
+    placeSheet: (sheet) => {
+      // As « Restaurer »: from where the pointer last was over the graph, else its centre; the graph takes the focus for
+      // the Escape that gives it up. Another « En faire un nœud » replaces one under way.
+      const sh = stateRef.current.sheets.get(sheet), el = root.current;
+      if (!sh || !el || !engine.current || !sceneRef.current) return false;
+      if (busy() && placement.placing.current?.kind !== 'sheet') { notify(busyReason('d’en faire un nœud')); return false; }
+      const r = el.getBoundingClientRect();
+      placement.startPlacing({ kind: 'sheet', sheet }, sheetNode(sh.text).title, lastPointer.current ?? { x: r.width / 2, y: r.height / 2 });
+      el.focus({ preventScroll: true });
+      redraw();
+      return true;
     },
     // The trash's panel closed (× or Escape): the placement of a node being restored goes with it, as with its own Escape.
     cancelRestore: () => { if (trashCloseGivesUp(placement.placing.current)) feed({ t: 'cancel' }); },
@@ -816,6 +854,7 @@ export function GraphView(props: {
       className="graph"
       ref={root}
       tabIndex={0}
+      style={props.hidden ? { display: 'none' } : undefined}
       onContextMenu={(ev) => ev.preventDefault()}
       // Files, and nodes out of a list of annotations, dropped on the graph (graph/drop.ts).
       {...drop.handlers}

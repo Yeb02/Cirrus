@@ -1,5 +1,5 @@
 import {
-  type Action, addMember, combine, CommandError, conflictName, connect, connectionsLeaving, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
+  type Action, addMember, type AgendaEntryRec, deleteAgendaEntry, deleteSheet, putAgendaEntry, putSheet, type SheetRec, sheetNode, sheetToNode, combine, CommandError, conflictName, connect, connectionsLeaving, type ConnectionRec, createNode, defineTagKey, deleteConnection, deleteEverywhere, deleteTagKey,
   editConnection, editNode, exclude, type FileRef, fileNameKey, groupOf, type Id, include, joinArm, moveNodes, movePhantom, type NodeRec, phantomsOf, placeAbsent, placementKey, placeNode, removeFromPlan,
   removeMember, renameEnumValue, renameTagKey, restoreConnection, restoreNode, type Role, setBranches, setGroupColor, setLayout, setPreamble, setRole, splitArm, type State, type TagKeyDef,
   type TagValue, truncateLabel, type Vec2,
@@ -362,6 +362,52 @@ export function restoreBuild(scene: PlanScene, node: Id, at: Vec2, zoom: number,
     (x) => restoreNode(x, node, plan, at.x, at.y, k),
     ...(group !== null ? [(x: State) => include(x, plan, node, group)] : []),
   ]);
+}
+
+/**
+ * An agenda entry written as the form has it (plan 6b, D6), its title without its edge spaces; null when the state has it
+ * so already (never a write identical to the state). Its bounds are checked by the form first (agendaRefusal).
+ */
+export function agendaBuild(s: State, e: AgendaEntryRec): Build {
+  const next: AgendaEntryRec = { ...e, title: e.title.trim(), nodes: [...e.nodes] };
+  const old = s.agenda.get(e.id);
+  if (old && old.day === next.day && old.title === next.title && old.text === next.text
+    && old.nodes.length === next.nodes.length && old.nodes.every((n, i) => n === next.nodes[i])) return null;
+  return (st) => putAgendaEntry(st, next);
+}
+
+/** An agenda entry deleted (D6), from its line. */
+export const deleteAgendaBuild = (id: Id): Build => (st) => deleteAgendaEntry(st, id);
+
+/** A sheet written (D6): null when the state has it so already. Its bound is checked first (sheetRefusal). */
+export function sheetBuild(s: State, sheet: SheetRec): Build {
+  const old = s.sheets.get(sheet.id);
+  if (old && old.text === sheet.text && old.createdAt === sheet.createdAt) return null;
+  return (st) => putSheet(st, sheet);
+}
+
+/** A sheet deleted (D6), by its « Supprimer ». */
+export const deleteSheetBuild = (id: Id): Build => (st) => deleteSheet(st, id);
+
+/**
+ * « En faire un nœud » (D6): the sheet's node put down at `at` in the plan shown, at the step readable at this zoom,
+ * entering the group whose envelope receives it, and the sheet deleted — one action, one Ctrl+Z (sheetToNode). Refused
+ * when it is computed if the sheet is gone meanwhile. `index`: the scene's visibility index, if at hand (groupAt).
+ */
+export function sheetToNodeBuild(scene: PlanScene, sheet: Id, at: Vec2, zoom: number, p: RenderParams, index?: SceneIndex): Build {
+  const plan = scene.plan.id, k = readableStep(zoom, p), group = groupAt(scene, at, zoom, p, index);
+  return (st) => {
+    if (group === null) return sheetToNode(st, sheet, plan, at.x, at.y, k);
+    let id = '';
+    return combine(st, `Faire un nœud du feuillet « ${sheetNode(st.sheets.get(sheet)?.text ?? '').title} »`, [
+      (x) => {
+        const a = sheetToNode(x, sheet, plan, at.x, at.y, k);
+        id = (a.ops.find((o) => o.t === 'node') as { after: { id: Id } }).after.id;
+        return a;
+      },
+      (x) => include(x, plan, id, group),
+    ]);
+  };
 }
 
 /** « Restaurer » a connection of the trash (D5): its branches where two of its members are placed; the core's refusals told. */
