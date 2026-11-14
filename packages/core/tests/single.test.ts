@@ -303,4 +303,5 @@ test('synchro au hasard : 300 paires de commandes croisées, dans les quatre ord
     }
   }
   expect(crossings).toBe(1200);
-});
+  // 1 200 crossings take about 5 s on the main laptop: more than vitest's default, which is not what this test measures.
+}, 60_000);
