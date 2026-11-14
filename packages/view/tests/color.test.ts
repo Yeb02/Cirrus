@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { groupPalette, hexToRgb, mixRgb, oklchToRgb, rgbToHex } from '../src/color.ts';
+import { chosenPalette, groupPalette, hexToRgb, mixRgb, oklchToRgb, rgbToHex, rgbToOklch } from '../src/color.ts';
 import { DEFAULT_PARAMS } from '../src/params.ts';
 
 test('OKLCH : blanc, noir', () => {
@@ -44,4 +44,37 @@ test('hexadécimal aller-retour', () => {
   expect(hexToRgb('#ff8000')).toEqual([1, 128 / 255, 0]);
   expect(rgbToHex([1, 128 / 255, 0])).toBe('#ff8000');
   expect(rgbToHex(hexToRgb('#0a1120'))).toBe('#0a1120');
+});
+
+test('rgbToOklch est l’inverse de oklchToRgb dans la gamme (plan 6b, D4) : 200 couleurs tirées, à 1e-3 près', () => {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 200; i++) {
+    const c: [number, number, number] = [rand(), rand(), rand()];
+    const { L, C, h } = rgbToOklch(c);
+    const back = oklchToRgb(L, C, h);
+    for (let j = 0; j < 3; j++) expect(Math.abs(back[j] - c[j])).toBeLessThan(1e-3);
+  }
+  expect(rgbToOklch([1, 1, 1]).L).toBeCloseTo(1, 3);
+  expect(rgbToOklch([0, 0, 0]).L).toBeCloseTo(0, 6);
+});
+
+test('chosenPalette (D4) : le groupe coloré montre sa couleur exacte ; ses sous-groupes, sa teinte, à un pas de luminosité chacun', () => {
+  const p = DEFAULT_PARAMS, color = '#3a7bd5';
+  const own = chosenPalette(color, 0, p);
+  expect(rgbToHex(own.closed)).toBe(color);
+  expect(own.open).toEqual(mixRgb(p.skyColor, own.closed, p.envelopeOpacityOpen));
+  const base = rgbToOklch(hexToRgb(color)), one = rgbToOklch(chosenPalette(color, 1, p).closed), two = rgbToOklch(chosenPalette(color, 2, p).closed);
+  expect(Math.abs(one.h - base.h)).toBeLessThan(1);
+  expect(Math.abs(one.L - base.L - p.groupLightnessStep)).toBeLessThan(1e-3);
+  expect(Math.abs(two.L - one.L - p.groupLightnessStep)).toBeLessThan(1e-3);
+});
+
+test('chosenPalette (Review Focus 2) : noir, blanc et un vert saturé donnent des sous-groupes distincts du groupe et entre eux', () => {
+  const p = DEFAULT_PARAMS;
+  for (const color of ['#000000', '#ffffff', '#00ff00']) {
+    const L = [0, 1, 2, 3].map((d) => rgbToOklch(chosenPalette(color, d, p).closed).L);
+    expect(rgbToHex(chosenPalette(color, 0, p).closed), color).toBe(color);
+    for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) expect(Math.abs(L[i] - L[j]), `${color} ${i}/${j}`).toBeGreaterThanOrEqual(0.03);
+  }
 });
