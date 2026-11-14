@@ -146,6 +146,13 @@ L'esthétique visée est éthérée et céleste, comme le nom Cirrus. Le résult
 - **Les consultations** s'écrivent dans un fichier à part, `consultations.db`, à côté de la base et hors de son schéma, qui reste v4. Elles ne sont pas synchronisées pour l'instant (section 20).
 - **La fenêtre n'a plus de menu** (`Menu.setApplicationMenu(null)`) [C] : un Alt relâché après Alt+← aurait pu montrer la barre « Fichier Édition… », ce qu'un essai en arrière-plan ne pouvait pas vérifier. L'app construite perd ainsi le zoom de la page, le rechargement, les outils de développement, F11, Ctrl+W et Ctrl+M, dont elle ne se sert pas ; Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A et Ctrl+Z restent ceux de Chromium dans un champ. En développement seulement, Ctrl+R et Ctrl+Maj+I sont rendus. Reste à essayer par l'utilisateur, au premier plan : Alt+←, Alt+→ et un Alt seul ne doivent rien montrer.
 
+**La saisie et l'interface (plan 6b) :** les décisions D1 à D9 du plan (`docs/superpowers/plans/2026-11-14-cirrus-saisie-interface.md`). L'utilisateur a voulu la suite du plan 6 coupée en deux : ce plan prend la saisie et l'interface, le plan 6c prendra l'historique. Le plan a été écrit le 2026-11-14 avec l'utilisateur, qui l'a relu avant l'exécution, et exécuté le même jour. L'utilisateur a tranché le dessin d'une connexion à un seul nœud, le choix de la couleur d'un groupe, le départ d'un nœud jeté de ses connexions, et que « Poids de l'historique » ne supprimera que des fichiers ; les autres décisions sont de Claude. Comme ailleurs, [C] marque un choix fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-14-cirrus-saisie-interface-registre.md`) en donne la raison et le coût. Ce qu'elles donnent à l'usage est aux sections 5.3, 5.5, 5.6, 7, 8.4, 8.5, 11, 14, 17 et 20, les versions à la section 18.1, les réglages à la section 19.
+- **Un seul changement de format,** le format 2 : l'agenda, les feuillets et la couleur d'un placement. Le schéma de la base passe à 5, le protocole de synchro à 2 ; l'instantané garde sa version. Chaque PC prend donc la mise à jour forcée (18.1).
+- **Le serveur a désormais une règle à lui,** une seule, déterministe : il complète une écriture qu'il accepte des départs qu'elle n'a pas pu voir, quand un nœud jeté quitte ses connexions (section 7) [C]. La fusion reste au PC.
+- **Les consultations** partent au serveur, dans `serveur.db`, hors de la base et de son journal (section 20).
+- **L'agenda et les feuillets** sont des onglets qui ne sont pas des plans (section 17). **La santé du graphe** est un panneau, calculée dans l'interface (section 20).
+- Une seule déclaration nouvelle : `builder-util-runtime` 9.7.0, déjà installé avec electron-updater, pour annuler un téléchargement (18.1).
+
 **Bancs de mesure en tête de plan :** voir la section 21.
 
 ## 5. Modèle de données
@@ -188,6 +195,14 @@ Il existe deux sortes de connexions techniques :
 - **Structure :** tags `partie:X` (X entier) et `suivant`. Elles n'existent que dans les plans de type document (section 15).
 
 La recherche, le MCP, les badges et la santé du graphe excluent les connexions de structure. Les connexions d'inclusion n'apparaissent que comme groupes [C].
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : une connexion peut n'avoir qu'un membre (D2 ; retour de l'utilisateur du 2026-11-11, point 4, tranché le 2026-11-14). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-14-cirrus-saisie-interface-registre.md`) en donne la raison et le coût. Son dessin est à la section 8.5, son geste à la section 11, la synchro à la section 7.
+- **La règle :** une connexion de connaissance vivante a au moins un membre, et non plus deux. Sans membre, le cœur la refuse : « Une connexion doit relier au moins un nœud. ». Le serveur la partage.
+- **Retirer un membre** garde la connexion tant qu'il lui en reste un. Retirer le dernier la met à la corbeille, et ce membre reste dans sa liste, pour une restauration. Une connexion d'inclusion ou de structure garde sa règle : sous deux membres, elle va à la corbeille [C].
+- **Un nœud qui part à la corbeille quitte ses connexions** (décision de l'utilisateur, 2026-11-14), par « Supprimer partout » comme par le retrait de son dernier plan (« Cacher », « Ici seulement »). Il est retiré de chacune, vivante ou déjà à la corbeille, avec ses branches et ses fantômes. Une connexion vivante qui garde alors 0 ou 1 nœud part à la corbeille avec lui, à l'heure du nœud ; la corbeille la classe juste après lui [C]. Le retrait volontaire d'un membre, lui, garde une connexion à un nœud.
+  - Une annotation qui quitte son dernier plan reste vivante (section 7) : elle garde ses connexions.
+  - Les liens de groupe : « Supprimer partout » les jette toujours ; le retrait du dernier plan les garde, cachés [C].
+  - Restaurer un nœud ne lui rend pas ses connexions.
 
 ### 5.4 Registre de tags et de labels
 
@@ -241,6 +256,12 @@ La recherche, le MCP, les badges et la santé du graphe excluent les connexions 
 
 Un nœud ou une connexion créé dans un plan ordinaire est **exclusif** à ce plan tant qu'il n'est pas ajouté au lobby.
 
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : la couleur d'un groupe, propre au plan (D1, D4 ; demandée par l'utilisateur le 2026-11-12). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût. Son rendu et son choix sont à la section 8.4.
+- **Un champ du placement du groupe,** `color`, facultatif, écrit `#rrggbb` en minuscules. Son absence veut dire « Automatique ». Un placement coloré passe par la partie JSON de l'instantané.
+- **La commande** `setGroupColor`, une action, « Couleur de « T » ». Elle refuse un nœud qui n'a pas de membres dans ce plan : « Ce nœud n’est pas un groupe dans ce plan. » ; et un groupe caché, qui a des membres mais pas de placement : « Ce groupe n’est pas dans ce plan. » [C].
+- **La couleur suit le placement** là où une commande le recopie : un déplacement, la renaissance d'un nœud dans le même plan à la fusion. Tout placement neuf naît sans couleur : créer, poser, restaurer [C].
+- **Avec la synchro,** le placement reste un champ où le plus récent gagne : deux PC qui changent le même groupe en même temps, la couleur d'un côté et la position de l'autre, gardent la dernière écriture [C]. Pour un seul utilisateur, c'est rare.
+
 ### 5.6 Autres données
 
 - Préambule LaTeX global, versionné (section 13).
@@ -248,13 +269,24 @@ Un nœud ou une connexion créé dans un plan ordinaire est **exclusif** à ce p
 - Paramètres de l'app (section 19).
 - Analytics (section 20).
 
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : le format 2, l'agenda et les feuillets dans la base (D1). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût. Leur usage est à la section 17, les versions à la section 18.1.
+- **Deux sortes d'enregistrements nouvelles :**
+  - une entrée d'agenda : `id`, `day` (`AAAA-MM-JJ`, une date du calendrier), `title` (de 1 à 200 caractères après `trim`), `text` (au plus 20 000 caractères) et `nodes` (au plus 50 identifiants distincts) ;
+  - un feuillet : `id`, `createdAt` (un temps entier en ms) et `text` (au plus 100 000 caractères).
+- **Les bornes** sont celles du format, vérifiées au même endroit par la commande, le serveur et l'envoi. Un refus du cœur dit « Opération mal formée : … » ; l'interface prévient par ses propres messages (section 17) [C]. Le titre d'une entrée est aussi borné brut à 400 caractères, espaces comprises [C]. En resserrer une demandera d'augmenter la version du protocole.
+- **Les ops** `agenda` et `sheet` sont du flux du contenu, et leur sujet est leur identifiant. Elles s'écrivent telles quelles : ni `trim` du titre, ni vérification que les nœuds nommés existent. Une entrée peut ainsi nommer un nœud jeté ou disparu [C].
+- **Cinq commandes,** une action chacune : `putAgendaEntry` (« Agenda : « titre » »), `deleteAgendaEntry` (« Supprimer « titre » de l’agenda »), `putSheet` (« Feuillet »), `deleteSheet` (« Supprimer un feuillet ») et `sheetToNode` (section 17).
+- **La fusion** reprend l'enregistrement entier : le plus récent l'emporte, comme pour un placement. Deux PC qui modifient en même temps le même feuillet gardent la dernière écriture [C].
+- **Le stockage :** la migration v5 de la base crée les tables `agenda` et `sheets` (`id`, `json`). L'instantané les porte dans sa partie JSON et garde sa version, 1 ; une entrée mal formée le rend illisible [C].
+- **Une base qui n'a qu'un feuillet ou une entrée d'agenda** n'est ni vide ni vierge au premier jumelage (6.6, D7), au PC comme au serveur [C].
+
 ## 6. Synchronisation, historique et annulation
 
 L'outil de version est sans commit ni push, ce qui remplace la spécification.
 
 ### 6.1 Flux et rythme
 
-- **Les flux** (plan 5a, D5) : le contenu, les connexions et la disposition passent par un seul flux ordonné, pour que l'ordre du serveur vaille pour tous. Chaque ligne du journal garde son flux (`flow`), que le MCP et les analytics liront [C]. Les analytics auront leur propre envoi, par lots (plan 6b ; le plan 6a les enregistre sur chaque PC, section 20). Tout se synchronise en permanence.
+- **Les flux** (plan 5a, D5) : le contenu, les connexions et la disposition passent par un seul flux ordonné, pour que l'ordre du serveur vaille pour tous. Chaque ligne du journal garde son flux (`flow`), que le MCP et les analytics liront [C]. Les analytics ont leur propre envoi, par lots : le plan 6a les enregistre sur chaque PC, le plan 6b les envoie au serveur (section 20). Tout se synchronise en permanence.
 - **Écriture locale :** chaque changement est écrit tout de suite sur le disque, puis envoyé au serveur, qui le relaie aux autres PC ouverts.
 - **Rythme** (plan 5a, D8) : chaque écriture part dès qu'elle est faite.
   - un déplacement en est une au relâchement de la souris ;
@@ -295,7 +327,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 - **Historique par nœud :** on peut consulter les versions et restaurer un nœud seul. Une vue des différences textuelles est fournie.
 - **Corbeille :** un objet retiré de son dernier plan y va, sauf une annotation (section 7).
 - **Copies :** l'historique complet est conservé sur chaque PC.
-- **Poids de l'historique :** une fenêtre à part dans le menu principal, d'usage très exceptionnel, par exemple pour un PDF sur lequel l'utilisateur s'est ravisé. Elle affiche le poids par nœud et par type, et permet de supprimer un contenu en gardant la trace de son existence : nom, date et taille. Une restauration affiche alors « contenu supprimé ».
+- **Poids de l'historique :** une fenêtre à part dans le menu principal, d'usage très exceptionnel, par exemple pour un PDF sur lequel l'utilisateur s'est ravisé. Elle affiche le poids par nœud et par type, et permet de supprimer un contenu en gardant la trace de son existence : nom, date et taille. Une restauration affiche alors « contenu supprimé ». Le contenu supprimé n'est qu'un fichier : un PDF ou un autre fichier d'un dossier (décision de l'utilisateur, 2026-11-14 ; plan 6c).
 - **Plus tard :** un curseur temporel en lecture seule.
 
 **Fixé par le plan 6a** (écrit le 2026-11-09 et exécuté en travail autonome le 2026-11-10 ; ses décisions sont de Claude, et l'utilisateur ne les a pas encore approuvées : section 4) : la corbeille se voit, et ses objets se restaurent un à un (D5). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût. La restauration dans les plans est à la section 7.
@@ -305,12 +337,12 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
   - un champ filtre par le titre, sans casse ni accents ;
   - la liste n'a pas de plafond : chaque ligne n'est redessinée que si ce qu'elle montre change [C]. Sur la base de référence, 1 000 nœuds et 1 000 connexions à la corbeille, elle se lit en 3,5 ms [C] ;
   - le panneau reste ouvert après une restauration, pour la suivante ; il s'ouvre à la place du registre des tags, et Échap le ferme de même, même avec un pop-up épinglé à l'écran ou la recherche ouverte sans le focus, qui ne prennent pas cet Échap [C] ;
-  - « Restaurer » est éteint, sa raison pour titre, sur une connexion qui n'a plus que moins de deux nœuds : « Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir. » ; la ligne reste listée [C] ;
-  - une connexion restaurée que nul plan ne montre le dit : « Connexion restaurée ; aucun plan ne réunit deux de ses nœuds. » [C] ;
+  - « Restaurer » est éteint, sa raison pour titre, sur une connexion qui n'a plus aucun nœud : « Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir. » ; la ligne reste listée [C]. Jusqu'au plan 6b, c'était sous deux nœuds (section 7) ;
+  - une connexion restaurée que nul plan ne montre le dit : « Connexion restaurée ; aucun plan ne montre ses nœuds. » (plan 6b) [C] ;
   - fermer le panneau, par la croix ou par Échap, abandonne la pose d'un nœud en cours, non un autre geste [C] ;
   - une ligne périmée — le nœud n'est plus à la corbeille (un Ctrl+Z, une synchro) —, est refusée avant tout fantôme : « Ce nœud n’est pas à la corbeille. » [C].
-- **Vider la corbeille :** rien ne se vide. La suppression d'un contenu passera par « Poids de l'historique », au plan 6b.
-- **Hors du plan 6a :** l'historique par nœud (versions, restauration, différences), « Poids de l'historique » et le curseur temporel (section 24).
+- **Vider la corbeille :** rien ne se vide. La suppression d'un contenu passera par « Poids de l'historique », au plan 6c.
+- **Hors du plan 6a :** l'historique par nœud (versions, restauration, différences), « Poids de l'historique » et le curseur temporel (section 24). Les deux premiers vont au plan 6c.
 
 ### 6.4 Annulation (Ctrl+Z, Ctrl+Y)
 
@@ -418,7 +450,7 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 - **Fantôme :** au collage, le contenu suit le curseur sous forme de fantôme, et un clic le pose.
 - **Échelle :** tous les éléments collés changent du même nombre de crans Δk. On choisit le cran le plus proche de celui qui conserverait exactement la place qu'occupait la sélection à l'écran au moment de la copie : Δk = arrondi de log_f(zoom à la copie ÷ zoom au collage). Les distances changent du même rapport f^Δk. L'écart avec la taille d'origine reste au plus de ×√f.
 - **Positions :** les positions relatives sont conservées.
-- **Connexions :** une connexion suit si au moins deux de ses nœuds sont dans la sélection. Ses autres branches deviennent des amorces.
+- **Connexions :** une connexion suit si au moins deux de ses nœuds sont dans la sélection. Ses autres branches deviennent des amorces. Une connexion d'un seul nœud suit si ce nœud y est (plan 6b).
 - **Groupes :** un groupe suit selon les règles de la sélection (9.3). Les inclusions sont recalculées sur l'ancêtre présent.
 - **Nœuds déjà présents :** dans le plan d'arrivée, ils gardent leur place et leur groupe, et l'app propose de les déplacer [C, non contesté].
 - **Dépôt dans une enveloppe :** les règles d'entrée dans un groupe s'appliquent (section 10).
@@ -427,11 +459,23 @@ L'outil de version est sans commit ni push, ce qui remplace la spécification.
 
 **Fixé par le plan 6a** (écrit le 2026-11-09 et exécuté en travail autonome le 2026-11-10 ; ses décisions sont de Claude, et l'utilisateur ne les a pas encore approuvées : section 4) : la restauration depuis la corbeille (D5), et « Voir dans un autre plan » (D3, section 14). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
 - **Restaurer un nœud** (« Restaurer » dans la corbeille) : son titre suit le curseur, comme un collage, au cran lisible, et un clic le pose dans le plan montré, dans le groupe dont l'enveloppe reçoit le clic, en une action [C]. Échap abandonne. Une annotation se restaure de même, posée dans le plan montré [C]. Un autre « Restaurer » remplace une pose en cours ; tout autre geste en cours la refuse [C]. Les amorces « absentes » de ce nœud dans ce plan disparaissent, comme à toute pose [C]. Fermer le panneau abandonne la pose en cours, et une ligne périmée est refusée avant qu'un fantôme ne suive le curseur (6.3) [C].
-- **Restaurer une connexion :** elle revient tout de suite, en une action, avec une branche pour chacun de ses membres dans chaque plan où au moins deux d'entre eux sont placés, documents à part ; ni amorce ni fantôme [C]. Ses membres restent ce qu'ils sont, même un membre encore à la corbeille, qui ne se montre nulle part [C]. Une connexion qu'aucun plan ne montre revient sans branche, vue par les pop-ups et les badges de ses membres, et le dit : « Connexion restaurée ; aucun plan ne réunit deux de ses nœuds. » [C]. Les refus :
-  - « Ses nœuds sont à la corbeille : restaure-les d’abord. », avec moins de deux membres vivants ;
-  - « Il reste moins de deux nœuds à cette connexion : elle ne peut pas revenir. », quand la suppression d'un de ses nœuds l'en a retiré [C] ; le bouton « Restaurer » est alors éteint dès la liste, cette phrase pour titre (6.3) [C].
+- **Restaurer une connexion :** elle revient tout de suite, en une action, avec une branche pour chacun de ses membres vivants dans chaque plan où au moins deux d'entre eux sont placés (depuis le plan 6b, un seul pour une connexion qui n'a qu'un membre vivant), documents à part ; ni amorce ni fantôme [C]. Ses membres restent ce qu'ils sont, même un membre encore à la corbeille, qui ne se montre nulle part [C]. Une connexion qu'aucun plan ne montre revient sans branche, vue par les pop-ups et les badges de ses membres, et le dit : « Connexion restaurée ; aucun plan ne montre ses nœuds. » (plan 6b) [C]. Les refus :
+  - « Ses nœuds sont à la corbeille : restaure-les d’abord. », quand elle a des membres, mais aucun vivant (plan 6b ; avant, moins de deux vivants) ;
+  - « Il ne reste aucun nœud à cette connexion : elle ne peut pas revenir. », quand elle n'a plus aucun membre (plan 6b ; avant, sous deux membres) [C] ; le bouton « Restaurer » est alors éteint dès la liste, cette phrase pour titre (6.3) [C].
 - **Ce qui ne revient pas :** les appartenances et les connexions retirées avec un nœud, comme à la synchro (6.2). Le Ctrl+Z de la session, lui, rend tout.
-- **Avec la synchro :** une connexion restaurée sur un PC pendant qu'un autre supprime partout un de ses membres converge sans violation, dans les quatre ordres. Elle revient ; le membre reste à la corbeille, et sa branche est une amorce vers un nœud jeté, que l'import refuse (« Ce nœud est à la corbeille. ») [C]. Une règle de synchro pour ce cas attend le plan 6b.
+- **Avec la synchro :** au plan 6a, une connexion restaurée sur un PC pendant qu'un autre supprimait partout un de ses membres convergeait sans violation, mais revenait avec ce membre jeté, sa branche une amorce vers lui. Le plan 6b donne la règle de ce cas (plus bas).
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : un nœud jeté quitte ses connexions (D2, section 5.3), et la règle de synchro de ce cas (D3). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **Retirer un nœud de son dernier plan, ou partout,** le retire de ses connexions ; celles qui gardent 0 ou 1 nœud le suivent à la corbeille (5.3). L'avertissement de « Cacher » et de « Supprimer… ici » compte ces connexions : « « A » ira à la corbeille (dernier plan), avec 2 connexions » [C].
+- **Ce qui revient :** restaurer un nœud ne lui rend pas ses connexions. La corbeille rend une connexion sans lui, avec les membres qui lui restent, à un nœud s'il ne lui en reste qu'un.
+- **La règle de synchro :** avec D2, aucune commande ne laisse un nœud jeté dans une connexion vivante. Seule une synchro croisée le pouvait : un PC jette un nœud, partout ou de son dernier plan, pendant qu'un autre restaure une connexion qui le tenait, lui ajoute ce nœud ou la recrée par Ctrl+Z. Le départ à la corbeille l'emporte : la connexion fusionnée n'a ni ce nœud, ni ses branches, ni ses fantômes, et si elle garde 0 ou 1 nœud alors qu'elle en avait au moins deux, elle va à la corbeille. Les deux PC finissent dans le même état, dans les quatre ordres, sans écriture perdue.
+- **Son moyen est double** [C] :
+  - le PC qui rejoue une écriture écarte les branches et les fantômes d'un membre retiré, et lui ajoute les départs qu'il voit (`rebaseUnit`) ;
+  - le serveur complète toute écriture qu'il accepte des départs qu'elle n'a pas pu voir (`Canon.accept`) : un nœud qu'elle jette et qu'une connexion tient encore, un nœud jeté qu'elle ajoute à une connexion vivante. Sans lui, l'ajout d'un nœud à une connexion, croisé avec la suppression de ce nœud, ne touchait aucun enregistrement commun : le serveur acceptait les deux, et la connexion restait vivante avec le nœud jeté. Le PC reçoit l'écriture telle que le serveur la tient, et la retire de sa pile d'annulation. Une écriture faite sur tout ce que tient le serveur n'en reçoit aucun : 1 200 croisements tirés au hasard le vérifient, et que les deux chemins mènent au même état ;
+  - une écriture que ses départs mèneraient au-delà de 200 000 opérations, la borne d'une action (section 18), est refusée par le serveur, l'état remis : aucun PC ne pourrait la lire [C].
+- **Une connexion jetée avec un nœud prend l'heure du nœud,** la seule que les deux ordres connaissent. Une restauration croisée avec une suppression devient, rejouée, une remise à la corbeille à cette heure [C].
+- **Seul le départ à la corbeille compte,** pas la disparition d'une création annulée, et la synchro ne touche que les nœuds jetés par les écritures croisées. Une connexion vivante d'une base plus ancienne qui tient un nœud jeté reste telle quelle, et la santé du graphe ne la liste pas. Aucun invariant nouveau : une telle base reste lisible [C].
+- **Mesuré :** retirer de son dernier plan un groupe de 202 éléments très reliés emmène, sur la base de référence, 3 500 connexions à la corbeille et 4 300 branches hors de la scène : 40 à 48 ms au lieu de 16,6, et 44 ms pour son annulation. La porte du banc (`scale-perf`) passe de 20 à 120 ms, trois fois la mesure ; la cible reste 20 ms (section 24) [C].
 
 ## 8. Rendu du graphe
 
@@ -484,6 +528,17 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
   - **Choix manuel :** la couleur choisie par l'utilisateur prime.
 - **Rappel discret :** un coin de l'écran montre la hiérarchie des groupes sous le curseur. Il est cliquable [C].
 
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : la couleur d'un groupe, choisie dans une palette, librement, ou « Automatique » (D4 ; décision de l'utilisateur, 2026-11-14). Elle est propre au plan, et enregistrée avec le placement du groupe (5.5). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **La règle :** un groupe prend la couleur du premier de ses ancêtres, lui compris, qui en porte une dans ce plan. Sans ancêtre coloré, rien ne change.
+  - Le groupe coloré la montre telle quelle, fermé.
+  - Un sous-groupe, d crans de profondeur sous lui, en garde la teinte et la chroma (OKLCH), avec une luminosité décalée de d × `groupLightnessStep`, rebondie dans `groupLightnessRange` comme le défaut.
+  - Un sous-groupe qui a sa propre couleur la montre, et la transmet aux siens.
+  - Une couleur extrême, le noir, le blanc ou un vert saturé hors de la gamme de la palette, donne des sous-groupes distincts d'elle et entre eux.
+  - L'enveloppe ouverte reste un mélange avec le ciel.
+- **La palette :** 12 teintes espacées de 30° à partir de 15° (`groupPaletteHues`), à la luminosité `groupLightness` et à la chroma `groupPaletteChroma` (0,12).
+- **Le sélecteur :** les 12 pastilles, « Automatique », et « Autre… », le sélecteur de couleur du système, qui s'ouvre sur la couleur du moment et dont le choix compte à sa fermeture [C]. Un choix est une action, qu'un Ctrl+Z défait. Le sélecteur reste ouvert pour en essayer un autre ; Échap ou un clic dehors le ferme.
+- **Où on le trouve :** « Couleur… » dans le menu d'un groupe, et non d'un nœud simple ou d'une connexion, qui ouvre le sélecteur à l'endroit du clic ; et la section « Couleur dans ce plan » du pop-up d'un groupe.
+
 ### 8.5 Connexions
 
 - **Cas 1 vers 1 :** une courbe simple, sans point visible.
@@ -496,7 +551,7 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
 - **Titre :** sans boîte, placé près du marqueur sans recouvrir le marqueur ni les lignes. Sa distance au marqueur est réglable. Sans titre, rien ne s'affiche.
 - **Survol :** il illumine toute la connexion.
 - **Pop-up :** un clic ouvre la relation en pop-up, à l'endroit du clic.
-- **Nœud absent du plan :** il devient une **amorce** en pointillés, nommée au survol, déplaçable et cliquable comme un hyperlien. La connexion s'affiche dès que deux de ses nœuds sont présents.
+- **Nœud absent du plan :** il devient une **amorce** en pointillés, nommée au survol, déplaçable et cliquable comme un hyperlien. La connexion s'affiche dès que deux de ses nœuds sont présents ; une connexion d'un seul nœud, dès que ce nœud l'est (plan 6b, plus bas).
 - **Bras scindés et fantômes** (décisions de l'utilisateur, 2026-11-02). Une connexion est dessinée en entier par défaut. Pour les rares connexions entre nœuds très éloignés, l'utilisateur peut scinder un bras.
   - **Geste :** un clic droit sur une branche, entre le centre et un nœud, propose « scinder ce bras ». Le geste crée deux fantômes, que l'utilisateur place à la main :
     1. Le curseur tient le fantôme du nœud lointain, et un clic gauche le pose près du faisceau.
@@ -526,6 +581,14 @@ Les nœuds hors groupe restent affichés, avec une taille minimale à l'écran [
   - un clic sur la partie masquée par un fond opaque touche le groupe ; la partie visible, hors du groupe, reste cliquable ;
   - **Implémentation :** chaque connexion multiplie son opacité par celle que lui laissent les fonds des groupes qui la masquent, calculée dans ses shaders. Comme une enveloppe est opaque, c'est exactement le fond dessiné par-dessus, sans changer l'ordre de dessin. Une courbe porte au plus quatre groupes masquants : ceux de son propre bout d'abord, puis le plus haut groupe des autres bouts. Au-delà, rare, une branche qui traverse le groupe d'un autre membre passe au-dessus de son fond.
   - **Retiré :** le glissement des extrémités vers le bord, la levée sur le groupe avec une flèche évidée, la fusion des membres en une branche et des connexions en une ligne « 2 connexions », et le réglage de l'intérieur d'une flèche évidée.
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : le dessin d'une connexion d'un seul nœud, un bras court et un marqueur déplaçable (D2 ; décision de l'utilisateur, 2026-11-14). Sa règle est à la section 5.3, son geste à la section 11. [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **Le bras** va du bord du nœud au marqueur. Il est droit, et se courbe par ses deux poignées de Bézier ; il n'a pas de poignée de rotation [C]. Le dessin passe par celui des faisceaux, sans shader nouveau.
+- **Le marqueur** est toujours dessiné, ce qui le rend cliquable, et le titre court se pose près de lui comme pour les autres connexions.
+- **Le glyphe du rôle** est au bout côté nœud : une flèche sortante pour une source, entrante pour une cible, un point pour un associé.
+- **Sa place par défaut,** sans marqueur épinglé : à `singleArmLength` (80, en unités du monde, multiplié par f^k du nœud) du bout du bras côté nœud [C], dans la direction `singleArmAngle` (−45°, vers le haut à droite). On le déplace par sa poignée, comme un autre marqueur, et il suit son nœud.
+- **Ce qui la montre :** elle s'affiche dans un plan où son nœud est placé. Une connexion de plusieurs membres dont un seul est présent reste masquée, avec son badge, comme avant.
+- Elle n'offre pas « Scinder ce bras » [C].
 
 ### 8.6 Fond
 
@@ -609,7 +672,7 @@ Une sélection se comporte comme un groupe temporaire sans titre. Son centre est
 - **Liste :** le pop-up liste tous les membres de la connexion, en grisé ceux qui ne sont pas affichés dans ce plan [C, accepté].
 - **Plans sans le nœud :** un plan qui contient la connexion mais pas le nœud ajouté ne change pas, ce qui garde sa forme stable [C, accepté].
 - **Suppression d'un membre :** la règle de suppression s'applique : partout ou ici, avec le nombre d'instances et un avertissement pour la dernière.
-- **Moins de deux nœuds :** une connexion qui n'a plus deux nœuds affichés dans un plan s'y masque, et sa forme revient avec le nœud. Une connexion qui n'a plus deux membres du tout est supprimée, après avertissement.
+- **Moins de deux nœuds :** une connexion de plusieurs membres qui n'a plus deux nœuds affichés dans un plan s'y masque, et sa forme revient avec le nœud. Depuis le plan 6b, retirer l'avant-dernier membre la garde, à un seul nœud ; retirer le dernier la met à la corbeille, après avertissement (plus bas).
 
 ### 11.3 Amorces
 
@@ -617,6 +680,13 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 
 - **Import :** un clic sur l'amorce permet d'importer le nœud dans le plan.
 - **Badge :** sur un nœud, un badge discret signale ses connexions existantes mais absentes de ce plan [C, non contesté].
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : une connexion d'un seul nœud se crée et se garde (D2 ; sa règle à la section 5.3, son dessin à la 8.5). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **La création :** le geste « Ajouter une connexion » se termine aussi :
+  - par un clic sur le fond, qui épingle le marqueur là, dans ce plan ;
+  - par Entrée, qui donne au marqueur sa place par défaut. Quand une cible est visée sous le pointeur, après un zoom compris, Entrée ne fait rien : le clic la prend [C].
+  - Le nœud de départ est source, comme pour toute connexion tirée. La question « partout ou ici seulement » porte sur les autres plans où ce nœud est placé.
+- **Le retrait d'un membre :** la question ne parle de corbeille que pour le dernier : « C’est son dernier nœud : « partout » met la connexion à la corbeille. » [C].
 
 ## 12. Contenu des nœuds : pop-ups et plein écran
 
@@ -862,7 +932,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - la cible de 300 ms est tenue au p95, mais pas à chaque frappe : une frappe du .tex sur 69 l'a dépassée (329 ms), et une autre, avec un repos de 0,8 s, a pris 306 ms. L'image suivante vient de 1 à 13 ms après le canevas (environ 4 ms en médiane) : pour le .tex, elle donne 291 ms au p95 et 331 ms au plus ;
   - la compilation, dans le principal, en prend environ les trois quarts (de 118 à 208 ms selon la frappe pour le résumé, de 131 à 239 ms pour le .tex). pdf.js, de la première réponse du PDF au canevas, prend de 25 à 56 ms pour le résumé, et de 41 à 95 ms pour le .tex. L'IPC, le rendu de React et la première réponse du PDF prennent environ 5 ms (de 4 à 8) ;
   - un pop-up rouvert dans la session, son résumé en cache : 17 ms. Le premier résumé d'une session : 0,49 s en cache, 0,62 s s'il faut compiler, dont 0,45 s pour charger pdf.js et son travailleur. Les charger d'avance, au repos, serait le levier suivant.
-- **Hors du plan 4b :** la recompilation en arrière-plan après une synchro (faite au plan 5b, plus bas) ; le saut vers la cible avec « précédent » et « suivant » (fait au plan 6a, depuis le pop-up du lien : section 14), et l'aperçu au survol d'un lien (plan 6b) ; la liste des doublons et des liens cassés dans la santé du graphe ; l'assemblage des documents (section 15) ; SyncTeX ; l'installation de TinyTeX hors de Windows, où `CIRRUS_TINYTEX` désigne une TinyTeX existante.
+- **Hors du plan 4b :** la recompilation en arrière-plan après une synchro (faite au plan 5b, plus bas) ; le saut vers la cible avec « précédent » et « suivant » (fait au plan 6a, depuis le pop-up du lien : section 14), et l'aperçu au survol d'un lien (fait au plan 6b, section 14) ; la liste des doublons et des liens cassés dans la santé du graphe (faite au plan 6b, section 20) ; l'assemblage des documents (section 15) ; SyncTeX ; l'installation de TinyTeX hors de Windows, où `CIRRUS_TINYTEX` désigne une TinyTeX existante.
 
 **Fixé par le plan 5b** (écrit et exécuté en travail autonome le 2026-11-09 ; ses décisions sont de Claude, et l'utilisateur ne les a pas encore approuvées : section 4) : la recompilation en arrière-plan après une synchronisation. [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-09-cirrus-synchro-suite-registre.md`) en donne la raison et le coût.
 
@@ -914,7 +984,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 **Fixé par le plan 6a** (écrit le 2026-11-09 et exécuté en travail autonome le 2026-11-10 ; ses décisions sont de Claude, et l'utilisateur ne les a pas encore approuvées : section 4) : la recherche (D1), les sauts avec « précédent » et « suivant » (D2), et « Voir dans un autre plan » (D3). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan (`docs/superpowers/plans/2026-11-10-cirrus-outils-essentiels-registre.md`) en donne la raison et le coût.
 - **La boîte de Ctrl+K :** un champ en haut du graphe, centré sur lui et non sur la fenêtre, avec ses filtres et la liste des résultats dessous.
   - Chaque ligne montre le titre et l'endroit : « ce plan », « lobby », le nom d'un autre plan, ou « aucun plan » pour une annotation. Les flèches parcourent la liste, Entrée ou un clic saute au résultat, Échap ferme.
-  - Les filtres : Titre, Tags et Résumé sont cochés ; Contenu (les `.tex`) ne l'est pas, ni « Ce plan seulement ». Le texte des PDF et des autres fichiers attend le plan 6b.
+  - Les filtres : Titre, Tags et Résumé sont cochés ; Contenu (les `.tex`) ne l'est pas, ni « Ce plan seulement ». Le texte des PDF et des autres fichiers attend le plan 6c.
   - Ctrl+K marche partout, un champ de texte compris, sauf sous un plein écran ou l'éditeur du préambule, pendant une question, et dans un éditeur de code, où il garde son sens [C]. Il est entendu avant tout panneau, qui ne l'avale pas [C]. Un second Ctrl+K rend le focus au champ et sélectionne ce qui y est tapé [C].
   - Un clic dans le graphe qui ferme les pop-ups libres ferme aussi la recherche [C]. Un plein écran qui s'ouvre la ferme. La boîte passe au-dessus des notifications [C].
   - Tant qu'elle est ouverte, les résultats du plan actuel sont cerclés dans le graphe, d'une couleur à eux, `searchFoundColor`, un vert (#5ee38f), sans devenir une sélection [C]. Une connexion est cerclée par ses extrémités dessinées dans le plan [C]. Le cercle se dessine après celui des intrus et avant le dépôt et la sélection : un objet trouvé et sélectionné montre la sélection [C].
@@ -928,7 +998,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
 - **Sa construction :** une fois au chargement, par tranches de `searchBuildSliceMs` (8 ms) au plus, dans les moments libres, après la première image [C]. Un moment libre en enchaîne plusieurs, tant qu'il dure plus d'1 ms et qu'aucune touche ni aucun clic n'attend (`navigator.scheduling.isInputPending`, sans compter la souris ni la molette) ; la première tranche d'un moment est toujours faite, et, sans `isInputPending`, c'est la seule [C]. La relecture des `.tex` en fait autant. Le banc et les captures ne la font qu'au premier Ctrl+K. Jusque-là, la boîte dit « Préparation de la recherche… ». Les actions faites pendant ce temps lui sont données à la fin. Ensuite, chaque action ne relit que les nœuds et les connexions qu'elle touche, même quand plusieurs actions arrivent en un seul rendu [C].
 - **La requête :** chaque mot tapé doit être le début d'un mot de l'objet, dans les champs choisis : « enon comp » trouve « Énoncé de la complexité ». Les mots peuvent se trouver dans deux champs différents [C]. Une frappe qui précise la précédente ne relit que ce que celle-ci avait trouvé [C].
 - **L'ordre des résultats :** ce qui est dans le plan actuel, puis dans le lobby, puis dans les autres plans, puis dans aucun plan. Dans chaque groupe, un titre qui répond passe avant les tags, qui passent avant le résumé et le contenu ; le champ d'un résultat est le moins bon de ceux où se trouve chacun de ses mots [C]. À égalité, l'ordre des mots du titre, repliés, comme dans un dictionnaire, puis l'ordre français [C]. Au plus `searchMaxResults` (50) résultats.
-- **Le saut** (D2) va dans ce plan si l'objet y est, sinon dans le lobby, sinon dans le premier autre plan qui l'a, dans l'ordre des onglets puis des noms. Il ouvre le plan dans son onglet s'il le faut, cadre l'objet comme le coin de la hiérarchie (une connexion par ses extrémités dessinées), et le cercle un instant, `searchFlashMs` (1,2 s). Un objet dans aucun plan, une annotation, ouvre son pop-up sous la boîte [C] ; une connexion vivante qu'aucun plan ne montre (restaurée sans branche) le dit : « Cette connexion n’est dans aucun plan : aucun plan ne réunit deux de ses nœuds. » [C]. Un objet jeté ou retiré entre-temps le dit : « Cet objet n’est plus là : il a été jeté, ou retiré de ce plan. », le message de tous les sauts [C].
+- **Le saut** (D2) va dans ce plan si l'objet y est, sinon dans le lobby, sinon dans le premier autre plan qui l'a, dans l'ordre des onglets puis des noms. Il ouvre le plan dans son onglet s'il le faut, cadre l'objet comme le coin de la hiérarchie (une connexion par ses extrémités dessinées), et le cercle un instant, `searchFlashMs` (1,2 s). Un objet dans aucun plan, une annotation, ouvre son pop-up sous la boîte [C] ; une connexion vivante qu'aucun plan ne montre (restaurée sans branche) le dit : « Cette connexion n’est dans aucun plan. » (plan 6b ; avant, la phrase ajoutait « aucun plan ne réunit deux de ses nœuds ») [C]. Un objet jeté ou retiré entre-temps le dit : « Cet objet n’est plus là : il a été jeté, ou retiré de ce plan. », le message de tous les sauts [C].
 - **Ce qui saute :** un résultat de la recherche ; « Voir dans un autre plan » ; un bouton de plan dans le pop-up d'un nœud, qui cadre désormais le nœud (« Voir ce nœud dans ce plan ») [C] ; « S'y téléporter », qui garde son centrage au zoom courant [C] ; et « Aller au nœud », nouveau, dans le pop-up qu'un lien a ouvert, si le nœud est dans un plan [C].
 - **Les liens :** un clic sur un lien `\ref` ou `\cite` ouvre toujours le pop-up du nœud (section 13, plan 4b, D7, plus récent que la ligne « un clic gauche saute à la cible » ci-dessus) [C]. Le saut se fait de ce pop-up, par « Aller au nœud ».
 - **« Précédent » et « suivant » :**
@@ -944,7 +1014,22 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - **La construction de l'index au chargement** commence 5 à 11 ms après la première image, par tranches de 8,5 ms au p95 et 10,4 ms au plus, sans aucune tâche de plus de 50 ms : elle ne retarde pas la première image. Sans elle (`requestIdleCallback` coupé), la première image vient 1 508 à 1 608 ms après la navigation, et avec elle 1 605 à 1 767 ms ; mais l'écart, entre deux chargements de la même session, est déjà là avant que l'état ne soit prêt, et sur la base enrichie il va dans les deux sens (2 459 à 3 178 ms sans, 2 514 à 3 164 ms avec). Son travail : 0,39 à 0,44 s sur la base de référence, 1,95 à 2,11 s sur la base enrichie. Mesurée ainsi, elle n'avançait que d'une tranche par moment libre, une toutes les 60 ms environ quand la fenêtre est au repos : l'index était prêt 2,8 à 3,2 s après la première image sur la base de référence, et 14,6 à 15,8 s sur la base enrichie, ce qui est le « avant ». Elle enchaîne depuis ses tranches dans un même moment libre, tant qu'il reste plus d'1 ms et qu'aucune touche ni aucun clic n'attend (`navigator.scheduling.isInputPending({ includeContinuous: false })`) [C]. **L'effet attendu n'est pas mesuré :** le temps jusqu'à l'index prêt, et ce qu'une molette ou un survol attend pendant la construction (au plus un moment libre, 50 ms, au lieu d'une tranche de 8 ms ; une touche ou un clic interrompent, eux, après une tranche au plus), sont à mesurer à une exécution ultérieure ; on ne sait pas non plus si `navigator.scheduling` est exposé par Electron 45 à l'exécution, la chaîne `isInputPending` étant dans son binaire. Sans lui, la construction se fait comme avant, une tranche par moment. Jusque-là, Ctrl+K dit « Préparation de la recherche… » (section 24).
   - **Une action ordinaire :** la mise à jour de l'index coûte à un renommage 0,1 ms en médiane et 0,3 ms au plus sur la base de référence, 0,3 et 0,5 ms sur la base enrichie ; à un déplacement, qui ne relit rien, 0 ms en médiane et 0,9 ms au plus. De l'Entrée à l'image, un renommage prend 25 ms en médiane sans l'index et 24,6 ms avec (48,8 et 45,3 ms sur la base enrichie), hors le premier de chaque session, de 90 à 234 ms avec ou sans : l'écart est dans le bruit. Un déplacement, du relâchement à l'image, avec l'index : 16,4 ms en médiane et 24,9 ms au p95 (36,8 et 45,1 ms sur la base enrichie).
   - **Le dessin avec le cercle :** pendant un zoom à la molette, une image prend 0,3 à 0,4 ms de processeur en médiane et 1,5 à 2,1 ms au p95, et 0,85 à 0,89 ms de carte graphique en médiane et 1,26 à 1,30 ms au p95, avec ou sans le cercle, de 50 résultats comme de 500 (`searchMaxResults` au plus) : aucun écart mesurable.
-- **Hors du plan 6a :** l'aperçu au survol d'un lien, le choix du plan d'arrivée au clic droit et l'import du nœud cible ; le texte des PDF et des autres fichiers dans la recherche (plan 6b, section 24).
+- **Hors du plan 6a :** l'aperçu au survol d'un lien, le choix du plan d'arrivée au clic droit et l'import du nœud cible, faits au plan 6b (plus bas) ; le texte des PDF et des autres fichiers dans la recherche (plan 6c, section 24).
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : l'aperçu d'un lien, son clic droit et « Importer ici » (D5). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **L'aperçu au survol :** après `linkPreviewDelayMs` (400 ms) sur un lien `\ref` ou `\cite` vers un nœud, un aperçu se pose près du lien. Il montre le titre du nœud, ses plans (« ce plan », « lobby », leurs noms) et son résumé compilé, sans son édition.
+  - Il disparaît quand le pointeur quitte le lien, à tout appui, à la molette, à un défilement ou à une touche, et quand le pop-up qui le porte se ferme, défile ou change de mode. Il n'apparaît jamais après coup.
+  - Il n'est pas interactif : ouvrir un nœud depuis un aperçu reste pour plus tard (plus haut).
+- **Le clic droit sur un lien** ouvre un menu :
+  - « Ouvrir le pop-up », le clic gauche ;
+  - « Voir dans ce plan », si le nœud y est, puis « Voir dans « P » » pour chaque autre plan qui l'a, dans l'ordre de « Voir dans un autre plan » ;
+  - « Importer ici », si le nœud n'est pas dans le plan montré.
+  - Un nœud jeté ou disparu n'a que « Ouvrir le pop-up », qui le dit. Un choix de ce menu ne ferme pas les pop-ups libres, comme le clic gauche [C].
+- **« Importer ici » :** le titre du nœud suit le curseur sur le graphe, comme une restauration, et un clic le pose, en une action ; Échap abandonne. Un second « Importer ici » remplace le premier [C]. Une notification refuse :
+  - un nœud déjà dans ce plan, « Déjà dans ce plan. », et le nœud est cadré ;
+  - un nœud jeté, « Ce nœud est à la corbeille. » ;
+  - un autre geste en cours.
+- **Le plein écran** ne change pas : ses liens ne font qu'avertir.
 
 ## 15. Documents
 
@@ -1045,6 +1130,28 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
     - un raccourci dans l'app crée un feuillet.
   - **Historique :** les feuillets sont des éditions comme les autres, donc ils entrent dans l'historique et se défont par Ctrl+Z.
 - **Méta du travail :** plus tard.
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : l'agenda et les feuillets, deux onglets (D6). Leur format est à la section 5.6. [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **Les onglets :** « Agenda » et « Feuillets » s'ouvrent depuis le « + » de la barre d'onglets, après les plans fermés et sous un trait, et depuis le menu du fond, avant « Santé du graphe… » [C]. Ils se ferment comme un plan, et s'enregistrent avec les autres onglets.
+  - Ce ne sont pas des plans : le graphe reste chargé, caché, avec sa caméra, ses scènes et sa dernière taille. Un saut depuis l'agenda cadre donc comme depuis le graphe [C].
+  - Fermer l'onglet montré ramène le dernier plan montré, non le lobby [C]. Revenir ainsi au même plan ne compte pas comme un plan montré (section 20) [C].
+  - Cacher le graphe abandonne le geste en cours, la question et le menu, et ferme la recherche et l'éditeur du titre, comme un changement de plan [C].
+  - Ctrl+K y ramène le graphe ; Alt+←, Alt+→ et les boutons latéraux n'y font rien [C].
+  - La recherche ne voit ni l'agenda ni les feuillets [C].
+- **L'agenda :** une frise verticale, du plus ancien en haut au plus lointain en bas, regroupée par mois (« novembre 2026 »).
+  - Une ligne « Aujourd’hui » précède les entrées du jour, et la vue s'y place à l'ouverture ; son mois existe même vide [C]. Les entrées d'un même jour suivent leur ordre de création [C].
+  - Chaque entrée montre sa date, son titre, son texte et ses nœuds liés, avec « Modifier » et « Supprimer ». « Supprimer » agit sans question : Ctrl+Z rend l'entrée [C]. Aucun rappel.
+  - « Nouvelle entrée » ouvre un formulaire : la date, aujourd'hui par défaut, le titre, le texte, et les nœuds, ajoutés par un champ qui cherche dans les titres de l'index de Ctrl+K. Entrée dans la date ou le titre enregistre l'entrée ; Entrée dans le champ des nœuds ajoute le premier trouvé [C].
+  - Une borne se dit sous le formulaire, à l'enregistrement [C] : « Choisissez une date valide. », « Donnez un titre à l’entrée. », « Le titre d’une entrée compte au plus 200 caractères. », « Le texte d’une entrée compte au plus 20 000 caractères. », « Une entrée lie au plus 50 nœuds. ».
+  - Un clic sur un nœud lié fait comme « Aller au nœud ». Un nœud jeté ou disparu est barré, suivi de « (à la corbeille) » ou « (disparu) », et ne se clique pas ; un nœud disparu, dont le titre n'est plus connu, s'écrit « Nœud » [C].
+- **Les feuillets :** une liste, du plus récent au plus ancien. Chaque feuillet est un texte libre, éditable sur place, avec son âge : « à l’instant », « il y a 5 min », « il y a 3 h », « il y a 2 j », puis la date, « 07/11/2026 ». L'âge se relit chaque minute et à chaque action [C].
+  - « Nouveau feuillet » en crée un, et « Supprimer » en supprime un, chacun en une action [C]. Rien ne s'efface seul.
+  - La frappe s'enregistre après `sheetTypingPauseMs` (800 ms) de pause, à la perte du focus, en quittant l'onglet et à la fermeture. La création est un pas d'annulation ; les enregistrements d'une même frappe, d'une prise du focus à sa perte, en font un autre [C]. Dans le champ, Ctrl+Z agit sur le texte.
+  - Au-delà de 100 000 caractères, l'enregistrement est refusé, et une notification le dit à chaque tentative : « Un feuillet compte au plus 100 000 caractères. » [C]. La frappe en attente d'un feuillet supprimé entre-temps, ailleurs ou par un Ctrl+Z, ne le refait pas : « Ce feuillet n’existe plus : ce qui y était tapé n’est pas gardé. » [C].
+- **Le raccourci :** Ctrl+Maj+N crée un feuillet vide, ouvre l'onglet « Feuillets » et y met le focus, de partout, un champ de texte compris ; pas sous un plein écran ou l'éditeur du préambule, pendant une question, ni dans un éditeur de code [C].
+- **Feuillet → nœud :** « En faire un nœud » ramène le dernier plan montré, et le titre du feuillet suit le curseur, comme une restauration. Le clic crée le nœud et supprime le feuillet, en une action, « Faire un nœud du feuillet « T » ». Échap abandonne, et le feuillet reste.
+  - Le titre est la première ligne non vide, coupée à 200 caractères ; un feuillet vide donne « Feuillet ».
+  - Le résumé est le reste, ce qui dépasse de la première ligne compris : rien du feuillet ne se perd [C]. Ses caractères spéciaux de TeX sont échappés (`\ { } % $ & # _ ^ ~`), pour qu'un texte libre ne casse pas une compilation.
 
 ## 18. Serveur, sécurité et déploiement
 
@@ -1179,6 +1286,11 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - `npm run dev` reste l'app officielle, sur la vraie base [C] : la faire passer à « Cirrus Dev » est laissé à l'utilisateur (section 24).
 - **L'installateur** (NSIS) est en un clic, pour l'utilisateur seul, sans droits d'administrateur ni dossier à choisir [C] ; l'installation pour tous n'est pas prise en charge. **Le désinstalleur n'efface jamais les données,** pas plus qu'une mise à jour, qui le lance [C].
 
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : le format 2 et le délai sans progrès d'une mise à jour forcée (D1, D9). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **Le format 2** (5.5, 5.6) : la version du schéma de la base passe à 5, celle du protocole de synchro à 2 ; celle de l'instantané reste 1. Le serveur, qui se met à jour seul, refuse alors chaque PC resté en arrière (409 au `/hello`), et ce PC prend la mise à jour forcée, au lieu de lire une écriture qu'il ne comprend pas. Chaque PC se met donc à jour d'office à cette version.
+- **Ce qui demandera une version du protocole** [C] : resserrer une borne de l'agenda, des feuillets ou de la couleur, qui sont des bornes du format ; ajouter une sorte de consultation, qu'un serveur plus ancien refuserait (section 20).
+- **Le délai sans progrès** (revue de la mise à jour forcée, 2026-11-11) : un téléchargement qui ne reçoit plus rien pendant `updateStallMs` (2 min) est annulé. Chaque progrès réarme le délai. L'échec est celui d'un téléchargement interrompu : l'écran dit « Le téléchargement a échoué (aucune donnée depuis 2 min). Cirrus réessaiera à la prochaine vérification. », offre « Continuer sans mettre à jour », et l'essai suivant vient comme après tout échec. Un serveur compromis qui tiendrait un vrai manifeste signé ne peut plus faire durer l'écran. L'annulation passe par le jeton d'annulation de `builder-util-runtime` 9.7.0, déjà installé avec electron-updater, désormais déclaré.
+
 ## 19. Paramètres
 
 - **Exposition :** tous les paramètres sont exposés dans l'app pour que l'utilisateur les ajuste, dans un bandeau latéral « Réglages ».
@@ -1213,6 +1325,11 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - Rubrique « Apparence », groupe « Sélection et dépôt » : la couleur des résultats de la recherche, `searchFoundColor`, un vert, qu'un test garde distinct de la sélection, des intrus et du dépôt [C].
   - Rubrique « Performances et base », un groupe nouveau, « Consultations » (section 20) : « Enregistrer mes consultations », un choix Oui / Non, « Oui » par défaut, réglage principal [C]. Une valeur gardée qui n'est ni l'une ni l'autre, un fichier de réglages modifié à la main par exemple, se lit « Non » : l'interrupteur tombe du côté fermé [C]. Le délai entre deux écritures, `consultationsFlushMs` (10 s, de 1 à 600 s, par pas de 1 s), est avancé.
 - **Plan 9** (section 18 pour le statut de ses décisions) : le bloc « Serveur » ne propose plus d'adresse ; le champ est vide, « https://cirrus.mondomaine.fr » pour exemple, et le refus d'une adresse invalide nomme https [C]. Le groupe « Synchronisation » gagne quatre réglages avancés, et passe à 16, la limite du panneau [C] : `syncRequestTimeoutMs` (30 s, de 5 s à 10 min), `syncStreamSilenceMs` (40 s, de 20 s à 10 min) et `syncReceiveMaxUnits` (500, de 50 à 10 000), section 23 ; `updateCheckMs` (1 h, de 5 min à un jour), section 18.1.
+- **Plan 6b** (section 4 pour le statut de ses décisions) : les réglages nouveaux, tous avancés.
+  - Rubrique « Apparence » : dans « Groupes », qui passe à 16 entrées, la palette des couleurs de groupe (section 8.4), `groupPaletteHues` (12 teintes, de 15° à 345° par 30°) et `groupPaletteChroma` (0,12, de 0 à 0,3) ; dans « Connexions », le bras d'une connexion d'un seul nœud (section 8.5), `singleArmLength` (80, de 10 à 600, par pas de 5) et `singleArmAngle` (−45°, de −180° à 180°, par pas de 5°).
+  - Rubrique « Fenêtres » : dans « Pop-ups », le survol d'un lien avant son aperçu, `linkPreviewDelayMs` (400 ms, de 0 à 3 000, par pas de 50), puis, en dernier, les lignes montrées d'abord par section de la santé du graphe, `healthRowsShown` (100, de 10 à 2 000, par pas de 10) [C] ; un groupe nouveau, « Agenda et feuillets », avec la pause de frappe d'un feuillet, `sheetTypingPauseMs` (800 ms, de 100 à 10 000, par pas de 50) [C].
+  - Rubrique « Performances et base », groupe « Consultations » : l'intervalle des envois au serveur, `consultationsSendMs` (60 s, de 10 s à 1 h, par pas d'1 s) ; les jours sans consultation après lesquels un nœud est « jamais revu », `healthUnseenDays` (30, de 1 à 3 650) [C].
+  - Rubrique « Serveur » : un groupe nouveau, « Mises à jour », avec `updateCheckMs`, qui quitte « Synchronisation » (revenu à 15 réglages), et l'attente de données d'un téléchargement de mise à jour, `updateStallMs` (2 min, de 10 s à 1 h, par pas d'1 s).
 - **Mode performance :** envisageable si les bancs de mesure le rendent nécessaire (section 21). Un interrupteur dans les paramètres graphiques allégerait alors les effets coûteux : flou des enveloppes, rubans à largeur variable, ciel étoilé, résolution du rendu.
 - **Stockage** (plan 5a, D9) : les valeurs sont centralisées sur le serveur et communes à tous les PC : tous les réglages sont partagés. Des valeurs propres à un PC seront revues plus tard si besoin. L'adresse du serveur, le nom du PC et son jeton (`serveur.json`) ne sont pas des réglages.
   - **Le serveur fait autorité :** un réglage qu'il n'a pas vaut sa valeur par défaut. Il garde chaque réglage avec l'heure de sa dernière modification et le PC qui l'a faite. Le plus récent gagne, réglage par réglage, puis l'identifiant du PC, comme pour les actions [C].
@@ -1241,15 +1358,46 @@ L'utilisateur veut pouvoir développer l'app depuis n'importe quel PC et tester 
   - **l'espace :** la base du serveur, son magasin (taille et nombre de fichiers) et l'espace libre de son disque, que `GET /status` rend (section 18) ;
   - chaque valeur est en fin de ligne, et n'est pas dessinée dans une capture : elle change d'une fois à l'autre [C] ;
   - **option écartée :** un test de débit qui enverrait des octets pour rien.
-- **La santé du graphe** ne liste pas encore les conflits de `.tex` : elle n'est pas faite.
+- **La santé du graphe** est faite au plan 6b, plus bas.
 - **L'enregistrement des consultations** (fixé par le plan 6a, D6 ; section 4 pour le statut de ses décisions) : le début des analytics, pour la santé du graphe du plan 6b (« jamais revus »). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
-  - **Le fichier :** `consultations.db`, à côté de la base et hors de son schéma, pour ne pas changer le format que la synchro compare. Une table, `events (at, pc, kind, subject, plan, detail)` ; `at`, `pc` et `kind` sont obligatoires [C]. Il est créé à la première écriture, en WAL [C]. Il n'est pas synchronisé : son envoi par lots au serveur vient au plan 6b.
+  - **Le fichier :** `consultations.db`, à côté de la base et hors de son schéma, pour ne pas changer le format que la synchro compare. Une table, `events (at, pc, kind, subject, plan, detail)` ; `at`, `pc` et `kind` sont obligatoires [C]. Il est créé à la première écriture, en WAL [C]. Il n'est pas synchronisé ; depuis le plan 6b, ses événements partent au serveur par lots (plus bas).
   - **Ce qui s'enregistre :** l'ouverture et la fermeture de l'app ; un plan montré, à chaque changement d'onglet actif ; le pop-up d'un nœud ou d'une connexion ouvert (une ligne par connexion que montre la ligne cliquée) [C] ; un fichier ouvert en aperçu ou en plein écran, son nom en détail [C] ; une recherche faite, une par ouverture de la boîte, avec son texte et le résultat choisi, ou sans résultat si elle se ferme sans choix [C] ; un saut qui a abouti, retour et avance compris, jamais un saut refusé [C] ; les moments où la fenêtre prend ou perd le focus, une fenêtre cachée comptant comme sans focus, pour le temps passé [C]. Chaque événement dit le plan montré, sauf un plan montré ou un saut, qui disent celui où l'on arrive [C].
   - **Ce qui ne s'enregistre pas :** ni texte tapé ni contenu, hors le texte d'une recherche. Rien avant que les réglages ne soient lus, ni en mode banc ou capture [C]. Ce n'est pas une action : rien n'entre dans le journal ni dans l'annulation.
   - **L'écriture :** l'interface garde les événements en mémoire et les envoie au principal toutes les `consultationsFlushMs` (10 s), dès le premier d'une file vide, et à la fermeture, en premier [C]. Le principal les écrit en une transaction, et refuse un lot entier à la moindre irrégularité ; le PC est le sien, jamais celui que dirait l'interface [C].
   - **Les pannes :** un fichier verrouillé, abîmé, plein, ou dans un dossier disparu : un avertissement dans la console, une fois jusqu'à la prochaine écriture réussie, et le lot est perdu. Rien de visible, et la fermeture n'attend jamais [C]. Une fermeture brutale perd au plus `consultationsFlushMs` d'événements.
   - **L'interrupteur,** « Enregistrer mes consultations » (section 19) : éteint, rien ne s'enregistre, et ce qui attendait est abandonné [C].
   - **Une base prise du serveur** (6.6, D7) emmène `consultations.db` dans la nouvelle base, s'il n'y en a pas déjà un : l'historique d'usage de ce PC n'est pas dans la base [C].
+
+**Fixé par le plan 6b** (écrit le 2026-11-14 avec l'utilisateur, exécuté le 2026-11-14 ; section 4 pour le statut de ses décisions) : l'envoi des consultations au serveur (D7), pour que « jamais revus » compte tous les PC, et la santé du graphe (D8). [C] marque, comme plus haut, un choix fait pendant l'exécution ; le registre du plan en donne la raison et le coût.
+- **Au serveur :** la migration v4 de `serveur.db` crée la table `consultations` (`pc`, `seq`, `at`, `kind`, `subject`, `plan`, `detail`), de clé `(pc, seq)`, hors de la base et de son journal. Son index sur `(subject, kind, at)` couvre la lecture de « vu » [C]. La forme d'un lot est au cœur, partagée par le PC et le serveur [C]. Trois routes, authentifiées comme les autres :
+  - `POST /consultations { events }` écrit au plus 1 000 événements et 1 Mio par requête, sans doublon (`INSERT OR IGNORE` sur `(pc, seq)`), et répond `{ upto }`, le plus grand numéro gardé pour ce PC. Un lot irrégulier est refusé en entier (400), un lot trop grand aussi (413) ;
+  - `GET /consultations/upto` répond `{ upto }` ;
+  - `GET /consultations/seen` répond la dernière consultation de chaque sujet, tous PC confondus. Il ne compte que les sortes qui disent qu'on a regardé un objet : le pop-up d'un nœud ou d'une connexion, un fichier en aperçu ou en plein écran, un saut, une recherche avec un résultat. Sa réponse n'est pas bornée, une soixantaine d'octets par sujet vu [C].
+  - Le serveur garde toutes les lignes, sans plafond ni durée, même celles d'un PC révoqué, qui comptent dans « vu » : quelques Mo par an pour un utilisateur [C].
+- **Au PC :**
+  - le numéro d'un événement est sa ligne dans `consultations.db`. Une table `sent` y retient, pour chaque base du serveur, le dernier numéro parti ;
+  - chaque connexion commence par demander `upto` : le serveur fait foi, et une copie restaurée plus ancienne reçoit ce qui lui manque [C]. La marque avance toujours : le plus grand de `upto` et du dernier envoyé [C] ;
+  - ce qui attend part à l'ouverture de la connexion, puis toutes les `consultationsSendMs` (60 s), par lots de 1 000 au plus, coupés à 1 Mio [C], un envoi à la fois, et seulement avec une connexion ouverte. Interrupteur éteint, rien ne part ; un tour sans rien d'enregistré par ce PC ne demande rien [C] ;
+  - un lot refusé repart par moitiés ; un événement refusé seul est sauté, et abandonné quand un lot suivant est pris. Trois refus seuls d'affilée arrêtent le tour, la marque en place, et le disent une fois : un serveur qui refuse tout ne fait rien abandonner [C].
+- **« Vu »,** pour la santé du graphe : connecté, la réponse du serveur, plus les événements du fichier pas encore partis ; sinon, ou si la réponse manque, tout le fichier [C]. L'heure d'une consultation est celle du PC qui l'a enregistrée, sans l'écart mesuré au serveur [C].
+- **Mesuré :** « vu » sur 300 000 lignes et 20 000 sujets, 105 ms au serveur, au lieu de 164 ms sans l'index couvrant [C].
+- **Limite connue :** un `consultations.db` effacé à la main recommence ses numéros à 1, et une coupure de courant peut défaire ses dernières écritures. Le serveur ignore alors, sous son `upto`, les événements qui reprennent des numéros déjà envoyés : ces consultations-là ne comptent pas pour les autres PC [C].
+- **Le panneau « Santé du graphe »** s'ouvre par « Santé du graphe… », dans le menu du fond, juste avant « Corbeille… ». Il s'ouvre à la place de la corbeille et du registre des tags, et Échap le ferme de même. Ses sections sont repliables, chacune avec son compte, dans cet ordre :
+  1. **Références cassées :** un `\ref` vers un label inconnu, un `\cite` vers une clé qu'aucun nœud vivant ne porte. Une ligne par source, ses noms écrits `\ref{…}` ou `\cite{…}` quelle que soit la commande (`\eqref`…), les labels d'abord [C].
+  2. **Labels et clés BibTeX en double.**
+  3. **Conflits de .tex :** chaque copie « (conflit du …) » dont l'original existe. La ligne ouvre la comparaison (6.2).
+  4. **Tags obligatoires non renseignés :** pour chaque clé obligatoire, les objets qui ne la portent pas, avec ou sans valeur par défaut. Une ligne par clé, avec son compte, qu'on déplie pour voir ses objets. Les annotations n'y sont pas [C].
+  5. **Nœuds orphelins :** vivants, hors annotations, membres d'aucune connexion de connaissance vivante. Un groupe ou une partie de document sans connexion de connaissance l'est aussi [C].
+  6. **Jamais revus :** des nœuds vivants, hors annotations, créés il y a plus de `healthUnseenDays` (30) jours, l'heure de création se lisant dans leur identifiant, et consultés sur aucun PC. Les consultations de tous les PC se lisent une fois, à l'ouverture du panneau [C]. Interrupteur éteint, la section liste quand même, et le dit : « L’enregistrement des consultations est éteint sur ce PC : ce que vous y consultez n’est pas compté. » [C]. Illisibles : « Les consultations n’ont pas pu être lues : cette section reste vide. ».
+  7. **Intrus dans une enveloppe,** plan par plan, calculés par tranches de `searchBuildSliceMs` dans les moments libres, comme l'index de la recherche ; « Calcul en cours… » jusque-là. Après une action, la liste précédente reste affichée avec « Calcul en cours… » [C]. Un fantôme intrus n'est pas listé : son nœud est ailleurs [C].
+  8. **Plans ignorés lors d'une répercussion,** chacun avec sa raison : « troisième groupe » ou « boucle », retenus quand le dépôt s'écrit sans question ou par « Partout », jamais par « Ici seulement » ; « Échap », pour un plan sauté pendant une pose à la main, par Échap, un clic droit ou une perte du focus ; « répercussion interrompue », pour les plans qui restaient quand un autre plan a été montré [C]. Ils ne se déduisent pas de l'état : la session les garde en mémoire, 200 au plus, les derniers d'abord. Une entrée dont le nœud ou le plan a disparu n'est pas montrée [C].
+- **Une ligne** montre l'objet, son titre ou le nom d'une connexion comme à la corbeille, et son endroit. Un clic saute à lui ; dans aucun plan, il ouvre son pop-up. Une section montre d'abord `healthRowsShown` (100) lignes, puis « Afficher 100 de plus (N restants) » : seules les lignes montrées se font [C].
+- **Le recalcul,** panneau ouvert seulement, à chaque action : les sections 1 et 2 suivent le registre LaTeX, les sections 3 à 6 et 8 l'état [C].
+- **Les intrus suivent les actions, plan par plan** [C]. Tant que le panneau est ouvert, chaque plan a sa scène : celle que le graphe garde à jour, sinon la sienne, mise à jour par les opérations de chaque action, et rebâtie seulement après des rendus groupés, un changement des réglages de la scène, ou quand le graphe lâche le plan. Un plan n'est relu que si sa scène a changé, ceux à portée d'abord. Une scène à rebâtir se bâtit seule, d'un tenant, dans un moment libre, jamais dans une tranche. Fermer le panneau les lâche.
+- **Mesuré** sur la base de référence (50 000 nœuds, 549 189 connexions), par un test marqué lent, seul sur la machine :
+  - les sections 1 à 6 et 8, avec deux clés obligatoires de nœud et la moitié des nœuds vus : 53 à 60 ms en médiane de trois passes (125 489 lignes). Le critère, 150 ms, est tenu : elles ne passent pas par tranches. Depuis la relecture, à chaque action : 42 à 45 ms ; 95 à 107 ms pour le pire cas, une clé obligatoire de connexion que nulle ne porte (475 000 lignes de plus) ; 2 ms pour déplier une clé de 50 000 lignes. Sous la charge de toute la suite, 181 ms : le test en est sorti [C] ;
+  - les intrus du lobby : 112 ms en 10 tranches, la plus longue 24 ms, l'index des 50 000 centres se bâtissant par 4 096 [C] ;
+  - **reste d'un tenant** la scène d'un plan hors du cache, bâtie seule dans un moment libre : 0,53 à 0,56 s pour ce lobby, un à-coup à l'ouverture du panneau pour un grand plan non montré récemment [C].
 
 ## 21. Ordre de construction imposé
 
@@ -1349,25 +1497,14 @@ Le découpage détaillé relève du plan d'implémentation.
   - partage.
 
 **Hors du plan 5b :**
-- **plan 6 :** le saut « précédent » et « suivant », fait au plan 6a (section 14) ; le flux des analytics, dont le plan 6a fait l'enregistrement sur chaque PC (section 20), et l'aperçu au survol d'un lien, au plan 6b (plus bas) ;
+- **plan 6 :** le saut « précédent » et « suivant », fait au plan 6a (section 14) ; le flux des analytics, dont le plan 6a fait l'enregistrement sur chaque PC (section 20), et l'aperçu au survol d'un lien, au plan 6b (plus bas), qui a fait les deux ;
 - **plan 9 :** fait, sauf ce que liste « Hors du plan 9 », plus bas ;
-- **la santé du graphe** (section 20), qui listera les conflits de `.tex` ;
+- **la santé du graphe** (section 20), conflits de `.tex` compris : faite au plan 6b ;
 - **à revoir à l'usage :** le magasin de certificats du système pour le réseau ouvert, si un site échoue derrière un proxy ; des pages enregistrées d'OpenReview, de PMLR et des actes de NeurIPS, à la place des pages de test écrites de mémoire ; une liste de `.tex` ouverts que le serveur n'a pas reçue, renvoyée sans attendre le changement suivant.
 
 **Fait au plan 6a** (section 4) : la recherche, « précédent » et « suivant », « Voir dans un autre plan » (section 14) ; le registre des tags (5.4) ; la corbeille (6.3, 7) ; l'enregistrement des consultations (section 20).
 
-**Hors du plan 6a (plan 6b, à venir) :**
-- la santé du graphe (section 20), qui listera aussi les conflits de `.tex` et les nœuds jamais revus, d'après les consultations ;
-- l'agenda et les feuillets (section 17) ;
-- l'envoi des consultations au serveur, par lots (section 20) ;
-- l'aperçu au survol d'un lien, le choix du plan d'arrivée au clic droit et l'import du nœud cible (section 14) ;
-- le texte des PDF et des autres fichiers dans la recherche (section 14) ;
-- l'historique par nœud : ses versions, leur restauration et leurs différences (6.3) ;
-- « Poids de l'historique » (6.3), seul moyen de supprimer un contenu : la corbeille ne se vide pas ;
-- une règle de synchro pour une connexion vivante dont un membre est à la corbeille (section 7) ;
-- **la couleur d'un groupe choisie par l'utilisateur, propre au plan** (sections 5 et 8.4, « Choix manuel ») : enregistrée avec le placement du groupe, donc un changement du format de la base et une mise à jour forcée de chaque PC ; choisie depuis le menu ou le pop-up du groupe ; ses sous-groupes en prennent les nuances. Demandée par l'utilisateur le 2026-11-12 ;
-- **une connexion liée à un seul nœud** (retour de l'utilisateur du 2026-11-11, point 4) : retirer l'avant-dernier membre la garderait au lieu de la mettre à la corbeille. Cela touche la règle « au moins deux membres » du cœur, partagée avec le serveur (suppression, restauration, invariants), et la géométrie, qui suppose deux bouts, jusque dans les shaders : où poser le centre et le bras d'une connexion à un membre ;
-- **un délai sans progrès pour le téléchargement d'une mise à jour forcée,** en réglage : un serveur compromis qui tiendrait un vrai manifeste signé pourrait faire durer l'écran de mise à jour (revue de la mise à jour forcée, 2026-11-11) ;
+**Hors du plan 6a :** fait au plan 6b (plus bas), sauf l'historique par nœud, « Poids de l'historique » et le texte des PDF et des autres fichiers dans la recherche, qui passent au plan 6c. Restent aussi :
 - **à essayer par l'utilisateur, au premier plan :** Alt+←, Alt+→ et un Alt seul ne montrent aucune barre (section 4) ; une vraie souris à boutons latéraux, dont le pilote enverrait aussi des commandes « navigateur », ferait deux pas au lieu d'un (section 14) ;
 - **à mesurer, à une exécution ultérieure :** l'index de recherche prêt après la première image sur la base enrichie (15 s avant), et ce que la molette, le survol et les frappes attendent pendant sa construction, depuis que ses tranches s'enchaînent dans un même moment libre tant qu'aucune touche ni aucun clic n'attend (`isInputPending`) : l'effet est attendu, non mesuré (section 14) ;
 - **à revoir à l'usage :** le premier renommage d'une session, de 90 à 234 ms, et la première lettre d'une recherche, jusqu'à 71 ms, plus lents que les suivants (section 14).
@@ -1386,3 +1523,21 @@ Le découpage détaillé relève du plan d'implémentation.
 - **une signature du code du serveur,** des tags signés : il vient aujourd'hui de GitHub par git, en HTTPS (section 18) ;
 - **`npm run dev` sous l'identité de « Cirrus Dev » :** fait le 2026-11-12 ; une app lancée depuis le dépôt est toujours « Cirrus Dev » (`runVariant`) ;
 - **à revoir à l'usage :** installer LaTeX dans les deux variantes à la fois, qui partagent TinyTeX, peut se heurter ; un PC qui lit le manifeste pendant qu'une version se pose peut voir une signature dépareillée, et dire une fois « Mise à jour refusée » ; après un arrêt brutal, le serveur peut relire jusqu'à 999 lignes de son journal au démarrage, ce qu'une ligne réglerait.
+
+**Fait au plan 6b** (section 4) :
+- le format 2 : l'agenda, les feuillets et la couleur d'un placement ; le schéma 5, le protocole 2, et donc une mise à jour forcée de chaque PC (5.6, 18.1) ;
+- la couleur d'un groupe, propre au plan : palette, couleur libre ou « Automatique » (5.5, 8.4) ;
+- une connexion d'un seul nœud, un bras et son marqueur ; un nœud jeté quitte ses connexions, et la règle de synchro de ce cas, au PC comme au serveur (5.3, 7, 8.5, 11) ;
+- l'aperçu d'un lien au survol, son clic droit et « Importer ici » (14) ;
+- l'agenda et les feuillets, deux onglets ; Ctrl+Maj+N (17) ;
+- l'envoi des consultations au serveur, et la santé du graphe (20) ;
+- le délai sans progrès d'une mise à jour forcée (18.1).
+
+**Hors du plan 6b (plan 6c, à venir) :**
+- l'historique par nœud : ses versions, leur restauration et leurs différences (6.3) ;
+- « Poids de l'historique » (6.3), seul moyen de supprimer un contenu, la corbeille ne se vidant pas : des fichiers seulement, PDF et fichiers des dossiers, dont le nom, la date et la taille restent (décision de l'utilisateur, 2026-11-14) ;
+- le texte des PDF et des autres fichiers dans la recherche (section 14) ;
+- **à faire passer :** le scénario d'interface du lien (l'aperçu, le clic droit, « Importer ici »), avec TinyTeX, l'aperçu compilant le résumé : en cours d'écriture à la clôture du plan ;
+- **à revoir à l'usage :** Entrée ne fait rien pendant le tracé d'une connexion quand une cible est visée (section 11) ; la saccade de 40 à 48 ms en retirant de son dernier plan un gros groupe très relié, dont la porte du banc est passée de 20 à 120 ms (section 7) ; l'à-coup de la scène d'un grand plan hors du cache à l'ouverture de la santé du graphe (section 20) ;
+- **à remesurer au repos :** « les masques du plan plat en 1 ms au plus » (`scale-perf`), mesurés à 1,1 et 1,2 ms pendant le plan ;
+- **à savoir :** les bornes de l'agenda, des feuillets et de la couleur sont celles du format : en resserrer une demande d'augmenter la version du protocole, comme ajouter une sorte de consultation (18.1).
