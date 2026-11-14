@@ -1030,6 +1030,7 @@ Une amorce apparaît quand une branche de ce plan vise un nœud absent du plan :
   - un nœud jeté, « Ce nœud est à la corbeille. » ;
   - un autre geste en cours.
 - **Le plein écran** ne change pas : ses liens ne font qu'avertir.
+- **Le scénario d'interface « liens »** le vérifie avec TinyTeX (celui du banc, `CIRRUS_TINYTEX`) : un `\ref` vers un nœud d'un autre plan, son aperçu, son départ, le menu, « Importer ici » sans fermer le pop-up, la pose et son Ctrl+Z [C].
 
 ## 15. Documents
 
@@ -1537,7 +1538,6 @@ Le découpage détaillé relève du plan d'implémentation.
 - l'historique par nœud : ses versions, leur restauration et leurs différences (6.3) ;
 - « Poids de l'historique » (6.3), seul moyen de supprimer un contenu, la corbeille ne se vidant pas : des fichiers seulement, PDF et fichiers des dossiers, dont le nom, la date et la taille restent (décision de l'utilisateur, 2026-11-14) ;
 - le texte des PDF et des autres fichiers dans la recherche (section 14) ;
-- **à faire passer :** le scénario d'interface du lien (l'aperçu, le clic droit, « Importer ici »), avec TinyTeX, l'aperçu compilant le résumé : en cours d'écriture à la clôture du plan ;
 - **à revoir à l'usage :** Entrée ne fait rien pendant le tracé d'une connexion quand une cible est visée (section 11) ; la saccade de 40 à 48 ms en retirant de son dernier plan un gros groupe très relié, dont la porte du banc est passée de 20 à 120 ms (section 7) ; l'à-coup de la scène d'un grand plan hors du cache à l'ouverture de la santé du graphe (section 20) ;
 - **à remesurer au repos :** « les masques du plan plat en 1 ms au plus » (`scale-perf`), mesurés à 1,1 et 1,2 ms pendant le plan ;
 - **à savoir :** les bornes de l'agenda, des feuillets et de la couleur sont celles du format : en resserrer une demande d'augmenter la version du protocole, comme ajouter une sorte de consultation (18.1).
